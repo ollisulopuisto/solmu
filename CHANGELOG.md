@@ -13,7 +13,7 @@ version in Cargo.toml is bumped.
 
 - Conversation clocks and status marks sit outside the bubble toward the centre. Date separators carry the day; hovering the clock keeps the full local timestamp. Photos and albums no longer draw a timestamp over the image.
 - Search results now request missing Beeper history instead of silently dropping the jump command. The target stays pending until reached; history failures and a 50-page safety bound are explicit and retryable.
-- Global and in-chat Beeper searches offer Load more when the API reports another page. Each click expands the cumulative result window, capped at 50 pages, preserving query/day/chat scope.
+- Global and in-chat Beeper searches offer Load more when the API reports another page. Each click fetches one next cursor page, keeps earlier pages and is capped at 50 pages with a notice, preserving query/day/chat scope.
 - Cmd/Ctrl+K keeps recent chats with an empty query. Typing lists matching chat names first, then message text from the existing index plus fuzzy matching of loaded text. Remote Beeper search is literal-word search, so typo matches in unloaded history are not guaranteed.
 - The open-chat toolbar duplicates Read later, Reply later, Favorite and Archive actions, including clear/unfavorite/unarchive states. Later flags remain local and use the same existing shortcuts.
 

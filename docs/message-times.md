@@ -15,3 +15,9 @@ Hovering the time shows the full local date, time, seconds and zone. Sent-messag
 time/status still opens Message info. Standalone search results, copied messages
 and message info keep their dated timestamps because they lack this transcript's
 date context. No archive data or timestamps are rewritten.
+
+## Narrow light-theme example
+
+The bundled offline demo, with clocks outside photos and bubbles:
+
+![Outside-bubble clocks beside photos](screenshot-external-times.png)

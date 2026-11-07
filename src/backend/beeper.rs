@@ -3783,19 +3783,13 @@ impl CachedSearch {
             return Err("Search continuation did not advance; earlier results are kept".into());
         }
         if let Some(old) = &self.page {
-            let mut ids: HashSet<_> = old
-                .items
-                .iter()
-                .map(|m| (m.chat_id.clone(), m.id.clone()))
-                .collect();
             let newer = std::mem::take(&mut page.items);
             page.items = old.items.clone();
-            page.items.extend(
-                newer
-                    .into_iter()
-                    .filter(|m| ids.insert((m.chat_id.clone(), m.id.clone()))),
-            );
+            page.items.extend(newer);
         }
+        let mut ids = HashSet::new();
+        page.items
+            .retain(|m| ids.insert((m.chat_id.clone(), m.id.clone())));
         if let Some(cursor) = cursor {
             self.seen.insert(cursor);
         }
@@ -4875,6 +4869,46 @@ mod tests {
         assert_eq!(cache.next(&api, params()).unwrap().items.len(), 2);
         assert_eq!(cache.pages, 2);
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn cache_limits_and_bad_cursors_do_not_issue_another_request() {
+        let api = Api::new(&BeeperConfig {
+            base_url: "http://127.0.0.1:9".into(),
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let page = || {
+            serde_json::from_str::<Page<BeeperMessage>>(
+                r#"{"items":[],"hasMore":true,"oldestCursor":"next"}"#,
+            )
+            .unwrap()
+        };
+        let params = || vec![("query", "fixture".into())];
+        let mut cache = CachedSearch {
+            page: Some(page()),
+            pages: 50,
+            seen: HashSet::new(),
+        };
+        assert!(cache.next(&api, params()).unwrap().has_more);
+        assert_eq!(cache.pages, 50);
+        cache.pages = 1;
+        cache.seen.insert("next".into());
+        assert!(
+            cache
+                .next(&api, params())
+                .unwrap_err()
+                .contains("did not advance")
+        );
+        cache.seen.clear();
+        cache.page.as_mut().unwrap().oldest_cursor = None;
+        assert!(
+            cache
+                .next(&api, params())
+                .unwrap_err()
+                .contains("unavailable")
+        );
+        assert_eq!(cache.pages, 1);
     }
 
     #[test]

@@ -33,3 +33,11 @@ These use existing chat IDs/actions even when the chat was opened from search.
 In a linked timeline these act on the currently selected exact source chat, not
 on every linked account at once. Later flags are local; Archive/Unarchive keeps its existing backend semantics.
 Channels do not get Favorite. No messages are sent by these controls.
+
+## Demo captures
+
+The bundled offline demo, not a real account:
+
+![Cmd-K with a fuzzy message keyword](screenshot-search-switcher.png)
+
+![Linked timeline actions at a narrow window width](screenshot-linked-actions.png)
