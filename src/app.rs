@@ -5752,10 +5752,12 @@ impl App {
         // A hidden account's remembered chat is not being read: marking it
         // read would send receipts for messages nobody has seen.
         let remembered = self.open_chat.as_deref() == Some(chat.id.as_str());
-        let reading = self
-            .open_chat
-            .as_deref()
-            .is_some_and(|open| self.read_chat_ids(open).iter().any(|id| id == &chat.id));
+        let reading = self.open_chat.as_deref().is_some_and(|open| {
+            self.read_chat_ids(open).iter().any(|id| id == &chat.id)
+                && self.chat(&chat.id).is_none_or(|known| {
+                    crate::merged::Member::of(known) == crate::merged::Member::of(&chat)
+                })
+        });
         let is_open = live && remembered && self.chat_view();
         let is_reading = live && reading && self.chat_view();
         let mut chat = chat;
@@ -26790,6 +26792,52 @@ mod person_tests {
         app.chat_mut("ada-tg").unwrap().locked = false;
         app.chat_mut("ada-tg").unwrap().backend_account = Some("replacement-account".into());
         app.mark_read("ada-wa");
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
+    }
+
+    #[test]
+    fn instagram_third_member_unread_clears_even_when_latest_reply_is_elsewhere() {
+        let mut app = linked_unread_app();
+        let mut instagram = member_chat("ada-instagram", "instagram", 1, 5);
+        instagram.backend_network = Some("Instagram".into());
+        app.settings.beeper.people[0]
+            .members
+            .push(Member::of(&instagram).unwrap());
+        app.chats.push(instagram.clone());
+        app.chat_mut("ada-tg").unwrap().unread = 0;
+        app.chat_mut("ada-tg").unwrap().marked_unread = false;
+        app.chat_mut("ada-wa").unwrap().last_activity = 50;
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        app.open_chat("ada-wa".into());
+        assert_eq!(
+            app.beeper_person_preview(app.chat("ada-wa").unwrap())
+                .unread,
+            0
+        );
+        assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(|command| matches!(command, Command::MarkRead { chat, receipts: true } if chat == "ada-instagram")));
+        app.window_focused = true;
+        app.window_hidden = false;
+        // A later stale server refresh must not revive the visible member's badge.
+        app.handle_chat_updated(instagram, true);
+        assert_eq!(app.chat("ada-instagram").unwrap().unread, 0);
+        assert_eq!(
+            app.beeper_person_preview(app.chat("ada-wa").unwrap())
+                .unread,
+            0
+        );
+    }
+
+    #[test]
+    fn a_changed_live_member_identity_is_not_marked_read_by_a_stale_link() {
+        let mut app = linked_unread_app();
+        app.open_chat = Some("ada-wa".into());
+        app.page = Page::Chats;
+        app.window_focused = true;
+        app.window_hidden = false;
+        let mut update = app.chat("ada-tg").unwrap().clone();
+        update.backend_account = Some("replacement".into());
+        app.handle_chat_updated(update, true);
         assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
     }
 
