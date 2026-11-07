@@ -236,6 +236,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 if index == app.jump_selected || response.hovered() {
                     widgets::row_highlight(ui, &palette, rect, palette.surface_active);
                 }
+                if index == app.jump_selected && (up || down) {
+                    response.scroll_to_me(Some(egui::Align::Center));
+                }
                 if response.hovered() {
                     app.jump_selected = index;
                 }
@@ -289,14 +292,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         crate::util::moment_stamp(app.locale, message.timestamp),
                         message.content.summary()
                     );
-                    if ui
-                        .add(
-                            egui::Button::selectable(selected, label)
-                                .wrap()
-                                .min_size(vec2(ui.available_width(), 64.0)),
-                        )
-                        .clicked()
-                    {
+                    let response = ui.add(
+                        egui::Button::selectable(selected, label)
+                            .wrap()
+                            .min_size(vec2(ui.available_width(), 64.0)),
+                    );
+                    if selected && (up || down) {
+                        response.scroll_to_me(Some(egui::Align::Center));
+                    }
+                    if response.clicked() {
                         clicked_message = Some(message.clone());
                     }
                 }
