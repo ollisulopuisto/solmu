@@ -10755,7 +10755,7 @@ mod tests {
         let ctx = egui::Context::default();
         let palette = crate::theme::Palette::dark();
         let mut cells = Vec::new();
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.horizontal(|ui| {
                 for icon in [
                     Icon::QueueRead,
@@ -10768,6 +10768,7 @@ mod tests {
                 }
             });
         });
+        output.textures_delta.clear();
         for cell in &cells {
             assert_eq!(cell.size(), vec2(30.0, 30.0));
             assert!((cell.center().y - cells[0].center().y).abs() < 0.1);
@@ -10785,9 +10786,10 @@ mod tests {
         let diagnostic = "raw-cursor-diagnostic-fixture";
         app.beeper_live_errors
             .insert("chat".into(), diagnostic.into());
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             connection_status(&app, ui, &["chat"])
         });
+        output.textures_delta.clear();
         fn has_diagnostic(shape: &egui::Shape, text: &str) -> bool {
             match shape {
                 egui::Shape::Text(text_shape) => text_shape.galley.text().contains(text),
