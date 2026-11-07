@@ -1341,7 +1341,7 @@ impl Api {
     }
 
     fn search_messages(&self, query: &str) -> Result<Page<BeeperMessage>, String> {
-        self.get("/v1/messages/search", &[("query", query.to_string())])
+        search_pages(self, vec![("query", query.to_string())], 1)
     }
 
     fn send_text(
@@ -2302,6 +2302,90 @@ struct ChatCursors {
     has_more_older: bool,
 }
 
+/// Search/quote jumps must not silently fall through the Beeper command match.
+/// Walk the actual older-history cursors, retaining good pages on failure.
+fn load_until_message(
+    api: &Api,
+    cursors: &mut HashMap<ChatId, ChatCursors>,
+    chat: &str,
+    target: &str,
+    emit: &dyn Fn(Event),
+) {
+    let mut seen = HashSet::new();
+    for _ in 0..50 {
+        let state = cursors.get(chat);
+        if state.is_some_and(|state| !state.has_more_older) {
+            break;
+        }
+        let cursor = state.and_then(|state| state.oldest.clone());
+        let Some(cursor) = cursor else {
+            emit(Event::BeeperHistoryState { chat: chat.into(), error: Some("Cannot reach the search result: older-history cursor unavailable. Retry after history recovers.".into()) });
+            break;
+        };
+        if !seen.insert(cursor.clone()) {
+            break;
+        }
+        match api.list_messages(chat, Some(&cursor), Some("before")) {
+            Ok(page) => {
+                let found = page
+                    .items
+                    .iter()
+                    .any(|m| m.id == target && !m.is_hidden && !m.is_deleted);
+                let next =
+                    history_cursor(page.oldest_cursor.as_deref(), Some(&cursor), page.has_more);
+                let error = next.as_ref().err().cloned();
+                if let Some(state) = cursors.get_mut(chat) {
+                    if let Ok(next) = next {
+                        state.oldest = next;
+                    }
+                    state.has_more_older = page.has_more;
+                }
+                let mut messages: Vec<_> = page
+                    .items
+                    .iter()
+                    .filter(|m| !m.is_hidden && !m.is_deleted)
+                    .map(|m| api.map_message(m, chat))
+                    .collect();
+                messages.sort_by_key(|m| m.timestamp);
+                emit(Event::Messages {
+                    chat: chat.into(),
+                    messages,
+                    older: true,
+                    complete: !page.has_more,
+                });
+                emit(Event::BeeperHistoryState {
+                    chat: chat.into(),
+                    error: error.clone(),
+                });
+                if found {
+                    emit(Event::OlderFetched {
+                        chat: chat.into(),
+                        more: page.has_more,
+                        silent: false,
+                    });
+                    return;
+                }
+                if error.is_some() || !page.has_more {
+                    break;
+                }
+            }
+            Err(error) => {
+                emit(Event::BeeperHistoryState {
+                    chat: chat.into(),
+                    error: Some(format!("Search result history unavailable: {error}")),
+                });
+                break;
+            }
+        }
+    }
+    emit(Event::BeeperHistoryState { chat: chat.into(), error: Some("Search result not reached. History may be incomplete or the 50-page safety limit was reached. Click the result again to continue.".into()) });
+    emit(Event::OlderFetched {
+        chat: chat.into(),
+        more: cursors.get(chat).is_none_or(|state| state.has_more_older),
+        silent: false,
+    });
+}
+
 fn history_cursor(
     next: Option<&str>,
     previous: Option<&str>,
@@ -2601,6 +2685,8 @@ pub fn run(
     emit(Event::Contacts(Vec::new()));
 
     let mut chat_cursors: HashMap<ChatId, ChatCursors> = HashMap::new();
+    let mut search_budget = (String::new(), 1usize);
+    let mut chat_search_budget = (String::new(), 1usize);
     let mut open_chat: Option<ChatId> = None;
     let mut watched_chats: Vec<ChatId> = Vec::new();
     // Chats the Server answered 404 for: permanent per id, so polling and
@@ -2834,6 +2920,13 @@ pub fn run(
                             emit(Event::Error(copy));
                         }
                     }
+                }
+                Command::LoadUntil {
+                    chat,
+                    id,
+                    before: _,
+                } => {
+                    load_until_message(&api, &mut chat_cursors, &chat, &id, &emit);
                 }
                 Command::FetchOlder { chat, explicit: _ } => {
                     if chat_cursors.get(&chat).is_some_and(|c| !c.has_more_older) {
@@ -3313,9 +3406,39 @@ pub fn run(
                     query,
                     from,
                     until,
-                } => run_chat_search(&api, chat, query, from, until, &emit),
+                } => {
+                    chat_search_budget = (format!("{chat}\0{query}\0{from:?}\0{until:?}"), 1);
+                    run_chat_search(&api, chat, query, from, until, &emit);
+                }
+                Command::SearchChatMessagesMore {
+                    chat,
+                    query,
+                    from,
+                    until,
+                } => {
+                    let key = format!("{chat}\0{query}\0{from:?}\0{until:?}");
+                    if chat_search_budget.0 == key {
+                        chat_search_budget.1 = (chat_search_budget.1 + 1).min(50);
+                        run_chat_search_pages(
+                            &api,
+                            chat,
+                            query,
+                            from,
+                            until,
+                            &emit,
+                            chat_search_budget.1,
+                        );
+                    }
+                }
                 Command::SearchMessages { query } => {
+                    search_budget = (query.clone(), 1);
                     run_message_search(&api, query, &emit);
+                }
+                Command::SearchMessagesMore { query } => {
+                    if search_budget.0 == query {
+                        search_budget.1 = (search_budget.1 + 1).min(50);
+                        run_message_search_pages(&api, query, &emit, search_budget.1);
+                    }
                 }
                 Command::Picked {
                     chat,
@@ -3607,6 +3730,48 @@ pub fn run(
     }
 }
 
+/// Re-read a bounded cumulative result window on explicit Load more. Repeating
+/// earlier pages keeps cursor state scoped to the exact query/filters and avoids
+/// merging a stale response into a changed search. Stop on repeated/missing cursors.
+fn search_pages(
+    api: &Api,
+    params: Vec<(&str, String)>,
+    budget: usize,
+) -> Result<Page<BeeperMessage>, String> {
+    let mut items = Vec::new();
+    let mut seen = HashSet::new();
+    let mut cursor: Option<String> = None;
+    let mut ids = HashSet::new();
+    for index in 0..budget.clamp(1, 50) {
+        let mut query = params.clone();
+        if let Some(cursor) = &cursor {
+            query.push(("cursor", cursor.clone()));
+        }
+        let page: Page<BeeperMessage> = api.get("/v1/messages/search", &query)?;
+        for message in page.items {
+            if ids.insert((message.chat_id.clone(), message.id.clone())) {
+                items.push(message);
+            }
+        }
+        if !page.has_more || index + 1 == budget.clamp(1, 50) {
+            return Ok(Page {
+                items,
+                has_more: page.has_more,
+                oldest_cursor: page.oldest_cursor,
+                newest_cursor: page.newest_cursor,
+            });
+        }
+        let Some(next) = page.oldest_cursor.filter(|c| !c.is_empty()) else {
+            return Err("Search continuation cursor unavailable; earlier results are kept".into());
+        };
+        if !seen.insert(next.clone()) {
+            return Err("Search continuation did not advance; earlier results are kept".into());
+        }
+        cursor = Some(next);
+    }
+    unreachable!()
+}
+
 fn run_chat_search(
     api: &Api,
     chat: ChatId,
@@ -3614,6 +3779,18 @@ fn run_chat_search(
     from: Option<i64>,
     until: Option<i64>,
     emit: &dyn Fn(Event),
+) {
+    run_chat_search_pages(api, chat, query, from, until, emit, 1);
+}
+
+fn run_chat_search_pages(
+    api: &Api,
+    chat: ChatId,
+    query: String,
+    from: Option<i64>,
+    until: Option<i64>,
+    emit: &dyn Fn(Event),
+    pages: usize,
 ) {
     let result = (|| -> Result<Page<BeeperMessage>, String> {
         let mut params = vec![
@@ -3636,7 +3813,7 @@ fn run_chat_search(
                     .to_string(),
             ));
         }
-        api.get("/v1/messages/search", &params)
+        search_pages(api, params, pages)
     })();
     match result {
         Ok(page) => {
@@ -3672,7 +3849,15 @@ fn run_chat_search(
 }
 
 fn run_message_search(api: &Api, query: String, emit: &dyn Fn(Event)) {
-    match api.search_messages(&query) {
+    run_message_search_pages(api, query, emit, 1);
+}
+
+fn run_message_search_pages(api: &Api, query: String, emit: &dyn Fn(Event), pages: usize) {
+    match if pages == 1 {
+        api.search_messages(&query)
+    } else {
+        search_pages(api, vec![("query", query.clone())], pages)
+    } {
         Ok(page) => {
             let mut messages: Vec<Message> = page
                 .items
@@ -4475,6 +4660,81 @@ mod tests {
         );
         let events = events.into_inner().unwrap();
         assert!(events.iter().any(|e|matches!(e,Event::ChatHits{messages,truncated:true,..} if messages.len()==1 && messages[0].id=="start")));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn load_until_follows_older_cursor_and_emits_target() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let n = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..n]);
+            assert!(request.contains("cursor=older"));
+            assert!(request.contains("direction=before"));
+            let body = r#"{"items":[{"id":"target","chatID":"chat","text":"fixture","timestamp":"2026-06-19T12:00:00Z"}],"hasMore":false}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let mut cursors = HashMap::from([(
+            "chat".into(),
+            ChatCursors {
+                oldest: Some("older".into()),
+                newest: None,
+                has_more_older: true,
+            },
+        )]);
+        let events = std::sync::Mutex::new(Vec::new());
+        load_until_message(&api, &mut cursors, "chat", "target", &|event| {
+            events.lock().unwrap().push(event)
+        });
+        assert!(events.into_inner().unwrap().iter().any(|event| matches!(event, Event::Messages { messages, older: true, .. } if messages.iter().any(|m| m.id=="target"))));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn explicit_search_more_keeps_query_and_follows_oldest_cursor() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            for second in [false, true] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let n = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..n]);
+                assert!(request.contains("query=fixture"));
+                assert_eq!(request.contains("cursor=next"), second);
+                let body = if second {
+                    r#"{"items":[],"hasMore":false}"#
+                } else {
+                    r#"{"items":[],"hasMore":true,"oldestCursor":"next"}"#
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let result = search_pages(&api, vec![("query", "fixture".into())], 2).unwrap();
+        assert!(!result.has_more);
         worker.join().unwrap();
     }
 

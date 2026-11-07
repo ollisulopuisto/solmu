@@ -287,6 +287,17 @@ pub enum Command {
     SearchMessages {
         query: String,
     },
+    /// Expands a global search by one cursor page.
+    SearchMessagesMore {
+        query: String,
+    },
+    /// Expands an in-chat search by one cursor page.
+    SearchChatMessagesMore {
+        chat: ChatId,
+        query: String,
+        from: Option<i64>,
+        until: Option<i64>,
+    },
     /// Searches one chat, optionally inside a Unix-second day range.
     SearchChatMessages {
         chat: ChatId,
