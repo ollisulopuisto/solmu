@@ -913,3 +913,12 @@ Unreplied. The first four follow the visible queue order; Favorites and chat typ
 are additional facets, so selecting a queue does not clear them. 0 is unassigned.
 Option+1..0 (Alt elsewhere) selects a network outside text fields. Command+1..0
 (Ctrl elsewhere) opens a favorite chat. These modifier families are distinct.
+
+### Fixed search shortcuts
+
+`Ctrl+F` (`Cmd+F` on macOS) always searches within the open chat. Without an
+open chat it does nothing; it never switches to settings or global search.
+`Ctrl+Shift+F` (`Cmd+Shift+F`) opens the global search for messages and chats.
+`Ctrl+K` (`Cmd+K`) still jumps between recent chats. On macOS both searches are
+listed separately in Edit, using those same shortcuts. Click Settings' search
+field to search settings. Focus does not change either search shortcut's scope.

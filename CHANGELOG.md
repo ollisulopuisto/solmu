@@ -9,6 +9,10 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.3
+
+- Search shortcuts now have fixed scopes on macOS and elsewhere: Cmd/Ctrl+F searches within the open chat only, Cmd/Ctrl+Shift+F searches all messages and chats, and Cmd/Ctrl+K stays recent chats. macOS Edit menus now match the keyboard instead of routing Cmd+F to the global search. Settings search is reached by clicking its field, not by changing Cmd+F's meaning.
+
 - Conversation day separators now show Today, Yesterday and Day before yesterday, then short numeric dates in the system locale's order. Dates from another year include the full year. Finnish regions show Tänään, Eilen and Toissapäivänä. Bubble clocks and chat-row timestamps are unchanged.
 - The four-way queue toggle can show chat counts for All, Unread, Reply later and Read later. Settings > Chats > Show queue counts is on by default; turn it off for icons only. Counts follow the current search and filters, count linked people once, and are separate from unread-message counts.
 

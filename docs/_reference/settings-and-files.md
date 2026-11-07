@@ -112,7 +112,7 @@ attach the archive, keys, or full logs from older releases.
 ## Settings
 
 Changes on the Settings page are saved to `settings.json` immediately. The
-search field at the top (`Ctrl+F`, Command+F on macOS) finds a setting by its
+search field at the top finds a setting by its
 name or description, in the interface language or in English.
 
 **Appearance**

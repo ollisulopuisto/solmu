@@ -14,7 +14,7 @@ use crate::wallpaper;
 
 use super::widgets;
 
-/// The settings search field, which Ctrl+F focuses on this page.
+/// The settings search field, focused by clicking it.
 pub const SEARCH_ID: &str = "settings-search";
 
 /// A settings string with its English source, so the search finds a
@@ -314,7 +314,7 @@ pub fn column_id() -> egui::Id {
     egui::Id::new("settings-column")
 }
 
-/// The search field above the settings. Ctrl+F focuses it.
+/// The search field above the settings.
 fn search(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let mut text = app.settings_search.clone();
