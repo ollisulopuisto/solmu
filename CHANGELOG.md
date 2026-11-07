@@ -19,10 +19,14 @@ version in Cargo.toml is bumped.
 
 - Search shortcuts now have fixed scopes on macOS and elsewhere: Cmd/Ctrl+F searches within the open chat only, Cmd/Ctrl+Shift+F searches all messages and chats, and Cmd/Ctrl+K stays recent chats. macOS Edit menus now match the keyboard instead of routing Cmd+F to the global search. Settings search is reached by clicking its field, not by changing Cmd+F's meaning.
 
+## v0.24.1
+
+- macOS: Cmd-Tab now restores minimized Solmu windows by default after real-device testing of the opt-in. Set `SOLMU_EXPERIMENTAL_RESTORE_MINIMIZED=0` when launching to opt out. Closed-window activation and Dock reopen keep their existing paths.
+
 - Conversation day separators now show Today, Yesterday and Day before yesterday, then short numeric dates in the system locale's order. Dates from another year include the full year. Finnish regions show Tänään, Eilen and Toissapäivänä. Bubble clocks and chat-row timestamps are unchanged.
 - The four-way queue toggle can show chat counts for All, Unread, Reply later and Read later. Settings > Chats > Show queue counts is on by default; turn it off for icons only. Counts follow the current search and filters, count linked people once, and are separate from unread-message counts.
 
-- macOS: explicitly subscribe the late-installed Cmd-Tab activation handler with standalone method type encodings so it reliably requests a new window when running headless, and provide experimental direct minimized-window restoration behind `SOLMU_EXPERIMENTAL_RESTORE_MINIMIZED=1` (off by default, awaiting native acceptance). Dock reopen stays separate.
+- macOS: explicitly subscribe the late-installed Cmd-Tab activation handler with standalone method type encodings so it reliably requests a new window when running headless, and provide direct minimized-window restoration (now on by default; set `SOLMU_EXPERIMENTAL_RESTORE_MINIMIZED=0` to opt out). Dock reopen stays separate.
 - Favorites ordering avoids normalizing ordinary ASCII search text just to test emptiness, while preserving Unicode search behavior.
 
 - Sidebar shortcuts follow the visible queue: Cmd+Option+3 (Ctrl+Alt+3 elsewhere) selects Reply later, and 5 toggles Favorites only. Network tooltips now show Option/Alt without Command/Ctrl. Fixed the off-Mac Ctrl+Shift+1 Chats collision and corrected shortcut help and guide references.
