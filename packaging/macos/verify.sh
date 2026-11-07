@@ -25,7 +25,7 @@ client="$app/Contents/MacOS/solmu-client"
 identity="$(codesign --display --verbose=4 "$client" 2>&1)"
 grep -qx 'Identifier=fi.sulopuisto.fast-beeper.client' <<< "$identity"
 grep -qx 'TeamIdentifier=LWSR8T5392' <<< "$identity"
-requirement="$(codesign --display --requirements - "$client" 2>&1)"
+requirement="$(codesign -d -r- "$client" 2>&1)"
 grep -Fq 'identifier "fi.sulopuisto.fast-beeper.client"' <<< "$requirement"
 grep -Fq 'LWSR8T5392' <<< "$requirement"
 if grep -Eq 'cdhash|55554944' <<< "$requirement"; then
