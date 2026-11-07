@@ -2318,6 +2318,12 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
         match part {
             "history-date" => history_date_sample(app),
             "minute-gutter" => minute_gutter_sample(app),
+            "group-footer-status" => {
+                minute_gutter_sample(app);
+                let history = app.conversations.get_mut(SAMPLES[0].id).unwrap();
+                history.messages[3].status = crate::model::Delivery::Unknown;
+                history.messages[4].status = crate::model::Delivery::Failed;
+            }
             "linked-minute-gutter" => {
                 linked_sample(app);
                 minute_gutter_sample(app);
@@ -4832,12 +4838,12 @@ mod tests {
                 .unwrap_or_else(|| panic!("painted time {clock}"));
             let time_rect = egui::Rect::from_min_size(*time_pos, time.size());
             assert!(
-                time_rect.left() > body_right,
-                "own timestamp stays in the shared right-edge gutter"
+                time_rect.right() <= body_right + 12.0,
+                "own timestamp stays at its bubble's right edge"
             );
             assert!(
-                time_rect.bottom() >= body_bottom - 12.0,
-                "timestamp stays near the bubble bottom"
+                time_rect.top() >= body_bottom,
+                "timestamp is below the bubble body"
             );
             let body_rect = body
                 .rows

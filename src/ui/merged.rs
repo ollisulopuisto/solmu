@@ -919,6 +919,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                     Action::Reply(id) => {
                                         selected_reply = Some((member.clone(), id));
                                     }
+                                    Action::PrefillComposer { text, .. } => {
+                                        if app.composer.trim().is_empty()
+                                            && app.reply_to.is_none()
+                                            && app.editing.is_none()
+                                        {
+                                            state.destination = Some(member.clone());
+                                            state.explicit = true;
+                                            actions.push(Action::PrefillComposer {
+                                                chat: chat.id.clone(),
+                                                text,
+                                            });
+                                        } else {
+                                            refused_action = true;
+                                        }
+                                    }
                                     Action::Edit(_)
                                     | Action::SelectMessage(_)
                                     | Action::SweepMessages { .. }

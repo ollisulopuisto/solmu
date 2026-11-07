@@ -4480,32 +4480,13 @@ fn bubble(
     } else {
         WHATSAPP_WIDTH_SHARE
     };
-    let last = album.and_then(|items| items.last()).unwrap_or(message);
-    let metadata = footer_width(
-        ui,
-        view.locale,
-        last,
-        view.starred.is_some_and(|ids| ids.contains(&last.id)),
-        view.pins.is_some_and(|ids| ids.contains(&last.id)),
-    );
-    // Reserve a stable right-edge metadata gutter for both directions.
+    // The footer is below the group, so it no longer steals bubble width.
     let max_width = ((ui.available_width() * share).min(if carousel { 920.0 } else { 560.0 })
         - if with_avatar {
             SENDER_AVATAR + 8.0
         } else {
             0.0
         })
-    .min(
-        (ui.available_width()
-            - metadata.max(100.0)
-            - 8.0
-            - if with_avatar {
-                SENDER_AVATAR + 8.0
-            } else {
-                0.0
-            })
-        .max(0.0),
-    )
     .max(0.0);
     // Register the empty strip beside the bubble from its previous rect, before
     // the row, so the avatar, the bubble, and the reactions win clicks, and the
@@ -4529,7 +4510,7 @@ fn bubble(
     }
     let mut response = None;
     let mut area = ui.available_rect_before_wrap();
-    area.max.x = footer_right - metadata.max(100.0) - 8.0;
+    area.max.x = footer_right;
     ui.scope_builder(
         egui::UiBuilder::new()
             .max_rect(area)
@@ -5225,26 +5206,46 @@ fn bubble_frame(
     let last = album.and_then(|items| items.last()).unwrap_or(message);
     let starred = view.starred.is_some_and(|ids| ids.contains(&last.id));
     let pinned = view.pins.is_some_and(|ids| ids.contains(&last.id));
-    let metadata_width = footer_width(ui, view.locale, last, starred, pinned);
-    let metadata = if let Some(right) = view.footer_right {
-        aligned_footer_rect(inner.response.rect, metadata_width.max(100.0), right)
-    } else {
-        external_footer_rect(inner.response.rect, metadata_width, own)
-    };
     let outside_view = View {
         palette: outside_palette,
         ..*view
     };
-    footer(
-        ui,
-        &outside_view,
-        last,
-        Some(metadata),
-        starred,
-        pinned,
-        actions,
-    );
-    ui.expand_to_include_rect(metadata);
+    let status = shown_delivery(&outside_view, last);
+    let visible_status = last.from_me && !matches!(status, Delivery::None | Delivery::Unknown);
+    let visible_footer = view.show_timestamp || visible_status || starred || pinned || last.edited;
+    if visible_footer {
+        let mut metadata_width = footer_width(ui, view.locale, last, starred, pinned);
+        if !view.show_timestamp {
+            metadata_width -= clock_width(ui, view.locale, last);
+        }
+        if last.from_me && !visible_status {
+            metadata_width -= 19.0;
+        }
+        let metadata = group_footer_rect(inner.response.rect, metadata_width.max(1.0), own);
+        footer(
+            ui,
+            &outside_view,
+            last,
+            Some(metadata),
+            starred,
+            pinned,
+            actions,
+        );
+        ui.expand_to_include_rect(metadata);
+    } else {
+        ui.ctx().data_mut(|data| {
+            data.remove::<Rect>(footer_id(&last.chat, &last.id));
+        });
+    }
+    // A missing receipt is inspectable but not a floating dash on every row.
+    if last.from_me && status == Delivery::Unknown {
+        ui.interact(
+            inner.response.rect,
+            ui.id().with(("unknown-delivery", &last.id)),
+            Sense::hover(),
+        )
+        .on_hover_text("Delivery status unavailable");
+    }
     if fill != Color32::TRANSPARENT && ui.is_rect_visible(inner.response.rect) {
         ui.painter().set(
             backdrop,
@@ -5890,7 +5891,15 @@ fn footer_width(
     };
     let not_sent = if not_sent(message) {
         ui.painter()
-            .layout_no_wrap(NOT_SENT.to_owned(), theme::medium(11.0), Color32::WHITE)
+            .layout_no_wrap(
+                if matches!(message.content, Content::Text { .. }) {
+                    "Not sent · Try again".to_owned()
+                } else {
+                    NOT_SENT.to_owned()
+                },
+                theme::medium(11.0),
+                Color32::WHITE,
+            )
             .size()
             .x
             + 6.0
@@ -6016,27 +6025,13 @@ pub(crate) fn last_minute_in_run(message: &Message, next: Option<&Message>) -> b
     })
 }
 
-fn aligned_footer_rect(bubble: Rect, width: f32, right: f32) -> Rect {
-    Rect::from_min_size(
-        pos2(
-            right - width,
-            (bubble.bottom() - FOOTER_HEIGHT).max(bubble.top()),
-        ),
-        vec2(width, FOOTER_HEIGHT),
-    )
-}
-
-/// The metadata strip sits outside the bubble toward the conversation centre.
-fn external_footer_rect(bubble: Rect, width: f32, own: bool) -> Rect {
+fn group_footer_rect(bubble: Rect, width: f32, own: bool) -> Rect {
     let x = if own {
-        bubble.left() - 8.0 - width
+        bubble.right() - width
     } else {
-        bubble.right() + 8.0
+        bubble.left()
     };
-    Rect::from_min_size(
-        pos2(x, (bubble.bottom() - FOOTER_HEIGHT).max(bubble.top())),
-        vec2(width, FOOTER_HEIGHT),
-    )
+    Rect::from_min_size(pos2(x, bubble.bottom() + 3.0), vec2(width, FOOTER_HEIGHT))
 }
 
 /// Paints the clock/status strip, including an explicit externally supplied slot.
@@ -6068,14 +6063,17 @@ fn footer(
     // uses the text colour: the danger red on an outgoing bubble is too faint
     // to read, and the red icon beside it already carries the alarm.
     let failed = not_sent(message).then(|| {
+        let label = if matches!(message.content, Content::Text { .. }) {
+            "Not sent · Try again"
+        } else {
+            NOT_SENT
+        };
         ui.painter()
-            .layout_no_wrap(NOT_SENT.to_owned(), theme::medium(11.0), palette.text)
+            .layout_no_wrap(label.to_owned(), theme::medium(11.0), palette.text)
     });
-    let tick_width = if message.from_me || view.footer_right.is_some() {
-        19.0
-    } else {
-        0.0
-    };
+    let status = shown_delivery(view, message);
+    let has_tick = message.from_me && !matches!(status, Delivery::None | Delivery::Unknown);
+    let tick_width = if has_tick { 19.0 } else { 0.0 };
     let width = time.size().x
         + edited.as_ref().map_or(0.0, |galley| galley.size().x + 4.0)
         + failed.as_ref().map_or(0.0, |galley| galley.size().x + 6.0)
@@ -6101,9 +6099,9 @@ fn footer(
     )
     .on_hover_text(crate::util::full_stamp(message.timestamp));
     let mut x = rect.right();
-    if message.from_me {
+    if has_tick {
         let ticks = Rect::from_center_size(pos2(x - 7.5, rect.center().y), Vec2::splat(15.0));
-        widgets::ticks(ui, palette, ticks, shown_delivery(view, message));
+        widgets::ticks(ui, palette, ticks, status);
     }
     x -= tick_width;
     x -= time.size().x;
@@ -6158,6 +6156,23 @@ fn footer(
             egui::WidgetInfo::labeled(egui::WidgetType::Label, true, NOT_SENT_HINT)
         });
         response.on_hover_text(NOT_SENT_HINT);
+        if let Content::Text { text, .. } = &message.content {
+            let retry = ui
+                .interact(
+                    status,
+                    ui.id().with(("retry-text", &message.id)),
+                    Sense::click(),
+                )
+                .on_hover_text(
+                    "Restore text to an empty composer for review. Send it yourself; existing drafts are never replaced.",
+                );
+            if retry.clicked() {
+                actions.push(Action::PrefillComposer {
+                    chat: message.chat.clone(),
+                    text: text.clone(),
+                });
+            }
+        }
     }
     if starred {
         x -= FOOTER_MARK_SLOT;
@@ -10831,6 +10846,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unknown_delivery_footer_keeps_no_clockless_status_slot() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            let mut unknown = message(Content::text("Test"));
+            unknown.from_me = true;
+            unknown.status = Delivery::Unknown;
+            let view = View {
+                show_timestamp: false,
+                ..*view
+            };
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                footer(
+                    ui,
+                    &view,
+                    &unknown,
+                    Some(Rect::from_min_size(pos2(10.0, 10.0), vec2(100.0, 20.0))),
+                    false,
+                    false,
+                    &mut Vec::new(),
+                );
+            });
+            output.textures_delta.clear();
+            assert_eq!(
+                ctx.data(|data| data.get_temp::<Rect>(footer_id(&unknown.chat, &unknown.id)))
+                    .unwrap()
+                    .width(),
+                0.0
+            );
+        });
+    }
+
+    #[test]
     fn timestamp_only_ends_a_consecutive_same_sender_minute() {
         let mut first = message(Content::text("18:40"));
         first.timestamp = 18 * 3600 + 40 * 60;
@@ -10853,16 +10900,20 @@ mod tests {
     }
 
     #[test]
-    fn aligned_timestamp_gutter_has_one_right_edge_across_bubble_widths() {
+    fn group_footer_stays_below_its_bubble_on_the_sender_edge() {
         for (left, width) in [(20.0, 100.0), (20.0, 400.0), (310.0, 110.0)] {
             let bubble = Rect::from_min_size(pos2(left, 30.0), vec2(width, 80.0));
-            let strip = aligned_footer_rect(bubble, 100.0, 540.0);
-            assert_eq!(strip.right(), 540.0);
-            assert!(!strip.intersects(bubble));
-            assert_eq!(strip.bottom(), bubble.bottom());
+            for own in [false, true] {
+                let strip = group_footer_rect(bubble, 80.0, own);
+                assert_eq!(strip.top(), bubble.bottom() + 3.0);
+                assert!(!strip.intersects(bubble));
+                if own {
+                    assert_eq!(strip.right(), bubble.right());
+                } else {
+                    assert_eq!(strip.left(), bubble.left());
+                }
+            }
         }
-        assert_eq!(DAY_SPACE_ABOVE, 12.0);
-        assert_eq!(DAY_SPACE_BELOW, 14.0);
     }
 
     #[test]
@@ -11655,18 +11706,13 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_strip_is_outside_both_directions_and_retains_marks() {
+    fn timestamp_footer_is_below_both_directions_and_retains_marks() {
         let bubble = Rect::from_min_size(pos2(140.0, 20.0), vec2(100.0, 45.0));
         for own in [false, true] {
-            let strip = external_footer_rect(bubble, 80.0, own);
+            let strip = group_footer_rect(bubble, 80.0, own);
             assert!(!strip.intersects(bubble));
-            assert_eq!(strip.bottom(), bubble.bottom());
+            assert_eq!(strip.top(), bubble.bottom() + 3.0);
             assert_eq!(strip.width(), 80.0);
-            if own {
-                assert_eq!(strip.right(), bubble.left() - 8.0);
-            } else {
-                assert_eq!(strip.left(), bubble.right() + 8.0);
-            }
         }
     }
 
@@ -11884,7 +11930,7 @@ mod tests {
                             ui,
                             view,
                             &message,
-                            Some(external_footer_rect(
+                            Some(group_footer_rect(
                                 picture,
                                 footer_width(ui, view.locale, &message, starred, pinned),
                                 false,

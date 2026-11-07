@@ -9,6 +9,11 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.6
+
+- Message clocks sit below the final bubble of each same-sender/source minute, aligned with that sender's edge. The wide right-hand clock gutter is removed.
+- Unknown delivery status no longer paints a standalone dash in the transcript; hover still explains that the status is unavailable. Real pending, sent, delivered/read and failed states remain visible. Failed text can be restored to the composer for review by clicking its failure label; nothing is sent automatically.
+
 ## v0.24.5
 
 - Day changes have more room above and below their labels in ordinary and linked timelines.

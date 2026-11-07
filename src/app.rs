@@ -7993,6 +7993,8 @@ impl App {
                     self.emoji_start = None;
                     self.mention_start = None;
                     self.focus_composer = true;
+                } else {
+                    self.toast("Keep or clear your current draft before restoring this text.");
                 }
             }
             Action::MessageYourself => {
