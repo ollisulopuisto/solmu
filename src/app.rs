@@ -5752,7 +5752,12 @@ impl App {
         // A hidden account's remembered chat is not being read: marking it
         // read would send receipts for messages nobody has seen.
         let remembered = self.open_chat.as_deref() == Some(chat.id.as_str());
+        let reading = self
+            .open_chat
+            .as_deref()
+            .is_some_and(|open| self.read_chat_ids(open).iter().any(|id| id == &chat.id));
         let is_open = live && remembered && self.chat_view();
+        let is_reading = live && reading && self.chat_view();
         let mut chat = chat;
         self.apply_silence(&mut chat);
         if chat.unread == 0 {
@@ -5762,16 +5767,17 @@ impl App {
                 self.reset_notification_throttle(&chat.id);
             }
         }
-        if is_open
+        if is_reading
             && !self.settings.beeper.incognito
             && (!chat.locked || self.locked_folder_open())
-            && chat.unread > 0
+            && (chat.unread > 0 || chat.marked_unread)
             && self.window_focused
             && !self.window_hidden
         {
             chat.unread = 0;
+            chat.marked_unread = false;
             chat.unread_mention = None;
-            self.mark_read(&chat.id);
+            self.mark_source_read(&chat.id);
         }
         // Inside the authenticated folder the chat stays open; otherwise a
         // lock closes and clears everything it left behind.
@@ -6702,7 +6708,63 @@ impl App {
         });
     }
 
+    /// Exact unlocked source chats displayed together in a linked timeline.
+    /// Match the view's eligibility checks; a stale link never expands reads.
+    fn read_chat_ids(&self, chat: &str) -> Vec<ChatId> {
+        let Some(source) = self.chat(chat) else {
+            return vec![chat.to_owned()];
+        };
+        let Some(person) = self
+            .settings
+            .beeper
+            .people
+            .iter()
+            .find(|person| person.members.iter().any(|member| member.matches(source)))
+        else {
+            return vec![chat.to_owned()];
+        };
+        let ids: Vec<_> = person
+            .members
+            .iter()
+            .filter_map(|member| {
+                self.chats
+                    .iter()
+                    .find(|known| {
+                        member.matches(known)
+                            && !known.locked
+                            && known.kind == crate::model::ChatKind::Direct
+                            && known.backend_origin == source.backend_origin
+                            && self
+                                .chats
+                                .iter()
+                                .filter(|other| other.id == known.id)
+                                .count()
+                                == 1
+                    })
+                    .map(|known| known.id.clone())
+            })
+            .collect();
+        if (2..=8).contains(&ids.len()) && ids.iter().any(|id| id == chat) {
+            ids
+        } else {
+            vec![chat.to_owned()]
+        }
+    }
+
+    fn reading_chat_has_unread(&self, chat: &str) -> bool {
+        self.read_chat_ids(chat).iter().any(|id| {
+            self.chat(id)
+                .is_some_and(|known| known.unread > 0 || known.marked_unread)
+        })
+    }
+
     fn mark_read(&mut self, chat: &str) {
+        for id in self.read_chat_ids(chat) {
+            self.mark_source_read(&id);
+        }
+    }
+
+    fn mark_source_read(&mut self, chat: &str) {
         self.clear_chat_notifications(chat);
         self.reset_notification_throttle(chat);
         if let Some(known) = self.chat_mut(chat) {
@@ -6988,11 +7050,7 @@ impl App {
         {
             self.fetch_older(&id, false);
         }
-        if self
-            .chat(&id)
-            .is_some_and(|chat| chat.unread > 0 || chat.marked_unread)
-            && !self.settings.beeper.incognito
-        {
+        if self.reading_chat_has_unread(&id) && !self.settings.beeper.incognito {
             self.mark_read(&id);
         }
         if self.settings.last_chat.as_deref() != Some(id.as_str()) {
@@ -11811,7 +11869,7 @@ impl App {
             && !self.settings.beeper.incognito
             && self.chat_view()
             && let Some(open) = self.open_chat.clone()
-            && self.chat(&open).is_some_and(|chat| chat.unread > 0)
+            && self.reading_chat_has_unread(&open)
         {
             self.mark_read(&open);
         }
@@ -26642,6 +26700,97 @@ mod person_tests {
             members,
             primary: None,
         }
+    }
+
+    fn linked_unread_app() -> App {
+        let mut app = app();
+        let wa = member_chat("ada-wa", "whatsapp", 0, 10);
+        let mut tg = member_chat("ada-tg", "telegram", 3, 20);
+        tg.marked_unread = true;
+        app.chats = vec![wa.clone(), tg.clone()];
+        app.settings.beeper.people.push(ada(vec![
+            Member::of(&wa).unwrap(),
+            Member::of(&tg).unwrap(),
+        ]));
+        app
+    }
+
+    #[test]
+    fn explicit_read_clears_all_exact_linked_members_and_sends_each_source() {
+        let mut app = linked_unread_app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        app.mark_read("ada-wa");
+        let display = app.beeper_person_preview(app.chat("ada-wa").unwrap());
+        assert_eq!(display.unread, 0);
+        assert!(!display.marked_unread);
+        let read: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok())
+            .filter_map(|command| match command {
+                Command::MarkRead { chat, .. } => Some(chat),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(read, ["ada-wa", "ada-tg"]);
+    }
+
+    #[test]
+    fn explicit_linked_read_keeps_read_receipt_privacy_flag_for_every_source() {
+        let mut app = linked_unread_app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        app.account_mut().settings.send_read_receipts = false;
+        app.mark_read("ada-wa");
+        assert!(!app.reading_chat_has_unread("ada-wa"));
+        let read: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok())
+            .filter_map(|command| match command {
+                Command::MarkRead { receipts, .. } => Some(receipts),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(read, [false, false]);
+    }
+
+    #[test]
+    fn opening_linked_chat_clears_unread_on_a_nonrepresentative_member() {
+        let mut app = linked_unread_app();
+        app.open_chat("ada-wa".into());
+        assert!(!app.reading_chat_has_unread("ada-wa"));
+    }
+
+    #[test]
+    fn live_nonrepresentative_updates_clear_only_while_reading_and_focused() {
+        for focused in [true, false] {
+            let mut app = linked_unread_app();
+            app.open_chat = Some("ada-wa".into());
+            app.page = Page::Chats;
+            app.window_focused = focused;
+            app.window_hidden = false;
+            let update = app.chat("ada-tg").unwrap().clone();
+            app.handle_chat_updated(update, true);
+            assert_eq!(
+                app.chat("ada-tg").unwrap().unread,
+                if focused { 0 } else { 3 }
+            );
+            assert_eq!(app.chat("ada-tg").unwrap().marked_unread, !focused);
+        }
+    }
+
+    #[test]
+    fn linked_read_preserves_incognito_hidden_and_stale_or_locked_sources() {
+        let mut app = linked_unread_app();
+        app.settings.beeper.incognito = true;
+        app.open_chat("ada-wa".into());
+        assert!(app.reading_chat_has_unread("ada-wa"));
+        app.handle_chat_updated(app.chat("ada-tg").unwrap().clone(), false);
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
+        app.settings.beeper.incognito = false;
+        app.chat_mut("ada-tg").unwrap().locked = true;
+        app.mark_read("ada-wa");
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
+        app.chat_mut("ada-tg").unwrap().locked = false;
+        app.chat_mut("ada-tg").unwrap().backend_account = Some("replacement-account".into());
+        app.mark_read("ada-wa");
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
     }
 
     #[test]
