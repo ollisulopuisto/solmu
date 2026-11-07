@@ -706,7 +706,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                             "Loading linked histories…"
                         });
                     }
-                    for original_message in visible {
+                    for (visible_index, original_message) in visible.iter().copied().enumerate() {
                         let top = ui.cursor().top();
                         // A row the reader cannot see costs its cached or
                         // estimated height and nothing else: no timezone
@@ -816,7 +816,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                 message.sender_name.as_deref().unwrap_or("Sender")
                             };
                             if day_boundary {
+                                ui.add_space(super::conversation::DAY_SPACE_ABOVE);
                                 ui.small(crate::util::day_label(app.locale, message.timestamp));
+                                ui.add_space(super::conversation::DAY_SPACE_BELOW);
                             } else if boundary {
                                 ui.add_space(4.0);
                             }
@@ -881,6 +883,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                             ui,
                                             &source_chat,
                                             message,
+                                            super::conversation::last_minute_in_run(
+                                                original_message,
+                                                visible.get(visible_index + 1).copied(),
+                                            ),
+                                            timeline.right() - 8.0,
                                             &mut actions,
                                         )
                                     },

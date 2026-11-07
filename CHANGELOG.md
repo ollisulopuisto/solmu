@@ -9,6 +9,11 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.5
+
+- Day changes have more room above and below their labels in ordinary and linked timelines.
+- Message clocks align in a fixed right-edge gutter instead of following each bubble's width. Consecutive same-sender, same-source messages in one minute show the clock only beside the last bubble. Status ticks, edited/failure notices, pin/star marks and exact-time hovers remain available.
+
 ## v0.24.4
 
 - Chat header actions now use outlined icon cells beside Search, with green active states and tooltips. Linked timelines use the same single header row, including at narrow widths.

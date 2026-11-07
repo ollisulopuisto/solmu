@@ -2317,6 +2317,11 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
     for part in page.split(',').map(str::trim) {
         match part {
             "history-date" => history_date_sample(app),
+            "minute-gutter" => minute_gutter_sample(app),
+            "linked-minute-gutter" => {
+                linked_sample(app);
+                minute_gutter_sample(app);
+            }
             "day-separators" => day_separators_sample(app),
             "linked-day-separators" => {
                 linked_sample(app);
@@ -4187,6 +4192,44 @@ fn history_date_sample(app: &mut App) {
     app.open_chat = Some(chat.into());
     app.scroll_to_bottom = false;
     app.scroll_anchor = Some("history-date-45".into());
+}
+
+fn minute_gutter_sample(app: &mut App) {
+    let chat = SAMPLES[0].id;
+    let (start, _) = crate::util::day_bounds(crate::util::today()).unwrap();
+    let base = start + 18 * 3600 + 40 * 60;
+    let rows = [
+        (false, 0, "First note"),
+        (false, 60, "Second note, same minute as the next"),
+        (false, 80, "Third note"),
+        (true, 90, "A reply"),
+        (
+            true,
+            100,
+            "And one more reply, all clocks share the same column",
+        ),
+        (
+            false,
+            180,
+            "A longer incoming note that wraps across the page so the clock is not pinned to the end of the bubble",
+        ),
+    ];
+    app.conversations.entry(chat.into()).or_default().messages = rows
+        .into_iter()
+        .enumerate()
+        .map(|(index, (own, offset, text))| {
+            message(
+                chat,
+                &format!("minute-gutter-{index}"),
+                own,
+                base + offset,
+                Content::text(text),
+            )
+        })
+        .collect();
+    app.open_chat = Some(chat.into());
+    app.typing.clear();
+    app.scroll_to_bottom = true;
 }
 
 /// Compact calendar-day fixture for localized separator screenshots.

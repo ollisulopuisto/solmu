@@ -2476,6 +2476,8 @@ pub(crate) fn reply_strip_id() -> egui::Id {
 
 /// App data needed while drawing a checked-out conversation.
 struct View<'a> {
+    show_timestamp: bool,
+    footer_right: Option<f32>,
     palette: Palette,
     locale: crate::i18n::Locale,
     chat: &'a Chat,
@@ -2586,10 +2588,11 @@ fn album_run(messages: &[Message], start: usize) -> Option<&[Message]> {
     (end > start + 1).then_some(&messages[start..end])
 }
 
-/// A row height to assume for a message that has not been laid out yet. Rows
-/// near the viewport are always measured, and a change in the height of a row
-/// above the viewport moves the scroll offset with it, so this only shapes the
-/// scrollbar until the reader scrolls near the row.
+/// Explicit breathing room around calendar-day boundaries.
+pub(crate) const DAY_SPACE_ABOVE: f32 = 12.0;
+pub(crate) const DAY_SPACE_BELOW: f32 = 14.0;
+
+/// Estimate rows until measured near the viewport, including day-separator gaps.
 fn estimated_height(message: &Message, width: f32, new_day: bool, notices: usize) -> f32 {
     // Bubbles take at most 72% of the transcript, and 560 points.
     let bubble = ((width * 0.72).min(560.0) - 20.0).max(40.0);
@@ -2618,7 +2621,13 @@ fn estimated_height(message: &Message, width: f32, new_day: bool, notices: usize
     // Bubble padding, the sender line, and the row spacing, plus the date
     // chip above the first message of a day, and any pin notice this row
     // carries.
-    40.0 + body + if new_day { 36.0 } else { 0.0 } + notices as f32 * PIN_NOTICE_HEIGHT
+    40.0 + body
+        + if new_day {
+            24.0 + DAY_SPACE_ABOVE + DAY_SPACE_BELOW
+        } else {
+            0.0
+        }
+        + notices as f32 * PIN_NOTICE_HEIGHT
 }
 
 /// The pins the transcript places, oldest first. `chat_pins` hands them over
@@ -2853,6 +2862,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     let list_label =
         || crate::a11y::messages_list_label(app.locale, &app.chat_title(chat), chat.is_group());
     let view = View {
+        show_timestamp: true,
+        footer_right: None,
         palette,
         locale: app.locale,
         chat,
@@ -3203,7 +3214,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                 != crate::util::day_key(message.timestamp)
                         });
                         if new_day {
-                            day_separator_top = before + 8.0;
+                            day_separator_top = before + DAY_SPACE_ABOVE;
                         }
                         let here = notices_above(&notices[placed..], message.timestamp);
                         let known = rows.get(&message.id).copied();
@@ -3289,7 +3300,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                             if hidden { builder.invisible() } else { builder },
                             |ui| {
                                 if new_day {
-                                    ui.add_space(8.0);
+                                    ui.add_space(DAY_SPACE_ABOVE);
                                     ui.vertical_centered(|ui| {
                                         widgets::chip(
                                             ui,
@@ -3297,7 +3308,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                             &crate::util::day_label(app.locale, message.timestamp),
                                         );
                                     });
-                                    ui.add_space(4.0);
+                                    ui.add_space(DAY_SPACE_BELOW);
                                 }
                                 for _ in 0..here {
                                     let Some(notice) = notices.get(placed) else {
@@ -3382,6 +3393,16 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                                 message,
                                                 album,
                                                 RunPlace {
+                                                    show_timestamp: last_minute_in_run(
+                                                        album
+                                                            .and_then(|items| items.last())
+                                                            .unwrap_or(message),
+                                                        conversation.messages.get(
+                                                            message_index
+                                                                + album
+                                                                    .map_or(1, |items| items.len()),
+                                                        ),
+                                                    ),
                                                     show_sender,
                                                     show_avatar,
                                                     tailed,
@@ -3399,6 +3420,15 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                         message,
                                         album,
                                         RunPlace {
+                                            show_timestamp: last_minute_in_run(
+                                                album
+                                                    .and_then(|items| items.last())
+                                                    .unwrap_or(message),
+                                                conversation.messages.get(
+                                                    message_index
+                                                        + album.map_or(1, |items| items.len()),
+                                                ),
+                                            ),
                                             show_sender,
                                             show_avatar,
                                             tailed,
@@ -4413,6 +4443,7 @@ fn reaction_affordance(
 /// shows their picture, and carries the bubble's tail.
 #[derive(Clone, Copy)]
 struct RunPlace {
+    show_timestamp: bool,
     show_sender: bool,
     show_avatar: bool,
     tailed: bool,
@@ -4428,10 +4459,17 @@ fn bubble(
     actions: &mut Vec<Action>,
 ) -> Option<egui::Response> {
     let RunPlace {
+        show_timestamp,
         show_sender,
         show_avatar,
         tailed,
     } = place;
+    let footer_right = view.footer_right.unwrap_or(ui.max_rect().right());
+    let view = &View {
+        show_timestamp,
+        footer_right: Some(footer_right),
+        ..*view
+    };
     let own = message.from_me;
     let with_avatar = !own && shows_sender_pictures(view.chat);
     let carousel = matches!(&message.content, Content::Interactive { card: Some(card), .. } if !card.carousel.is_empty());
@@ -4450,7 +4488,7 @@ fn bubble(
         view.starred.is_some_and(|ids| ids.contains(&last.id)),
         view.pins.is_some_and(|ids| ids.contains(&last.id)),
     );
-    // Keep the clock/status strip in the free space toward the centre.
+    // Reserve a stable right-edge metadata gutter for both directions.
     let max_width = ((ui.available_width() * share).min(if carousel { 920.0 } else { 560.0 })
         - if with_avatar {
             SENDER_AVATAR + 8.0
@@ -4459,7 +4497,7 @@ fn bubble(
         })
     .min(
         (ui.available_width()
-            - metadata
+            - metadata.max(100.0)
             - 8.0
             - if with_avatar {
                 SENDER_AVATAR + 8.0
@@ -4490,8 +4528,12 @@ fn bubble(
         reply_on_double_click(&strip, message, actions);
     }
     let mut response = None;
-    ui.with_layout(
-        Layout::top_down(if own { Align::Max } else { Align::Min }),
+    let mut area = ui.available_rect_before_wrap();
+    area.max.x = footer_right - metadata.max(100.0) - 8.0;
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(area)
+            .layout(Layout::top_down(if own { Align::Max } else { Align::Min })),
         |ui| {
             if with_avatar {
                 ui.horizontal_top(|ui| {
@@ -5184,7 +5226,11 @@ fn bubble_frame(
     let starred = view.starred.is_some_and(|ids| ids.contains(&last.id));
     let pinned = view.pins.is_some_and(|ids| ids.contains(&last.id));
     let metadata_width = footer_width(ui, view.locale, last, starred, pinned);
-    let metadata = external_footer_rect(inner.response.rect, metadata_width, own);
+    let metadata = if let Some(right) = view.footer_right {
+        aligned_footer_rect(inner.response.rect, metadata_width.max(100.0), right)
+    } else {
+        external_footer_rect(inner.response.rect, metadata_width, own)
+    };
     let outside_view = View {
         palette: outside_palette,
         ..*view
@@ -5961,6 +6007,25 @@ fn not_sent(message: &Message) -> bool {
     message.from_me && message.status == Delivery::Failed
 }
 
+/// Only the final consecutive same-source, same-sender, same-minute bubble gets a clock.
+pub(crate) fn last_minute_in_run(message: &Message, next: Option<&Message>) -> bool {
+    next.is_none_or(|next| {
+        message.chat != next.chat
+            || !same_run(message, next)
+            || message.timestamp.div_euclid(60) != next.timestamp.div_euclid(60)
+    })
+}
+
+fn aligned_footer_rect(bubble: Rect, width: f32, right: f32) -> Rect {
+    Rect::from_min_size(
+        pos2(
+            right - width,
+            (bubble.bottom() - FOOTER_HEIGHT).max(bubble.top()),
+        ),
+        vec2(width, FOOTER_HEIGHT),
+    )
+}
+
 /// The metadata strip sits outside the bubble toward the conversation centre.
 fn external_footer_rect(bubble: Rect, width: f32, own: bool) -> Rect {
     let x = if own {
@@ -5987,7 +6052,11 @@ fn footer(
     let palette = &view.palette;
     let font = theme::regular(11.0);
     let time = ui.painter().layout_no_wrap(
-        crate::util::clock(message.timestamp),
+        if view.show_timestamp {
+            crate::util::clock(message.timestamp)
+        } else {
+            String::new()
+        },
         font.clone(),
         palette.secondary,
     );
@@ -6002,7 +6071,11 @@ fn footer(
         ui.painter()
             .layout_no_wrap(NOT_SENT.to_owned(), theme::medium(11.0), palette.text)
     });
-    let tick_width = if message.from_me { 19.0 } else { 0.0 };
+    let tick_width = if message.from_me || view.footer_right.is_some() {
+        19.0
+    } else {
+        0.0
+    };
     let width = time.size().x
         + edited.as_ref().map_or(0.0, |galley| galley.size().x + 4.0)
         + failed.as_ref().map_or(0.0, |galley| galley.size().x + 6.0)
@@ -6031,8 +6104,8 @@ fn footer(
     if message.from_me {
         let ticks = Rect::from_center_size(pos2(x - 7.5, rect.center().y), Vec2::splat(15.0));
         widgets::ticks(ui, palette, ticks, shown_delivery(view, message));
-        x -= tick_width;
     }
+    x -= tick_width;
     x -= time.size().x;
     ui.painter().galley(
         pos2(x, rect.center().y - time.size().y / 2.0),
@@ -6278,6 +6351,8 @@ pub(crate) fn list_menu(
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
     let view = View {
+        show_timestamp: true,
+        footer_right: None,
         palette: app.conversation_palette(),
         locale: app.locale,
         chat,
@@ -6328,6 +6403,8 @@ pub(crate) fn linked_bubble(
     ui: &mut egui::Ui,
     chat: &Chat,
     message: &Message,
+    show_timestamp: bool,
+    footer_right: f32,
     actions: &mut Vec<Action>,
 ) -> Option<egui::Rect> {
     // The message's own source network hues its bubbles; a small network
@@ -6349,6 +6426,8 @@ pub(crate) fn linked_bubble(
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
     let view = View {
+        show_timestamp,
+        footer_right: Some(footer_right),
         palette,
         locale: app.locale,
         chat,
@@ -6390,6 +6469,7 @@ pub(crate) fn linked_bubble(
         message,
         None,
         RunPlace {
+            show_timestamp,
             show_sender: false,
             show_avatar: false,
             tailed: true,
@@ -10751,6 +10831,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn timestamp_only_ends_a_consecutive_same_sender_minute() {
+        let mut first = message(Content::text("18:40"));
+        first.timestamp = 18 * 3600 + 40 * 60;
+        first.from_me = false;
+        let mut second = first.clone();
+        second.timestamp += 60;
+        let mut third = second.clone();
+        third.timestamp += 30;
+        assert!(last_minute_in_run(&first, Some(&second)));
+        assert!(!last_minute_in_run(&second, Some(&third)));
+        assert!(last_minute_in_run(&third, None));
+        third.sender = "someone-else".into();
+        assert!(last_minute_in_run(&second, Some(&third)));
+        third = second.clone();
+        third.chat = "other-network".into();
+        assert!(last_minute_in_run(&second, Some(&third)));
+        third = second.clone();
+        third.from_me = !second.from_me;
+        assert!(last_minute_in_run(&second, Some(&third)));
+    }
+
+    #[test]
+    fn aligned_timestamp_gutter_has_one_right_edge_across_bubble_widths() {
+        for (left, width) in [(20.0, 100.0), (20.0, 400.0), (310.0, 110.0)] {
+            let bubble = Rect::from_min_size(pos2(left, 30.0), vec2(width, 80.0));
+            let strip = aligned_footer_rect(bubble, 100.0, 540.0);
+            assert_eq!(strip.right(), 540.0);
+            assert!(!strip.intersects(bubble));
+            assert_eq!(strip.bottom(), bubble.bottom());
+        }
+        assert_eq!(DAY_SPACE_ABOVE, 12.0);
+        assert_eq!(DAY_SPACE_BELOW, 14.0);
+    }
+
+    #[test]
     fn header_controls_use_equal_cells_on_a_single_baseline() {
         let ctx = egui::Context::default();
         let palette = crate::theme::Palette::dark();
@@ -11684,6 +11799,8 @@ mod tests {
         let avatars = HashMap::new();
         let keyboard_navigation = std::cell::Cell::new(false);
         let view = View {
+            show_timestamp: true,
+            footer_right: None,
             transcriber: None,
             transcription_account: "test",
             palette: Palette::dark(),
