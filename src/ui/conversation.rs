@@ -8055,15 +8055,27 @@ fn album_tile(
             }
         }
         if not_sent(message) {
-            let badge =
-                Rect::from_center_size(rect.right_bottom() - vec2(15.0, 15.0), Vec2::splat(18.0));
-            theme::paint_icon(ui, Icon::CircleAlert, badge, 18.0, Color32::WHITE);
-            ui.interact(
+            let label =
+                ui.painter()
+                    .layout_no_wrap(NOT_SENT.into(), theme::medium(11.0), Color32::WHITE);
+            let badge = Rect::from_min_size(
+                rect.right_bottom() - label.size() - vec2(8.0, 8.0),
+                label.size(),
+            );
+            ui.painter()
+                .rect_filled(badge.expand(3.0), 3.0, Color32::from_black_alpha(190));
+            ui.painter().galley(badge.min, label, Color32::WHITE);
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(footer_id(&message.chat, &message.id), badge));
+            let response = ui.interact(
                 badge,
                 ui.id().with(("album-failed", &message.id)),
                 Sense::hover(),
-            )
-            .on_hover_text(NOT_SENT_HINT);
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Label, true, NOT_SENT_HINT)
+            });
+            response.on_hover_text(NOT_SENT_HINT);
         }
     }
     // A motion photo in an album keeps its own badge and clip.
@@ -11424,7 +11436,7 @@ mod tests {
             let mut message =
                 crate::archive::tests::message("1@s.whatsapp.net", "time-only", 1000, false);
             message.content = Content::text("An old message");
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 footer(ui, view, &message, None, false, false, &mut Vec::new());
             });
             let clock = crate::util::clock(message.timestamp);
@@ -11442,6 +11454,7 @@ mod tests {
             assert!(texts.contains(&clock.as_str()), "{texts:?}");
             assert!(!clock.is_empty());
             assert!(!clock.contains('.'));
+            output.textures_delta.clear();
         });
     }
 

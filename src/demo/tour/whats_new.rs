@@ -294,7 +294,8 @@ pub(super) fn script() -> Vec<Cue> {
     add(75.3, Move(Label("Deutsch")));
     add(75.7, Wheel(-160.0));
     add(76.8, esc("Esc · Close the list"));
-    add(77.2, Key(K::F, command(), "Ctrl + F · Search settings"));
+    add(77.1, Move(Widget("settings-search")));
+    add(77.2, Click(left));
     add(80.4, esc("Esc · Clear the search"));
     add(81.0, Move(Label("Dark")));
     add(81.4, Click(left));
