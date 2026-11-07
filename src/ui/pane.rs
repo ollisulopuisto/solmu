@@ -394,7 +394,10 @@ fn search(app: &mut App, ui: &mut egui::Ui, overlay: bool) {
                 }
             }
             if app.chat_search_truncated {
-                if !app.beeper_accounts.is_empty() && ui.button("Load more matches").clicked() {
+                if !app.beeper_accounts.is_empty()
+                    && app.beeper_chat_search_error.is_none()
+                    && ui.button("Load more matches").clicked()
+                {
                     app.actions.push(Action::ChatSearchMore);
                 }
                 // The list is capped, so say so rather than dropping the rest

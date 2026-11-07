@@ -21,7 +21,7 @@ pub struct SwitcherEntry {
 /// Tabs whose chat is not loaded (or is gone) and locked chats outside
 /// the unlocked folder stay out: they cannot be opened from here either.
 pub fn entries(app: &App, query: &str) -> Vec<SwitcherEntry> {
-    let needle = query.trim().to_lowercase();
+    let needle = crate::util::search_key(query.trim());
     let mut out = Vec::new();
     let all: Vec<_> = app
         .chats
@@ -78,17 +78,20 @@ fn keyword_match(text: &str, query: &str) -> bool {
         if word.chars().count() < 3 {
             return false;
         }
-        let mut chars = word.chars();
-        let mut next = chars.next();
-        for character in text.chars() {
-            if next == Some(character) {
-                next = chars.next();
-            }
-            if next.is_none() {
-                return true;
-            }
-        }
-        false
+        text.split(|character: char| !character.is_alphanumeric())
+            .any(|candidate| {
+                let mut chars = word.chars();
+                let mut next = chars.next();
+                for character in candidate.chars() {
+                    if next == Some(character) {
+                        next = chars.next();
+                    }
+                    if next.is_none() {
+                        return true;
+                    }
+                }
+                false
+            })
     })
 }
 
@@ -224,7 +227,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .id_salt("jump-to-chat-rows")
         .max_height((ui.ctx().content_rect().height() - 280.0).clamp(120.0, 380.0))
-        .auto_shrink([false, true])
+        .min_scrolled_height((ui.ctx().content_rect().height() - 280.0).clamp(120.0, 380.0))
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             for (index, entry) in entries.iter().enumerate() {
                 let (rect, response) =
@@ -285,7 +289,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         crate::util::moment_stamp(app.locale, message.timestamp),
                         message.content.summary()
                     );
-                    if ui.selectable_label(selected, label).clicked() {
+                    if ui
+                        .add(
+                            egui::Button::selectable(selected, label)
+                                .wrap()
+                                .min_size(vec2(ui.available_width(), 64.0)),
+                        )
+                        .clicked()
+                    {
                         clicked_message = Some(message.clone());
                     }
                 }
@@ -334,6 +345,65 @@ mod tests {
         ));
         assert!(entries(&app, "").is_empty());
         assert_eq!(entries(&app, "never")[0].id, "new@example");
+    }
+
+    #[test]
+    fn fuzzy_keywords_do_not_span_unrelated_words() {
+        assert!(keyword_match("Let's have coffee", "cofe"));
+        assert!(!keyword_match(
+            "check out our vision and values for healthy collaboration",
+            "cofe"
+        ));
+    }
+
+    #[test]
+    fn message_matches_are_deduplicated_and_exclude_locked_and_unknown_chats() {
+        let (_root, mut app) = app();
+        chat(&mut app, "public", "Ada", "WhatsApp");
+        chat(&mut app, "secret", "Secret", "WhatsApp");
+        app.chats[1].locked = true;
+        app.jump_query = "cofe".into();
+        for id in ["public", "public", "secret", "unknown"] {
+            let mut message = crate::archive::tests::message(id, "match", 1000, false);
+            message.content = crate::model::Content::text("Let's have coffee");
+            app.jump_hits.push(message);
+        }
+        let messages = message_entries(&app);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].chat, "public");
+    }
+
+    #[test]
+    fn enter_on_message_match_uses_the_history_loading_navigation_path() {
+        let (_root, mut app) = app();
+        chat(&mut app, "public", "Ada", "WhatsApp");
+        app.jump_query = "coffee".into();
+        let mut message = crate::archive::tests::message("public", "old-hit", 1000, false);
+        message.content = crate::model::Content::text("coffee");
+        app.jump_hits.push(message);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    vec2(800.0, 800.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ui| show(&mut app, ui),
+        );
+        output.textures_delta.clear();
+        assert!(
+            matches!(app.actions.as_slice(), [Action::CloseDialog, Action::OpenMessage {chat, message}] if chat == "public" && message == "old-hit")
+        );
     }
 
     #[test]

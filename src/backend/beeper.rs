@@ -2685,7 +2685,7 @@ pub fn run(
     emit(Event::Contacts(Vec::new()));
 
     let mut chat_cursors: HashMap<ChatId, ChatCursors> = HashMap::new();
-    let mut search_budget = (String::new(), 1usize);
+    let mut search_budgets = std::collections::HashMap::<String, usize>::new();
     let mut chat_search_budget = (String::new(), 1usize);
     let mut open_chat: Option<ChatId> = None;
     let mut watched_chats: Vec<ChatId> = Vec::new();
@@ -3431,14 +3431,16 @@ pub fn run(
                     }
                 }
                 Command::SearchMessages { query } => {
-                    search_budget = (query.clone(), 1);
+                    if search_budgets.len() > 32 {
+                        search_budgets.clear();
+                    }
+                    search_budgets.insert(query.clone(), 1);
                     run_message_search(&api, query, &emit);
                 }
                 Command::SearchMessagesMore { query } => {
-                    if search_budget.0 == query {
-                        search_budget.1 = (search_budget.1 + 1).min(50);
-                        run_message_search_pages(&api, query, &emit, search_budget.1);
-                    }
+                    let budget = search_budgets.entry(query.clone()).or_insert(1);
+                    *budget = (*budget + 1).min(50);
+                    run_message_search_pages(&api, query, &emit, *budget);
                 }
                 Command::Picked {
                     chat,
@@ -3830,13 +3832,17 @@ fn run_chat_search_pages(
                 .collect();
             messages.sort_by_key(|m| std::cmp::Reverse(m.timestamp));
             emit(Event::ChatHits {
-                chat,
-                query,
+                chat: chat.clone(),
+                query: query.clone(),
                 from,
                 until,
                 messages,
                 truncated: page.has_more,
             });
+            if pages >= 50 && page.has_more {
+                emit(Event::BeeperChatSearchError { chat, query, from, until,
+                    error: "Showing the first 50 pages. Narrow the search or choose a day for older matches.".into() });
+            }
         }
         Err(error) => emit(Event::BeeperChatSearchError {
             chat,
@@ -3868,7 +3874,9 @@ fn run_message_search_pages(api: &Api, query: String, emit: &dyn Fn(Event), page
             messages.sort_by_key(|m| std::cmp::Reverse(m.timestamp));
             emit(Event::BeeperSearchState {
                 query: query.clone(),
-                error: None,
+                error: (pages >= 50 && page.has_more).then(|| {
+                    "Showing the first 50 pages. Narrow the search for older matches.".into()
+                }),
                 truncated: page.has_more,
             });
             emit(Event::SearchHits { query, messages });
