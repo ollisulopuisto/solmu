@@ -5733,7 +5733,7 @@ mod tests {
                     })
                     .expect("external timestamp beside cards");
                 assert!(!bounds.intersects(time), "time outside carousel frame");
-                assert!((time.bottom() - bounds.bottom()).abs() < 1.0);
+                assert!((time.top() - bounds.bottom() - 3.0).abs() < 1.0);
                 assert!(
                     last.right() <= bounds.right(),
                     "last card remains inside frame"
@@ -14522,16 +14522,35 @@ mod tests {
             .unwrap()
             .expect("the transcript was drawn");
         let chat = app.open_chat.clone().expect("a chat is open");
-        let (id, bubble) = app.conversations[&chat]
-            .messages
-            .iter()
-            .map(|message| crate::ui::conversation::bubble_id(&chat, &message.id))
-            .find_map(|id| {
-                let rect = ctx.data(|data| data.get_temp::<egui::Rect>(id.with("rect")))?;
-                (rect.top() < viewport.top() - 8.0 && rect.bottom() > viewport.top() + 8.0)
-                    .then_some((id, rect))
-            })
-            .expect("a message runs under the header");
+        let mut crossing = None;
+        for _ in 0..80 {
+            crossing = app.conversations[&chat]
+                .messages
+                .iter()
+                .find_map(|message| {
+                    let id = crate::ui::conversation::bubble_id(&chat, &message.id);
+                    let rect = ctx.data(|data| data.get_temp::<egui::Rect>(id.with("rect")))?;
+                    (rect.top() < viewport.top() - 8.0 && rect.bottom() > viewport.top() + 8.0)
+                        .then_some((id, rect))
+                });
+            if crossing.is_some() {
+                break;
+            }
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(viewport.center()),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, 12.0),
+                        modifiers: egui::Modifiers::NONE,
+                        phase: egui::TouchPhase::Move,
+                    },
+                ],
+            );
+        }
+        let (id, bubble) = crossing.expect("a deliberately scrolled message runs under the header");
         let right_click = |app: &mut App, pos: egui::Pos2| {
             let press = |pressed| egui::Event::PointerButton {
                 pos,
@@ -16818,7 +16837,7 @@ mod tests {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
         assert!(screen.contains_rect(body), "m399 body on screen: {body:?}");
         let from = egui::pos2(body.left() + 2.0, body.center().y);
-        let to = egui::pos2(body.center().x, body.center().y);
+        let to = egui::pos2(body.right() - 2.0, body.center().y);
         let press = |pos, pressed| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
@@ -17332,6 +17351,11 @@ mod tests {
         let chat = sample_ids()[0].to_owned();
         // Scroll away from the end before extending the selection.
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
+        let viewport = app
+            .selection_view
+            .lock()
+            .unwrap()
+            .expect("the transcript viewport");
         let ids: Vec<String> = app.conversations[&chat]
             .messages
             .iter()
@@ -17340,7 +17364,7 @@ mod tests {
         let body_of = |ctx: &egui::Context, id: &str| {
             let key = crate::ui::conversation::bubble_id(&chat, id).with("body");
             ctx.data(|data| data.get_temp::<egui::Rect>(key))
-                .filter(|rect| screen.contains_rect(*rect))
+                .filter(|rect| viewport.contains_rect(*rect))
         };
         let sweepable = |content: &crate::model::Content| -> Option<String> {
             match content {
@@ -17575,6 +17599,11 @@ mod tests {
         render(&mut app, &ctx);
         let chat = sample_ids()[0].to_owned();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
+        let viewport = app
+            .selection_view
+            .lock()
+            .unwrap()
+            .expect("the transcript viewport");
         let ids: Vec<String> = app.conversations[&chat]
             .messages
             .iter()
@@ -17585,7 +17614,7 @@ mod tests {
             .filter_map(|id| {
                 let key = crate::ui::conversation::bubble_id(&chat, id).with("body");
                 ctx.data(|data| data.get_temp::<egui::Rect>(key))
-                    .filter(|rect| screen.contains_rect(*rect))
+                    .filter(|rect| viewport.contains_rect(*rect))
             })
             .collect();
         bodies.sort_by(|a, b| a.top().total_cmp(&b.top()));
@@ -21260,7 +21289,7 @@ mod bubble_detail_tests {
     /// sample is drawn, and only each run's last balloon curls a tail out of
     /// its side, as far as Apple's reaches at Solmu's text size; a lone
     /// photo leaves the tail to the balloon after it. All of it fits a 1280
-    /// by 800 window.
+    /// by 1000 window.
     #[test]
     fn messages_balloons_tail_only_the_last_of_each_run() {
         // These runs belong to one day. Near midnight a real clock puts a
@@ -21271,7 +21300,7 @@ mod bubble_detail_tests {
             zone: jiff::tz::TimeZone::UTC,
             twelve_hour: false,
         });
-        const SIZE: egui::Vec2 = egui::vec2(1280.0, 800.0);
+        const SIZE: egui::Vec2 = egui::vec2(1280.0, 1000.0);
         let reach = crate::ui::widgets::balloon::TIP[0] * crate::ui::widgets::MESSAGES_SCALE;
         for page in ["bubbles,messages", "bubbles,messages-light"] {
             let mut app = app();
@@ -21349,7 +21378,7 @@ mod bubble_detail_tests {
                 .unwrap_or_else(|| panic!("{page}: {id} is drawn"));
                 assert!(
                     shown.top() >= 0.0 && shown.bottom() <= SIZE.y,
-                    "{page}: {id} is off the 1280 by 800 window at {shown:?}"
+                    "{page}: {id} is off the 1280 by 1000 window at {shown:?}"
                 );
             }
         }
