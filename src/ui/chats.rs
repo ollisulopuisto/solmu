@@ -1939,16 +1939,22 @@ fn results(app: &mut App, ui: &mut egui::Ui) {
     {
         if let Some(error) = error {
             ui.add(egui::Label::new(egui::RichText::new(error).color(palette.warning)).wrap());
+            if *truncated && ui.button("Retry loading message results").clicked() {
+                app.actions.push(Action::SearchMore);
+            }
         } else if *truncated {
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(
-                        "Message results are partial; only the first API search page is loaded.",
+                        "More message results are available. Load more to search older matches.",
                     )
                     .color(palette.warning),
                 )
                 .wrap(),
             );
+            if ui.button("Load more message results").clicked() {
+                app.actions.push(Action::SearchMore);
+            }
         }
     }
     let contacts: Vec<Contact> = if app.search_scope_active() {
