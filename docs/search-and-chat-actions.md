@@ -13,12 +13,13 @@ exact matches rank first. The remote Beeper index does literal-word search, so
 fuzzy/typo matches outside loaded history are not guaranteed. Locked chats remain
 excluded. Selecting a message uses the same exact chat/message jump as search.
 
-Global and in-chat Beeper search initially request one page. Load more re-reads a
-cumulative window one page larger, preserving the exact query/chat/day parameters,
-deduplicating chat+message IDs. Re-reading costs additional local API requests and
-latency, not a new paid service. This is capped at 50 pages per query. Missing,
-repeated or failed continuation cursors are errors, not proof the result set is
-complete. Previous displayed results stay available on failure.
+Global and in-chat Beeper search initially request one page. Each Load more click
+fetches one next cursor page, preserving the exact query/chat/day parameters and
+deduplicating chat+message IDs. Earlier pages are kept on the worker rather than
+re-read. This is capped at 50 pages per query, with an explicit notice to narrow
+the query or choose a day. Missing, repeated or failed continuation cursors are
+errors, not proof the result set is complete. Previous displayed results stay
+available on failure, with a retry control.
 
 Clicking a message hit from either search requests older history until the target
 is loaded, using the last good history cursor. Up to 50 older pages are loaded per

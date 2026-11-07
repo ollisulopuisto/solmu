@@ -395,8 +395,13 @@ fn search(app: &mut App, ui: &mut egui::Ui, overlay: bool) {
             }
             if app.chat_search_truncated {
                 if !app.beeper_accounts.is_empty()
-                    && app.beeper_chat_search_error.is_none()
-                    && ui.button("Load more matches").clicked()
+                    && ui
+                        .button(if app.beeper_chat_search_error.is_some() {
+                            "Retry loading matches"
+                        } else {
+                            "Load more matches"
+                        })
+                        .clicked()
                 {
                     app.actions.push(Action::ChatSearchMore);
                 }
