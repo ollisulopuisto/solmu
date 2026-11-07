@@ -267,7 +267,7 @@ unsafe extern "C-unwind" fn reopen(
 /// forward activation to the app: AppKit's window list also contains the
 /// status item's window, which can outlive the closed chat window.
 /// The shell knows whether its resident window exists. Native miniaturized
-/// windows are restored here only with the experimental opt-in enabled.
+/// windows are restored here by default, with an explicit opt-out available.
 unsafe extern "C-unwind" fn did_become_active(
     _this: &objc2::runtime::AnyObject,
     _sel: objc2::runtime::Sel,
@@ -278,7 +278,7 @@ unsafe extern "C-unwind" fn did_become_active(
     };
     let app = NSApplication::sharedApplication(mtm);
     dock_diag(&format!("did_become_active {}", window_counts(&app)));
-    // Experimental native restoration is opt-in until real Cmd-Tab acceptance.
+    // Native restoration is on after the owner's minimized Cmd-Tab acceptance.
     if direct_restore_enabled(
         std::env::var("SOLMU_EXPERIMENTAL_RESTORE_MINIMIZED")
             .ok()
@@ -300,9 +300,9 @@ unsafe extern "C-unwind" fn did_become_active(
     }
 }
 
-/// Only an explicit opt-in enables the unaccepted native restoration path.
+/// Restore by default; keep the existing variable as an explicit opt-out.
 fn direct_restore_enabled(value: Option<&str>) -> bool {
-    value == Some("1")
+    value != Some("0")
 }
 
 /// Adds `reopen` to the application delegate's class once winit has set its
@@ -578,11 +578,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_minimized_restoration_is_off_unless_explicitly_enabled() {
-        for value in [None, Some(""), Some("0"), Some("false"), Some("true")] {
-            assert!(!direct_restore_enabled(value));
+    fn direct_minimized_restoration_is_on_unless_explicitly_disabled() {
+        for value in [None, Some(""), Some("1"), Some("false"), Some("true")] {
+            assert!(direct_restore_enabled(value));
         }
-        assert!(direct_restore_enabled(Some("1")));
+        assert!(!direct_restore_enabled(Some("0")));
     }
 
     #[test]
