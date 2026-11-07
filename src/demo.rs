@@ -10617,6 +10617,54 @@ mod tests {
         assert!(ctx.memory(|memory| memory.has_focus(composer)));
     }
 
+    #[test]
+    fn failed_text_recovery_stages_for_review_without_sending_or_replacing_a_draft() {
+        for draft in ["", "Keep this draft"] {
+            let mut app = app();
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            apply_flags(&mut app, Some("group-footer-status"));
+            app.backend.record_demo_commands();
+            app.composer = draft.into();
+            render(&mut app, &ctx);
+            render(&mut app, &ctx);
+            let chat = SAMPLES[0].id;
+            let footer = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(crate::ui::conversation::footer_id(
+                        chat,
+                        "minute-gutter-4",
+                    ))
+                })
+                .expect("failed footer");
+            let at = egui::pos2(footer.left() + 12.0, footer.center().y);
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(at),
+                    primary(at, true),
+                    primary(at, false),
+                ],
+            );
+            render(&mut app, &ctx);
+            assert_eq!(
+                app.composer,
+                if draft.is_empty() {
+                    "And one more reply, all clocks share the same column"
+                } else {
+                    draft
+                }
+            );
+            assert!(
+                !app.backend
+                    .take_demo_commands()
+                    .iter()
+                    .any(|command| matches!(command, crate::backend::Command::SendText { .. }))
+            );
+        }
+    }
+
     /// Our time or ticks open "Message info"; an incoming time opens nothing.
     #[test]
     fn clicking_the_time_or_ticks_opens_message_info() {
@@ -19136,8 +19184,8 @@ mod tests {
                 .expect("the time is drawn");
             assert!(disc.x < title.left(), "{}: the disc leads", message.id);
             assert!(
-                !footer.intersects(bubble) && (footer.bottom() - bubble.bottom()).abs() < 1.0,
-                "{}: the time stays outside the bubble at its bottom",
+                !footer.intersects(bubble) && (footer.top() - bubble.bottom() - 3.0).abs() < 1.0,
+                "{}: the time stays below the bubble",
                 message.id
             );
             match entry.detail(app.locale) {
@@ -21460,7 +21508,7 @@ mod bubble_detail_tests {
                 .expect("the time was drawn");
             assert!(!picture.intersects(footer), "{id}: no time over the image");
             assert!(!frame.intersects(footer), "{id}: time outside the bubble");
-            assert!((frame.bottom() - footer.bottom()).abs() < 1.0);
+            assert!((footer.top() - frame.bottom() - 3.0).abs() < 1.0);
             assert!(
                 frame.bottom() - picture.bottom() <= 7.0,
                 "{id}: no strip under the picture ({picture:?} in {frame:?})"
@@ -21484,8 +21532,7 @@ mod bubble_detail_tests {
         );
     }
 
-    /// A voice message carries its time and ticks on the duration's line,
-    /// as on the phone, rather than on a line of their own under it.
+    /// A voice message uses the same below-bubble sender-edge footer as text.
     #[test]
     fn a_voice_message_keeps_its_time_outside_without_an_extra_line() {
         let mut app = app();
@@ -21507,8 +21554,8 @@ mod bubble_detail_tests {
                 "{id}: the time is outside the bubble ({footer:?} beside {frame:?})"
             );
             assert!(
-                frame.bottom() - footer.bottom() <= 8.0,
-                "{id}: the bubble closes under the time ({footer:?} in {frame:?})"
+                (footer.top() - frame.bottom() - 3.0).abs() < 1.0,
+                "{id}: the time sits below the bubble ({footer:?} in {frame:?})"
             );
             assert!(
                 frame.height() <= 60.0,
