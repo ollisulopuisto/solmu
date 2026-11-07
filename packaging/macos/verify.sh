@@ -19,6 +19,19 @@ app="$mount/Solmu.app"
 codesign --verify --strict --deep "$app"
 spctl --assess --type execute --verbose=2 "$app"
 lipo "$app/Contents/MacOS/solmu" -verify_arch x86_64 arm64
+# This is the process that actually reads Keychain. Its designated requirement
+# must survive a rebuild rather than inheriting a UUID-derived Mach-O identity.
+client="$app/Contents/MacOS/solmu-client"
+identity="$(codesign --display --verbose=4 "$client" 2>&1)"
+grep -qx 'Identifier=fi.sulopuisto.fast-beeper.client' <<< "$identity"
+grep -qx 'TeamIdentifier=LWSR8T5392' <<< "$identity"
+requirement="$(codesign -d -r- "$client" 2>&1)"
+grep -Fq 'identifier "fi.sulopuisto.fast-beeper.client"' <<< "$requirement"
+grep -Fq 'LWSR8T5392' <<< "$requirement"
+if grep -Eq 'cdhash|55554944' <<< "$requirement"; then
+    echo "Client requirement is pinned to one build rather than its stable signing identity" >&2
+    exit 1
+fi
 # Beeper bundles contain both a Swift launcher and the Rust client. Checking
 # just CFBundleExecutable would miss an incorrectly packaged client.
 lipo "$app/Contents/MacOS/solmu-client" -verify_arch x86_64 arm64

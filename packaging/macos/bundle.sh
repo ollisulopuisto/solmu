@@ -84,9 +84,12 @@ cp "$sounds/alert.wav" "$app/Contents/Resources/solmu-alert.wav"
 
 # Sign both executables in the fork, then the containing app.
 if [[ "$mode" == beeper ]]; then
-    codesign --force --entitlements "$here/entitlements.plist" --sign "${CODESIGN_IDENTITY:--}" "$app/Contents/MacOS/solmu-client"
+    # A bare Mach-O's default identifier includes its linker UUID. That changes
+    # on every rebuild and breaks the Keychain ACL of this actual reader.
+    # Set a stable identifier before native-packages preserves it on re-sign.
+    codesign --force --identifier fi.sulopuisto.fast-beeper.client --entitlements "$here/entitlements.plist" --sign "${CODESIGN_IDENTITY:--}" "$app/Contents/MacOS/solmu-client"
     if [[ -f "$app/Contents/MacOS/solmu-scheduler" ]]; then
-        codesign --force --sign "${CODESIGN_IDENTITY:--}" "$app/Contents/MacOS/solmu-scheduler"
+        codesign --force --identifier fi.sulopuisto.fast-beeper.scheduler --sign "${CODESIGN_IDENTITY:--}" "$app/Contents/MacOS/solmu-scheduler"
     fi
 fi
 
