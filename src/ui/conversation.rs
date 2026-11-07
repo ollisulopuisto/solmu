@@ -5580,11 +5580,15 @@ fn call_entry(
             .layout_no_wrap(detail.clone(), theme::regular(12.5), palette.secondary)
     });
     let detail_width = detail_galley.as_ref().map_or(0.0, |galley| galley.size().x);
-    // The time follows the detail on its line, 8 points after it as after a
-    // text's last line; with no detail it has that line to itself.
-    let gap = if detail_galley.is_some() { 8.0 } else { 0.0 };
+    // Call rows no longer reserve a second line for the external clock.
+    // A detail is real call content; no detail means a single centred title.
+    let gap = if detail_galley.is_some() && reserve > 0.0 {
+        8.0
+    } else {
+        0.0
+    };
     let lead = CALL_BADGE + CALL_BADGE_GAP;
-    let inline = lead + detail_width + gap + reserve <= width;
+    let inline = reserve > 0.0 && lead + detail_width + gap + reserve <= width;
     let second_width = if inline {
         detail_width + gap + reserve
     } else {

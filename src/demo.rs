@@ -19005,10 +19005,10 @@ mod tests {
 
     /// A call entry draws as WhatsApp's: the glyph's disc centred on the
     /// title and detail together, the detail under the title at its start,
-    /// and the time on the detail's line at the bubble's end, on both sides
-    /// of a group, where a sender's name heads the bubble.
+    /// with no phantom detail line on title-only calls. The clock stays
+    /// outside the bubble on both sides of a group.
     #[test]
-    fn a_call_entry_centres_its_glyph_and_tucks_its_time_beside_the_detail() {
+    fn a_call_entry_centres_its_glyph_with_an_external_clock() {
         let mut app = app();
         apply_flags(&mut app, Some("call-bubbles"));
         let chat = SAMPLES[1].id;
