@@ -3584,7 +3584,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                     )
                                 })
                                 .flatten();
-                            let time = crate::util::bubble_stamp(view.locale, last.timestamp);
+                            let time = crate::util::clock(last.timestamp);
                             // Whether the file is there to open, still coming, or why not;
                             // in an album, the first item that is not there yet.
                             let attachment = members.iter().find_map(|member| {
@@ -4298,11 +4298,6 @@ fn bubble(
         tailed,
     } = place;
     let own = message.from_me;
-    // Greys that read on the panel can vanish on the bubble; use its own.
-    let view = &View {
-        palette: view.palette.on_bubble(own),
-        ..*view
-    };
     let with_avatar = !own && shows_sender_pictures(view.chat);
     let carousel = matches!(&message.content, Content::Interactive { card: Some(card), .. } if !card.carousel.is_empty());
     let share = if carousel {
@@ -4312,12 +4307,32 @@ fn bubble(
     } else {
         WHATSAPP_WIDTH_SHARE
     };
+    let last = album.and_then(|items| items.last()).unwrap_or(message);
+    let metadata = footer_width(
+        ui,
+        view.locale,
+        last,
+        view.starred.is_some_and(|ids| ids.contains(&last.id)),
+        view.pins.is_some_and(|ids| ids.contains(&last.id)),
+    );
+    // Keep the clock/status strip in the free space toward the centre.
     let max_width = ((ui.available_width() * share).min(if carousel { 920.0 } else { 560.0 })
         - if with_avatar {
             SENDER_AVATAR + 8.0
         } else {
             0.0
         })
+    .min(
+        (ui.available_width()
+            - metadata
+            - 8.0
+            - if with_avatar {
+                SENDER_AVATAR + 8.0
+            } else {
+                0.0
+            })
+        .max(0.0),
+    )
     .max(0.0);
     // Register the empty strip beside the bubble from its previous rect, before
     // the row, so the avatar, the bubble, and the reactions win clicks, and the
@@ -4908,8 +4923,14 @@ fn bubble_frame(
     max_width: f32,
     actions: &mut Vec<Action>,
 ) -> egui::Response {
-    let palette = view.palette;
+    let outside_palette = view.palette;
     let own = message.from_me;
+    // Bubble text uses its contrast palette; metadata uses the panel palette.
+    let view = &View {
+        palette: view.palette.on_bubble(own),
+        ..*view
+    };
+    let palette = view.palette;
     let fill = if bubbleless(&palette, message) {
         Color32::TRANSPARENT
     } else if own {
@@ -4936,12 +4957,9 @@ fn bubble_frame(
             } else {
                 widgets::Side::Left
             });
-    // A picture without a caption carries its time over its corner, so
-    // the bubble closes under it as evenly as it opens above it.
-    let over_picture = album.is_none() && time_over_picture(message);
     let mut tiles: Vec<(Rect, String)> = Vec::new();
     let inner = Frame::new()
-        .inner_margin(bubble_margin(&palette, message, over_picture))
+        .inner_margin(bubble_margin(&palette, message, false))
         .show(ui, |ui| {
             ui.set_max_width(max_width);
             ui.spacing_mut().item_spacing.y = 4.0;
@@ -4979,17 +4997,12 @@ fn bubble_frame(
                 20.0
             };
             let cap = ((max_width - inset).min(ui.available_width())).max(0.0);
-            let last = album
-                .and_then(|messages| messages.last())
-                .unwrap_or(message);
-            // An album's footer is its last member's, marks included.
-            let starred = view.starred.is_some_and(|ids| ids.contains(&last.id));
-            let pinned = view.pins.is_some_and(|ids| ids.contains(&last.id));
-            let reserve = footer_width(ui, view.locale, last, starred, pinned);
+            // Metadata is outside the frame, so text/media need no footer slot.
+            let reserve = 0.0;
             let settled = album
                 .map(|_| CARD_WIDTH.min(cap))
                 .or_else(|| settled_width(ui, view, message, cap));
-            let slot = if let Some(messages) = album {
+            let _slot = if let Some(messages) = album {
                 for member in messages {
                     if let Some(quoted) = &member.quoted {
                         quote_block(ui, view, member, quoted, settled.unwrap_or(cap), actions);
@@ -5008,11 +5021,6 @@ fn bubble_frame(
                     None => content(ui, view, message, cap, reserve, actions),
                 }
             };
-            if over_picture && let Some(picture) = slot {
-                footer_over_picture(ui, view, message, picture, starred, pinned, actions);
-            } else {
-                footer(ui, view, last, slot, starred, pinned, actions);
-            }
             if matches!(message.content, Content::Poll { .. }) {
                 super::polls::results_button(
                     ui,
@@ -5037,6 +5045,25 @@ fn bubble_frame(
                 });
             }
         });
+    let last = album.and_then(|items| items.last()).unwrap_or(message);
+    let starred = view.starred.is_some_and(|ids| ids.contains(&last.id));
+    let pinned = view.pins.is_some_and(|ids| ids.contains(&last.id));
+    let metadata_width = footer_width(ui, view.locale, last, starred, pinned);
+    let metadata = external_footer_rect(inner.response.rect, metadata_width, own);
+    let outside_view = View {
+        palette: outside_palette,
+        ..*view
+    };
+    footer(
+        ui,
+        &outside_view,
+        last,
+        Some(metadata),
+        starred,
+        pinned,
+        actions,
+    );
+    ui.expand_to_include_rect(metadata);
     if fill != Color32::TRANSPARENT && ui.is_rect_visible(inner.response.rect) {
         ui.painter().set(
             backdrop,
@@ -5292,15 +5319,7 @@ fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f3
         .iter()
         .map(|row| row.row.size.x)
         .fold(0.0, f32::max);
-    let last = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
-    let starred = view.starred.is_some_and(|ids| ids.contains(&message.id));
-    let pinned = view.pins.is_some_and(|ids| ids.contains(&message.id));
-    let reserve = footer_width(ui, view.locale, message, starred, pinned);
-    Some(if last + 8.0 + reserve <= cap {
-        widest.max(last + 8.0 + reserve)
-    } else {
-        widest
-    })
+    Some(widest)
 }
 
 /// Width of a quote's accent bar.
@@ -5654,10 +5673,10 @@ const FOOTER_STAR: Color32 = Color32::from_rgb(0xEA, 0xB3, 0x08);
 
 /// The stamp's own width at the footer's size: the floor a footer starts
 /// from, and the one part of it that depends on the reader's clock format.
-fn clock_width(ui: &egui::Ui, locale: crate::i18n::Locale, message: &Message) -> f32 {
+fn clock_width(ui: &egui::Ui, _locale: crate::i18n::Locale, message: &Message) -> f32 {
     ui.painter()
         .layout_no_wrap(
-            crate::util::bubble_stamp(locale, message.timestamp),
+            crate::util::clock(message.timestamp),
             theme::regular(11.0),
             Color32::WHITE,
         )
@@ -5755,121 +5774,6 @@ fn picture_radius(palette: &Palette, message: &Message) -> f32 {
     }
 }
 
-/// Space between a picture's edges and the time drawn over it: the scrim
-/// around the time keeps a few points clear of the rounded corner.
-const OVER_PICTURE_INSET: Vec2 = vec2(10.0, 6.0);
-
-/// Paints the time and ticks over the bottom corner of a picture without a
-/// caption, in white on a soft dark scrim so they read on any picture.
-fn footer_over_picture(
-    ui: &mut egui::Ui,
-    view: &View<'_>,
-    message: &Message,
-    picture: Rect,
-    starred: bool,
-    pinned: bool,
-    actions: &mut Vec<Action>,
-) {
-    let palette = &view.palette;
-    let font = theme::regular(11.0);
-    let time = ui.painter().layout_no_wrap(
-        crate::util::bubble_stamp(view.locale, message.timestamp),
-        font,
-        Color32::WHITE,
-    );
-    let failed = not_sent(message).then(|| {
-        ui.painter()
-            .layout_no_wrap(NOT_SENT.to_owned(), theme::medium(11.0), Color32::WHITE)
-    });
-    let tick_width = if message.from_me { 19.0 } else { 0.0 };
-    let marks =
-        if starred { FOOTER_MARK_SLOT } else { 0.0 } + if pinned { FOOTER_MARK_SLOT } else { 0.0 };
-    let width = time.size().x
-        + failed.as_ref().map_or(0.0, |galley| galley.size().x + 6.0)
-        + tick_width
-        + marks;
-    let row = Rect::from_min_max(
-        pos2(
-            picture.right() - OVER_PICTURE_INSET.x - width,
-            picture.bottom() - OVER_PICTURE_INSET.y - 15.0,
-        ),
-        picture.right_bottom() - OVER_PICTURE_INSET,
-    );
-    if ui.is_rect_visible(picture) {
-        let scrim = row.expand2(vec2(6.0, 2.0)).intersect(picture);
-        ui.painter()
-            .rect_filled(scrim, scrim.height() / 2.0, Color32::from_black_alpha(110));
-    }
-    let mut x = row.right();
-    if message.from_me {
-        let ticks = Rect::from_center_size(pos2(x - 7.5, row.center().y), Vec2::splat(15.0));
-        widgets::ticks_in(
-            ui,
-            palette,
-            ticks,
-            shown_delivery(view, message),
-            Color32::WHITE,
-        );
-        x -= tick_width;
-    }
-    x -= time.size().x;
-    ui.painter().galley(
-        pos2(x, row.center().y - time.size().y / 2.0),
-        time,
-        Color32::WHITE,
-    );
-    let status =
-        Rect::from_x_y_ranges(x..=row.right(), row.center().y - 7.5..=row.center().y + 7.5);
-    status_opens_info(ui, view, message, status, actions);
-    if let Some(failed) = failed {
-        x -= failed.size().x + 6.0;
-        let label = Rect::from_min_size(
-            pos2(x, row.center().y - failed.size().y / 2.0),
-            failed.size(),
-        );
-        ui.painter().galley(label.min, failed, Color32::WHITE);
-        let status = Rect::from_min_max(label.min, pos2(row.right(), label.max.y));
-        let response = ui.interact(
-            status,
-            ui.id().with(("not-sent", &message.id)),
-            Sense::hover(),
-        );
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Label, true, NOT_SENT_HINT)
-        });
-        response.on_hover_text(NOT_SENT_HINT);
-    }
-    if pinned {
-        x -= FOOTER_MARK_SLOT;
-        theme::paint_icon(
-            ui,
-            Icon::Pin,
-            Rect::from_center_size(
-                pos2(x + FOOTER_MARK / 2.0, row.center().y),
-                Vec2::splat(FOOTER_MARK),
-            ),
-            FOOTER_MARK,
-            Color32::WHITE,
-        );
-    }
-    if starred {
-        x -= FOOTER_MARK_SLOT;
-        theme::paint_icon(
-            ui,
-            Icon::StarFill,
-            Rect::from_center_size(
-                pos2(x + FOOTER_MARK / 2.0, row.center().y),
-                Vec2::splat(FOOTER_MARK),
-            ),
-            FOOTER_MARK,
-            FOOTER_STAR,
-        );
-    }
-    ui.ctx().data_mut(|data| {
-        data.insert_temp(footer_id(&message.chat, &message.id), row);
-    });
-}
-
 /// Where a message's time and ticks were drawn, for layout tests.
 pub fn footer_id(chat: &str, message: &str) -> egui::Id {
     bubble_id(chat, message).with("footer")
@@ -5918,7 +5822,20 @@ fn not_sent(message: &Message) -> bool {
     message.from_me && message.status == Delivery::Failed
 }
 
-/// Paints the time and ticks at the bubble's right edge without widening it.
+/// The metadata strip sits outside the bubble toward the conversation centre.
+fn external_footer_rect(bubble: Rect, width: f32, own: bool) -> Rect {
+    let x = if own {
+        bubble.left() - 8.0 - width
+    } else {
+        bubble.right() + 8.0
+    };
+    Rect::from_min_size(
+        pos2(x, (bubble.bottom() - FOOTER_HEIGHT).max(bubble.top())),
+        vec2(width, FOOTER_HEIGHT),
+    )
+}
+
+/// Paints the clock/status strip, including an explicit externally supplied slot.
 fn footer(
     ui: &mut egui::Ui,
     view: &View<'_>,
@@ -5931,7 +5848,7 @@ fn footer(
     let palette = &view.palette;
     let font = theme::regular(11.0);
     let time = ui.painter().layout_no_wrap(
-        crate::util::bubble_stamp(view.locale, message.timestamp),
+        crate::util::clock(message.timestamp),
         font.clone(),
         palette.secondary,
     );
@@ -5965,6 +5882,12 @@ fn footer(
             Rect::from_min_max(pos2(rect.right() - width, rect.top()), rect.max),
         );
     });
+    ui.interact(
+        rect,
+        ui.id().with(("timestamp", &message.id)),
+        Sense::hover(),
+    )
+    .on_hover_text(crate::util::full_stamp(message.timestamp));
     let mut x = rect.right();
     if message.from_me {
         let ticks = Rect::from_center_size(pos2(x - 7.5, rect.center().y), Vec2::splat(15.0));
@@ -8061,9 +7984,15 @@ fn album_tile(
             }
         }
         if not_sent(message) {
-            let starred = view.starred.is_some_and(|ids| ids.contains(&message.id));
-            let pinned = view.pins.is_some_and(|ids| ids.contains(&message.id));
-            footer_over_picture(ui, view, message, rect, starred, pinned, actions);
+            let badge =
+                Rect::from_center_size(rect.right_bottom() - vec2(15.0, 15.0), Vec2::splat(18.0));
+            theme::paint_icon(ui, Icon::CircleAlert, badge, 18.0, Color32::WHITE);
+            ui.interact(
+                badge,
+                ui.id().with(("album-failed", &message.id)),
+                Sense::hover(),
+            )
+            .on_hover_text(NOT_SENT_HINT);
         }
     }
     // A motion photo in an album keeps its own badge and clip.
@@ -11401,6 +11330,51 @@ mod tests {
     }
 
     #[test]
+    fn timestamp_strip_is_outside_both_directions_and_retains_marks() {
+        let bubble = Rect::from_min_size(pos2(140.0, 20.0), vec2(100.0, 45.0));
+        for own in [false, true] {
+            let strip = external_footer_rect(bubble, 80.0, own);
+            assert!(!strip.intersects(bubble));
+            assert_eq!(strip.bottom(), bubble.bottom());
+            assert_eq!(strip.width(), 80.0);
+            if own {
+                assert_eq!(strip.right(), bubble.left() - 8.0);
+            } else {
+                assert_eq!(strip.left(), bubble.right() + 8.0);
+            }
+        }
+    }
+
+    #[test]
+    fn old_messages_show_only_a_clock_in_the_transcript() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let mut message =
+                crate::archive::tests::message("1@s.whatsapp.net", "time-only", 1000, false);
+            message.content = Content::text("An old message");
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                footer(ui, view, &message, None, false, false, &mut Vec::new());
+            });
+            let clock = crate::util::clock(message.timestamp);
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        Some(text.galley.text())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert!(texts.contains(&clock.as_str()), "{texts:?}");
+            assert!(!clock.is_empty());
+            assert!(!clock.contains('.'));
+        });
+    }
+
+    #[test]
     fn the_footer_paints_a_pin_mark_when_the_message_is_pinned() {
         let ctx = egui::Context::default();
         with_still_view(|view| {
@@ -11578,11 +11552,15 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        footer_over_picture(
+                        footer(
                             ui,
                             view,
                             &message,
-                            picture,
+                            Some(external_footer_rect(
+                                picture,
+                                footer_width(ui, view.locale, &message, starred, pinned),
+                                false,
+                            )),
                             starred,
                             pinned,
                             &mut Vec::new(),
