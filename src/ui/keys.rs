@@ -976,14 +976,10 @@ fn sticker_view_keys(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-/// Ctrl+F searches the open chat, as in WhatsApp, the chat list when no
-/// chat is open, and the settings on the Settings page.
-fn find_action(app: &App) -> Action {
-    match app.page {
-        Page::Settings => Action::FocusSettingsSearch,
-        Page::Chats if app.open_chat.is_some() => Action::OpenChatSearch,
-        _ => Action::FocusSearch,
-    }
+/// Ctrl+F has one scope: the open chat. No chat means no action; settings
+/// and other pages never fall back to a different search scope.
+fn find_action(_app: &App) -> Action {
+    Action::OpenChatSearch
 }
 
 /// Ctrl+E archives the open chat, or unarchives an archived one, as in
@@ -1124,8 +1120,12 @@ const SEARCH_CHATS: Shortcut = Shortcut {
     id: "search-chats",
     keys: &[(COMMAND_SHIFT, Key::F)],
     label: Some("Ctrl+Shift+F"),
-    description: Some("Search chats"),
-    menu: None,
+    description: Some("Search all messages and chats"),
+    menu: Some(MenuItem {
+        id: "search-all",
+        text: "Search All Messages and Chats\u{2026}",
+        accelerator: "Super+Shift+KeyF",
+    }),
 };
 const PALETTE: Shortcut = Shortcut {
     id: "palette",
@@ -1138,10 +1138,10 @@ const FIND: Shortcut = Shortcut {
     id: "find",
     keys: &[(Modifiers::COMMAND, Key::F)],
     label: Some("Ctrl+F"),
-    description: Some("Search the open chat or the settings"),
+    description: Some("Search within this chat"),
     menu: Some(MenuItem {
         id: "search",
-        text: "Find\u{2026}",
+        text: "Search Within This Chat\u{2026}",
         accelerator: "Super+KeyF",
     }),
 };
@@ -1681,9 +1681,9 @@ mod tests {
     fn the_help_rows_stay_exactly_as_written() {
         let expected: Vec<(&str, &str)> = vec![
             ("Ctrl+K", "Jump between recent chats"),
-            ("Ctrl+Shift+F", "Search chats"),
+            ("Ctrl+Shift+F", "Search all messages and chats"),
             ("Ctrl+P", "Command palette: chats, filters, actions"),
-            ("Ctrl+F", "Search the open chat or the settings"),
+            ("Ctrl+F", "Search within this chat"),
             (
                 "\u{2191} / \u{2193}, Enter",
                 "Walk the open chat's search results and jump to one",
@@ -1886,21 +1886,37 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_f_searches_the_open_chat_the_list_or_the_settings() {
+    fn search_shortcuts_have_distinct_keys_and_menu_scopes() {
+        assert_eq!(FIND.keys, &[(Modifiers::COMMAND, Key::F)]);
+        assert_eq!(SEARCH_CHATS.keys, &[(COMMAND_SHIFT, Key::F)]);
+        assert_eq!(JUMP_TO_CHAT.keys, &[(Modifiers::COMMAND, Key::K)]);
+        assert_eq!(FIND.menu.as_ref().unwrap().accelerator, "Super+KeyF");
+        assert_eq!(
+            SEARCH_CHATS.menu.as_ref().unwrap().accelerator,
+            "Super+Shift+KeyF"
+        );
+        assert_ne!(
+            FIND.menu.as_ref().unwrap().id,
+            SEARCH_CHATS.menu.as_ref().unwrap().id
+        );
+    }
+
+    #[test]
+    fn ctrl_f_never_changes_search_scope_with_the_page() {
         let root = tempfile::tempdir().unwrap();
         let mut app = App::headless(
             crate::paths::AppDirs::under(root.path()),
             crate::settings::Settings::default(),
         )
         .0;
-        assert!(matches!(find_action(&app), Action::FocusSearch));
+        assert!(matches!(find_action(&app), Action::OpenChatSearch));
         app.open_chat = Some("1@s.whatsapp.net".into());
         app.page = Page::Chats;
         assert!(matches!(find_action(&app), Action::OpenChatSearch));
         app.page = Page::Settings;
-        assert!(matches!(find_action(&app), Action::FocusSettingsSearch));
+        assert!(matches!(find_action(&app), Action::OpenChatSearch));
         app.page = Page::Wallpaper;
-        assert!(matches!(find_action(&app), Action::FocusSearch));
+        assert!(matches!(find_action(&app), Action::OpenChatSearch));
     }
 
     #[test]

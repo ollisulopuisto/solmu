@@ -525,6 +525,7 @@ pub struct App {
     pub new_chat_search: String,
     /// Open-chat switcher query text.
     pub jump_query: String,
+    pub jump_hits: Vec<Message>,
     /// Highlighted row in the open-chat switcher.
     pub jump_selected: usize,
     /// Command palette query text.
@@ -1483,6 +1484,7 @@ impl App {
             chat_lock_error: false,
             new_chat_search: String::new(),
             jump_query: String::new(),
+            jump_hits: Vec::new(),
             jump_selected: 0,
             palette_query: String::new(),
             palette_selected: 0,
@@ -4462,7 +4464,7 @@ impl App {
                     self.refresh_viewer_album(&chat);
                 }
                 if live && self.open_chat.as_deref() == Some(chat.as_str()) {
-                    if !older && (self.at_bottom || was_empty) {
+                    if !older && self.scroll_anchor.is_none() && (self.at_bottom || was_empty) {
                         self.scroll_to_bottom = true;
                     }
                     if bare {
@@ -4553,7 +4555,12 @@ impl App {
                 }
             }
             Event::SearchHits { query, messages } => {
-                if query == self.search.trim() {
+                if self.dialog == Some(Dialog::JumpToChat) && query == self.jump_query.trim() {
+                    self.jump_hits = messages
+                        .into_iter()
+                        .filter(|message| self.chat(&message.chat).is_some_and(|chat| !chat.locked))
+                        .collect();
+                } else if query == self.search.trim() {
                     // Locked chats' messages stay out of plain search.
                     self.search_hits = messages
                         .into_iter()
@@ -9640,6 +9647,7 @@ impl App {
                 }
                 if dialog == Dialog::JumpToChat {
                     self.jump_query.clear();
+                    self.jump_hits.clear();
                     let rows = crate::ui::switcher::entries(self, "");
                     self.jump_selected = crate::ui::switcher::default_selected(self, &rows);
                 }
@@ -10034,6 +10042,29 @@ impl App {
                 self.follow_message(&chat, &id);
                 self.jump_highlight = Some(JumpHighlight::new(chat, id.clone()));
                 self.scroll_anchor = Some(id);
+            }
+            Action::SwitcherSearch(query) => {
+                self.jump_hits.clear();
+                if !query.trim().is_empty() {
+                    self.backend.send(Command::SearchMessages { query });
+                }
+            }
+            Action::SearchMore => {
+                self.backend.send(Command::SearchMessagesMore {
+                    query: self.search.trim().into(),
+                });
+            }
+            Action::ChatSearchMore => {
+                if let Some(chat) = self.open_chat.clone() {
+                    let (from, until) = self.chat_search_range();
+                    self.chat_search_pending = true;
+                    self.backend.send(Command::SearchChatMessagesMore {
+                        chat,
+                        query: self.chat_search.trim().into(),
+                        from,
+                        until,
+                    });
+                }
             }
             Action::Search(text) => {
                 self.search = text;

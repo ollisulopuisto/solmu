@@ -125,6 +125,7 @@ fn build_menu() -> tray_icon::menu::Result<Menu> {
         &registered("select-all"),
         &Native::separator(),
         &registered("find"),
+        &registered("search-chats"),
     ])?;
     let view = Submenu::new("View", true);
     view.append_items(&[
@@ -535,7 +536,8 @@ fn action(id: &str) -> Option<Action> {
         "new" => Action::ShowDialog(Dialog::NewChat),
         "close" => Action::CloseWindow,
         "quit" => Action::Quit,
-        "search" => Action::FocusSearch,
+        "search" => Action::OpenChatSearch,
+        "search-all" => Action::FocusSearch,
         "sidebar" => Action::ToggleSidebar,
         "info-sidebar" => Action::ToggleInfoSidebar,
         "whats-new" => Action::ShowDialog(Dialog::WhatsNew),
@@ -562,7 +564,10 @@ pub fn drain(hidden: bool) -> Vec<Action> {
             if hidden
                 && matches!(
                     action,
-                    Action::ShowDialog(_) | Action::Open(_) | Action::FocusSearch
+                    Action::ShowDialog(_)
+                        | Action::Open(_)
+                        | Action::FocusSearch
+                        | Action::OpenChatSearch
                 )
             {
                 actions.push(Action::ShowWindow);
@@ -576,6 +581,20 @@ pub fn drain(hidden: bool) -> Vec<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_find_and_global_search_have_fixed_separate_scopes() {
+        assert!(matches!(action("search"), Some(Action::OpenChatSearch)));
+        assert!(matches!(action("search-all"), Some(Action::FocusSearch)));
+        let find = crate::ui::keys::shortcut("find").menu.as_ref().unwrap();
+        let global = crate::ui::keys::shortcut("search-chats")
+            .menu
+            .as_ref()
+            .unwrap();
+        assert_eq!(find.accelerator, "Super+KeyF");
+        assert_eq!(global.accelerator, "Super+Shift+KeyF");
+        assert_ne!(find.id, global.id);
+    }
 
     #[test]
     fn direct_minimized_restoration_is_on_unless_explicitly_disabled() {

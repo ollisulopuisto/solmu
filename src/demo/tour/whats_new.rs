@@ -294,8 +294,14 @@ pub(super) fn script() -> Vec<Cue> {
     add(75.3, Move(Label("Deutsch")));
     add(75.7, Wheel(-160.0));
     add(76.8, esc("Esc · Close the list"));
-    add(77.2, Key(K::F, command(), "Ctrl + F · Search settings"));
+    // The language menu was scrolled. Unlike the old contextual Cmd-F,
+    // clicking a field does not first reveal it: scroll the settings page up.
+    add(76.95, Wheel(2000.0));
+    add(77.1, Move(Widget("settings-search")));
+    // Pointer moves take 280 ms. Click only after it reaches the field.
+    add(77.5, Click(left));
     add(80.4, esc("Esc · Clear the search"));
+    add(80.6, Wheel(2000.0));
     add(81.0, Move(Label("Dark")));
     add(81.4, Click(left));
     add(81.9, Move(Label("Light")));

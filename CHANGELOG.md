@@ -9,6 +9,16 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.3
+
+- Conversation clocks and status marks sit outside the bubble toward the centre. Date separators carry the day; hovering the clock keeps the full local timestamp. Photos and albums no longer draw a timestamp over the image.
+- Search results now request missing Beeper history instead of silently dropping the jump command. The target stays pending until reached; history failures and a 50-page safety bound are explicit and retryable.
+- Global and in-chat Beeper searches offer Load more when the API reports another page. Each click fetches one next cursor page, keeps earlier pages and is capped at 50 pages with a notice, preserving query/day/chat scope.
+- Cmd/Ctrl+K keeps recent chats with an empty query. Typing lists matching chat names first, then message text from the existing index plus fuzzy matching of loaded text. Remote Beeper search is literal-word search, so typo matches in unloaded history are not guaranteed.
+- The open-chat toolbar duplicates Read later, Reply later, Favorite and Archive actions, including clear/unfavorite/unarchive states. Later flags remain local and use the same existing shortcuts.
+
+- Search shortcuts now have fixed scopes on macOS and elsewhere: Cmd/Ctrl+F searches within the open chat only, Cmd/Ctrl+Shift+F searches all messages and chats, and Cmd/Ctrl+K stays recent chats. macOS Edit menus now match the keyboard instead of routing Cmd+F to the global search. Settings search is reached by clicking its field, not by changing Cmd+F's meaning.
+
 ## v0.24.1
 
 - macOS: Cmd-Tab now restores minimized Solmu windows by default after real-device testing of the opt-in. Set `SOLMU_EXPERIMENTAL_RESTORE_MINIMIZED=0` when launching to opt out. Closed-window activation and Dock reopen keep their existing paths.

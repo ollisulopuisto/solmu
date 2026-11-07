@@ -351,6 +351,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     if !actions_inline {
         ui.horizontal(|ui| actions(ui, app, &mut state));
     }
+    // Same exact source chat as the open-chat keyboard shortcuts, not all members.
+    super::conversation::chat_actions_toolbar(app, ui, chat);
     if let Some(error) = routing_error {
         ui.colored_label(egui::Color32::YELLOW, error);
     }

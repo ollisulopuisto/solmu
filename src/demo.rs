@@ -4769,15 +4769,14 @@ mod tests {
                 .iter()
                 .find(|(_, galley)| galley.text() == clock.as_str())
                 .unwrap_or_else(|| panic!("painted time {clock}"));
+            let time_rect = egui::Rect::from_min_size(*time_pos, time.size());
             assert!(
-                time_pos.y >= body_bottom - 0.5,
-                "time at {} overlaps the last row ending at {body_bottom}",
-                time_pos.y
+                time_rect.right() < body_right,
+                "own timestamp moves toward the centre"
             );
-            let gap = body_right - (time_pos.x + time.size().x);
             assert!(
-                (0.0..40.0).contains(&gap),
-                "time should end beside the ticks at the right edge, {gap} short of it"
+                time_rect.bottom() >= body_bottom - 12.0,
+                "timestamp stays near the bubble bottom"
             );
             let body_rect = body
                 .rows
@@ -5657,25 +5656,20 @@ mod tests {
                         data.get_temp::<egui::Rect>(bubble.with(("carousel-card", cards - 1)))
                     })
                     .unwrap();
-                let output = run(&mut app, vec![]);
-                let stamp =
-                    crate::util::clock(app.conversations[SAMPLES[0].id].messages[0].timestamp);
-                let time = output
-                    .shapes
-                    .iter()
-                    .find_map(|shape| {
-                        let egui::Shape::Text(text) = &shape.shape else {
-                            return None;
-                        };
-                        (text.galley.text() == stamp
-                            && bounds.contains(text.pos)
-                            && text.pos.y >= last.bottom())
-                        .then(|| egui::Rect::from_min_size(text.pos, text.galley.size()))
+                let _output = run(&mut app, vec![]);
+                let time = ctx
+                    .data(|data| {
+                        data.get_temp::<egui::Rect>(crate::ui::conversation::footer_id(
+                            SAMPLES[0].id,
+                            "interactive-card",
+                        ))
                     })
-                    .expect("timestamp below the cards");
+                    .expect("external timestamp beside cards");
+                assert!(!bounds.intersects(time), "time outside carousel frame");
+                assert!((time.bottom() - bounds.bottom()).abs() < 1.0);
                 assert!(
-                    (time.right() - last.right()).abs() < 1.0,
-                    "timestamp {time:?} must follow the last card {last:?}"
+                    last.right() <= bounds.right(),
+                    "last card remains inside frame"
                 );
             }
             let id = crate::ui::conversation::bubble_id(SAMPLES[0].id, "interactive-card-card-0")
@@ -19011,10 +19005,10 @@ mod tests {
 
     /// A call entry draws as WhatsApp's: the glyph's disc centred on the
     /// title and detail together, the detail under the title at its start,
-    /// and the time on the detail's line at the bubble's end, on both sides
-    /// of a group, where a sender's name heads the bubble.
+    /// with no phantom detail line on title-only calls. The clock stays
+    /// outside the bubble on both sides of a group.
     #[test]
-    fn a_call_entry_centres_its_glyph_and_tucks_its_time_beside_the_detail() {
+    fn a_call_entry_centres_its_glyph_with_an_external_clock() {
         let mut app = app();
         apply_flags(&mut app, Some("call-bubbles"));
         let chat = SAMPLES[1].id;
@@ -19072,8 +19066,8 @@ mod tests {
                 .expect("the time is drawn");
             assert!(disc.x < title.left(), "{}: the disc leads", message.id);
             assert!(
-                footer.right() <= bubble.right() - 9.0 && footer.bottom() <= bubble.bottom(),
-                "{}: the time stays inside the bubble's padding",
+                !footer.intersects(bubble) && (footer.bottom() - bubble.bottom()).abs() < 1.0,
+                "{}: the time stays outside the bubble at its bottom",
                 message.id
             );
             match entry.detail(app.locale) {
@@ -19097,24 +19091,14 @@ mod tests {
                         disc.y
                     );
                     assert!(
-                        (footer.center().y - detail.center().y).abs() <= 0.5,
-                        "{}: the time sits on the detail's line",
-                        message.id
-                    );
-                    assert!(
-                        footer.left() >= detail.right() + 8.0,
-                        "{}: the time follows the detail",
-                        message.id
+                        !footer.intersects(bubble),
+                        "the clock is not part of call detail"
                     );
                 }
                 None => {
-                    assert!(footer.top() >= title.bottom(), "{}", message.id);
-                    let block = (title.top() + footer.bottom()) / 2.0;
                     assert!(
-                        (disc.y - block).abs() <= 1.0,
-                        "{}: the disc centres on {}, title and time on {block}",
-                        message.id,
-                        disc.y
+                        (disc.y - title.center().y).abs() <= 1.0,
+                        "call icon and title stay centred"
                     );
                 }
             }
@@ -21395,7 +21379,7 @@ mod bubble_detail_tests {
     /// bottom corner, and its bubble closes just under it; with a caption
     /// they stay on the caption's line below the picture (#251).
     #[test]
-    fn a_picture_without_a_caption_carries_its_time_over_its_corner() {
+    fn picture_metadata_sits_outside_the_picture_and_bubble() {
         let (_app, ctx) = photos();
         let chat = SAMPLES[0].id;
         for id in ["photos-in", "photos-out"] {
@@ -21404,15 +21388,9 @@ mod bubble_detail_tests {
             let picture = rect(&ctx, bubble.with("picture")).expect("the picture was drawn");
             let footer = rect(&ctx, crate::ui::conversation::footer_id(chat, id))
                 .expect("the time was drawn");
-            assert!(
-                picture.contains_rect(footer),
-                "{id}: the time is over the picture ({footer:?} in {picture:?})"
-            );
-            assert!(
-                picture.right() - footer.right() <= 12.0
-                    && picture.bottom() - footer.bottom() <= 8.0,
-                "{id}: the time sits in the picture's bottom corner ({footer:?} in {picture:?})"
-            );
+            assert!(!picture.intersects(footer), "{id}: no time over the image");
+            assert!(!frame.intersects(footer), "{id}: time outside the bubble");
+            assert!((frame.bottom() - footer.bottom()).abs() < 1.0);
             assert!(
                 frame.bottom() - picture.bottom() <= 7.0,
                 "{id}: no strip under the picture ({picture:?} in {frame:?})"
@@ -21439,7 +21417,7 @@ mod bubble_detail_tests {
     /// A voice message carries its time and ticks on the duration's line,
     /// as on the phone, rather than on a line of their own under it.
     #[test]
-    fn a_voice_message_keeps_its_time_on_the_duration_line() {
+    fn a_voice_message_keeps_its_time_outside_without_an_extra_line() {
         let mut app = app();
         let ctx = egui::Context::default();
         app.attach(&ctx);
@@ -21455,8 +21433,8 @@ mod bubble_detail_tests {
             let footer = rect(&ctx, crate::ui::conversation::footer_id(chat, id))
                 .expect("the time was drawn");
             assert!(
-                frame.contains_rect(footer),
-                "{id}: the time is inside the bubble ({footer:?} in {frame:?})"
+                !frame.intersects(footer),
+                "{id}: the time is outside the bubble ({footer:?} beside {frame:?})"
             );
             assert!(
                 frame.bottom() - footer.bottom() <= 8.0,

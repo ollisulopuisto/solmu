@@ -3095,6 +3095,9 @@ pub enum Action {
     ScrollTo(String),
     /// Updates chat-list search text.
     Search(String),
+    SearchMore,
+    SwitcherSearch(String),
+    ChatSearchMore,
     ShowUpdate,
     CloseUpdate,
     DownloadUpdate,

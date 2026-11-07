@@ -74,7 +74,7 @@ impl BeeperConfig {
 // Shapes follow the official TypeScript SDK (beeper/desktop-api-js, `next`),
 // which is generated from Beeper's OpenAPI spec.
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 // serde's derive would otherwise add a bogus `T: Default` bound for the
 // `#[serde(default)]` fields (serde issue #1541).
@@ -1340,10 +1340,6 @@ impl Api {
         result.map_err(str::to_string)
     }
 
-    fn search_messages(&self, query: &str) -> Result<Page<BeeperMessage>, String> {
-        self.get("/v1/messages/search", &[("query", query.to_string())])
-    }
-
     fn send_text(
         &self,
         chat: &str,
@@ -2302,6 +2298,90 @@ struct ChatCursors {
     has_more_older: bool,
 }
 
+/// Search/quote jumps must not silently fall through the Beeper command match.
+/// Walk the actual older-history cursors, retaining good pages on failure.
+fn load_until_message(
+    api: &Api,
+    cursors: &mut HashMap<ChatId, ChatCursors>,
+    chat: &str,
+    target: &str,
+    emit: &dyn Fn(Event),
+) {
+    let mut seen = HashSet::new();
+    for _ in 0..50 {
+        let state = cursors.get(chat);
+        if state.is_some_and(|state| !state.has_more_older) {
+            break;
+        }
+        let cursor = state.and_then(|state| state.oldest.clone());
+        let Some(cursor) = cursor else {
+            emit(Event::BeeperHistoryState { chat: chat.into(), error: Some("Cannot reach the search result: older-history cursor unavailable. Retry after history recovers.".into()) });
+            break;
+        };
+        if !seen.insert(cursor.clone()) {
+            break;
+        }
+        match api.list_messages(chat, Some(&cursor), Some("before")) {
+            Ok(page) => {
+                let found = page
+                    .items
+                    .iter()
+                    .any(|m| m.id == target && !m.is_hidden && !m.is_deleted);
+                let next =
+                    history_cursor(page.oldest_cursor.as_deref(), Some(&cursor), page.has_more);
+                let error = next.as_ref().err().cloned();
+                if let Some(state) = cursors.get_mut(chat) {
+                    if let Ok(next) = next {
+                        state.oldest = next;
+                    }
+                    state.has_more_older = page.has_more;
+                }
+                let mut messages: Vec<_> = page
+                    .items
+                    .iter()
+                    .filter(|m| !m.is_hidden && !m.is_deleted)
+                    .map(|m| api.map_message(m, chat))
+                    .collect();
+                messages.sort_by_key(|m| m.timestamp);
+                emit(Event::Messages {
+                    chat: chat.into(),
+                    messages,
+                    older: true,
+                    complete: !page.has_more,
+                });
+                emit(Event::BeeperHistoryState {
+                    chat: chat.into(),
+                    error: error.clone(),
+                });
+                if found {
+                    emit(Event::OlderFetched {
+                        chat: chat.into(),
+                        more: page.has_more,
+                        silent: false,
+                    });
+                    return;
+                }
+                if error.is_some() || !page.has_more {
+                    break;
+                }
+            }
+            Err(error) => {
+                emit(Event::BeeperHistoryState {
+                    chat: chat.into(),
+                    error: Some(format!("Search result history unavailable: {error}")),
+                });
+                break;
+            }
+        }
+    }
+    emit(Event::BeeperHistoryState { chat: chat.into(), error: Some("Search result not reached. History may be incomplete or the 50-page safety limit was reached. Click the result again to continue.".into()) });
+    emit(Event::OlderFetched {
+        chat: chat.into(),
+        more: cursors.get(chat).is_none_or(|state| state.has_more_older),
+        silent: false,
+    });
+}
+
 fn history_cursor(
     next: Option<&str>,
     previous: Option<&str>,
@@ -2601,6 +2681,8 @@ pub fn run(
     emit(Event::Contacts(Vec::new()));
 
     let mut chat_cursors: HashMap<ChatId, ChatCursors> = HashMap::new();
+    let mut search_cache = std::collections::HashMap::<String, CachedSearch>::new();
+    let mut chat_search_cache = (String::new(), CachedSearch::default());
     let mut open_chat: Option<ChatId> = None;
     let mut watched_chats: Vec<ChatId> = Vec::new();
     // Chats the Server answered 404 for: permanent per id, so polling and
@@ -2834,6 +2916,13 @@ pub fn run(
                             emit(Event::Error(copy));
                         }
                     }
+                }
+                Command::LoadUntil {
+                    chat,
+                    id,
+                    before: _,
+                } => {
+                    load_until_message(&api, &mut chat_cursors, &chat, &id, &emit);
                 }
                 Command::FetchOlder { chat, explicit: _ } => {
                     if chat_cursors.get(&chat).is_some_and(|c| !c.has_more_older) {
@@ -3313,9 +3402,51 @@ pub fn run(
                     query,
                     from,
                     until,
-                } => run_chat_search(&api, chat, query, from, until, &emit),
+                } => {
+                    chat_search_cache = (
+                        format!("{chat}\0{query}\0{from:?}\0{until:?}"),
+                        CachedSearch::default(),
+                    );
+                    run_chat_search_cached(
+                        &api,
+                        chat,
+                        query,
+                        from,
+                        until,
+                        &emit,
+                        &mut chat_search_cache.1,
+                    );
+                }
+                Command::SearchChatMessagesMore {
+                    chat,
+                    query,
+                    from,
+                    until,
+                } => {
+                    let key = format!("{chat}\0{query}\0{from:?}\0{until:?}");
+                    if chat_search_cache.0 == key {
+                        run_chat_search_cached(
+                            &api,
+                            chat,
+                            query,
+                            from,
+                            until,
+                            &emit,
+                            &mut chat_search_cache.1,
+                        );
+                    }
+                }
                 Command::SearchMessages { query } => {
-                    run_message_search(&api, query, &emit);
+                    if search_cache.len() > 8 {
+                        search_cache.retain(|_, cache| cache.pages > 1);
+                    }
+                    let cache = search_cache.entry(query.clone()).or_default();
+                    *cache = CachedSearch::default();
+                    run_message_search_cached(&api, query, &emit, cache);
+                }
+                Command::SearchMessagesMore { query } => {
+                    let cache = search_cache.entry(query.clone()).or_default();
+                    run_message_search_cached(&api, query, &emit, cache);
                 }
                 Command::Picked {
                     chat,
@@ -3607,6 +3738,93 @@ pub fn run(
     }
 }
 
+/// Re-read a bounded cumulative result window on explicit Load more. Repeating
+/// earlier pages keeps cursor state scoped to the exact query/filters and avoids
+/// merging a stale response into a changed search. Stop on repeated/missing cursors.
+/// A single API request per explicit Load more click. Keeps earlier pages and
+/// cursors on the worker, so paging neither restarts the query nor blocks normal
+/// chat updates behind a growing batch of already-fetched requests.
+#[derive(Default)]
+struct CachedSearch {
+    page: Option<Page<BeeperMessage>>,
+    pages: usize,
+    seen: HashSet<String>,
+}
+
+impl CachedSearch {
+    fn next(
+        &mut self,
+        api: &Api,
+        mut params: Vec<(&str, String)>,
+    ) -> Result<Page<BeeperMessage>, String> {
+        let mut cursor = None;
+        if let Some(page) = &self.page {
+            if !page.has_more || self.pages >= 50 {
+                return Ok(page.clone());
+            }
+            let next = page
+                .oldest_cursor
+                .as_ref()
+                .filter(|c| !c.is_empty())
+                .ok_or("Search continuation cursor unavailable; earlier results are kept")?;
+            if self.seen.contains(next) {
+                return Err("Search continuation did not advance; earlier results are kept".into());
+            }
+            params.push(("cursor", next.clone()));
+            cursor = Some(next.clone());
+        }
+        let mut page: Page<BeeperMessage> = api.get("/v1/messages/search", &params)?;
+        if page.has_more
+            && page
+                .oldest_cursor
+                .as_ref()
+                .is_some_and(|next| Some(next) == cursor.as_ref() || self.seen.contains(next))
+        {
+            return Err("Search continuation did not advance; earlier results are kept".into());
+        }
+        if let Some(old) = &self.page {
+            let newer = std::mem::take(&mut page.items);
+            page.items = old.items.clone();
+            page.items.extend(newer);
+        }
+        let mut ids = HashSet::new();
+        page.items
+            .retain(|m| ids.insert((m.chat_id.clone(), m.id.clone())));
+        if let Some(cursor) = cursor {
+            self.seen.insert(cursor);
+        }
+        self.pages += 1;
+        self.page = Some(page.clone());
+        Ok(page)
+    }
+}
+
+fn run_message_search_cached(
+    api: &Api,
+    query: String,
+    emit: &dyn Fn(Event),
+    cache: &mut CachedSearch,
+) {
+    let result = cache.next(api, vec![("query", query.clone())]);
+    emit_message_search(api, query, emit, result, cache.pages);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_chat_search_cached(
+    api: &Api,
+    chat: ChatId,
+    query: String,
+    from: Option<i64>,
+    until: Option<i64>,
+    emit: &dyn Fn(Event),
+    cache: &mut CachedSearch,
+) {
+    let result =
+        chat_search_params(&chat, &query, from, until).and_then(|params| cache.next(api, params));
+    emit_chat_search(api, chat, query, from, until, emit, result, cache.pages);
+}
+
+#[cfg(test)]
 fn run_chat_search(
     api: &Api,
     chat: ChatId,
@@ -3615,29 +3833,56 @@ fn run_chat_search(
     until: Option<i64>,
     emit: &dyn Fn(Event),
 ) {
-    let result = (|| -> Result<Page<BeeperMessage>, String> {
-        let mut params = vec![
-            ("query", query.clone()),
-            ("chatIDs", chat.clone()),
-            ("excludeLowPriority", "false".into()),
-        ];
-        if let Some(from) = from {
-            // API is strictly-after; UI uses an inclusive second boundary.
-            let time =
-                jiff::Timestamp::from_second(from.checked_sub(1).ok_or("Invalid search date")?)
-                    .map_err(|_| "Invalid search date")?;
-            params.push(("dateAfter", time.to_string()));
-        }
-        if let Some(until) = until {
-            params.push((
-                "dateBefore",
-                jiff::Timestamp::from_second(until)
-                    .map_err(|_| "Invalid search date")?
-                    .to_string(),
-            ));
-        }
-        api.get("/v1/messages/search", &params)
-    })();
+    run_chat_search_cached(
+        api,
+        chat,
+        query,
+        from,
+        until,
+        emit,
+        &mut CachedSearch::default(),
+    );
+}
+
+fn chat_search_params(
+    chat: &str,
+    query: &str,
+    from: Option<i64>,
+    until: Option<i64>,
+) -> Result<Vec<(&'static str, String)>, String> {
+    let mut params = vec![
+        ("query", query.to_string()),
+        ("chatIDs", chat.to_string()),
+        ("excludeLowPriority", "false".into()),
+    ];
+    if let Some(from) = from {
+        // API is strictly-after; UI uses an inclusive second boundary.
+        let time = jiff::Timestamp::from_second(from.checked_sub(1).ok_or("Invalid search date")?)
+            .map_err(|_| "Invalid search date")?;
+        params.push(("dateAfter", time.to_string()));
+    }
+    if let Some(until) = until {
+        params.push((
+            "dateBefore",
+            jiff::Timestamp::from_second(until)
+                .map_err(|_| "Invalid search date")?
+                .to_string(),
+        ));
+    }
+    Ok(params)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_chat_search(
+    api: &Api,
+    chat: ChatId,
+    query: String,
+    from: Option<i64>,
+    until: Option<i64>,
+    emit: &dyn Fn(Event),
+    result: Result<Page<BeeperMessage>, String>,
+    pages: usize,
+) {
     match result {
         Ok(page) => {
             // Check scope locally as well, even if a server ignores filters.
@@ -3653,13 +3898,17 @@ fn run_chat_search(
                 .collect();
             messages.sort_by_key(|m| std::cmp::Reverse(m.timestamp));
             emit(Event::ChatHits {
-                chat,
-                query,
+                chat: chat.clone(),
+                query: query.clone(),
                 from,
                 until,
                 messages,
-                truncated: page.has_more,
+                truncated: page.has_more && pages < 50,
             });
+            if pages >= 50 && page.has_more {
+                emit(Event::BeeperChatSearchError { chat, query, from, until,
+                    error: "Showing the first 50 pages. Narrow the search or choose a day for older matches.".into() });
+            }
         }
         Err(error) => emit(Event::BeeperChatSearchError {
             chat,
@@ -3671,8 +3920,19 @@ fn run_chat_search(
     }
 }
 
+#[cfg(test)]
 fn run_message_search(api: &Api, query: String, emit: &dyn Fn(Event)) {
-    match api.search_messages(&query) {
+    run_message_search_cached(api, query, emit, &mut CachedSearch::default());
+}
+
+fn emit_message_search(
+    api: &Api,
+    query: String,
+    emit: &dyn Fn(Event),
+    result: Result<Page<BeeperMessage>, String>,
+    pages: usize,
+) {
+    match result {
         Ok(page) => {
             let mut messages: Vec<Message> = page
                 .items
@@ -3683,15 +3943,17 @@ fn run_message_search(api: &Api, query: String, emit: &dyn Fn(Event)) {
             messages.sort_by_key(|m| std::cmp::Reverse(m.timestamp));
             emit(Event::BeeperSearchState {
                 query: query.clone(),
-                error: None,
-                truncated: page.has_more,
+                error: (pages >= 50 && page.has_more).then(|| {
+                    "Showing the first 50 pages. Narrow the search for older matches.".into()
+                }),
+                truncated: page.has_more && pages < 50,
             });
             emit(Event::SearchHits { query, messages });
         }
         Err(error) => emit(Event::BeeperSearchState {
             query,
             error: Some(format!("Message search unavailable: {error}")),
-            truncated: false,
+            truncated: pages > 0 && pages < 50,
         }),
     }
 }
@@ -4476,6 +4738,177 @@ mod tests {
         let events = events.into_inner().unwrap();
         assert!(events.iter().any(|e|matches!(e,Event::ChatHits{messages,truncated:true,..} if messages.len()==1 && messages[0].id=="start")));
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn load_until_follows_older_cursor_and_emits_target() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let n = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..n]);
+            assert!(request.contains("cursor=older"));
+            assert!(request.contains("direction=before"));
+            let body = r#"{"items":[{"id":"target","chatID":"chat","text":"fixture","timestamp":"2026-06-19T12:00:00Z"}],"hasMore":false}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let mut cursors = HashMap::from([(
+            "chat".into(),
+            ChatCursors {
+                oldest: Some("older".into()),
+                newest: None,
+                has_more_older: true,
+            },
+        )]);
+        let events = std::sync::Mutex::new(Vec::new());
+        load_until_message(&api, &mut cursors, "chat", "target", &|event| {
+            events.lock().unwrap().push(event)
+        });
+        assert!(events.into_inner().unwrap().iter().any(|event| matches!(event, Event::Messages { messages, older: true, .. } if messages.iter().any(|m| m.id=="target"))));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn explicit_search_more_keeps_query_and_follows_oldest_cursor() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            for second in [false, true] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let n = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..n]);
+                assert!(request.contains("query=fixture"));
+                assert_eq!(request.contains("cursor=next"), second);
+                let body = if second {
+                    r#"{"items":[],"hasMore":false}"#
+                } else {
+                    r#"{"items":[],"hasMore":true,"oldestCursor":"next"}"#
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let mut cache = CachedSearch::default();
+        let first = cache.next(&api, vec![("query", "fixture".into())]).unwrap();
+        assert!(first.has_more);
+        let result = cache.next(&api, vec![("query", "fixture".into())]).unwrap();
+        assert!(!result.has_more);
+        assert_eq!(cache.pages, 2);
+        // Exhausted results do not issue a third request.
+        assert!(
+            !cache
+                .next(&api, vec![("query", "fixture".into())])
+                .unwrap()
+                .has_more
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn search_cache_keeps_results_and_cursor_after_a_failed_page_and_can_retry() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            for index in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let n = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..n]);
+                assert!(request.contains("query=fixture"));
+                assert_eq!(request.contains("cursor=next"), index > 0);
+                let body = match index {
+                    0 => {
+                        r#"{"items":[{"id":"one","chatID":"chat","text":"fixture","timestamp":"2026-06-19T12:00:00Z"}],"hasMore":true,"oldestCursor":"next"}"#
+                    }
+                    1 => "invalid-json",
+                    _ => {
+                        r#"{"items":[{"id":"one","chatID":"chat","text":"fixture","timestamp":"2026-06-19T12:00:00Z"},{"id":"two","chatID":"chat","text":"fixture","timestamp":"2026-06-19T11:00:00Z"}],"hasMore":false}"#
+                    }
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let params = || vec![("query", "fixture".into())];
+        let mut cache = CachedSearch::default();
+        assert_eq!(cache.next(&api, params()).unwrap().items.len(), 1);
+        assert!(cache.next(&api, params()).is_err());
+        assert_eq!(cache.pages, 1);
+        assert_eq!(cache.page.as_ref().unwrap().items.len(), 1);
+        assert_eq!(cache.next(&api, params()).unwrap().items.len(), 2);
+        assert_eq!(cache.pages, 2);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn cache_limits_and_bad_cursors_do_not_issue_another_request() {
+        let api = Api::new(&BeeperConfig {
+            base_url: "http://127.0.0.1:9".into(),
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let page = || {
+            serde_json::from_str::<Page<BeeperMessage>>(
+                r#"{"items":[],"hasMore":true,"oldestCursor":"next"}"#,
+            )
+            .unwrap()
+        };
+        let params = || vec![("query", "fixture".into())];
+        let mut cache = CachedSearch {
+            page: Some(page()),
+            pages: 50,
+            seen: HashSet::new(),
+        };
+        assert!(cache.next(&api, params()).unwrap().has_more);
+        assert_eq!(cache.pages, 50);
+        cache.pages = 1;
+        cache.seen.insert("next".into());
+        assert!(
+            cache
+                .next(&api, params())
+                .unwrap_err()
+                .contains("did not advance")
+        );
+        cache.seen.clear();
+        cache.page.as_mut().unwrap().oldest_cursor = None;
+        assert!(
+            cache
+                .next(&api, params())
+                .unwrap_err()
+                .contains("unavailable")
+        );
+        assert_eq!(cache.pages, 1);
     }
 
     #[test]
