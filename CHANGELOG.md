@@ -9,6 +9,12 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.4
+
+- Chat header actions now use outlined icon cells beside Search, with green active states and tooltips. Linked timelines use the same single header row, including at narrow widths.
+- Background live-update errors stay discoverable in a compact Connection status control instead of painting raw diagnostics across messages. Details explain that messages may be missing while updates retry.
+- Favorite avatars include unread state from other unlocked chats linked to the same person. Network badges use a single muted color so unread counts and the active chat stay easy to see.
+
 ## v0.24.3
 
 - Conversation clocks and status marks sit outside the bubble toward the centre. Date separators carry the day; hovering the clock keeps the full local timestamp. Photos and albums no longer draw a timestamp over the image.

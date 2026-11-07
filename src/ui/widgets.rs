@@ -396,8 +396,15 @@ pub fn paint_network_badge(ui: &Ui, palette: &Palette, avatar: Rect, network: &s
     let rect = Rect::from_center_size(center, Vec2::splat(size));
     ui.painter()
         .circle_filled(center, size * 0.58, palette.surface);
-    let tint = theme::network_tint(network).unwrap_or(palette.secondary);
-    theme::paint_network_mark(ui, theme::network_icon(network), rect, size * 0.85, tint);
+    // Network identity is carried by the shape, not several competing brand
+    // colors on every avatar. Keep these subordinate to unread/active marks.
+    theme::paint_network_mark(
+        ui,
+        theme::network_icon(network),
+        rect,
+        size * 0.85,
+        palette.secondary,
+    );
 }
 
 pub fn paint_disappearing_badge(ui: &Ui, palette: &Palette, avatar: Rect) {

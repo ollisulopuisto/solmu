@@ -1398,6 +1398,9 @@ pub(super) fn favorite_bar_chats(app: &App) -> Vec<Chat> {
             .then(a.id.cmp(&b.id))
     });
     favorites
+        .into_iter()
+        .map(|chat| app.beeper_person_preview(&chat))
+        .collect()
 }
 
 pub(super) fn favorites_row(app: &mut App, ui: &mut egui::Ui) {
@@ -4304,6 +4307,37 @@ mod tests {
         );
         ctx.data(|data| data.get_temp::<Rect>(chat_row_id(&ordinary.id)))
             .expect("an unpinned chat keeps its row as before");
+    }
+
+    #[test]
+    fn linked_favorite_uses_unread_from_other_unlocked_members() {
+        use crate::merged::{Member, Person};
+        let directory = tempfile::tempdir().expect("temp dir");
+        let (mut app, _) = App::headless(AppDirs::under(directory.path()), Settings::default());
+        let mut favorite = Chat::new("ada-wa".into(), "Ada".into());
+        favorite.backend_account = Some("wa".into());
+        favorite.backend_origin = Some("http://localhost:23374".into());
+        favorite.favorite = true;
+        let mut other = favorite.clone();
+        other.id = "ada-signal".into();
+        other.backend_account = Some("signal".into());
+        other.favorite = false;
+        other.unread = 3;
+        other.marked_unread = true;
+        app.settings.beeper.people.push(Person {
+            name: "Ada".into(),
+            members: vec![Member::of(&favorite).unwrap(), Member::of(&other).unwrap()],
+            primary: None,
+        });
+        app.chats = vec![favorite, other];
+        let projected = favorite_bar_chats(&app);
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].unread, 3);
+        assert!(projected[0].marked_unread);
+        app.chats[1].locked = true;
+        let projected = favorite_bar_chats(&app);
+        assert_eq!(projected[0].unread, 0, "locked member unread must not leak");
+        assert!(!projected[0].marked_unread);
     }
 
     #[test]

@@ -59,22 +59,91 @@ const NOT_SENT: &str = "Not sent";
 const NOT_SENT_HINT: &str =
     "This message could not be sent, and Solmu will not retry it. Send it again yourself.";
 
-pub(super) fn beeper_live_warning(app: &App, ui: &mut egui::Ui, chat: &str) {
-    if let Some(error) = app.beeper_live_errors.get(chat) {
-        let source = app
-            .chat(chat)
-            .map(|c| c.network.as_deref().unwrap_or(&c.name))
-            .unwrap_or("Chat");
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(format!(
-                    "{source}: {error}. Updates may be incomplete. Retrying automatically."
-                ))
-                .color(app.conversation_palette().warning),
-            )
-            .wrap(),
+/// Same compact outlined-cell language as the chat-list queue controls.
+pub(crate) fn header_icon(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    icon: Icon,
+    active: bool,
+    label: &str,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
+    ui.painter().rect_stroke(
+        rect,
+        3.0,
+        Stroke::new(1.0, palette.outline),
+        egui::StrokeKind::Inside,
+    );
+    if active || response.hovered() {
+        ui.painter().rect_filled(
+            rect.shrink(1.0),
+            2.0,
+            palette
+                .accent
+                .gamma_multiply(if active { 0.22 } else { 0.10 }),
         );
     }
+    theme::paint_icon(
+        ui,
+        icon,
+        rect,
+        18.0,
+        if active {
+            palette.accent
+        } else {
+            palette.secondary
+        },
+    );
+    theme::focus_outline(ui, response.id, rect, 3.0);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), active, label)
+    });
+    response
+        .on_hover_text(label)
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Background update failures remain visible without taking transcript space.
+/// Full diagnostics are available on click, not painted across messages.
+pub(crate) fn connection_status(app: &App, ui: &mut egui::Ui, chats: &[&str]) {
+    let errors: Vec<_> = chats
+        .iter()
+        .filter_map(|id| {
+            app.beeper_live_errors.get(*id).map(|error| {
+                let network = app
+                    .chat(id)
+                    .map(|chat| chat.network.as_deref().unwrap_or(&chat.name))
+                    .unwrap_or("Chat");
+                (network, error)
+            })
+        })
+        .collect();
+    if errors.is_empty() {
+        return;
+    }
+    let mut palette = app.conversation_palette();
+    palette.secondary = palette.warning;
+    let response = header_icon(
+        ui,
+        &palette,
+        Icon::CircleAlert,
+        false,
+        "Connection status: updates may be incomplete. Click for details.",
+    );
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(egui::Id::new("chat-connection-status"), response.rect));
+    egui::Popup::menu(&response).show(|ui| {
+        ui.set_max_width(360.0);
+        ui.strong("Connection status");
+        ui.label(
+            "Some new messages may be missing. Retrying automatically; loaded messages are kept.",
+        );
+        for (network, error) in errors {
+            ui.separator();
+            ui.strong(network);
+            ui.add(egui::Label::new(error).wrap());
+        }
+    });
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
@@ -102,7 +171,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 let glass = ui.painter().add(egui::Shape::Noop);
                 let veil = ui.painter().add(egui::Shape::Noop);
                 header(app, ui, &chat);
-                beeper_live_warning(app, ui, &chat.id);
                 if theme::chrome_in_headers(ui.ctx()) {
                     super::banner(app, ui);
                 }
@@ -128,7 +196,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let header = header(app, ui, &chat);
-    beeper_live_warning(app, ui, &chat.id);
     if theme::chrome_in_headers(ui.ctx()) {
         super::banner(app, ui);
     }
@@ -471,11 +538,17 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                 let (subtitle, color) = subtitle(app, chat);
                 // More and Search, and Back in a narrow window, each on its
                 // own glass with room around it on a vibrant window.
-                let buttons = if narrow { 3.0 } else { 2.0 };
+                let buttons = if narrow { 3.0 } else { 2.0 }
+                    + if chat.is_channel() { 3.0 } else { 4.0 }
+                    + if app.beeper_live_errors.contains_key(&chat.id) {
+                        1.0
+                    } else {
+                        0.0
+                    };
                 let right_controls = if palette.vibrant() {
                     buttons * 36.0 + (buttons - 0.5) * BUTTON_GAP + (BUTTON_GLASS - 30.0)
                 } else {
-                    buttons * 36.0
+                    buttons * 32.0
                 } + room.right;
                 // On a vibrant window the name and the buttons sit on glass
                 // pills, drawn beneath them once they are measured.
@@ -512,7 +585,7 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                                 // Room for the name's glass pill to clear the avatar.
                                 ui.add_space(if palette.vibrant() { 14.0 } else { 4.0 });
                                 ui.vertical(|ui| {
-                                    let width = (ui.available_width() - right_controls).max(80.0);
+                                    let width = ui.available_width().max(30.0);
                                     ui.set_max_width(width);
                                     // On glass the lines centre on the avatar: the
                                     // column starts at the row's top otherwise.
@@ -633,6 +706,7 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                 };
                 let select_messages_label = crate::i18n::gettext(app.locale, "Select messages");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(room.right);
                     // Each button on a vibrant window floats on its own glass,
                     // with room around it.
@@ -782,19 +856,8 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                         ui.add_space(BUTTON_GAP);
                     }
                     let search_glass = ui.painter().add(egui::Shape::Noop);
-                    let search = theme::icon_button(
-                        ui,
-                        Icon::Search,
-                        18.0,
-                        if searching {
-                            palette.accent
-                        } else {
-                            palette.secondary
-                        },
-                        palette.text,
-                        &tip,
-                    )
-                    .tab_stop(Stop::ChatSearch);
+                    let search = header_icon(ui, &palette, Icon::Search, searching, &tip)
+                        .tab_stop(Stop::ChatSearch);
                     if palette.vibrant() {
                         ui.painter()
                             .set(search_glass, glass_button(&palette, search.rect));
@@ -806,6 +869,8 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                             Action::OpenChatSearch
                         });
                     }
+                    chat_actions_toolbar(app, ui, chat);
+                    connection_status(app, ui, &[&chat.id]);
                     // A narrow window shows the list or the chat, not both;
                     // this is the way back to the list.
                     if narrow {
@@ -835,7 +900,6 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                     }
                 });
             });
-            chat_actions_toolbar(app, ui, chat);
             ui.ctx()
                 .data_mut(|data| data.insert_temp(header_row_id(), row.response.rect));
         })
@@ -845,72 +909,72 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
 
 /// Chat-level controls use the open chat's exact existing actions, not list selection.
 pub(crate) fn chat_actions_toolbar(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
-    ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        let read = app.read_later_contains(chat);
-        let reply = app.reply_later_contains(chat);
-        if ui
-            .selectable_label(
-                read,
-                format!(
-                    "{} ({})",
-                    if read {
-                        "Clear read later"
-                    } else {
-                        "Read later"
-                    },
-                    super::keys::label("Ctrl+U")
-                ),
-            )
-            .clicked()
-        {
-            app.actions.push(Action::ToggleReadLater(chat.id.clone()));
-        }
-        if ui
-            .selectable_label(
-                reply,
-                format!(
-                    "{} ({})",
-                    if reply {
-                        "Clear reply later"
-                    } else {
-                        "Reply later"
-                    },
-                    super::keys::label("Ctrl+I")
-                ),
-            )
-            .clicked()
-        {
-            app.actions.push(Action::ToggleReplyLater(chat.id.clone()));
-        }
-        if !chat.is_channel()
-            && ui
-                .button(if chat.favorite {
-                    "Unfavorite"
-                } else {
-                    "Favorite"
-                })
-                .clicked()
-        {
-            if chat.pinned {
-                app.actions.push(Action::SetPinned(chat.id.clone(), false));
+    let palette = app.conversation_palette();
+    // Parent uses right-to-left layout: these appear read, reply, favorite,
+    // archive, search in the same header row, with no extra toolbar line.
+    let read = app.read_later_contains(chat);
+    let reply = app.reply_later_contains(chat);
+    let read_label = format!(
+        "{} ({})",
+        if read {
+            "Clear read later"
+        } else {
+            "Read later"
+        },
+        super::keys::label("Ctrl+U")
+    );
+    let reply_label = format!(
+        "{} ({})",
+        if reply {
+            "Clear reply later"
+        } else {
+            "Reply later"
+        },
+        super::keys::label("Ctrl+I")
+    );
+    if header_icon(
+        ui,
+        &palette,
+        Icon::Archive,
+        chat.archived,
+        if chat.archived {
+            "Unarchive"
+        } else {
+            "Archive"
+        },
+    )
+    .clicked()
+    {
+        app.actions
+            .push(Action::SetArchived(chat.id.clone(), !chat.archived));
+    }
+    if !chat.is_channel()
+        && header_icon(
+            ui,
+            &palette,
+            Icon::Star,
+            chat.favorite,
+            if chat.favorite {
+                "Remove from favorites"
             } else {
-                app.actions
-                    .push(Action::SetFavorite(chat.id.clone(), !chat.favorite));
-            }
-        }
-        if ui
-            .button(if chat.archived {
-                "Unarchive"
-            } else {
-                "Archive"
-            })
-            .clicked()
-        {
+                "Add to favorites"
+            },
+        )
+        .clicked()
+    {
+        if chat.pinned {
+            app.actions.push(Action::SetPinned(chat.id.clone(), false));
+        } else {
             app.actions
-                .push(Action::SetArchived(chat.id.clone(), !chat.archived));
+                .push(Action::SetFavorite(chat.id.clone(), !chat.favorite));
         }
-    });
+    }
+    if header_icon(ui, &palette, Icon::QueueReply, reply, &reply_label).clicked() {
+        app.actions.push(Action::ToggleReplyLater(chat.id.clone()));
+    }
+    if header_icon(ui, &palette, Icon::QueueRead, read, &read_label).clicked() {
+        app.actions.push(Action::ToggleReadLater(chat.id.clone()));
+    }
 }
 
 /// Where a narrow window's Back was laid out, for interaction tests.
@@ -10685,6 +10749,63 @@ fn chat_of(chat: &ChatId) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn header_controls_use_equal_cells_on_a_single_baseline() {
+        let ctx = egui::Context::default();
+        let palette = crate::theme::Palette::dark();
+        let mut cells = Vec::new();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.horizontal(|ui| {
+                for icon in [
+                    Icon::QueueRead,
+                    Icon::QueueReply,
+                    Icon::Star,
+                    Icon::Archive,
+                    Icon::Search,
+                ] {
+                    cells.push(header_icon(ui, &palette, icon, false, "Action").rect);
+                }
+            });
+        });
+        for cell in &cells {
+            assert_eq!(cell.size(), vec2(30.0, 30.0));
+            assert!((cell.center().y - cells[0].center().y).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn live_diagnostics_stay_in_status_details_not_transcript_text() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        let ctx = egui::Context::default();
+        let diagnostic = "raw-cursor-diagnostic-fixture";
+        app.beeper_live_errors
+            .insert("chat".into(), diagnostic.into());
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            connection_status(&app, ui, &["chat"])
+        });
+        fn has_diagnostic(shape: &egui::Shape, text: &str) -> bool {
+            match shape {
+                egui::Shape::Text(text_shape) => text_shape.galley.text().contains(text),
+                egui::Shape::Vec(shapes) => shapes.iter().any(|shape| has_diagnostic(shape, text)),
+                _ => false,
+            }
+        }
+        assert!(
+            !output
+                .shapes
+                .iter()
+                .any(|shape| has_diagnostic(&shape.shape, diagnostic))
+        );
+        assert!(
+            ctx.data(|data| data.get_temp::<Rect>(egui::Id::new("chat-connection-status")))
+                .is_some()
+        );
+    }
 
     #[test]
     fn a_narrow_composer_shows_the_compact_shortcut_hint() {
