@@ -4832,8 +4832,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("painted time {clock}"));
             let time_rect = egui::Rect::from_min_size(*time_pos, time.size());
             assert!(
-                time_rect.right() < body_right,
-                "own timestamp moves toward the centre"
+                time_rect.left() > body_right,
+                "own timestamp stays in the shared right-edge gutter"
             );
             assert!(
                 time_rect.bottom() >= body_bottom - 12.0,
@@ -5856,8 +5856,10 @@ mod tests {
                 }
             }
         }
-        for end in [false, true] {
-            let rect = arrow(1).expect("next card");
+        let mut clicks = 0;
+        while let Some(rect) = arrow(1) {
+            clicks += 1;
+            assert!(clicks <= 4, "each click must advance toward the final card");
             let click = |pressed| egui::Event::PointerButton {
                 pos: rect.center(),
                 pressed,
@@ -5872,8 +5874,9 @@ mod tests {
             settle(&mut app);
             assert!(first_card().left() < start - 10.0);
             assert!(arrow(-1).is_some());
-            assert_eq!(arrow(1).is_none(), end);
         }
+        assert!(clicks >= 2, "the fixture needs more than one page");
+        assert!(arrow(1).is_none(), "the final page has no forward arrow");
         let end = first_card().left();
         ctx.memory_mut(|memory| memory.request_focus(bubble.with(("carousel-arrow", -1))));
         run(&mut app, vec![key(egui::Key::Enter, egui::Modifiers::NONE)]);
