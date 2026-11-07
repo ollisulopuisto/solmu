@@ -835,77 +835,82 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                     }
                 });
             });
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                let read = app.read_later_contains(chat);
-                let reply = app.reply_later_contains(chat);
-                if ui
-                    .selectable_label(
-                        read,
-                        format!(
-                            "{} ({})",
-                            if read {
-                                "Clear read later"
-                            } else {
-                                "Read later"
-                            },
-                            super::keys::label("Ctrl+U")
-                        ),
-                    )
-                    .clicked()
-                {
-                    app.actions.push(Action::ToggleReadLater(chat.id.clone()));
-                }
-                if ui
-                    .selectable_label(
-                        reply,
-                        format!(
-                            "{} ({})",
-                            if reply {
-                                "Clear reply later"
-                            } else {
-                                "Reply later"
-                            },
-                            super::keys::label("Ctrl+I")
-                        ),
-                    )
-                    .clicked()
-                {
-                    app.actions.push(Action::ToggleReplyLater(chat.id.clone()));
-                }
-                if !chat.is_channel()
-                    && ui
-                        .button(if chat.favorite {
-                            "Unfavorite"
-                        } else {
-                            "Favorite"
-                        })
-                        .clicked()
-                {
-                    if chat.pinned {
-                        app.actions.push(Action::SetPinned(chat.id.clone(), false));
-                    } else {
-                        app.actions
-                            .push(Action::SetFavorite(chat.id.clone(), !chat.favorite));
-                    }
-                }
-                if ui
-                    .button(if chat.archived {
-                        "Unarchive"
-                    } else {
-                        "Archive"
-                    })
-                    .clicked()
-                {
-                    app.actions
-                        .push(Action::SetArchived(chat.id.clone(), !chat.archived));
-                }
-            });
+            chat_actions_toolbar(app, ui, chat);
             ui.ctx()
                 .data_mut(|data| data.insert_temp(header_row_id(), row.response.rect));
         })
         .response
         .rect
+}
+
+/// Chat-level controls use the open chat's exact existing actions, not list selection.
+pub(crate) fn chat_actions_toolbar(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        let read = app.read_later_contains(chat);
+        let reply = app.reply_later_contains(chat);
+        if ui
+            .selectable_label(
+                read,
+                format!(
+                    "{} ({})",
+                    if read {
+                        "Clear read later"
+                    } else {
+                        "Read later"
+                    },
+                    super::keys::label("Ctrl+U")
+                ),
+            )
+            .clicked()
+        {
+            app.actions.push(Action::ToggleReadLater(chat.id.clone()));
+        }
+        if ui
+            .selectable_label(
+                reply,
+                format!(
+                    "{} ({})",
+                    if reply {
+                        "Clear reply later"
+                    } else {
+                        "Reply later"
+                    },
+                    super::keys::label("Ctrl+I")
+                ),
+            )
+            .clicked()
+        {
+            app.actions.push(Action::ToggleReplyLater(chat.id.clone()));
+        }
+        if !chat.is_channel()
+            && ui
+                .button(if chat.favorite {
+                    "Unfavorite"
+                } else {
+                    "Favorite"
+                })
+                .clicked()
+        {
+            if chat.pinned {
+                app.actions.push(Action::SetPinned(chat.id.clone(), false));
+            } else {
+                app.actions
+                    .push(Action::SetFavorite(chat.id.clone(), !chat.favorite));
+            }
+        }
+        if ui
+            .button(if chat.archived {
+                "Unarchive"
+            } else {
+                "Archive"
+            })
+            .clicked()
+        {
+            app.actions
+                .push(Action::SetArchived(chat.id.clone(), !chat.archived));
+        }
+    });
 }
 
 /// Where a narrow window's Back was laid out, for interaction tests.

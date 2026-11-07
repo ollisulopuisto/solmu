@@ -154,6 +154,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         ui.label("Linked view supports up to 8 exact member chats.");
         return true;
     }
+    // Even a locally linked timeline keeps actions available for its selected
+    // exact source chat, the same target used by the keyboard shortcuts.
+    super::conversation::chat_actions_toolbar(app, ui, chat);
     let ids: Vec<_> = valid.iter().map(|m| m.chat.clone()).collect();
     app.ensure_person_loaded(&ids);
     let key = egui::Id::new(("linked-person-state", &person.members));

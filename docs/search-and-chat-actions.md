@@ -26,8 +26,9 @@ click; a failure or bound is shown, and clicking again retries. A pending jump i
 not replaced by the latest page's scroll-to-bottom. The target is highlighted
 when laid out. This does not repair separate Beeper live-update cursor errors.
 
-The toolbar above an ordinary open chat duplicates Read later (Cmd/Ctrl+U), Reply
+The toolbar above the open chat (including linked timelines) duplicates Read later (Cmd/Ctrl+U), Reply
 later (Cmd/Ctrl+I), Favorite and Archive. Active states offer the reverse action.
 These use existing chat IDs/actions even when the chat was opened from search.
-Later flags are local; Archive/Unarchive keeps its existing backend semantics.
+In a linked timeline these act on the currently selected exact source chat, not
+on every linked account at once. Later flags are local; Archive/Unarchive keeps its existing backend semantics.
 Channels do not get Favorite. No messages are sent by these controls.
