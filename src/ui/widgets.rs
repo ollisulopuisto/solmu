@@ -396,8 +396,15 @@ pub fn paint_network_badge(ui: &Ui, palette: &Palette, avatar: Rect, network: &s
     let rect = Rect::from_center_size(center, Vec2::splat(size));
     ui.painter()
         .circle_filled(center, size * 0.58, palette.surface);
-    let tint = theme::network_tint(network).unwrap_or(palette.secondary);
-    theme::paint_network_mark(ui, theme::network_icon(network), rect, size * 0.85, tint);
+    // Network identity is carried by the shape, not several competing brand
+    // colors on every avatar. Keep these subordinate to unread/active marks.
+    theme::paint_network_mark(
+        ui,
+        theme::network_icon(network),
+        rect,
+        size * 0.85,
+        palette.secondary,
+    );
 }
 
 pub fn paint_disappearing_badge(ui: &Ui, palette: &Palette, avatar: Rect) {
@@ -468,6 +475,15 @@ pub fn tick_icon(status: Delivery) -> Option<Icon> {
     })
 }
 
+/// Muting lowers emphasis slightly without turning unread into neutral chrome.
+fn unread_fill(palette: &Palette, muted: bool) -> Color32 {
+    if muted {
+        palette.accent.lerp_to_gamma(palette.surface, 0.18)
+    } else {
+        palette.accent
+    }
+}
+
 /// Chat-row unread badge.
 pub fn badge(ui: &Ui, palette: &Palette, at: egui::Pos2, count: u32, muted: bool) -> f32 {
     let label = if count > 99 {
@@ -480,7 +496,7 @@ pub fn badge(ui: &Ui, palette: &Palette, at: egui::Pos2, count: u32, muted: bool
         .layout_no_wrap(label, theme::semibold(11.0), palette.on_accent);
     let width = (galley.size().x + 12.0).max(20.0);
     let rect = Rect::from_center_size(at, vec2(width, 20.0));
-    let fill = if muted { palette.dim } else { palette.accent };
+    let fill = unread_fill(palette, muted);
     ui.painter().rect_filled(rect, 10.0, fill);
     ui.painter().galley(
         rect.center() - galley.size() / 2.0,
@@ -508,7 +524,7 @@ pub fn mention_badge(ui: &Ui, palette: &Palette, at: egui::Pos2) -> f32 {
 
 /// Empty unread reminder: the same round as a count badge, with no digit.
 pub fn unread_dot(ui: &Ui, palette: &Palette, at: egui::Pos2, muted: bool) -> f32 {
-    let fill = if muted { palette.dim } else { palette.accent };
+    let fill = unread_fill(palette, muted);
     ui.painter().circle_filled(at, 5.0, fill);
     10.0
 }
@@ -1959,6 +1975,18 @@ mod tests {
     /// A name too wide for its room rests three seconds at its start, eases
     /// to its end at 40 points a second on average, rests there as long, and
     /// comes back the same way. One that fits never moves or repaints.
+    #[test]
+    fn muted_unread_keeps_attention_color_instead_of_network_grey() {
+        let palette = Palette::dark();
+        assert_eq!(unread_fill(&palette, false), palette.accent);
+        assert_eq!(
+            unread_fill(&palette, true),
+            palette.accent.lerp_to_gamma(palette.surface, 0.18)
+        );
+        assert_ne!(unread_fill(&palette, true), palette.dim);
+        assert_ne!(unread_fill(&palette, true), palette.secondary);
+    }
+
     #[test]
     fn scrolling_text_steps_its_crossing_while_a_screen_reader_is_attached() {
         use std::time::Duration;

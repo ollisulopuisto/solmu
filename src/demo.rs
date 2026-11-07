@@ -2617,6 +2617,24 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.actions
                     .push(crate::model::Action::OpenChat(app.chats[0].id.clone()));
             }
+            "sidebar-unread" => {
+                linked_sample(app);
+                app.chats[0].unread = 0;
+                app.chats[0].favorite = true;
+                if let Some(chat) = app
+                    .chats
+                    .iter_mut()
+                    .find(|chat| chat.id == "393331234567@signal")
+                {
+                    chat.unread = 3;
+                }
+            }
+            "header-status" => {
+                app.beeper_live_errors.insert(
+                    SAMPLES[0].id.into(),
+                    "Beeper could not advance to the next update page".into(),
+                );
+            }
             "keyring" => {
                 unlink(app);
                 app.link = LinkStatus::Failed("The archive is encrypted but its OS keyring key is missing. Restore the original keyring; the archive has not been changed".into());

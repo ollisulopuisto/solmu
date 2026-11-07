@@ -262,44 +262,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     // Contact info panel, so the timeline keeps its room.
     let searching =
         state.search_open || !state.search.trim().is_empty() || state.source_filter.is_some();
-    // Right-aligned beside the identity while both fit; on their own row
-    // below when they would collide, as in the squeezed info layout. The
-    // right_to_left block cannot wrap, so measure instead of hoping.
     let tail = format!("{} linked chats · local only", valid.len());
-    let painter = ui.painter();
-    let actions_width = ["Load older", "Search"]
-        .iter()
-        .map(|label| {
-            painter
-                .layout_no_wrap(
-                    (*label).to_owned(),
-                    egui::TextStyle::Button.resolve(ui.style()),
-                    egui::Color32::WHITE,
-                )
-                .size()
-                .x
-                + 2.0 * ui.spacing().button_padding.x
-        })
-        .sum::<f32>()
-        + ui.spacing().item_spacing.x;
-    let identity_width = painter
-        .layout_no_wrap(
-            person.name.clone(),
-            egui::TextStyle::Heading.resolve(ui.style()),
-            egui::Color32::WHITE,
-        )
-        .size()
-        .x
-        + painter
-            .layout_no_wrap(
-                tail.clone(),
-                egui::TextStyle::Body.resolve(ui.style()),
-                egui::Color32::WHITE,
-            )
-            .size()
-            .x
-        + 2.0 * ui.spacing().item_spacing.x;
-    let actions_inline = identity_width + actions_width <= ui.available_width();
     let actions = |ui: &mut egui::Ui, app: &mut App, state: &mut State| {
         // A load over the tunnel is otherwise invisible: while one runs, the
         // button rests and a spinner beside it says the fetch is on its way.
@@ -310,7 +273,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                     .is_some_and(|c| c.loading_older || c.fetching_phone)
             });
         if ui
-            .add_enabled(!fetching, egui::Button::new("Load older"))
+            .add_enabled_ui(!fetching, |ui| {
+                super::conversation::header_icon(ui, &app.conversation_palette(), crate::theme::Icon::Clock, fetching, "Load older messages from each linked chat")
+            }).inner
             .on_hover_text(format!(
                 "Load older from each chat. {message_count} loaded messages · Each member pages independently; this is not the full remote history."
             ))
@@ -327,10 +292,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         if fetching {
             crate::theme::spinner(ui, 14.0, app.conversation_palette().accent);
         }
-        if ui
-            .selectable_label(searching, "Search")
-            .on_hover_text("Search the loaded messages and narrow by source")
-            .clicked()
+        if super::conversation::header_icon(
+            ui,
+            &app.conversation_palette(),
+            crate::theme::Icon::Search,
+            searching,
+            "Search the loaded messages and narrow by source",
+        )
+        .clicked()
         {
             state.search_open = !searching;
             if !state.search_open {
@@ -339,52 +308,46 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             }
         }
     };
-    ui.horizontal(|ui| {
-        ui.heading(&person.name);
-        ui.label(&tail);
-        if actions_inline {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                actions(ui, app, &mut state);
+    egui::Frame::new()
+        .fill(app.conversation_palette().surface)
+        .inner_margin(8.0)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let has_error = valid
+                    .iter()
+                    .any(|member| app.beeper_live_errors.contains_key(&member.chat));
+                let actions_width = if has_error { 224.0 } else { 192.0 };
+                let identity_width = (ui.available_width() - actions_width).max(30.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(identity_width, 40.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&person.name).strong()).truncate(),
+                        )
+                        .on_hover_text(&person.name);
+                        ui.add(egui::Label::new(&tail).truncate())
+                            .on_hover_text(&tail);
+                    },
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    actions(ui, app, &mut state);
+                    super::conversation::chat_actions_toolbar(app, ui, chat);
+                    super::conversation::connection_status(
+                        app,
+                        ui,
+                        &valid.iter().map(|m| m.chat.as_str()).collect::<Vec<_>>(),
+                    );
+                });
             });
-        }
-    });
-    if !actions_inline {
-        ui.horizontal(|ui| actions(ui, app, &mut state));
-    }
-    // Same exact source chat as the open-chat keyboard shortcuts, not all members.
-    super::conversation::chat_actions_toolbar(app, ui, chat);
+        });
     if let Some(error) = routing_error {
         ui.colored_label(egui::Color32::YELLOW, error);
     }
     if let Some(note) = &state.older_note {
         let warning = app.conversation_palette().warning;
         ui.colored_label(warning, note);
-    }
-    // One compact line per distinct connection problem, sources combined;
-    // the full backend text stays on hover instead of stacking per member.
-    let mut warnings: Vec<(Vec<&str>, &String)> = Vec::new();
-    for member in &valid {
-        if let Some(error) = app.beeper_live_errors.get(&member.chat) {
-            let source = app.chat(&member.chat).map(network_label).unwrap_or("Chat");
-            match warnings.iter_mut().find(|(_, known)| *known == error) {
-                Some((sources, _)) if !sources.contains(&source) => sources.push(source),
-                Some(_) => {}
-                None => warnings.push((vec![source], error)),
-            }
-        }
-    }
-    for (sources, error) in warnings {
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(format!(
-                    "{}: live updates unavailable; updates may be incomplete. Retrying automatically.",
-                    sources.join(", ")
-                ))
-                .color(app.conversation_palette().warning),
-            )
-            .wrap(),
-        )
-        .on_hover_text(error);
     }
     for member in &valid {
         if let Some(error) = app.beeper_history_errors.get(&member.chat).cloned() {
