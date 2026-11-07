@@ -13,7 +13,7 @@ version in Cargo.toml is bumped.
 
 - Chat header actions now use outlined icon cells beside Search, with green active states and tooltips. Linked timelines use the same single header row, including at narrow widths.
 - Background live-update errors stay discoverable in a compact Connection status control instead of painting raw diagnostics across messages. Details explain that messages may be missing while updates retry.
-- Favorite avatars include unread state from other unlocked chats linked to the same person. Network badges use a single muted color so unread counts and the active chat stay easy to see.
+- Favorite avatars include unread state from other unlocked chats linked to the same person. Network badges use a single muted color so unread counts and the active chat stay easy to see. Muted unread badges keep the attention color, only slightly subdued instead of grey.
 
 ## v0.24.3
 
