@@ -58,12 +58,18 @@ fn run_with_dialogs(
 }
 
 fn safe_name(name: &str) -> String {
-    Path::new(name)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
-        .unwrap_or("attachment")
-        .to_owned()
+    // Strip both Unix (/) and Windows (\) path separators to prevent cross-platform directory traversal
+    let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let trimmed = leaf.trim();
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.chars().any(char::is_control)
+    {
+        "attachment".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 fn decode(path: &Path) -> Result<crate::model::DecodedImage, String> {
@@ -191,7 +197,12 @@ mod tests {
         std::fs::create_dir(&folder).unwrap();
         std::fs::write(&source, b"bytes").unwrap();
         let command = || Command::SaveAttachments {
-            files: vec![(source.clone(), "../photo.png".into())],
+            files: vec![
+                (source.clone(), "../photo.png".into()),
+                (source.clone(), r"..\..\traversal.png".into()),
+                (source.clone(), r"subfolder\picture.png".into()),
+                (source.clone(), "   ".into()),
+            ],
         };
         assert!(handles(&command()));
         assert!(matches!(
@@ -199,7 +210,14 @@ mod tests {
             Some(Event::Info(_))
         ));
         assert_eq!(std::fs::read(folder.join("photo.png")).unwrap(), b"bytes");
+        assert_eq!(
+            std::fs::read(folder.join("traversal.png")).unwrap(),
+            b"bytes"
+        );
+        assert_eq!(std::fs::read(folder.join("picture.png")).unwrap(), b"bytes");
+        assert_eq!(std::fs::read(folder.join("attachment")).unwrap(), b"bytes");
         assert!(!root.path().join("photo.png").exists());
+        assert!(!root.path().join("traversal.png").exists());
         std::fs::remove_file(&source).unwrap();
         assert!(matches!(
             run(command(), Some(folder)),
