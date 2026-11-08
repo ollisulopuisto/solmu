@@ -5753,7 +5753,9 @@ impl App {
         // read would send receipts for messages nobody has seen.
         let remembered = self.open_chat.as_deref() == Some(chat.id.as_str());
         let reading = self.open_chat.as_deref().is_some_and(|open| {
-            self.read_chat_ids(open).iter().any(|id| id == &chat.id)
+            self.read_chat_ids_with_incoming(open, Some(&chat))
+                .iter()
+                .any(|id| id == &chat.id)
                 && self.chat(&chat.id).is_none_or(|known| {
                     crate::merged::Member::of(known) == crate::merged::Member::of(&chat)
                 })
@@ -6713,6 +6715,16 @@ impl App {
     /// Exact unlocked source chats displayed together in a linked timeline.
     /// Match the view's eligibility checks; a stale link never expands reads.
     fn read_chat_ids(&self, chat: &str) -> Vec<ChatId> {
+        self.read_chat_ids_with_incoming(chat, None)
+    }
+
+    fn read_chat_ids_with_incoming(&self, chat: &str, incoming: Option<&Chat>) -> Vec<ChatId> {
+        // A newly restored exact member is visible after this update even
+        // though it is not in the loaded list yet. Never replace a known
+        // identity here: the live-update guard handles changed identities.
+        let incoming =
+            incoming.filter(|incoming| !self.chats.iter().any(|known| known.id == incoming.id));
+        let candidates: Vec<&Chat> = self.chats.iter().chain(incoming).collect();
         let Some(source) = self.chat(chat) else {
             return vec![chat.to_owned()];
         };
@@ -6729,15 +6741,15 @@ impl App {
             .members
             .iter()
             .filter_map(|member| {
-                self.chats
+                candidates
                     .iter()
+                    .copied()
                     .find(|known| {
                         member.matches(known)
                             && !known.locked
                             && known.kind == crate::model::ChatKind::Direct
                             && known.backend_origin == source.backend_origin
-                            && self
-                                .chats
+                            && candidates
                                 .iter()
                                 .filter(|other| other.id == known.id)
                                 .count()
@@ -26826,6 +26838,48 @@ mod person_tests {
                 .unread,
             0
         );
+    }
+
+    #[test]
+    fn restored_linked_member_is_read_on_its_first_live_update_only_when_eligible() {
+        for mode in [
+            "eligible",
+            "unfocused",
+            "hidden",
+            "incognito",
+            "locked",
+            "wrong-account",
+            "wrong-origin",
+            "group",
+            "not-live",
+        ] {
+            let mut app = linked_unread_app();
+            let mut update = app.chats.remove(1);
+            app.open_chat = Some("ada-wa".into());
+            app.page = Page::Chats;
+            app.window_focused = mode != "unfocused";
+            app.window_hidden = mode == "hidden";
+            app.settings.beeper.incognito = mode == "incognito";
+            match mode {
+                "locked" => update.locked = true,
+                "wrong-account" => update.backend_account = Some("replacement".into()),
+                "wrong-origin" => update.backend_origin = Some("other".into()),
+                "group" => update.kind = ChatKind::Group,
+                _ => {}
+            }
+            let (backend, mut commands) = Backend::recording();
+            app.backend = backend;
+            app.handle_chat_updated(update, mode != "not-live");
+            assert_eq!(
+                app.chat("ada-tg").unwrap().unread,
+                if mode == "eligible" { 0 } else { 3 },
+                "{mode}"
+            );
+            let read = std::iter::from_fn(|| commands.try_recv().ok()).any(
+                |command| matches!(command, Command::MarkRead { chat, .. } if chat == "ada-tg"),
+            );
+            assert_eq!(read, mode == "eligible", "{mode}");
+        }
     }
 
     #[test]

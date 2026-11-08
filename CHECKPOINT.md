@@ -1,5 +1,14 @@
 # Fast-beeper coordination and development checkpoint
 
+## PR242 restored linked source - November 8, 2026
+
+Live read scope includes a first-arriving exact linked member when that update
+will make the combined timeline valid. Existing known identities are never
+replaced for eligibility. The same direct/unlocked/origin/unique/2-to-8 rules
+and focus/incognito gates apply. Regression covers first restoration plus
+unfocused, hidden, incognito, locked, foreign identity/origin, group and
+non-live exclusions. No merge or release.
+
 ## PR217 contact-key cache check repair - November 7, 2026
 
 Instinct updates the Option-returning filter_map to use ? for its missing
