@@ -2341,6 +2341,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 history.messages[3].status = crate::model::Delivery::Unknown;
                 history.messages[4].status = crate::model::Delivery::Failed;
             }
+            "group-stacks" => group_stacks_sample(app),
             "linked-chip-lanes" => {
                 linked_sample(app);
                 minute_gutter_sample(app);
@@ -4233,6 +4234,76 @@ fn history_date_sample(app: &mut App) {
     app.scroll_anchor = Some("history-date-45".into());
 }
 
+/// Deterministic group identity, streak, reaction and wrapped-footer fixture.
+fn group_stacks_sample(app: &mut App) {
+    let chat = SAMPLES[0].id;
+    let group = app.chats.iter_mut().find(|row| row.id == chat).unwrap();
+    group.kind = crate::model::ChatKind::Group;
+    group.name = "Class parents".into();
+    let (start, _) = crate::util::day_bounds(crate::util::today()).unwrap();
+    let base = start + 17 * 3600 + 25 * 60;
+    let people = [
+        ("15550000001@s.whatsapp.net", "Aino K."),
+        ("15550000002@s.whatsapp.net", "Mikko L."),
+        ("15550000003@s.whatsapp.net", "Sara R."),
+    ];
+    let rows = [
+        (0, 0, "The school fair raised €496."),
+        (0, 8, "I can send the final total tonight."),
+        (1, 60, "Brilliant."),
+        (1, 68, "Which account should we use?"),
+        (1, 76, "I can check after work."),
+        (2, 82, "Same account as last time."),
+        (2, 90, "The details are in the pinned note."),
+        (2, 98, "I will forward them here."),
+        (0, 120, "Thanks, I found the note."),
+        (0, 128, "I will send the total tonight."),
+        (3, 135, "Sounds good."),
+        (3, 143, "I can help tomorrow."),
+    ];
+    let mut messages: Vec<_> = rows
+        .into_iter()
+        .enumerate()
+        .map(|(index, (who, offset, text))| {
+            let own = who == 3;
+            let mut row = message(
+                chat,
+                &format!("group-stack-{index}"),
+                own,
+                base + offset,
+                Content::text(text),
+            );
+            if !own {
+                row.sender = people[who].0.into();
+                row.sender_name = Some(people[who].1.into());
+            } else {
+                row.status = Delivery::Read;
+            }
+            row
+        })
+        .collect();
+    for index in [1, 7] {
+        messages[index].reactions = vec![
+            Reaction {
+                sender: ME.into(),
+                from_me: true,
+                emoji: "❤️".into(),
+            },
+            Reaction {
+                sender: people[1].0.into(),
+                from_me: false,
+                emoji: "👍".into(),
+            },
+        ];
+    }
+    let conversation = app.conversations.get_mut(chat).unwrap();
+    conversation.messages = messages;
+    conversation.complete = true;
+    app.open_chat = Some(chat.into());
+    app.typing.clear();
+    app.scroll_to_bottom = true;
+}
+
 fn minute_gutter_sample(app: &mut App) {
     let chat = SAMPLES[0].id;
     let (start, _) = crate::util::day_bounds(crate::util::today()).unwrap();
@@ -4507,6 +4578,471 @@ fn contacts_by_id(app: &App) -> HashMap<&str, &Contact> {
 
 #[cfg(test)]
 mod tests {
+    fn streak_test_frame(
+        app: &mut App,
+        ctx: &egui::Context,
+        width: f32,
+        height: f32,
+        events: Vec<egui::Event>,
+    ) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, height),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let ctx = ui.ctx().clone();
+                app.background_frame(&ctx);
+                app.frame_ui(ui);
+            },
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn streak_seam_menu_targets_the_older_bubble_and_selection_unstacks() {
+        let mut app = app();
+        group_stacks_sample(&mut app);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..4 {
+            streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+        }
+        let id = |index| {
+            crate::ui::conversation::bubble_id(SAMPLES[0].id, &format!("group-stack-{index}"))
+        };
+        let rect = |index| {
+            ctx.data(|data| data.get_temp::<egui::Rect>(id(index).with("rect")))
+                .unwrap()
+        };
+        let older = rect(2);
+        let newer = rect(3);
+        let point = egui::pos2(older.left() + 20.0, older.bottom() - 2.0);
+        assert!(newer.contains(point), "point lies in the physical overlap");
+        for pressed in [true, false] {
+            streak_test_frame(
+                &mut app,
+                &ctx,
+                1180.0,
+                2000.0,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        assert!(
+            egui::Popup::is_id_open(&ctx, id(2).with("popup")),
+            "older bubble owns the seam menu"
+        );
+        assert!(
+            !egui::Popup::is_id_open(&ctx, id(3).with("popup")),
+            "newer bubble must not steal seam clicks"
+        );
+        egui::Popup::close_all(&ctx);
+        app.selection = Some((SAMPLES[0].id.into(), vec!["group-stack-2".into()]));
+        for _ in 0..3 {
+            streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+        }
+        assert!(
+            rect(3).top() >= rect(2).bottom(),
+            "selection gives each bubble its own full target"
+        );
+    }
+
+    #[test]
+    fn group_shadow_colours_the_body_and_tail_without_a_stripe() {
+        for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+            let mut app = app();
+            group_stacks_sample(&mut app);
+            app.settings.theme = theme;
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            for _ in 0..4 {
+                streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+            }
+            let shape = |index| {
+                ctx.data(|data| {
+                    data.get_temp::<egui::Shape>(
+                        crate::ui::conversation::bubble_id(
+                            SAMPLES[0].id,
+                            &format!("group-stack-{index}"),
+                        )
+                        .with("backdrop-shape"),
+                    )
+                })
+                .unwrap()
+            };
+            let shadow = |index| {
+                let egui::Shape::Vec(parts) = shape(index) else {
+                    panic!("bubble shape");
+                };
+                let egui::Shape::Rect(body) = &parts[0] else {
+                    panic!("body shadow");
+                };
+                let egui::Shape::Mesh(tail) = &parts[1] else {
+                    panic!("tail shadow");
+                };
+                assert!(
+                    tail.vertices.iter().any(|vertex| vertex.color == body.fill),
+                    "tail and body share sender colour"
+                );
+                assert!(
+                    tail.vertices
+                        .iter()
+                        .any(|vertex| vertex.color == egui::Color32::TRANSPARENT),
+                    "tail shadow fades out"
+                );
+                assert_eq!(
+                    parts.len(),
+                    4,
+                    "shadow and fill only, no accent stripe or raised border"
+                );
+                body.fill
+            };
+            // Speaker changes have priority over a stable per-person colour.
+            assert_eq!(shadow(2), shadow(3));
+            assert_ne!(shadow(0), shadow(2));
+            assert_ne!(shadow(2), shadow(5));
+        }
+    }
+
+    #[test]
+    fn streak_scroll_and_wrapped_reactions_keep_live_geometry() {
+        for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+            let mut app = app();
+            group_stacks_sample(&mut app);
+            app.settings.theme = theme;
+            app.conversations.get_mut(SAMPLES[0].id).unwrap().messages[7].reactions = (0..12)
+                .map(|index| Reaction {
+                    sender: format!("reactor-{index}"),
+                    from_me: false,
+                    emoji: ["❤️", "👍", "👀", "🎉", "😊", "🔥"][index % 6].into(),
+                })
+                .collect();
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            for _ in 0..4 {
+                streak_test_frame(&mut app, &ctx, 620.0, 800.0, vec![]);
+            }
+            for delta in [400.0, -200.0, 600.0, -800.0] {
+                streak_test_frame(
+                    &mut app,
+                    &ctx,
+                    620.0,
+                    800.0,
+                    vec![
+                        egui::Event::PointerMoved(egui::pos2(500.0, 500.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            phase: egui::TouchPhase::Move,
+                            delta: egui::vec2(0.0, delta),
+                            modifiers: Default::default(),
+                        },
+                    ],
+                );
+                for _ in 0..12 {
+                    streak_test_frame(&mut app, &ctx, 620.0, 800.0, vec![]);
+                }
+                let pass = ctx.cumulative_pass_nr() - 1;
+                for (first, next) in [(0, 1), (2, 3), (3, 4), (5, 6), (6, 7), (8, 9), (10, 11)] {
+                    let live = |index| {
+                        ctx.data(|data| {
+                            let id = crate::ui::conversation::bubble_id(
+                                SAMPLES[0].id,
+                                &format!("group-stack-{index}"),
+                            );
+                            (data.get_temp::<u64>(id.with("paint-pass")) == Some(pass))
+                                .then(|| data.get_temp::<egui::Rect>(id.with("rect")))
+                                .flatten()
+                        })
+                    };
+                    if let (Some(first), Some(next)) = (live(first), live(next)) {
+                        assert!(
+                            (first.bottom() - next.top() - 6.0).abs() < 1.0,
+                            "scrolling must not reuse a stale seam"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn adjacent_sender_streaks_have_separated_hues_even_when_ids_hash_the_same() {
+        let mut app = app();
+        group_stacks_sample(&mut app);
+        let seed = app.conversations[SAMPLES[0].id].messages[0].clone();
+        let mut by_hue = std::collections::HashMap::new();
+        let mut collision = None;
+        for index in 0..10000 {
+            let id = format!("speaker-{index}");
+            let hue = crate::util::hue(&id) as u32;
+            if let Some(first) = by_hue.insert(hue, id.clone()) {
+                collision = Some((first, id));
+                break;
+            }
+        }
+        let (a, b) = collision.expect("pigeonhole collision in 360 hashes");
+        let mut rows = Vec::new();
+        for (index, sender) in [
+            a.clone(),
+            a.clone(),
+            b.clone(),
+            b.clone(),
+            a,
+            b,
+            "third".into(),
+            "fourth".into(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut row = seed.clone();
+            row.id = format!("test-{index}");
+            row.sender = sender;
+            rows.push(row);
+        }
+        let hues = crate::ui::conversation::sender_streak_hues(&rows);
+        assert_eq!(
+            hues,
+            crate::ui::conversation::sender_streak_hues(&rows),
+            "deterministic between frames"
+        );
+        for index in 1..rows.len() {
+            if rows[index].sender == rows[index - 1].sender {
+                assert_eq!(hues[index], hues[index - 1]);
+            } else {
+                let gap = (hues[index] - hues[index - 1]).abs();
+                assert!(
+                    gap.min(360.0 - gap) >= 120.0,
+                    "adjacent speakers need a clearly different hue"
+                );
+            }
+        }
+        let mut long = Vec::new();
+        for index in 0..1000 {
+            let mut row = seed.clone();
+            row.sender = format!("many-speakers-{index}");
+            long.push(row);
+        }
+        let hues = crate::ui::conversation::sender_streak_hues(&long);
+        assert!(hues.windows(2).all(|pair| {
+            let gap = (pair[0] - pair[1]).abs();
+            gap.min(360.0 - gap) >= 120.0
+        }));
+    }
+
+    #[test]
+    fn streak_boundary_table_preserves_source_sender_metadata_and_controls() {
+        use crate::ui::conversation::stacks_after;
+        let mut app = app();
+        group_stacks_sample(&mut app);
+        let first = app.conversations[SAMPLES[0].id].messages[2].clone();
+        let next = app.conversations[SAMPLES[0].id].messages[3].clone();
+        assert!(stacks_after(&first, &next));
+        let mut cases = Vec::new();
+        let mut changed = next.clone();
+        changed.chat = "other-source".into();
+        cases.push(("source", first.clone(), changed));
+        let mut changed = next.clone();
+        changed.sender = "another-person".into();
+        cases.push(("sender", first.clone(), changed));
+        let mut changed = next.clone();
+        changed.from_me = true;
+        cases.push(("direction", first.clone(), changed));
+        let mut changed = next.clone();
+        changed.timestamp += 60;
+        cases.push(("minute", first.clone(), changed));
+        let mut changed = next.clone();
+        changed.timestamp = first.timestamp - 1;
+        cases.push(("reverse chronology", first.clone(), changed));
+        let mut changed = next.clone();
+        changed.quoted = Some(Quoted {
+            chat: None,
+            id: "quoted".into(),
+            sender: "speaker".into(),
+            sender_name: None,
+            summary: "Reply".into(),
+            labelled: None,
+            mentions: vec![],
+        });
+        cases.push(("quote controls", first.clone(), changed));
+        let mut changed = next.clone();
+        changed.forwarded = true;
+        cases.push(("forwarded", first.clone(), changed));
+        let mut changed = next.clone();
+        changed.edited = true;
+        cases.push(("edited", first.clone(), changed));
+        let mut changed = next.clone();
+        changed.content = Content::Revoked;
+        cases.push(("nontext", first.clone(), changed));
+        for status in [
+            Delivery::Pending,
+            Delivery::Failed,
+            Delivery::Unknown,
+            Delivery::Read,
+        ] {
+            let mut changed = next.clone();
+            changed.status = status;
+            cases.push(("status", first.clone(), changed));
+        }
+        let mut changed = first.clone();
+        changed.reactions.push(Reaction {
+            sender: ME.into(),
+            from_me: true,
+            emoji: "👍".into(),
+        });
+        cases.push(("earlier reaction footer", changed, next.clone()));
+        for (name, first, next) in cases {
+            assert!(!stacks_after(&first, &next), "{name} must break the stack");
+        }
+        let mut reacted = next.clone();
+        reacted.reactions.push(Reaction {
+            sender: ME.into(),
+            from_me: true,
+            emoji: "👍".into(),
+        });
+        assert!(
+            stacks_after(&first, &reacted),
+            "a final reaction is below the streak, not in its seam"
+        );
+    }
+
+    #[test]
+    fn group_stacks_geometry_and_footers_match_the_approved_design() {
+        use crate::ui::conversation::{bubble_id, footer_id};
+        for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+            for width in [620.0, 1180.0] {
+                let mut app = app();
+                group_stacks_sample(&mut app);
+                app.settings.theme = theme;
+                let ctx = egui::Context::default();
+                crate::theme::install(&ctx);
+                for _ in 0..4 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 2000.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let ctx = ui.ctx().clone();
+                            app.background_frame(&ctx);
+                            app.frame_ui(ui);
+                        },
+                    );
+                    output.textures_delta.clear();
+                }
+                let rect = |index: usize| {
+                    ctx.data(|data| {
+                        data.get_temp::<egui::Rect>(
+                            bubble_id(SAMPLES[0].id, &format!("group-stack-{index}")).with("rect"),
+                        )
+                    })
+                    .unwrap()
+                };
+                for index in 0..12 {
+                    let id = bubble_id(SAMPLES[0].id, &format!("group-stack-{index}"));
+                    let painted = ctx
+                        .data(|data| data.get_temp::<egui::Rect>(id.with("painted-rect")))
+                        .unwrap();
+                    let body = rect(index);
+                    assert_eq!(painted.top(), body.top(), "tails leave the top edge");
+                    assert_eq!(painted.bottom(), body.bottom(), "no tail below the body");
+                    if index < 10 {
+                        assert!(
+                            (body.left() - painted.left() - crate::ui::widgets::TAIL_WIDTH).abs()
+                                < 0.5
+                        );
+                    } else {
+                        assert!(
+                            (painted.right() - body.right() - crate::ui::widgets::TAIL_WIDTH).abs()
+                                < 0.5
+                        );
+                    }
+                }
+                for (first, second) in [(0, 1), (2, 3), (3, 4), (5, 6), (6, 7), (8, 9), (10, 11)] {
+                    let overlap = rect(first).bottom() - rect(second).top();
+                    assert!(
+                        (overlap - 6.0).abs() < 1.0,
+                        "width={width}, pair={first}/{second}, overlap={overlap}"
+                    );
+                }
+                for (first, second) in [(0, 1), (2, 3), (3, 4), (5, 6), (6, 7), (8, 9), (10, 11)] {
+                    let id = bubble_id(SAMPLES[0].id, &format!("group-stack-{second}"));
+                    let hit = ctx.read_response(id).unwrap().rect;
+                    assert!(
+                        hit.top() >= rect(first).bottom() - 0.5,
+                        "covered padding must not take the newer message's clicks"
+                    );
+                    let first_painted = ctx
+                        .data(|data| {
+                            data.get_temp::<egui::Rect>(
+                                bubble_id(SAMPLES[0].id, &format!("group-stack-{first}"))
+                                    .with("painted-rect"),
+                            )
+                        })
+                        .unwrap();
+                    let second_painted = ctx
+                        .data(|data| data.get_temp::<egui::Rect>(id.with("painted-rect")))
+                        .unwrap();
+                    assert!(
+                        first_painted.intersects(second_painted),
+                        "painted bubbles must actually overlap"
+                    );
+                }
+                for (first, second) in [(1, 2), (4, 5), (7, 8), (9, 10)] {
+                    assert!(
+                        rect(second).top() > rect(first).bottom(),
+                        "sender change must break the stack"
+                    );
+                }
+                for index in [1, 7] {
+                    let id = bubble_id(SAMPLES[0].id, &format!("group-stack-{index}"));
+                    let footer = ctx
+                        .data(|data| {
+                            data.get_temp::<egui::Rect>(footer_id(
+                                SAMPLES[0].id,
+                                &format!("group-stack-{index}"),
+                            ))
+                        })
+                        .unwrap();
+                    for emoji in ["❤️", "👍"] {
+                        let reaction = ctx
+                            .data(|data| data.get_temp::<egui::Rect>(id.with(("reaction", emoji))))
+                            .unwrap();
+                        assert!(
+                            !reaction.intersects(footer),
+                            "reaction and clock collide: {reaction:?}/{footer:?}"
+                        );
+                        assert!(
+                            (reaction.center().y - footer.center().y).abs() < 5.0,
+                            "wide-enough footer should share one row"
+                        );
+                    }
+                }
+                let own_footer = ctx
+                    .data(|data| {
+                        data.get_temp::<egui::Rect>(footer_id(SAMPLES[0].id, "group-stack-11"))
+                    })
+                    .unwrap();
+                assert!(own_footer.right() <= rect(11).right() + 1.0);
+            }
+        }
+    }
+
     #[test]
     fn linked_chip_lanes_order_is_independent_of_launch_hour() {
         let midnight: jiff::Timestamp = "2026-11-08T00:00:00Z".parse().unwrap();
@@ -10827,8 +11363,8 @@ mod tests {
                 })
                 .unwrap();
             assert!(
-                pill.top() >= footer.bottom(),
-                "{page}: reaction {pill:?} must be below footer {footer:?}"
+                !pill.intersects(footer),
+                "{page}: reaction {pill:?} must not cover footer {footer:?}"
             );
         }
     }

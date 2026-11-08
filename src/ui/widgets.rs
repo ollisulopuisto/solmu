@@ -1321,6 +1321,34 @@ pub fn bubble_shape(
     pixels_per_point: f32,
     screen: egui::Rangef,
 ) -> egui::Shape {
+    bubble_shape_with_shadow(
+        palette,
+        rect,
+        fill,
+        tail,
+        pixels_per_point,
+        screen,
+        BubbleEffects::default(),
+    )
+}
+
+#[derive(Default)]
+pub struct BubbleEffects {
+    pub sender_shadow: Option<Color32>,
+    pub flat_edge: bool,
+}
+
+/// Group identity colours the drop shadow, including its triangular tail.
+/// Other bubbles keep the palette's ordinary shadow.
+pub fn bubble_shape_with_shadow(
+    palette: &Palette,
+    rect: Rect,
+    fill: Color32,
+    tail: Option<Side>,
+    pixels_per_point: f32,
+    screen: egui::Rangef,
+    effects: BubbleEffects,
+) -> egui::Shape {
     if palette.bubbles == theme::BubbleStyle::Messages {
         // Your own balloons run from the palette's colour at the top of the
         // view to a deeper one at its bottom, as ChatKit's dynamic gradient
@@ -1339,7 +1367,10 @@ pub fn bubble_shape(
         return egui::Shape::mesh(fill_outline(&outline, color, 1.0 / pixels_per_point));
     }
     let corners = bubble_corners(tail);
-    let shadow = palette.bubble_shadow();
+    let mut shadow = palette.bubble_shadow();
+    if let Some(color) = effects.sender_shadow {
+        shadow.color = color;
+    }
     let mut shapes = vec![egui::Shape::Rect(shadow.as_shape(rect, corners))];
     // The tail overlaps the bubble by a few points so no seam shows where
     // the two anti-aliased edges meet.
@@ -1368,19 +1399,21 @@ pub fn bubble_shape(
     }
     // The raised edge: the same outline a hair higher, under the fill, so
     // only its top shows, thinning out down the rounded corners.
-    let edge = palette.raised_edge(fill);
-    let lift = vec2(0.0, -theme::RAISED_EDGE);
-    shapes.push(egui::Shape::rect_filled(
-        rect.translate(lift),
-        corners,
-        edge,
-    ));
-    if let Some(points) = &tail_points {
-        shapes.push(egui::Shape::convex_polygon(
-            points.iter().map(|point| *point + lift).collect(),
+    if !effects.flat_edge {
+        let edge = palette.raised_edge(fill);
+        let lift = vec2(0.0, -theme::RAISED_EDGE);
+        shapes.push(egui::Shape::rect_filled(
+            rect.translate(lift),
+            corners,
             edge,
-            Stroke::NONE,
         ));
+        if let Some(points) = &tail_points {
+            shapes.push(egui::Shape::convex_polygon(
+                points.iter().map(|point| *point + lift).collect(),
+                edge,
+                Stroke::NONE,
+            ));
+        }
     }
     shapes.push(egui::Shape::rect_filled(rect, corners, fill));
     if let Some(points) = tail_points {

@@ -2476,6 +2476,9 @@ pub(crate) fn reply_strip_id() -> egui::Id {
 
 /// App data needed while drawing a checked-out conversation.
 struct View<'a> {
+    sender_hue: Option<f32>,
+    hide_grouped_status: bool,
+    covered_top: Option<f32>,
     show_timestamp: bool,
     footer_right: Option<f32>,
     palette: Palette,
@@ -2821,6 +2824,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     // Check out the conversation while drawing rows and collecting actions.
     let mut conversation = app.conversations.remove(&chat.id).unwrap_or_default();
     // The list's items are its rows: an album is one.
+    let streak_hues = chat
+        .is_group()
+        .then(|| sender_streak_hues(&conversation.messages));
     let starts = row_starts(&conversation.messages, app.selecting_in(&chat.id));
     let total = starts.len();
     // The current message: the one the cursor names, or the newest when it
@@ -2862,6 +2868,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     let list_label =
         || crate::a11y::messages_list_label(app.locale, &app.chat_title(chat), chat.is_group());
     let view = View {
+        sender_hue: None,
+        hide_grouped_status: false,
+        covered_top: None,
         show_timestamp: true,
         footer_right: None,
         palette,
@@ -3365,7 +3374,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                 let tailed = if palette.bubbles == theme::BubbleStyle::Messages {
                                     last_bubble_of_run(&palette, &conversation.messages, index)
                                 } else {
-                                    first_in_run
+                                    true
                                 };
                                 if first_in_run && !new_day && previous.is_some() {
                                     ui.add_space(RUN_GAP);
@@ -3393,6 +3402,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                                 message,
                                                 album,
                                                 RunPlace {
+                                                    sender_hue: streak_hues
+                                                        .as_ref()
+                                                        .map(|hues| hues[message_index]),
                                                     show_timestamp: last_minute_in_run(
                                                         album
                                                             .and_then(|items| items.last())
@@ -3406,6 +3418,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                                     show_sender,
                                                     show_avatar,
                                                     tailed,
+                                                    overlap_previous: None,
+                                                    next_stacks: false,
                                                 },
                                                 &mut actions,
                                             )
@@ -3420,6 +3434,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                         message,
                                         album,
                                         RunPlace {
+                                            sender_hue: streak_hues
+                                                .as_ref()
+                                                .map(|hues| hues[message_index]),
                                             show_timestamp: last_minute_in_run(
                                                 album
                                                     .and_then(|items| items.last())
@@ -3432,6 +3449,24 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                             show_sender,
                                             show_avatar,
                                             tailed,
+                                            next_stacks: conversation
+                                                .messages
+                                                .get(message_index + 1)
+                                                .is_some_and(|next| {
+                                                    stack_pair(&view, message, next)
+                                                })
+                                                && palette.bubbles != theme::BubbleStyle::Messages,
+                                            overlap_previous: previous
+                                                .filter(|previous| {
+                                                    here == 0
+                                                        && !divider.as_ref().is_some_and(
+                                                            |(id, _, _)| row_contains(id),
+                                                        )
+                                                        && stack_pair(&view, previous, message)
+                                                })
+                                                .map(|previous| {
+                                                    bubble_id(&previous.chat, &previous.id)
+                                                }),
                                         },
                                         &mut actions,
                                     )
@@ -4443,10 +4478,13 @@ fn reaction_affordance(
 /// shows their picture, and carries the bubble's tail.
 #[derive(Clone, Copy)]
 struct RunPlace {
+    sender_hue: Option<f32>,
     show_timestamp: bool,
     show_sender: bool,
     show_avatar: bool,
     tailed: bool,
+    overlap_previous: Option<egui::Id>,
+    next_stacks: bool,
 }
 
 /// Draws a message row and returns its bubble response for scrolling.
@@ -4459,14 +4497,19 @@ fn bubble(
     actions: &mut Vec<Action>,
 ) -> Option<egui::Response> {
     let RunPlace {
+        sender_hue,
         show_timestamp,
         show_sender,
         show_avatar,
         tailed,
+        overlap_previous,
+        next_stacks,
     } = place;
     let footer_right = view.footer_right.unwrap_or(ui.max_rect().right());
     let view = &View {
         show_timestamp,
+        sender_hue,
+        hide_grouped_status: next_stacks,
         footer_right: Some(footer_right),
         ..*view
     };
@@ -4494,7 +4537,20 @@ fn bubble(
     // into a selection (#246).
     let id = bubble_id(&view.chat.id, &message.id);
     let previous = ui.ctx().data(|data| data.get_temp::<Rect>(id.with("rect")));
+    let paint_pass = ui.ctx().cumulative_pass_nr();
+    let previous_cover = overlap_previous
+        .filter(|_| !view.selecting && view.palette.bubbles != theme::BubbleStyle::Messages)
+        .and_then(|previous| {
+            ui.ctx().data(|data| {
+                (data.get_temp::<u64>(previous.with("paint-pass")) == Some(paint_pass))
+                    .then(|| data.get_temp::<Rect>(previous.with("rect")))
+                    .flatten()
+            })
+        });
     if let Some(rect) = previous {
+        let rect = rect.with_min_y(
+            previous_cover.map_or(rect.top(), |previous| previous.bottom().max(rect.top())),
+        );
         let strip = Rect::from_x_y_ranges(ui.max_rect().x_range(), rect.y_range());
         let strip = ui.interact(strip, id.with("row"), Sense::click_and_drag());
         if strip.clicked() {
@@ -4508,9 +4564,31 @@ fn bubble(
         }
         reply_on_double_click(&strip, message, actions);
     }
+    let overlap = overlap_previous
+        .filter(|_| !view.selecting && view.palette.bubbles != theme::BubbleStyle::Messages)
+        .and_then(|id| {
+            ui.ctx().data(|data| {
+                if data.get_temp::<u64>(id.with("paint-pass")) != Some(paint_pass) {
+                    return None;
+                }
+                Some((
+                    data.get_temp::<Rect>(id.with("rect"))?,
+                    data.get_temp::<egui::Shape>(id.with("backdrop-shape"))?,
+                ))
+            })
+        });
+    let view = &View {
+        covered_top: overlap.as_ref().map(|(rect, _)| rect.bottom()),
+        ..*view
+    };
+    if overlap.is_some() {
+        ui.add_space(-STREAK_OVERLAP - ui.spacing().item_spacing.y);
+    }
     let mut response = None;
     let mut area = ui.available_rect_before_wrap();
-    area.max.x = footer_right;
+    // Tails are part of the painted bounds, including beside a linked chip.
+    area.min.x += widgets::TAIL_WIDTH;
+    area.max.x = area.max.x.min(footer_right) - widgets::TAIL_WIDTH;
     ui.scope_builder(
         egui::UiBuilder::new()
             .max_rect(area)
@@ -4586,29 +4664,96 @@ fn bubble(
                     actions,
                 ));
             }
-            // An album row carries every member's reactions, each set
-            // reacting to its own item.
+            if let Some((previous, shape)) = &overlap {
+                // Include the older bubble's shadow below its body: clipping
+                // at its bottom erased the depth cue and looked like touching.
+                let seam = Rect::from_min_max(
+                    pos2(
+                        previous.left() - widgets::TAIL_WIDTH - 4.0,
+                        previous.bottom() - STREAK_OVERLAP - 3.0,
+                    ),
+                    pos2(
+                        previous.right() + widgets::TAIL_WIDTH + 4.0,
+                        previous.bottom() + 4.0,
+                    ),
+                );
+                let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(seam));
+                painter.add(shape.clone());
+            }
+            // Every reaction belongs to its own message. Flow pills and the
+            // timestamp together, wrapping rather than covering either one.
             let members = album.unwrap_or(std::slice::from_ref(message));
-            if members.iter().any(|member| !member.reactions.is_empty()) {
-                // The footer already expanded the row below the bubble. A
-                // negative overlap here would paint reactions over the clock.
+            if let Some(body) = &response {
                 let last = members.last().unwrap_or(message);
-                let footer_bottom = ui
-                    .ctx()
-                    .data(|data| data.get_temp::<Rect>(footer_id(&last.chat, &last.id)))
-                    .map(|rect| rect.bottom());
-                let gap =
-                    footer_bottom.map_or(2.0, |bottom| (bottom + 4.0 - ui.cursor().top()).max(2.0));
-                ui.add_space(gap);
-                ui.horizontal(|ui| {
-                    if with_avatar {
-                        ui.add_space(SENDER_AVATAR + 8.0);
+                let starred = view.starred.is_some_and(|ids| ids.contains(&last.id));
+                let pinned = view.pins.is_some_and(|ids| ids.contains(&last.id));
+                let status = shown_delivery(view, last);
+                let visible_status = last.from_me
+                    && !matches!(status, Delivery::None | Delivery::Unknown)
+                    && !view.hide_grouped_status;
+                let metadata =
+                    view.show_timestamp || visible_status || starred || pinned || last.edited;
+                let reacted = members.iter().any(|row| !row.reactions.is_empty());
+                if metadata || reacted {
+                    ui.add_space(3.0);
+                    let left = if with_avatar {
+                        area.left() + SENDER_AVATAR + 8.0
+                    } else {
+                        body.rect.left()
+                    };
+                    let mut metadata_width = footer_width(ui, view.locale, last, starred, pinned);
+                    if !view.show_timestamp {
+                        metadata_width -= clock_width(ui, view.locale, last);
                     }
-                    for member in members.iter().filter(|member| !member.reactions.is_empty()) {
-                        reactions(ui, view, member, actions);
+                    if last.from_me && !visible_status {
+                        metadata_width -= 19.0;
                     }
-                });
-                ui.add_space(2.0);
+                    let total = members
+                        .iter()
+                        .map(|row| reaction_row_width(ui, view, row))
+                        .sum::<f32>()
+                        + if metadata {
+                            metadata_width.max(1.0) + 5.0
+                        } else {
+                            0.0
+                        };
+                    let start = if own {
+                        (body.rect.right() - total).max(area.left())
+                    } else {
+                        left
+                    };
+                    let footer_area = Rect::from_min_max(pos2(start, ui.cursor().top()), area.max);
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(footer_area), |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 5.0;
+                            for member in members.iter().filter(|row| !row.reactions.is_empty()) {
+                                reactions(ui, view, member, actions);
+                            }
+                            if metadata {
+                                let mut width =
+                                    footer_width(ui, view.locale, last, starred, pinned);
+                                if !view.show_timestamp {
+                                    width -= clock_width(ui, view.locale, last);
+                                }
+                                if last.from_me && !visible_status {
+                                    width -= 19.0;
+                                }
+                                let (slot, _) = ui.allocate_exact_size(
+                                    vec2(width.max(1.0), 22.0),
+                                    Sense::hover(),
+                                );
+                                footer(ui, view, last, Some(slot), starred, pinned, actions);
+                            } else {
+                                ui.ctx().data_mut(|data| {
+                                    data.remove::<Rect>(footer_id(&last.chat, &last.id))
+                                });
+                            }
+                        });
+                    });
+                } else {
+                    ui.ctx()
+                        .data_mut(|data| data.remove::<Rect>(footer_id(&last.chat, &last.id)));
+                }
             }
         },
     );
@@ -5061,6 +5206,66 @@ fn same_run(message: &Message, next: &Message) -> bool {
     message.from_me == next.from_me && (message.from_me || message.sender == next.sender)
 }
 
+/// Assign a hue per sender streak, before viewport culling. Adjacent different
+/// senders get at least 120 degrees of hue separation. Among equally safe
+/// choices use the hue nearest the sender's stable preference. Loading older
+/// history may recolour later runs; distinguishing a change of speaker wins.
+pub(crate) fn sender_streak_hues(messages: &[Message]) -> Vec<f32> {
+    let distance = |a: f32, b: f32| {
+        let gap = (a - b).abs();
+        gap.min(360.0 - gap)
+    };
+    let mut hues: Vec<f32> = Vec::with_capacity(messages.len());
+    for (index, message) in messages.iter().enumerate() {
+        if index > 0
+            && message.chat == messages[index - 1].chat
+            && same_run(&messages[index - 1], message)
+        {
+            hues.push(hues[index - 1]);
+            continue;
+        }
+        let preferred = crate::util::hue(&message.sender);
+        let previous = hues.last().copied();
+        let hue = (0..12)
+            .map(|step| step as f32 * 30.0)
+            .filter(|hue| previous.is_none_or(|previous| distance(*hue, previous) >= 120.0))
+            .min_by(|a, b| distance(*a, preferred).total_cmp(&distance(*b, preferred)))
+            .expect("twelve hues always provide a separated candidate");
+        hues.push(hue);
+    }
+    hues
+}
+
+/// Only plain, adjacent text from the same exact source/sender/minute stacks.
+/// Controls, metadata, quotes and failure states are hard boundaries.
+pub(crate) fn stacks_after(previous: &Message, next: &Message) -> bool {
+    let plain = |row: &Message| {
+        matches!(row.content, Content::Text { .. })
+            && row.quoted.is_none()
+            && !row.forwarded
+            && !row.edited
+            && !matches!(row.status, Delivery::Pending | Delivery::Failed)
+    };
+    previous.chat == next.chat
+        && same_run(previous, next)
+        && previous.timestamp.div_euclid(60) == next.timestamp.div_euclid(60)
+        && next.timestamp >= previous.timestamp
+        && previous.reactions.is_empty()
+        && previous.status == next.status
+        && plain(previous)
+        && plain(next)
+}
+
+fn stack_pair(view: &View<'_>, previous: &Message, next: &Message) -> bool {
+    let marked = |row: &Message| {
+        view.starred.is_some_and(|ids| ids.contains(&row.id))
+            || view.pins.is_some_and(|ids| ids.contains(&row.id))
+    };
+    stacks_after(previous, next) && !marked(previous) && !marked(next)
+}
+
+const STREAK_OVERLAP: f32 = 6.0;
+
 /// Room around a bubble's contents: none around a picture that stands
 /// without one, Messages' insets in its style, WhatsApp's otherwise.
 fn bubble_margin(palette: &Palette, message: &Message, over_picture: bool) -> Margin {
@@ -5072,8 +5277,18 @@ fn bubble_margin(palette: &Palette, message: &Message, over_picture: bool) -> Ma
         Margin {
             left: 10,
             right: 10,
-            top: 6,
-            bottom: if over_picture { 6 } else { 5 },
+            top: if matches!(message.content, Content::Text { .. }) {
+                9
+            } else {
+                6
+            },
+            bottom: if over_picture {
+                6
+            } else if matches!(message.content, Content::Text { .. }) {
+                9
+            } else {
+                5
+            },
         }
     }
 }
@@ -5112,18 +5327,18 @@ fn bubble_frame(
     // the first frame's rect.
     let rect_id = bubble_id.with("rect");
     let previous = ui.ctx().data(|data| data.get_temp::<Rect>(rect_id));
-    let early = previous.map(|rect| ui.interact(rect, bubble_id, Sense::CLICK));
+    let exposed =
+        |rect: Rect| rect.with_min_y(view.covered_top.unwrap_or(rect.top()).max(rect.top()));
+    let early = previous.map(|rect| ui.interact(exposed(rect), bubble_id, Sense::CLICK));
     // Painted once the contents are measured, beneath them.
     let backdrop = ui.painter().add(egui::Shape::Noop);
     // Group messages share a straight bubble-body column, including follow-ups.
     // A protruding incoming tail made the first bubble look offset from the run.
-    let tail =
-        (tailed && (own || !shows_sender_pictures(view.chat)) && fill != Color32::TRANSPARENT)
-            .then_some(if own {
-                widgets::Side::Right
-            } else {
-                widgets::Side::Left
-            });
+    let tail = (tailed && fill != Color32::TRANSPARENT).then_some(if own {
+        widgets::Side::Right
+    } else {
+        widgets::Side::Left
+    });
     let mut tiles: Vec<(Rect, String)> = Vec::new();
     let inner = Frame::new()
         .inner_margin(bubble_margin(&palette, message, false))
@@ -5136,7 +5351,10 @@ fn bubble_frame(
                     ui,
                     &name,
                     theme::semibold(13.0),
-                    palette.sender(crate::util::hue(&message.sender)),
+                    palette.sender(
+                        view.sender_hue
+                            .unwrap_or_else(|| crate::util::hue(&message.sender)),
+                    ),
                 );
                 let response = ui
                     .interact(
@@ -5213,39 +5431,11 @@ fn bubble_frame(
             }
         });
     let last = album.and_then(|items| items.last()).unwrap_or(message);
-    let starred = view.starred.is_some_and(|ids| ids.contains(&last.id));
-    let pinned = view.pins.is_some_and(|ids| ids.contains(&last.id));
     let outside_view = View {
         palette: outside_palette,
         ..*view
     };
     let status = shown_delivery(&outside_view, last);
-    let visible_status = last.from_me && !matches!(status, Delivery::None | Delivery::Unknown);
-    let visible_footer = view.show_timestamp || visible_status || starred || pinned || last.edited;
-    if visible_footer {
-        let mut metadata_width = footer_width(ui, view.locale, last, starred, pinned);
-        if !view.show_timestamp {
-            metadata_width -= clock_width(ui, view.locale, last);
-        }
-        if last.from_me && !visible_status {
-            metadata_width -= 19.0;
-        }
-        let metadata = group_footer_rect(inner.response.rect, metadata_width.max(1.0), own);
-        footer(
-            ui,
-            &outside_view,
-            last,
-            Some(metadata),
-            starred,
-            pinned,
-            actions,
-        );
-        ui.expand_to_include_rect(metadata);
-    } else {
-        ui.ctx().data_mut(|data| {
-            data.remove::<Rect>(footer_id(&last.chat, &last.id));
-        });
-    }
     // A missing receipt is inspectable but not a floating dash on every row.
     if last.from_me && status == Delivery::Unknown {
         ui.interact(
@@ -5259,22 +5449,51 @@ fn bubble_frame(
         ));
     }
     if fill != Color32::TRANSPARENT && ui.is_rect_visible(inner.response.rect) {
-        ui.painter().set(
-            backdrop,
-            widgets::bubble_shape(
-                &palette,
-                inner.response.rect,
-                fill,
-                tail,
-                ui.ctx().pixels_per_point(),
-                // The transcript's viewport: own balloons shade down it.
-                ui.clip_rect().y_range(),
-            ),
+        let sender_shadow = (view.chat.is_group() && !own).then(|| {
+            let color = palette.sender(
+                view.sender_hue
+                    .unwrap_or_else(|| crate::util::hue(&message.sender)),
+            );
+            Color32::from_rgba_unmultiplied(
+                color.r(),
+                color.g(),
+                color.b(),
+                if palette.dark { 170 } else { 130 },
+            )
+        });
+        let shape = widgets::bubble_shape_with_shadow(
+            &palette,
+            inner.response.rect,
+            fill,
+            tail,
+            ui.ctx().pixels_per_point(),
+            ui.clip_rect().y_range(),
+            widgets::BubbleEffects {
+                sender_shadow,
+                flat_edge: sender_shadow.is_some()
+                    || view.covered_top.is_some()
+                    || view.hide_grouped_status,
+            },
         );
+        ui.painter().set(backdrop, shape.clone());
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(bubble_id.with("backdrop-shape"), shape));
+    }
+    let mut painted = inner.response.rect;
+    match tail {
+        Some(widgets::Side::Left) => painted.min.x -= widgets::TAIL_WIDTH,
+        Some(widgets::Side::Right) => painted.max.x += widgets::TAIL_WIDTH,
+        None => {}
     }
     ui.ctx()
+        .data_mut(|data| data.insert_temp(bubble_id.with("painted-rect"), painted));
+    ui.ctx()
         .data_mut(|data| data.insert_temp(rect_id, inner.response.rect));
-    let bubble = early.unwrap_or_else(|| ui.interact(inner.response.rect, bubble_id, Sense::CLICK));
+    let paint_pass = ui.ctx().cumulative_pass_nr();
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(bubble_id.with("paint-pass"), paint_pass));
+    let bubble =
+        early.unwrap_or_else(|| ui.interact(exposed(inner.response.rect), bubble_id, Sense::CLICK));
     if view.selecting {
         return bubble;
     }
@@ -6039,6 +6258,7 @@ pub(crate) fn last_minute_in_run(message: &Message, next: Option<&Message>) -> b
     })
 }
 
+#[cfg(test)]
 fn group_footer_rect(bubble: Rect, width: f32, own: bool) -> Rect {
     let x = if own {
         bubble.right() - width
@@ -6086,7 +6306,9 @@ fn footer(
             .layout_no_wrap(label.into_owned(), theme::medium(11.0), palette.text)
     });
     let status = shown_delivery(view, message);
-    let has_tick = message.from_me && !matches!(status, Delivery::None | Delivery::Unknown);
+    let has_tick = message.from_me
+        && !matches!(status, Delivery::None | Delivery::Unknown)
+        && !view.hide_grouped_status;
     let tick_width = if has_tick { 19.0 } else { 0.0 };
     let width = time.size().x
         + edited.as_ref().map_or(0.0, |galley| galley.size().x + 4.0)
@@ -6218,6 +6440,33 @@ fn footer(
             FOOTER_STAR,
         );
     }
+}
+
+fn reaction_row_width(ui: &egui::Ui, view: &View<'_>, message: &Message) -> f32 {
+    let mut counts = std::collections::BTreeMap::new();
+    for reaction in &message.reactions {
+        *counts.entry(&reaction.emoji).or_insert(0) += 1;
+    }
+    counts
+        .into_iter()
+        .map(|(emoji, count)| {
+            let label = if count > 1 {
+                format!("{emoji} {count}")
+            } else {
+                emoji.clone()
+            };
+            widgets::line(
+                ui,
+                &label,
+                theme::regular(13.0),
+                view.palette.text,
+                200.0,
+                1,
+            )
+            .size()
+            .x + 17.0
+        })
+        .sum()
 }
 
 fn reactions(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: &mut Vec<Action>) {
@@ -6403,6 +6652,9 @@ pub(crate) fn list_menu(
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
     let view = View {
+        sender_hue: None,
+        hide_grouped_status: false,
+        covered_top: None,
         show_timestamp: true,
         footer_right: None,
         palette: app.conversation_palette(),
@@ -6450,12 +6702,15 @@ pub(crate) fn linked_estimated_height(message: &Message, width: f32) -> f32 {
     estimated_height(message, width, false, 0) + 8.0
 }
 /// Linked timelines use the very same bubble/media renderer as ordinary chats.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn linked_bubble(
     app: &App,
     ui: &mut egui::Ui,
     chat: &Chat,
     message: &Message,
     show_timestamp: bool,
+    previous: Option<&Message>,
+    next: Option<&Message>,
     footer_right: f32,
     actions: &mut Vec<Action>,
 ) -> Option<egui::Rect> {
@@ -6478,6 +6733,9 @@ pub(crate) fn linked_bubble(
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
     let view = View {
+        sender_hue: None,
+        hide_grouped_status: false,
+        covered_top: None,
         show_timestamp,
         footer_right: Some(footer_right),
         palette,
@@ -6521,14 +6779,26 @@ pub(crate) fn linked_bubble(
         message,
         None,
         RunPlace {
+            sender_hue: None,
             show_timestamp,
             show_sender: false,
             show_avatar: false,
             tailed: true,
+            next_stacks: next.is_some_and(|next| stack_pair(&view, message, next))
+                && palette.bubbles != theme::BubbleStyle::Messages,
+            overlap_previous: previous
+                .filter(|previous| stack_pair(&view, previous, message))
+                .map(|previous| bubble_id(&previous.chat, &previous.id)),
         },
         actions,
     )
-    .map(|response| response.rect)
+    .map(|response| {
+        ui.ctx()
+            .data(|data| {
+                data.get_temp::<Rect>(bubble_id(&message.chat, &message.id).with("painted-rect"))
+            })
+            .unwrap_or(response.rect)
+    })
 }
 
 /// Quick reactions plus our current reaction when needed.
@@ -10890,6 +11160,9 @@ mod tests {
             unknown.from_me = true;
             unknown.status = Delivery::Unknown;
             let view = View {
+                sender_hue: None,
+                hide_grouped_status: false,
+                covered_top: None,
                 show_timestamp: false,
                 ..*view
             };
@@ -11882,6 +12155,9 @@ mod tests {
         let avatars = HashMap::new();
         let keyboard_navigation = std::cell::Cell::new(false);
         let view = View {
+            sender_hue: None,
+            hide_grouped_status: false,
+            covered_top: None,
             show_timestamp: true,
             footer_right: None,
             transcriber: None,

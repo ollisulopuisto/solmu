@@ -185,3 +185,14 @@ both directions, themes and widths.
 
 The chip-lanes fixture always puts WhatsApp before Signal, independent of the
 launch hour. Signal timestamps are rebased after the fixed WhatsApp sample.
+
+### Speaker-change streaks
+
+`--demo-page group-stacks` shows synthetic three-speaker text streaks, a
+returning speaker, reactions, and outgoing read receipts. Add `,light` for the
+light theme; compare `--demo-size 1180x1100` and `--demo-size 620x1400`.
+Each eligible pair overlaps by 6 logical points with its older lower edge in
+front. Every bubble has a triangular top sender-side tail. Incoming group
+shadows choose contrasting colours per sender streak, not a permanent colour
+identity; names/avatars remain the identity cues. There are no accent rails or
+stack separator borders. Reactions and time share a wrapping footer row.

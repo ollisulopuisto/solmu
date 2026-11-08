@@ -9,6 +9,9 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Text streaks overlap with the older bubble in front and keep a triangular speech tail on every bubble. Group speaker changes use contrasting colored drop shadows, including their tails, while names and avatars remain visible.
+- Reactions and message time share a compact row that wraps when needed without covering one another.
+
 - Keep outgoing linked-chat network icons outside message bubbles.
 
 - Opening or marking a linked person read clears the exact unlocked source chats shown together, not only the representative chat. Live updates and returning focus use the same scope; incognito and hidden-account protections remain.

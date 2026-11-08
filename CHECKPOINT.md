@@ -1,5 +1,46 @@
 # Fast-beeper coordination and development checkpoint
 
+## Speech-tail streaks and speaker-change shadows - November 8, 2026
+
+Branch `feat/notched-streaks-group-identity`, based on main 3fe1cb0 including
+PR244-245. WhatsApp-style bubbles keep a triangular top sender-side tail on
+every message. Eligible same-source/sender/minute text intersects by 6 points;
+the older lower edge and shadow paint in front. Quotes, forwarded/edited rows,
+status changes, pending/failed rows, reactions on the earlier row, pins/stars
+and selection break overlap. The Messages skin keeps its own geometry.
+
+Group speaker changes use a coloured body-and-tail drop shadow, with no
+accent rail, seam outline or raised top-edge border. Names and avatars stay.
+Hue is assigned to a complete loaded sender streak before viewport culling:
+12 candidates at 30-degree steps, at least 120 degrees from the previous streak,
+then closest to the sender-ID preference. Same-speaker rows keep the hue;
+returning speakers can change hue, and loading earlier history can recolour
+later streaks. Speaker transition contrast takes priority over identity colour.
+
+Reactions and time/status flow in one wrapping below-bubble row, preserving
+individual message targets. Repeated same-state ticks collapse within eligible
+streaks. Linked timelines use the shared renderer and reserve painted tail
+bounds outside the network-chip lane. Covered padding is not the next message's
+input target; current-pass geometry prevents a stale scroll position from
+creating a false overlap.
+
+Verification: strict all-feature/all-target clippy, fmt and actual demo build
+pass. Focused native harness, with unrelated test modules omitted and changed
+production renderers unchanged: 36 tests pass, including 11 demo regressions
+for 7 exact 6px intersections, both themes at 620/1180, tails, footer/reaction
+bounds, body/tail shadow colour and no extra border shapes, colliding sender
+hashes plus 1000 speaker changes, scroll/wrapped reactions, seam right-click,
+selection, time/tick dialogs, failed-draft recovery and linked chip geometry.
+The old reaction regression now checks noncollision instead of forcing two
+rows, as required by the approved compact-footer design. Full native runtime
+suite remains a CI gate, not a claimed local pass.
+
+Actual synthetic demo captures inspected in both themes, including 3x seam
+zoom after removing the last shadow-spill line. Existing narrow chat-header
+crowding is outside this patch. No screenshot/media files committed. Review
+media delivered separately; PR media-upload availability must be reported.
+No merge, release or DMG dispatch. Revert this PR to roll back.
+
 ## Linked network chip lane - November 8, 2026
 
 Instinct, branch `fix/linked-network-chip-overlap`, based on main 2498c7b
