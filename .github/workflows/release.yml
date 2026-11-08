@@ -7,6 +7,12 @@ on:
   # macOS job runs; the DMG lands on the rolling "macOS manual builds" draft
   # release directly, without an intermediate workflow artifact. Tag pushes still run the full release.
   workflow_dispatch:
+    inputs:
+      macos_arch:
+        description: 'Routine builds: Apple Silicon only; universal only when requested'
+        type: choice
+        default: arm64
+        options: [arm64, universal]
 
 permissions:
   contents: read
@@ -191,7 +197,7 @@ jobs:
           if-no-files-found: error
 
   macos:
-    name: macOS universal app
+    name: macOS app
     needs: release-source
     permissions:
       contents: write
@@ -226,30 +232,19 @@ jobs:
             version="${GITHUB_REF_NAME#v}"
             package_version="$version"
           fi
+          architecture=universal
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            architecture="${{ inputs.macos_arch || 'arm64' }}"
+          fi
+          case "$architecture" in arm64|universal) ;; *) exit 1 ;; esac
+          echo "MACOS_ARCH=$architecture" >> "$GITHUB_ENV"
+          echo "PACKAGE_TARGET=macos-$architecture" >> "$GITHUB_ENV"
           echo "PACKAGE_VERSION=$package_version" >> "$GITHUB_ENV"
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"
-          echo "DMG_NAME=solmu-v$version-macos-universal.dmg" >> "$GITHUB_ENV"
+          echo "DMG_NAME=solmu-v$version-macos-$architecture.dmg" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
-      # No compiler cache, as in the build job above.
-      - name: Build both architectures
-        run: |
-          cargo build --locked --release --target aarch64-apple-darwin
-          cargo build --locked --release --target x86_64-apple-darwin
-
-      - name: Universal binary
-        run: |
-          mkdir -p universal
-          lipo -create \
-            target/aarch64-apple-darwin/release/solmu \
-            target/x86_64-apple-darwin/release/solmu \
-            -output universal/solmu
-          # The two release builds fill most of the runner's disk; the DMG
-          # and its notarization copy need room of their own.
-          rm -rf target
-          df -h "$RUNNER_TEMP"
+      - name: Build selected Mac architectures
+        run: bash packaging/macos/build-release.sh "$MACOS_ARCH"
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -260,18 +255,18 @@ jobs:
       - name: App bundle
         run: |
           mkdir -p dist/macos-input
-          bash packaging/macos/bundle.sh universal/solmu dist/macos-input/Solmu.app "$APP_VERSION" beeper
+          bash packaging/macos/bundle.sh macos-binary/solmu dist/macos-input/Solmu.app "$APP_VERSION" beeper
           cp README.md LICENSE THIRD-PARTY-NOTICES.md dist/macos-input/
 
       - name: Package, sign and notarize macOS app
         run: |
           native-packages build \
-            --version "$PACKAGE_VERSION" --target macos-universal --defer-recipes \
+            --version "$PACKAGE_VERSION" --target "$PACKAGE_TARGET" --defer-recipes \
             --output "$RUNNER_TEMP/macos-packages"
-          mv "$RUNNER_TEMP/macos-packages/packages/macos-universal/dmg/"*.dmg "dist/$DMG_NAME"
+          mv "$RUNNER_TEMP/macos-packages/packages/$PACKAGE_TARGET/dmg/"*.dmg "dist/$DMG_NAME"
 
       - name: Verify the notarized release app
-        run: bash packaging/macos/verify.sh "dist/$DMG_NAME"
+        run: bash packaging/macos/verify.sh "dist/$DMG_NAME" "$MACOS_ARCH"
 
       - name: Attest macOS package
         uses: crmne/native-packages/.github/actions/attest@25a4214d2f203357c84b069f39de7c17c0be6253 # v0.11.0
@@ -293,7 +288,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: macOS manual builds
           body: |
-            Notarized universal macOS builds from manual runs (Actions -> Release -> Run workflow).
+            Notarized macOS builds from manual runs (Apple Silicon by default) (Actions -> Release -> Run workflow).
             Download the newest DMG; discard the draft to clear old builds. Multi-platform
             releases still come from v* tags.
           draft: true

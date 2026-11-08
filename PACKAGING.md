@@ -63,8 +63,11 @@ pin together. Applications need no packaging Gemfile, lockfile or Ruby wrapper.
 For a notarized macOS DMG without a full release, run the Release workflow by
 hand: Actions -> Release -> Run workflow on `main`. Only the macOS job runs;
 Linux, Windows, Flatpak and the publish job stay tag-only. The DMG is named
-with the Cargo version and the run number
-(`solmu-v0.24.0-manual.7-macos-universal.dmg`) and lands on the rolling
+with the Cargo version, run number and architecture
+(`solmu-v0.24.6-manual.7-macos-arm64.dmg`). Manual runs default to Apple
+Silicon only (`macos_arch: arm64`); choose `universal` explicitly when Intel
+support is requested for a bigger release. Tag releases remain universal.
+The selected DMG lands on the rolling
 "macOS manual builds" draft release - release assets cost nothing to store,
 unlike workflow artifacts. Manual runs upload directly from the macOS job,
 with no intermediate artifact storage. Download the DMG from the draft; discard the draft
@@ -118,8 +121,8 @@ Packaging CI builds both architectures from the published v0.13.1 fixture on
 PRs; release runs use their own tag. Clean Ubuntu, Debian and Fedora containers
 install and remove each package, check GUI libraries loaded with `dlopen`, and
 verify desktop and theme assets. Run the same check locally with
-`bash packaging/test-install.sh ubuntu:24.04 /path/to/native-packages-output`. The macOS job selects `macos-universal`
-from the same configuration with `--defer-recipes`, leaving Linux inputs and AUR
+`bash packaging/test-install.sh ubuntu:24.04 /path/to/native-packages-output`. The macOS job selects `macos-arm64` for routine manual builds or
+`macos-universal` for explicit universal/tag builds from the same configuration with `--defer-recipes`, leaving Linux inputs and AUR
 recipe generation to the Linux packaging job after release assets exist.
 
 ## Windows installer

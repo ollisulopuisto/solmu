@@ -3,6 +3,11 @@
 set -euo pipefail
 
 dmg="$1"
+architecture="${2:-universal}"
+case "$architecture" in arm64|universal) ;; *) echo "Unknown architecture: $architecture" >&2; exit 1 ;; esac
+verify_architectures() {
+    bash "$(dirname "$0")/verify-architectures.sh" "$1" "$architecture"
+}
 temporary="$(mktemp -d)"
 mount="$temporary/mount"
 mkdir "$mount"
@@ -18,7 +23,7 @@ hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount" >/dev/null
 app="$mount/Solmu.app"
 codesign --verify --strict --deep "$app"
 spctl --assess --type execute --verbose=2 "$app"
-lipo "$app/Contents/MacOS/solmu" -verify_arch x86_64 arm64
+verify_architectures "$app/Contents/MacOS/solmu"
 # This is the process that actually reads Keychain. Its designated requirement
 # must survive a rebuild rather than inheriting a UUID-derived Mach-O identity.
 client="$app/Contents/MacOS/solmu-client"
@@ -34,7 +39,7 @@ if grep -Eq 'cdhash|55554944' <<< "$requirement"; then
 fi
 # Beeper bundles contain both a Swift launcher and the Rust client. Checking
 # just CFBundleExecutable would miss an incorrectly packaged client.
-lipo "$app/Contents/MacOS/solmu-client" -verify_arch x86_64 arm64
+verify_architectures "$app/Contents/MacOS/solmu-client"
 codesign --display --entitlements - --xml "$app" > "$temporary/entitlements.plist"
 
 python3 - "$app/Contents/Info.plist" "$temporary/entitlements.plist" <<'PY'
@@ -55,5 +60,5 @@ if not info.get("NSCameraUsageDescription", "").strip():
     sys.exit("The release app is missing its camera permission description")
 if entitlements.get("com.apple.security.device.camera") is not True:
     sys.exit("The signed release app is missing its camera entitlement")
-print("Verified microphone and camera permission metadata in the signed universal app")
+print("Verified microphone and camera permission metadata in the signed app")
 PY
