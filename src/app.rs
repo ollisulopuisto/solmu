@@ -7232,7 +7232,10 @@ impl App {
             .chat(chat)
             .map(|chat| chat.participants.clone())
             .unwrap_or_default();
-        let selected = std::mem::take(&mut self.composer_mentions);
+        let mut selected = std::mem::take(&mut self.composer_mentions);
+        // Disambiguated labels may contain another member's shorter name.
+        // Encode the longest first so @Mira cannot consume @Mira (2).
+        selected.sort_by_key(|mention| std::cmp::Reverse(mention.name.len()));
         let mut mentions = Vec::new();
         for mention in selected {
             if !participants.iter().any(|id| id == &mention.id) {
@@ -9281,6 +9284,24 @@ impl App {
                     && self.composer.is_char_boundary(end)
                     && mention_at
                 {
+                    let name = self
+                        .composer_mentions
+                        .iter()
+                        .find(|mention| mention.id == id)
+                        .map(|mention| mention.name.clone())
+                        .unwrap_or_else(|| {
+                            let mut candidate = name.clone();
+                            let mut suffix = 2;
+                            while self
+                                .composer_mentions
+                                .iter()
+                                .any(|mention| mention.id != id && mention.name == candidate)
+                            {
+                                candidate = format!("{name} ({suffix})");
+                                suffix += 1;
+                            }
+                            candidate
+                        });
                     let mention = if everyone {
                         format!("@{}", crate::mentions::ALL_USER)
                     } else {
@@ -15064,6 +15085,45 @@ mod tests {
             "the template stayed out of the open chat: {:?}",
             app.composer
         );
+    }
+
+    #[test]
+    fn normal_composer_disambiguates_two_selected_members_with_the_same_name() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let chat = "123@g.us";
+        let first = "174057861464188@s.whatsapp.net";
+        let second = "174057861464189@s.whatsapp.net";
+        let mut group = Chat::new(chat.into(), "Group".into());
+        group.participants = vec![first.into(), second.into()];
+        app.chats.push(group);
+        app.open_chat = Some(chat.into());
+        for (index, id) in [first, second, first].into_iter().enumerate() {
+            if index > 0 {
+                app.composer.push_str("and ");
+            }
+            let start = app.composer.len();
+            app.composer.push('@');
+            app.apply(
+                Action::InsertMention {
+                    id: id.into(),
+                    name: "Mira".into(),
+                    start,
+                    end: start + 1,
+                },
+                &ctx,
+            );
+        }
+        assert_eq!(app.composer, "@Mira and @Mira (2) and @Mira ");
+        let text = app.composer.clone();
+        let (wire, recipients) = app.encode_composer_mentions(chat, text);
+        assert_eq!(
+            wire,
+            "@174057861464188 and @174057861464189 and @174057861464188 "
+        );
+        assert_eq!(recipients.len(), 2);
+        assert!(recipients.contains(&first.to_owned()));
+        assert!(recipients.contains(&second.to_owned()));
     }
 
     #[test]
