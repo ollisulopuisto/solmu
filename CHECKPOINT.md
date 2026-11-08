@@ -1,5 +1,26 @@
 # Fast-beeper coordination and development checkpoint
 
+## PR241 review repair - November 8, 2026
+
+Retry now carries display-name text and its mention selections through the
+ordinary and linked composer paths, without changing empty-draft guards or
+automatically sending. Original markup stays intact. Reaction pills reserve
+room below group clocks instead of overlapping them. New status/retry strings
+use gettext, including footer measurement, and retry has an accessible button
+label. Regression tests cover mention round-trip/draft retention, reaction
+separation in both themes and the accessible retry label. Repeated mentions now encode every occurrence, deduplicating recipient IDs;
+identical names get distinct editable labels. Media failure measurement also
+uses the translated label. Normal mention autocomplete assigns distinct
+labels to same-name recipients, reuses a recipient's existing label, and
+encodes longest labels first. Its regression selects A, B, A with the same
+display name. A Tab-cycle regression also exposed a scrolled-off bubble mistaking the
+header search control for its child by rectangle containment. Only visible
+child-focus geometry may trigger that scroll. The full path audit also switched
+mention encoding to original-draft spans only, so generated wire tokens cannot
+be reinterpreted as another recipient name. Ambiguous legacy labels remain
+literal rather than guessing. See MENTION-RETRY.md. No catalog changes, merge
+or release. Full runtime suite remains a CI gate.
+
 ## PR240 follow-up: batch filename collisions - November 8, 2026
 
 Keep cross-platform path sanitization from PR240. Plan safe names for the

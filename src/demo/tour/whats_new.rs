@@ -175,6 +175,10 @@ pub(super) fn script() -> Vec<Cue> {
 
     // Photos open in the app.
     add(15.4, Key(K::End, command(), "Ctrl + End · Latest messages"));
+    // Group footers make the history taller. Scroll the photo into the viewport
+    // instead of relying on its old position in an end-pinned window.
+    add(15.6, Move(Stop(Control::Messages)));
+    add(15.9, Wheel(300.0));
     add(16.2, Move(Picture("ada-photo")));
     add(16.6, Click(left));
     add(17.9, Move(Label("Fit")));

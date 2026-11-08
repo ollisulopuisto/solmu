@@ -2566,6 +2566,7 @@ pub enum Action {
     PrefillComposer {
         chat: ChatId,
         text: String,
+        mentions: Vec<crate::app::ComposerMention>,
     },
     /// Opens a chat at a message search result.
     OpenMessage {
