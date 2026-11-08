@@ -4008,6 +4008,12 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         ui.ctx()
             .request_discard("transcript rows above the viewport changed height");
     }
+    // ScrollArea applies a new offset after laying out its contents. Always
+    // repaint at that offset in the same frame, even when newly measured rows
+    // happen to have a net zero height correction.
+    if !redo && (output.state.offset.y - offset).abs() >= 0.5 {
+        ui.ctx().request_discard("transcript scroll offset changed");
+    }
     // A jump to the end moves the offset only after the rows were painted at
     // the old one. On a chat's first showing that is the top of its first
     // page, which would flash for a frame before the end; redo the pass at
@@ -5298,21 +5304,8 @@ fn bubble_margin(palette: &Palette, message: &Message, over_picture: bool) -> Ma
         Margin {
             left: 10,
             right: 10,
-            top: if matches!(message.content, Content::Text { .. })
-                && !message.forwarded
-                && message.quoted.is_none()
-            {
-                9
-            } else {
-                6
-            },
-            bottom: if over_picture {
-                6
-            } else if matches!(message.content, Content::Text { .. }) {
-                9
-            } else {
-                5
-            },
+            top: 6,
+            bottom: if over_picture { 6 } else { 5 },
         }
     }
 }
@@ -5364,96 +5357,102 @@ fn bubble_frame(
         widgets::Side::Left
     });
     let mut tiles: Vec<(Rect, String)> = Vec::new();
-    let inner = Frame::new()
-        .inner_margin(bubble_margin(&palette, message, false))
-        .show(ui, |ui| {
-            ui.set_max_width(max_width);
-            ui.spacing_mut().item_spacing.y = 4.0;
-            if show_sender && view.chat.is_group() {
-                let name = (view.names_or)(&message.sender, message.sender_name.as_deref());
-                let response = widgets::rich_text(
-                    ui,
-                    &name,
-                    theme::semibold(13.0),
-                    palette.sender(
-                        view.sender_hue
-                            .unwrap_or_else(|| crate::util::hue(&message.sender)),
-                    ),
-                );
-                let response = ui
-                    .interact(
-                        response.rect,
-                        ui.id().with(("sender", &message.id)),
-                        Sense::CLICK,
-                    )
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                if response.clicked() {
-                    actions.push(Action::OpenInfo(message.sender.clone()));
+    let mut margin = bubble_margin(&palette, message, false);
+    if view.hide_grouped_status || view.covered_top.is_some() {
+        margin.top = 9;
+        margin.bottom = 9;
+    }
+    if view.covered_top.is_some() {
+        margin.top += STREAK_OVERLAP as i8;
+    }
+    let inner = Frame::new().inner_margin(margin).show(ui, |ui| {
+        ui.set_max_width(max_width);
+        ui.spacing_mut().item_spacing.y = 4.0;
+        if show_sender && view.chat.is_group() {
+            let name = (view.names_or)(&message.sender, message.sender_name.as_deref());
+            let response = widgets::rich_text(
+                ui,
+                &name,
+                theme::semibold(13.0),
+                palette.sender(
+                    view.sender_hue
+                        .unwrap_or_else(|| crate::util::hue(&message.sender)),
+                ),
+            );
+            let response = ui
+                .interact(
+                    response.rect,
+                    ui.id().with(("sender", &message.id)),
+                    Sense::CLICK,
+                )
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if response.clicked() {
+                actions.push(Action::OpenInfo(message.sender.clone()));
+            }
+        }
+        // Reserve the label's line now and paint it once the contents
+        // are measured, at their start: an own bubble lays out from the
+        // right, and its width is known only then.
+        let forwarded = message.forwarded.then(|| forwarded_label(ui, &palette));
+        // Cards share the bubble's settled width: at least CARD_WIDTH and
+        // no more than the cap. Text spans that width and stays left-aligned.
+        // Bubbles without cards use the natural text width.
+        let inset = if palette.bubbles == theme::BubbleStyle::Messages
+            && !bare_picture(&palette, message)
+        {
+            MESSAGES_BUBBLE_MARGIN.sum().x
+        } else {
+            20.0
+        };
+        let cap = ((max_width - inset).min(ui.available_width())).max(0.0);
+        // Metadata is outside the frame, so text/media need no footer slot.
+        let reserve = 0.0;
+        let settled = album
+            .map(|_| CARD_WIDTH.min(cap))
+            .or_else(|| settled_width(ui, view, message, cap));
+        let _slot = if let Some(messages) = album {
+            for member in messages {
+                if let Some(quoted) = &member.quoted {
+                    quote_block(ui, view, member, quoted, settled.unwrap_or(cap), actions);
                 }
             }
-            // Reserve the label's line now and paint it once the contents
-            // are measured, at their start: an own bubble lays out from the
-            // right, and its width is known only then.
-            let forwarded = message.forwarded.then(|| forwarded_label(ui, &palette));
-            // Cards share the bubble's settled width: at least CARD_WIDTH and
-            // no more than the cap. Text spans that width and stays left-aligned.
-            // Bubbles without cards use the natural text width.
-            let inset = if palette.bubbles == theme::BubbleStyle::Messages
-                && !bare_picture(&palette, message)
-            {
-                MESSAGES_BUBBLE_MARGIN.sum().x
-            } else {
-                20.0
-            };
-            let cap = ((max_width - inset).min(ui.available_width())).max(0.0);
-            // Metadata is outside the frame, so text/media need no footer slot.
-            let reserve = 0.0;
-            let settled = album
-                .map(|_| CARD_WIDTH.min(cap))
-                .or_else(|| settled_width(ui, view, message, cap));
-            let _slot = if let Some(messages) = album {
-                for member in messages {
-                    if let Some(quoted) = &member.quoted {
-                        quote_block(ui, view, member, quoted, settled.unwrap_or(cap), actions);
+            tiles = album_content(ui, view, messages, settled.unwrap_or(cap), actions);
+            None
+        } else {
+            match settled {
+                Some(width) => {
+                    if let Some(quoted) = &message.quoted {
+                        quote_block(ui, view, message, quoted, width, actions);
                     }
+                    content(ui, view, message, width, reserve, actions)
                 }
-                tiles = album_content(ui, view, messages, settled.unwrap_or(cap), actions);
-                None
-            } else {
-                match settled {
-                    Some(width) => {
-                        if let Some(quoted) = &message.quoted {
-                            quote_block(ui, view, message, quoted, width, actions);
-                        }
-                        content(ui, view, message, width, reserve, actions)
-                    }
-                    None => content(ui, view, message, cap, reserve, actions),
-                }
-            };
-            if matches!(message.content, Content::Poll { .. }) {
-                super::polls::results_button(
-                    ui,
-                    &palette,
-                    view.locale,
-                    message,
-                    settled.unwrap_or(cap),
-                    actions,
-                );
+                None => content(ui, view, message, cap, reserve, actions),
             }
-            if let Content::Interactive {
-                card: Some(card), ..
-            } = &message.content
-            {
-                interactive_buttons(ui, view, message, card, settled.unwrap_or(cap), actions);
-            }
-            if let Some((reserved, galley)) = forwarded {
-                let at = pos2(ui.min_rect().left(), reserved.top());
-                let painted = paint_forwarded_label(ui, &palette, at, galley);
-                ui.ctx().data_mut(|data| {
-                    data.insert_temp(bubble_id.with("forwarded"), painted);
-                });
-            }
-        });
+        };
+        if matches!(message.content, Content::Poll { .. }) {
+            super::polls::results_button(
+                ui,
+                &palette,
+                view.locale,
+                message,
+                settled.unwrap_or(cap),
+                actions,
+            );
+        }
+        if let Content::Interactive {
+            card: Some(card), ..
+        } = &message.content
+        {
+            interactive_buttons(ui, view, message, card, settled.unwrap_or(cap), actions);
+        }
+        if let Some((reserved, galley)) = forwarded {
+            let at = pos2(ui.min_rect().left(), reserved.top());
+            let painted = paint_forwarded_label(ui, &palette, at, galley);
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(bubble_id.with("forwarded"), painted);
+            });
+        }
+    });
     let last = album.and_then(|items| items.last()).unwrap_or(message);
     let outside_view = View {
         palette: outside_palette,

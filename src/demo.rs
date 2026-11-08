@@ -5076,6 +5076,13 @@ mod tests {
                 }
                 for (first, second) in [(0, 1), (2, 3), (3, 4), (5, 6), (6, 7), (8, 9), (10, 11)] {
                     let id = bubble_id(SAMPLES[0].id, &format!("group-stack-{second}"));
+                    let text = ctx
+                        .data(|data| data.get_temp::<egui::Rect>(id.with("body")))
+                        .unwrap();
+                    assert!(
+                        text.top() >= rect(first).bottom() + 8.5,
+                        "overlapped text retains normal9pt headroom below the older edge"
+                    );
                     let hit = ctx.read_response(id).unwrap().rect;
                     assert!(
                         hit.top() >= rect(first).bottom() - 0.5,

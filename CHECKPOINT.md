@@ -66,6 +66,25 @@ is the PR's renderer. Strict all-feature/all-target clippy, fmt and demo build
 pass. Fresh dark/wide and light/narrow synthetic captures inspected. Full CI
 still needs to validate the next repair head; do not merge based on local tests.
 
+Maintainer waived PR screenshot embedding ("Okay nvm screenshot"); stop upload
+work, keep media out of the repository. New request: add headroom in overlapped
+bubbles. Continuations now add the6pt overlap to their normal9pt top padding,
+leaving9pt visible between the older edge and the next text. Runtime geometry
+checks this in both themes and widths. Restrict enlarged padding to actual
+streak members so ordinary text retains its original6/5pt vertical margins.
+
+Full CI one9968fb:1913 passed,3 failed,8 ignored. Expanded the local harness
+again with the full long-chat module and Ctrl+End/new-arrival regression.
+ScrollArea applies offset after layout: when new row measurements had zero
+net height correction, no discard occurred and the frame painted at the old
+offset. Request a discard whenever the output offset changed, even with zero
+height correction.60 focused tests pass, plus12 repeated keyboard phone-link
+runs and4 Ctrl+End runs. The phone-link CI failure is intermittent and is not
+claimed resolved until full CI verifies the new head. No test weakened.
+Strict all-feature/all-target clippy, fmt and demo build pass. Fresh synthetic
+dark/wide, light/narrow and3x headroom crop inspected. Separate stepped-card
+width request is approved for its own PR after this CI/headroom work, not here.
+
 ## Linked network chip lane - November 8, 2026
 
 Instinct, branch `fix/linked-network-chip-overlap`, based on main 2498c7b
