@@ -44,17 +44,73 @@ fn run_with_dialogs(
         }
         Command::SaveAttachments { files } => {
             let folder = pick_folder()?;
-            let result = files.into_iter().try_for_each(|(source, name)| {
-                let destination = folder.join(safe_name(&name));
-                if destination.exists() {
-                    return Err("A file with this name already exists; save it individually to choose another name".into());
-                }
-                copy(&source, &destination)
-            });
+            let result = save_batch(&folder, files);
             Some(save_result(result))
         }
         _ => None,
     }
+}
+
+/// Plan every name first: normalization must not merge distinct attachments.
+/// Existing files still refuse the batch, and create_new closes overwrite races.
+fn save_batch(folder: &Path, files: Vec<(PathBuf, String)>) -> Result<(), String> {
+    let names: Vec<String> = files.iter().map(|(_, name)| safe_name(name)).collect();
+    let reserved: std::collections::HashSet<String> =
+        names.iter().map(|name| name.to_lowercase()).collect();
+    let mut used = std::collections::HashSet::new();
+    let mut plan = Vec::with_capacity(files.len());
+    for ((source, _), name) in files.into_iter().zip(names) {
+        let mut chosen = name.clone();
+        let mut number = 2;
+        if used.contains(&chosen.to_lowercase()) {
+            loop {
+                let path = Path::new(&name);
+                let stem = path
+                    .file_stem()
+                    .and_then(|part| part.to_str())
+                    .unwrap_or(&name);
+                let extension = path
+                    .extension()
+                    .and_then(|part| part.to_str())
+                    .map_or(String::new(), |part| format!(".{part}"));
+                chosen = format!("{stem} ({number}){extension}");
+                number += 1;
+                let key = chosen.to_lowercase();
+                if !used.contains(&key)
+                    && !reserved.contains(&key)
+                    && !folder.join(&chosen).exists()
+                {
+                    break;
+                }
+            }
+        }
+        let destination = folder.join(&chosen);
+        if destination.exists() {
+            return Err(
+                "A file with this name already exists; save it individually to choose another name"
+                    .into(),
+            );
+        }
+        let source = std::fs::File::open(&source).map_err(|error| error.to_string())?;
+        if !source
+            .metadata()
+            .map_err(|error| error.to_string())?
+            .is_file()
+        {
+            return Err("An attachment source is not a file".into());
+        }
+        used.insert(chosen.to_lowercase());
+        plan.push((source, destination));
+    }
+    for (mut source, destination) in plan {
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&destination)
+            .map_err(|error| error.to_string())?;
+        std::io::copy(&mut source, &mut output).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn safe_name(name: &str) -> String {
@@ -187,6 +243,75 @@ mod tests {
             run(command(), Some(destination)),
             Some(Event::Error(_))
         ));
+    }
+
+    #[test]
+    fn normalized_batch_names_are_unique_and_keep_each_documents_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("chosen");
+        std::fs::create_dir(&folder).unwrap();
+        let files: Vec<_> = [
+            "notes.pdf",
+            " notes.pdf",
+            "notes (2).pdf",
+            r"..\notes.pdf",
+            "NOTES.pdf",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let source = root.path().join(format!("source{index}"));
+            std::fs::write(&source, format!("document{index}")).unwrap();
+            (source, name.to_owned())
+        })
+        .collect();
+        save_batch(&folder, files).unwrap();
+        for (name, index) in [
+            ("notes.pdf", 0),
+            ("notes (3).pdf", 1),
+            ("notes (2).pdf", 2),
+            ("notes (4).pdf", 3),
+            ("NOTES (5).pdf", 4),
+        ] {
+            assert_eq!(
+                std::fs::read_to_string(folder.join(name)).unwrap(),
+                format!("document{index}")
+            );
+        }
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 5);
+    }
+
+    #[test]
+    fn batch_preflight_refuses_existing_files_or_missing_sources_without_partial_saves() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("chosen");
+        std::fs::create_dir(&folder).unwrap();
+        let source = root.path().join("source");
+        std::fs::write(&source, b"new").unwrap();
+        std::fs::write(folder.join("existing.pdf"), b"keep").unwrap();
+        assert!(
+            save_batch(
+                &folder,
+                vec![
+                    (source.clone(), "first.pdf".into()),
+                    (source.clone(), "existing.pdf".into())
+                ]
+            )
+            .is_err()
+        );
+        assert!(!folder.join("first.pdf").exists());
+        assert_eq!(std::fs::read(folder.join("existing.pdf")).unwrap(), b"keep");
+        assert!(
+            save_batch(
+                &folder,
+                vec![
+                    (source, "first.pdf".into()),
+                    (root.path().join("missing"), "last.pdf".into())
+                ]
+            )
+            .is_err()
+        );
+        assert!(!folder.join("first.pdf").exists());
     }
 
     #[test]

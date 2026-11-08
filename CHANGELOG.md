@@ -9,6 +9,8 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Save all keeps attachments with colliding sanitized filenames separate and checks the batch before writing.
+
 ## v0.24.5
 
 - Day changes have more room above and below their labels in ordinary and linked timelines.
