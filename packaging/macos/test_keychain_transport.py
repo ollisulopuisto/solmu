@@ -2,7 +2,6 @@
 
 import importlib.util
 import os
-import shlex
 import subprocess
 import tempfile
 import unittest
@@ -26,7 +25,7 @@ class NativeKeychainTransportTests(unittest.TestCase):
     def test_create_unlock_import_partition_and_delete(self):
         with tempfile.TemporaryDirectory(prefix="solmu signing smoke ") as directory:
             folder = Path(directory)
-            keychain = folder / "transport.keychain-db"
+            keychain = folder / 'transport "quoted" \\ keychain.keychain-db'
             key = folder / "test.key"
             cert = folder / "test.crt"
             bundle = folder / "test.p12"
@@ -61,8 +60,10 @@ class NativeKeychainTransportTests(unittest.TestCase):
                     capture_output=True, check=True,
                 )
                 checked(b"Solmu transport smoke test" in result.stdout)
-                current = shlex.split(HELPER.security("list-keychains", "-d", "user"))
-                checked(set(shlex.split(original)).issubset(current))
+                current = HELPER.keychain_paths(
+                    HELPER.security("list-keychains", "-d", "user"),
+                )
+                checked(set(HELPER.keychain_paths(original)).issubset(current))
                 # Prove the password was not silently truncated by -i quoting.
                 HELPER.security("lock-keychain", str(keychain))
                 with self.assertRaises(RuntimeError):  # noqa: PT027 - standalone stdlib runner

@@ -5,7 +5,6 @@ import os
 import pty
 import re
 import select
-import shlex
 import signal
 import subprocess
 import sys
@@ -41,10 +40,24 @@ def security(*args):
     return result.stdout or ""
 
 
+def keychain_paths(output):
+    # security prints each path in literal outer quotes, not shell escaping.
+    # Strip only that pair, retaining embedded quotes and backslashes exactly.
+    paths = []
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if not (line.startswith('"/') and line.endswith('"')):
+            raise RuntimeError("Unexpected keychain search-list output (withheld)")
+        paths.append(line[1:-1])
+    return paths
+
+
 def import_certificate():
     keychain = os.environ["KEYCHAIN_PATH"]
     password = os.environ["KEYCHAIN_PASSWORD"]
-    original = shlex.split(security("list-keychains", "-d", "user"))
+    original = keychain_paths(security("list-keychains", "-d", "user"))
     security("create-keychain", "-p", password, keychain)
     security("set-keychain-settings", "-lut", "21600", keychain)
     security("unlock-keychain", "-p", password, keychain)
@@ -52,7 +65,7 @@ def import_certificate():
              os.environ["P12_PASSWORD"], "-T", "/usr/bin/codesign", "-k", keychain)
     security("set-key-partition-list", "-S", "apple-tool:,apple:,codesign:",
              "-s", "-k", password, keychain)
-    current = shlex.split(security("list-keychains", "-d", "user"))
+    current = keychain_paths(security("list-keychains", "-d", "user"))
     paths = list(dict.fromkeys([*original, *current, keychain]))
     security("list-keychains", "-d", "user", "-s", *paths)
 
