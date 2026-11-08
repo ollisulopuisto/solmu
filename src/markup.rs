@@ -230,6 +230,48 @@ pub fn name_mentions(text: &str, mentions: &[Mention]) -> String {
     plain(text, mentions)
 }
 
+/// Different recipients with the same name need distinct editable tokens.
+pub fn distinguish_mention_names(mentions: &mut [Mention]) {
+    let names: Vec<_> = mentions
+        .iter()
+        .map(|mention| mention.name.clone())
+        .collect();
+    let mut used: std::collections::HashSet<String> = names.iter().cloned().collect();
+    for (index, mention) in mentions.iter_mut().enumerate() {
+        if names.iter().filter(|name| **name == names[index]).count() > 1 {
+            let mut suffix = index + 1;
+            loop {
+                let candidate = format!("{} ({suffix})", names[index]);
+                if used.insert(candidate.clone()) {
+                    mention.name = candidate;
+                    break;
+                }
+                suffix += 1;
+            }
+        }
+    }
+}
+
+/// Restores display-name mentions in an editable draft, preserving its markup.
+pub fn editable_mentions(text: &str, mentions: &[Mention]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < text.len() {
+        if text[at..].starts_with('@')
+            && let Some((end, mention)) = mention_at(text, at, mentions)
+        {
+            out.push('@');
+            out.push_str(&mention.name);
+            at = end;
+        } else {
+            let character = text[at..].chars().next().expect("a character remains");
+            out.push(character);
+            at += character.len_utf8();
+        }
+    }
+    out
+}
+
 fn parse(text: &str, mentions: &[Mention]) -> Vec<Span> {
     let mut spans = Vec::new();
     let mut in_block = false;

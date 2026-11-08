@@ -2318,6 +2318,29 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
         match part {
             "history-date" => history_date_sample(app),
             "minute-gutter" => minute_gutter_sample(app),
+            "group-footer-reactions" => {
+                minute_gutter_sample(app);
+                let chat = SAMPLES[0].id;
+                let mut row = message(
+                    chat,
+                    "reaction-clock",
+                    false,
+                    crate::util::now() - 60,
+                    Content::text("OK, the clock stays clear of my reactions."),
+                );
+                row.reactions.push(Reaction {
+                    sender: ME.into(),
+                    from_me: true,
+                    emoji: "👍".into(),
+                });
+                app.conversations.get_mut(chat).unwrap().messages = vec![row];
+            }
+            "group-footer-status" => {
+                minute_gutter_sample(app);
+                let history = app.conversations.get_mut(SAMPLES[0].id).unwrap();
+                history.messages[3].status = crate::model::Delivery::Unknown;
+                history.messages[4].status = crate::model::Delivery::Failed;
+            }
             "linked-minute-gutter" => {
                 linked_sample(app);
                 minute_gutter_sample(app);
@@ -4832,12 +4855,12 @@ mod tests {
                 .unwrap_or_else(|| panic!("painted time {clock}"));
             let time_rect = egui::Rect::from_min_size(*time_pos, time.size());
             assert!(
-                time_rect.left() > body_right,
-                "own timestamp stays in the shared right-edge gutter"
+                time_rect.right() <= body_right + 12.0,
+                "own timestamp stays at its bubble's right edge"
             );
             assert!(
-                time_rect.bottom() >= body_bottom - 12.0,
-                "timestamp stays near the bubble bottom"
+                time_rect.top() >= body_bottom,
+                "timestamp is below the bubble body"
             );
             let body_rect = body
                 .rows
@@ -5727,7 +5750,7 @@ mod tests {
                     })
                     .expect("external timestamp beside cards");
                 assert!(!bounds.intersects(time), "time outside carousel frame");
-                assert!((time.bottom() - bounds.bottom()).abs() < 1.0);
+                assert!((time.top() - bounds.bottom() - 3.0).abs() < 1.0);
                 assert!(
                     last.right() <= bounds.right(),
                     "last card remains inside frame"
@@ -10611,6 +10634,99 @@ mod tests {
         assert!(ctx.memory(|memory| memory.has_focus(composer)));
     }
 
+    #[test]
+    fn failed_text_recovery_stages_for_review_without_sending_or_replacing_a_draft() {
+        for draft in ["", "Keep this draft"] {
+            let mut app = app();
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            apply_flags(&mut app, Some("group-footer-status"));
+            app.backend.record_demo_commands();
+            app.composer = draft.into();
+            render(&mut app, &ctx);
+            render(&mut app, &ctx);
+            let chat = SAMPLES[0].id;
+            let footer = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(crate::ui::conversation::footer_id(
+                        chat,
+                        "minute-gutter-4",
+                    ))
+                })
+                .expect("failed footer");
+            let at = egui::pos2(footer.left() + 12.0, footer.center().y);
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(at),
+                    primary(at, true),
+                    primary(at, false),
+                ],
+            );
+            render(&mut app, &ctx);
+            assert_eq!(
+                app.composer,
+                if draft.is_empty() {
+                    "And one more reply, all clocks share the same column"
+                } else {
+                    draft
+                }
+            );
+            assert!(
+                !app.backend
+                    .take_demo_commands()
+                    .iter()
+                    .any(|command| matches!(command, crate::backend::Command::SendText { .. }))
+            );
+        }
+    }
+
+    #[test]
+    fn reactions_never_cover_group_footer_clocks() {
+        for page in ["chat", "chat,light"] {
+            let mut app = app();
+            apply_flags(&mut app, Some(page));
+            let chat = SAMPLES[0].id;
+            let mut row = message(
+                chat,
+                "reaction-clock",
+                false,
+                1_700_000_000,
+                Content::text("OK"),
+            );
+            row.reactions.push(Reaction {
+                sender: ME.into(),
+                from_me: true,
+                emoji: "👍".into(),
+            });
+            app.conversations.get_mut(chat).unwrap().messages = vec![row];
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            render(&mut app, &ctx);
+            let footer = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(crate::ui::conversation::footer_id(
+                        chat,
+                        "reaction-clock",
+                    ))
+                })
+                .unwrap();
+            let pill = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(
+                        crate::ui::conversation::bubble_id(chat, "reaction-clock")
+                            .with(("reaction", "👍")),
+                    )
+                })
+                .unwrap();
+            assert!(
+                pill.top() >= footer.bottom(),
+                "{page}: reaction {pill:?} must be below footer {footer:?}"
+            );
+        }
+    }
+
     /// Our time or ticks open "Message info"; an incoming time opens nothing.
     #[test]
     fn clicking_the_time_or_ticks_opens_message_info() {
@@ -14468,16 +14584,35 @@ mod tests {
             .unwrap()
             .expect("the transcript was drawn");
         let chat = app.open_chat.clone().expect("a chat is open");
-        let (id, bubble) = app.conversations[&chat]
-            .messages
-            .iter()
-            .map(|message| crate::ui::conversation::bubble_id(&chat, &message.id))
-            .find_map(|id| {
-                let rect = ctx.data(|data| data.get_temp::<egui::Rect>(id.with("rect")))?;
-                (rect.top() < viewport.top() - 8.0 && rect.bottom() > viewport.top() + 8.0)
-                    .then_some((id, rect))
-            })
-            .expect("a message runs under the header");
+        let mut crossing = None;
+        for _ in 0..80 {
+            crossing = app.conversations[&chat]
+                .messages
+                .iter()
+                .find_map(|message| {
+                    let id = crate::ui::conversation::bubble_id(&chat, &message.id);
+                    let rect = ctx.data(|data| data.get_temp::<egui::Rect>(id.with("rect")))?;
+                    (rect.top() < viewport.top() - 8.0 && rect.bottom() > viewport.top() + 8.0)
+                        .then_some((id, rect))
+                });
+            if crossing.is_some() {
+                break;
+            }
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(viewport.center()),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, 12.0),
+                        modifiers: egui::Modifiers::NONE,
+                        phase: egui::TouchPhase::Move,
+                    },
+                ],
+            );
+        }
+        let (id, bubble) = crossing.expect("a deliberately scrolled message runs under the header");
         let right_click = |app: &mut App, pos: egui::Pos2| {
             let press = |pressed| egui::Event::PointerButton {
                 pos,
@@ -16764,7 +16899,7 @@ mod tests {
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
         assert!(screen.contains_rect(body), "m399 body on screen: {body:?}");
         let from = egui::pos2(body.left() + 2.0, body.center().y);
-        let to = egui::pos2(body.center().x, body.center().y);
+        let to = egui::pos2(body.right() - 2.0, body.center().y);
         let press = |pos, pressed| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
@@ -17278,6 +17413,11 @@ mod tests {
         let chat = sample_ids()[0].to_owned();
         // Scroll away from the end before extending the selection.
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
+        let viewport = app
+            .selection_view
+            .lock()
+            .unwrap()
+            .expect("the transcript viewport");
         let ids: Vec<String> = app.conversations[&chat]
             .messages
             .iter()
@@ -17286,7 +17426,7 @@ mod tests {
         let body_of = |ctx: &egui::Context, id: &str| {
             let key = crate::ui::conversation::bubble_id(&chat, id).with("body");
             ctx.data(|data| data.get_temp::<egui::Rect>(key))
-                .filter(|rect| screen.contains_rect(*rect))
+                .filter(|rect| viewport.contains_rect(*rect))
         };
         let sweepable = |content: &crate::model::Content| -> Option<String> {
             match content {
@@ -17521,6 +17661,11 @@ mod tests {
         render(&mut app, &ctx);
         let chat = sample_ids()[0].to_owned();
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1180.0, 780.0));
+        let viewport = app
+            .selection_view
+            .lock()
+            .unwrap()
+            .expect("the transcript viewport");
         let ids: Vec<String> = app.conversations[&chat]
             .messages
             .iter()
@@ -17531,7 +17676,7 @@ mod tests {
             .filter_map(|id| {
                 let key = crate::ui::conversation::bubble_id(&chat, id).with("body");
                 ctx.data(|data| data.get_temp::<egui::Rect>(key))
-                    .filter(|rect| screen.contains_rect(*rect))
+                    .filter(|rect| viewport.contains_rect(*rect))
             })
             .collect();
         bodies.sort_by(|a, b| a.top().total_cmp(&b.top()));
@@ -17614,6 +17759,12 @@ mod tests {
             })
             .count();
         assert_eq!(hints, 1, "exactly the failed message carries the hint");
+        assert!(
+            tree.nodes.iter().any(|(_, node)| node.label()
+                == Some("Restore failed text to composer")
+                && node.role() == egui::accesskit::Role::Button),
+            "retry is a named accessible button"
+        );
     }
 
     /// Every control the line under the header draws is reachable without a
@@ -19130,8 +19281,8 @@ mod tests {
                 .expect("the time is drawn");
             assert!(disc.x < title.left(), "{}: the disc leads", message.id);
             assert!(
-                !footer.intersects(bubble) && (footer.bottom() - bubble.bottom()).abs() < 1.0,
-                "{}: the time stays outside the bubble at its bottom",
+                !footer.intersects(bubble) && (footer.top() - bubble.bottom() - 3.0).abs() < 1.0,
+                "{}: the time stays below the bubble",
                 message.id
             );
             match entry.detail(app.locale) {
@@ -21206,7 +21357,7 @@ mod bubble_detail_tests {
     /// sample is drawn, and only each run's last balloon curls a tail out of
     /// its side, as far as Apple's reaches at Solmu's text size; a lone
     /// photo leaves the tail to the balloon after it. All of it fits a 1280
-    /// by 800 window.
+    /// by 1000 window.
     #[test]
     fn messages_balloons_tail_only_the_last_of_each_run() {
         // These runs belong to one day. Near midnight a real clock puts a
@@ -21217,7 +21368,7 @@ mod bubble_detail_tests {
             zone: jiff::tz::TimeZone::UTC,
             twelve_hour: false,
         });
-        const SIZE: egui::Vec2 = egui::vec2(1280.0, 800.0);
+        const SIZE: egui::Vec2 = egui::vec2(1280.0, 1000.0);
         let reach = crate::ui::widgets::balloon::TIP[0] * crate::ui::widgets::MESSAGES_SCALE;
         for page in ["bubbles,messages", "bubbles,messages-light"] {
             let mut app = app();
@@ -21295,7 +21446,7 @@ mod bubble_detail_tests {
                 .unwrap_or_else(|| panic!("{page}: {id} is drawn"));
                 assert!(
                     shown.top() >= 0.0 && shown.bottom() <= SIZE.y,
-                    "{page}: {id} is off the 1280 by 800 window at {shown:?}"
+                    "{page}: {id} is off the 1280 by 1000 window at {shown:?}"
                 );
             }
         }
@@ -21454,7 +21605,7 @@ mod bubble_detail_tests {
                 .expect("the time was drawn");
             assert!(!picture.intersects(footer), "{id}: no time over the image");
             assert!(!frame.intersects(footer), "{id}: time outside the bubble");
-            assert!((frame.bottom() - footer.bottom()).abs() < 1.0);
+            assert!((footer.top() - frame.bottom() - 3.0).abs() < 1.0);
             assert!(
                 frame.bottom() - picture.bottom() <= 7.0,
                 "{id}: no strip under the picture ({picture:?} in {frame:?})"
@@ -21478,8 +21629,7 @@ mod bubble_detail_tests {
         );
     }
 
-    /// A voice message carries its time and ticks on the duration's line,
-    /// as on the phone, rather than on a line of their own under it.
+    /// A voice message uses the same below-bubble sender-edge footer as text.
     #[test]
     fn a_voice_message_keeps_its_time_outside_without_an_extra_line() {
         let mut app = app();
@@ -21501,8 +21651,8 @@ mod bubble_detail_tests {
                 "{id}: the time is outside the bubble ({footer:?} beside {frame:?})"
             );
             assert!(
-                frame.bottom() - footer.bottom() <= 8.0,
-                "{id}: the bubble closes under the time ({footer:?} in {frame:?})"
+                (footer.top() - frame.bottom() - 3.0).abs() < 1.0,
+                "{id}: the time sits below the bubble ({footer:?} in {frame:?})"
             );
             assert!(
                 frame.height() <= 60.0,

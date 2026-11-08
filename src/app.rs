@@ -1028,6 +1028,12 @@ pub struct ComposerMention {
     name: String,
 }
 
+impl ComposerMention {
+    pub(crate) fn new(id: String, name: String) -> Self {
+        Self { id, name }
+    }
+}
+
 impl Pending {
     /// Whether the composer can preview the file as an image.
     pub fn is_picture_file(path: &std::path::Path) -> bool {
@@ -2192,6 +2198,7 @@ impl App {
                         self.actions.push(Action::PrefillComposer {
                             chat: request.chat.clone(),
                             text,
+                            mentions: Vec::new(),
                         });
                     }
                 }
@@ -7451,23 +7458,52 @@ impl App {
             .chat(chat)
             .map(|chat| chat.participants.clone())
             .unwrap_or_default();
-        let selected = std::mem::take(&mut self.composer_mentions);
+        let mut selected = std::mem::take(&mut self.composer_mentions);
+        // Disambiguated labels may contain another member's shorter name.
+        // Encode the longest first so @Mira cannot consume @Mira (2).
+        selected.sort_by_key(|mention| std::cmp::Reverse(mention.name.len()));
+        selected.retain(|mention| participants.contains(&mention.id) && !mention.name.is_empty());
+        let ambiguous: std::collections::HashSet<_> = selected
+            .iter()
+            .filter(|mention| {
+                selected
+                    .iter()
+                    .any(|other| other.name == mention.name && other.id != mention.id)
+            })
+            .map(|mention| mention.name.clone())
+            .collect();
+        selected.retain(|mention| !ambiguous.contains(&mention.name));
         let mut mentions = Vec::new();
-        for mention in selected {
-            if !participants.iter().any(|id| id == &mention.id) {
-                continue;
-            }
-            let Some(user) = mention.id.split('@').next().filter(|user| !user.is_empty()) else {
-                continue;
-            };
-            let shown = format!("@{}", mention.name);
-            if let Some(at) = find_named_mention(&text, &shown) {
-                text.replace_range(at..at + shown.len(), &format!("@{user}"));
-                if !mentions.iter().any(|id| id == &mention.id) {
-                    mentions.push(mention.id);
+        let mut encoded = String::with_capacity(text.len());
+        let mut at = 0;
+        // Match only the original draft. Newly emitted numeric wire tokens
+        // must never become another recipient's display-name match.
+        while at < text.len() {
+            let matched = selected.iter().find_map(|mention| {
+                let user = mention
+                    .id
+                    .split('@')
+                    .next()
+                    .filter(|user| !user.is_empty())?;
+                let shown = format!("@{}", mention.name);
+                (text[at..].starts_with(&shown)
+                    && find_named_mention(&text[at..], &shown) == Some(0))
+                .then_some((mention, user, shown.len()))
+            });
+            if let Some((mention, user, len)) = matched {
+                encoded.push('@');
+                encoded.push_str(user);
+                if !mentions.contains(&mention.id) {
+                    mentions.push(mention.id.clone());
                 }
+                at += len;
+            } else {
+                let character = text[at..].chars().next().expect("character remains");
+                encoded.push(character);
+                at += character.len_utf8();
             }
         }
+        text = encoded;
         // Preserve mentions in an edited draft that already contains wire
         // tokens, even when it did not originate in this composer session.
         for id in participants {
@@ -8062,7 +8098,11 @@ impl App {
                         self.app_lock.defer(crate::app_lock::Deferred::Invite(code));
                     }
                 }
-                Action::PrefillComposer { chat, text } => {
+                Action::PrefillComposer {
+                    chat,
+                    text,
+                    mentions,
+                } if mentions.is_empty() => {
                     // The chat it belongs to arrives in the request the
                     // StartChat above is holding; a template without its
                     // chat has nowhere to go.
@@ -8198,7 +8238,11 @@ impl App {
                     self.dialog = None;
                 }
             }
-            Action::PrefillComposer { chat, text } => {
+            Action::PrefillComposer {
+                chat,
+                text,
+                mentions,
+            } => {
                 // The composer belongs to whoever is reading: a template is
                 // only a start, and only where nothing is already written.
                 if self.open_chat.as_deref() != Some(chat.as_str()) {
@@ -8215,10 +8259,18 @@ impl App {
                 {
                     self.composer = text.clone();
                     self.prefilled = Some((chat, text));
-                    self.composer_mentions.clear();
+                    self.composer_mentions = mentions;
                     self.emoji_start = None;
                     self.mention_start = None;
                     self.focus_composer = true;
+                } else {
+                    self.toast(
+                        crate::i18n::gettext(
+                            self.locale,
+                            "Keep or clear your current draft before restoring this text.",
+                        )
+                        .into_owned(),
+                    );
                 }
             }
             Action::MessageYourself => {
@@ -9478,6 +9530,24 @@ impl App {
                     && self.composer.is_char_boundary(end)
                     && mention_at
                 {
+                    let name = self
+                        .composer_mentions
+                        .iter()
+                        .find(|mention| mention.id == id)
+                        .map(|mention| mention.name.clone())
+                        .unwrap_or_else(|| {
+                            let mut candidate = name.clone();
+                            let mut suffix = 2;
+                            while self
+                                .composer_mentions
+                                .iter()
+                                .any(|mention| mention.id != id && mention.name == candidate)
+                            {
+                                candidate = format!("{name} ({suffix})");
+                                suffix += 1;
+                            }
+                            candidate
+                        });
                     let mention = if everyone {
                         format!("@{}", crate::mentions::ALL_USER)
                     } else {
@@ -11452,6 +11522,7 @@ impl App {
                     self.actions.push(Action::PrefillComposer {
                         chat: request.chat,
                         text,
+                        mentions: Vec::new(),
                     });
                 }
             }
@@ -15249,6 +15320,7 @@ mod tests {
             Action::PrefillComposer {
                 chat: locked.into(),
                 text: "This is not here".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
@@ -15259,6 +15331,166 @@ mod tests {
             "the template stayed out of the open chat: {:?}",
             app.composer
         );
+    }
+
+    #[test]
+    fn normal_composer_disambiguates_two_selected_members_with_the_same_name() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let chat = "123@g.us";
+        let first = "174057861464188@s.whatsapp.net";
+        let second = "174057861464189@s.whatsapp.net";
+        let mut group = Chat::new(chat.into(), "Group".into());
+        group.participants = vec![first.into(), second.into()];
+        app.chats.push(group);
+        app.open_chat = Some(chat.into());
+        for (index, id) in [first, second, first].into_iter().enumerate() {
+            if index > 0 {
+                app.composer.push_str("and ");
+            }
+            let start = app.composer.len();
+            app.composer.push('@');
+            app.apply(
+                Action::InsertMention {
+                    id: id.into(),
+                    name: "Mira".into(),
+                    start,
+                    end: start + 1,
+                },
+                &ctx,
+            );
+        }
+        assert_eq!(app.composer, "@Mira and @Mira (2) and @Mira ");
+        let text = app.composer.clone();
+        let (wire, recipients) = app.encode_composer_mentions(chat, text);
+        assert_eq!(
+            wire,
+            "@174057861464188 and @174057861464189 and @174057861464188 "
+        );
+        assert_eq!(recipients.len(), 2);
+        assert!(recipients.contains(&first.to_owned()));
+        assert!(recipients.contains(&second.to_owned()));
+    }
+
+    #[test]
+    fn mention_encoding_never_rewrites_generated_wire_tokens() {
+        let mut app = app();
+        let chat = "123@g.us";
+        let first = "12345@s.whatsapp.net";
+        let second = "67890@s.whatsapp.net";
+        let mut group = Chat::new(chat.into(), "Group".into());
+        group.participants = vec![first.into(), second.into()];
+        app.chats.push(group);
+        app.composer_mentions = vec![
+            ComposerMention {
+                id: first.into(),
+                name: "Mira".into(),
+            },
+            ComposerMention {
+                id: second.into(),
+                name: "12345".into(),
+            },
+        ];
+        let (wire, recipients) =
+            app.encode_composer_mentions(chat, "@Mira and @12345 and *@Mira*".into());
+        assert_eq!(wire, "@12345 and @67890 and *@12345*");
+        assert_eq!(recipients, [first, second]);
+    }
+
+    #[test]
+    fn legacy_ambiguous_mention_labels_do_not_guess_a_recipient() {
+        let mut app = app();
+        let chat = "123@g.us";
+        let mut group = Chat::new(chat.into(), "Group".into());
+        group.participants = vec!["12345@s.whatsapp.net".into(), "67890@s.whatsapp.net".into()];
+        app.chats.push(group);
+        app.composer_mentions = vec![
+            ComposerMention::new("12345@s.whatsapp.net".into(), "Mira".into()),
+            ComposerMention::new("67890@s.whatsapp.net".into(), "Mira".into()),
+        ];
+        let (wire, recipients) = app.encode_composer_mentions(chat, "@Mira and @Mira".into());
+        assert_eq!(wire, "@Mira and @Mira");
+        assert!(recipients.is_empty());
+    }
+
+    #[test]
+    fn repeated_retry_mentions_round_trip_even_with_identical_display_names() {
+        let mut app = app();
+        let chat = "123@g.us";
+        let mut group = Chat::new(chat.into(), "Group".into());
+        group.participants = vec![
+            "174057861464188@s.whatsapp.net".into(),
+            "174057861464189@s.whatsapp.net".into(),
+        ];
+        app.chats.push(group);
+        let mut names = vec![
+            crate::markup::Mention {
+                user: "174057861464188".into(),
+                name: "Mira".into(),
+            },
+            crate::markup::Mention {
+                user: "174057861464189".into(),
+                name: "Mira".into(),
+            },
+        ];
+        crate::markup::distinguish_mention_names(&mut names);
+        let wire = "Hi *@174057861464188* and @174057861464189 and @174057861464188";
+        let draft = crate::markup::editable_mentions(wire, &names);
+        assert_eq!(draft, "Hi *@Mira (1)* and @Mira (2) and @Mira (1)");
+        app.composer_mentions = names
+            .iter()
+            .zip(app.chat(chat).unwrap().participants.iter())
+            .map(|(name, id)| ComposerMention::new(id.clone(), name.name.clone()))
+            .collect();
+        let (encoded, recipients) = app.encode_composer_mentions(chat, draft);
+        assert_eq!(encoded, wire);
+        assert_eq!(recipients.len(), 2);
+        assert!(recipients.contains(&"174057861464188@s.whatsapp.net".into()));
+        assert!(recipients.contains(&"174057861464189@s.whatsapp.net".into()));
+    }
+
+    #[test]
+    fn a_retry_prefill_preserves_mentions_and_never_replaces_a_draft() {
+        let ctx = egui::Context::default();
+        for draft in ["", "keep my draft"] {
+            let mut app = app();
+            let chat = "123@g.us";
+            let mut group = Chat::new(chat.into(), "Group".into());
+            group.participants = vec!["174057861464188@s.whatsapp.net".into()];
+            app.chats.push(group);
+            app.open_chat = Some(chat.into());
+            app.composer = draft.into();
+            let prior = ComposerMention::new("old".into(), "Existing".into());
+            app.composer_mentions = vec![prior.clone()];
+            let mention =
+                ComposerMention::new("174057861464188@s.whatsapp.net".into(), "Mira".into());
+            let shown = crate::markup::editable_mentions(
+                "hi *@174057861464188*",
+                &[crate::markup::Mention {
+                    user: "174057861464188".into(),
+                    name: "Mira".into(),
+                }],
+            );
+            app.apply(
+                Action::PrefillComposer {
+                    chat: chat.into(),
+                    text: shown,
+                    mentions: vec![mention.clone()],
+                },
+                &ctx,
+            );
+            if draft.is_empty() {
+                assert_eq!(app.composer, "hi *@Mira*");
+                assert_eq!(app.composer_mentions, vec![mention]);
+                let text = app.composer.clone();
+                let (wire, mentions) = app.encode_composer_mentions(chat, text);
+                assert_eq!(wire, "hi *@174057861464188*");
+                assert_eq!(mentions, vec!["174057861464188@s.whatsapp.net"]);
+            } else {
+                assert_eq!(app.composer, draft);
+                assert_eq!(app.composer_mentions, vec![prior]);
+            }
+        }
     }
 
     /// A link's template is a start, not something the reader left behind:
@@ -15284,6 +15516,7 @@ mod tests {
             Action::PrefillComposer {
                 chat: chat.into(),
                 text: "Invoice 123 is attached".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
@@ -15326,6 +15559,7 @@ mod tests {
                 Action::PrefillComposer {
                     chat: chat.into(),
                     text: "Invoice 123".into(),
+                    mentions: Vec::new(),
                 },
                 &ctx,
             );
@@ -15399,6 +15633,7 @@ mod tests {
             Action::PrefillComposer {
                 chat: chat.into(),
                 text: "Invoice 123".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
@@ -15430,6 +15665,7 @@ mod tests {
             Action::PrefillComposer {
                 chat: chat.into(),
                 text: "Invoice 123".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
@@ -15467,6 +15703,7 @@ mod tests {
             Action::PrefillComposer {
                 chat: chat.into(),
                 text: "Invoice 123".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
@@ -26063,6 +26300,7 @@ mod app_lock_tests {
             Action::PrefillComposer {
                 chat: CHAT.into(),
                 text: "Invoice 123 is attached".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
@@ -26216,6 +26454,7 @@ mod app_lock_tests {
             Action::PrefillComposer {
                 chat: CHAT.into(),
                 text: "Invoice 123 is attached".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
