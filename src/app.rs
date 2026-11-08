@@ -26039,6 +26039,88 @@ mod name_tests {
     }
 
     #[test]
+    fn participant_list_cached_keys_preserve_case_insensitive_stable_order() {
+        let mut app = app();
+        let mut chat = Chat::new("fixture@g.us".into(), "Group".into());
+        for (index, name) in ["Bob", "alice", "Alice", "bob", "alice", "BOB"]
+            .iter()
+            .enumerate()
+        {
+            let id = format!("1555000000{index}@s.whatsapp.net");
+            app.contacts.insert(
+                id.clone(),
+                Contact {
+                    id: id.clone(),
+                    full_name: Some((*name).into()),
+                    first_name: Some((*name).into()),
+                    push_name: None,
+                },
+            );
+            chat.participants.push(id);
+        }
+        let expected = [1, 2, 4, 0, 3, 5]
+            .into_iter()
+            .map(|index| {
+                let id = chat.participants[index].clone();
+                let name = app.contacts[&id].full_name.clone().unwrap();
+                (id, name)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(app.participant_list(&chat), expected);
+
+        // Equal lowercase keys retain input order, including identical names
+        // belonging to different identities, rather than sorting by id/case.
+        chat.participants.reverse();
+        let expected = [1, 3, 4, 0, 2, 5]
+            .into_iter()
+            .map(|index| {
+                let id = chat.participants[index].clone();
+                let name = app.contacts[&id].full_name.clone().unwrap();
+                (id, name)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(app.participant_list(&chat), expected);
+    }
+
+    #[test]
+    fn participant_names_cached_keys_keep_first_label_and_count_short_names() {
+        let mut app = app();
+        let mut chat = Chat::new("fixture@g.us".into(), "Group".into());
+        for (index, (full_name, first_name)) in [
+            ("Bob East", "Bob"),
+            ("alice North", "alice"),
+            ("Alice South", "Alice"),
+            ("bob West", "bob"),
+            ("alice West", "alice"),
+            ("BOB North", "BOB"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let id = format!("1555000000{index}@s.whatsapp.net");
+            app.contacts.insert(
+                id.clone(),
+                Contact {
+                    id: id.clone(),
+                    full_name: Some((*full_name).into()),
+                    first_name: Some((*first_name).into()),
+                    push_name: None,
+                },
+            );
+            chat.participants.push(id);
+        }
+        // Repeat identities must not inflate repeated short-name counts.
+        chat.participants.push(chat.participants[1].clone());
+        assert_eq!(app.participant_names(&chat), "alice x3, Bob x3");
+
+        // Changing which equal-key label arrives first changes the retained
+        // spelling, but neither ordering nor distinct-identity counts.
+        chat.participants.swap(1, 2);
+        chat.participants.swap(0, 5);
+        assert_eq!(app.participant_names(&chat), "Alice x3, BOB x3");
+    }
+
+    #[test]
     fn unnamed_and_cached_group_titles_share_counted_participant_names() {
         let mut app = app();
         let mut chat = Chat::new("fixture@g.us".into(), "Group".into());
