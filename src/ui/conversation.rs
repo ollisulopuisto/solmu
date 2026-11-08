@@ -5907,7 +5907,7 @@ fn footer_width(
                 if matches!(message.content, Content::Text { .. }) {
                     crate::i18n::gettext(locale, "Not sent · Try again").into_owned()
                 } else {
-                    NOT_SENT.to_owned()
+                    crate::i18n::gettext(locale, "Not sent").into_owned()
                 },
                 theme::medium(11.0),
                 Color32::WHITE,
@@ -6186,17 +6186,17 @@ fn footer(
                 )
             });
             if retry.clicked() {
+                let mut names = mentions_of(view, message);
+                markup::distinguish_mention_names(&mut names);
                 actions.push(Action::PrefillComposer {
                     chat: message.chat.clone(),
-                    text: markup::editable_mentions(text, &mentions_of(view, message)),
+                    text: markup::editable_mentions(text, &names),
                     mentions: message
                         .mentions
                         .iter()
-                        .map(|mention| {
-                            crate::app::ComposerMention::new(
-                                mention.id.clone(),
-                                (view.mention_names)(&mention.id),
-                            )
+                        .zip(names)
+                        .map(|(mention, name)| {
+                            crate::app::ComposerMention::new(mention.id.clone(), name.name)
                         })
                         .collect(),
                 });

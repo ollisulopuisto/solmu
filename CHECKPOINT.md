@@ -8,8 +8,9 @@ automatically sending. Original markup stays intact. Reaction pills reserve
 room below group clocks instead of overlapping them. New status/retry strings
 use gettext, including footer measurement, and retry has an accessible button
 label. Regression tests cover mention round-trip/draft retention, reaction
-separation in both themes and the accessible retry label. No catalog changes,
-merge or release. Full runtime suite remains a CI gate.
+separation in both themes and the accessible retry label. Repeated mentions now encode every occurrence, deduplicating recipient IDs;
+identical names get distinct editable labels. Media failure measurement also
+uses the translated label. No catalog changes, merge or release. Full runtime suite remains a CI gate.
 
 ## PR217 contact-key cache check repair - November 7, 2026
 

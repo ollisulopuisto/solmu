@@ -7242,11 +7242,17 @@ impl App {
                 continue;
             };
             let shown = format!("@{}", mention.name);
-            if let Some(at) = find_named_mention(&text, &shown) {
-                text.replace_range(at..at + shown.len(), &format!("@{user}"));
-                if !mentions.iter().any(|id| id == &mention.id) {
-                    mentions.push(mention.id);
-                }
+            let mut at = 0;
+            let mut found = false;
+            while let Some(relative) = find_named_mention(&text[at..], &shown) {
+                let start = at + relative;
+                let wire = format!("@{user}");
+                text.replace_range(start..start + shown.len(), &wire);
+                at = start + wire.len();
+                found = true;
+            }
+            if found && !mentions.iter().any(|id| id == &mention.id) {
+                mentions.push(mention.id);
             }
         }
         // Preserve mentions in an edited draft that already contains wire
@@ -15058,6 +15064,42 @@ mod tests {
             "the template stayed out of the open chat: {:?}",
             app.composer
         );
+    }
+
+    #[test]
+    fn repeated_retry_mentions_round_trip_even_with_identical_display_names() {
+        let mut app = app();
+        let chat = "123@g.us";
+        let mut group = Chat::new(chat.into(), "Group".into());
+        group.participants = vec![
+            "174057861464188@s.whatsapp.net".into(),
+            "174057861464189@s.whatsapp.net".into(),
+        ];
+        app.chats.push(group);
+        let mut names = vec![
+            crate::markup::Mention {
+                user: "174057861464188".into(),
+                name: "Mira".into(),
+            },
+            crate::markup::Mention {
+                user: "174057861464189".into(),
+                name: "Mira".into(),
+            },
+        ];
+        crate::markup::distinguish_mention_names(&mut names);
+        let wire = "Hi *@174057861464188* and @174057861464189 and @174057861464188";
+        let draft = crate::markup::editable_mentions(wire, &names);
+        assert_eq!(draft, "Hi *@Mira (1)* and @Mira (2) and @Mira (1)");
+        app.composer_mentions = names
+            .iter()
+            .zip(app.chat(chat).unwrap().participants.iter())
+            .map(|(name, id)| ComposerMention::new(id.clone(), name.name.clone()))
+            .collect();
+        let (encoded, recipients) = app.encode_composer_mentions(chat, draft);
+        assert_eq!(encoded, wire);
+        assert_eq!(recipients.len(), 2);
+        assert!(recipients.contains(&"174057861464188@s.whatsapp.net".into()));
+        assert!(recipients.contains(&"174057861464189@s.whatsapp.net".into()));
     }
 
     #[test]
