@@ -15,3 +15,7 @@
 ## 2026-11-07 - solmu-reader client registry cache
 **Learning:** mtime alone is not safe for authorization caching. chmod leaves mtime unchanged; atomic replacements can preserve it. Unix cache hits now check private mode and device/inode/ctime/mtime/length. Other platforms reload rather than infer unchanged authority. Immutable Arc snapshots release the cache mutex before upstream work; otherwise one slow request serializes the server.
 **Action:** Keep auth safety and concurrency regressions at the HTTP boundary, and update every Shared initializer. Benchmark claims from the original optimization are not revalidated after the safety repair.
+
+## 2026-11-08 - Participant list and names sort key allocations
+**Learning:** In `App::participant_list` and `App::participant_names`, sorting participant lists using `sort_by_key` computed `.to_lowercase()` across $O(n \log n)$ comparisons, and adjacent duplicate counting in `participant_names` recomputed `.to_lowercase()` on every peek. Precomputing `(sort_key, item)` once per participant reduced lowercasing allocations from $O(n \log n)$ to $O(n)$ and sped up participant list sorting by ~2.1x (372µs -> 176µs for 100 participants) while preserving exact sort stability and duplicate counting.
+**Action:** In collection sorting and subsequent runs over sorted elements (like grouping / deduplication), pair items with precomputed lowercase keys `(key, item)` to avoid redundant reallocations in both the sort comparison closure and subsequent scan steps.

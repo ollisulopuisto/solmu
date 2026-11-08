@@ -3055,7 +3055,18 @@ impl App {
                 named.push((id.clone(), name));
             }
         }
-        named.sort_by_key(|(_, name)| name.trim_start_matches('~').to_lowercase());
+        // Performance optimization: Precompute the lowercase sort key once per
+        // participant into a (sort_key, id, name) tuple. Sorting via `sort_by_key`
+        // recomputed `to_lowercase()` on every comparison (O(n log n) allocations).
+        let mut keyed_named: Vec<(String, String, String)> = named
+            .into_iter()
+            .map(|(id, name)| (name.trim_start_matches('~').to_lowercase(), id, name))
+            .collect();
+        keyed_named.sort_by(|a, b| a.0.cmp(&b.0));
+        let mut named: Vec<(String, String)> = keyed_named
+            .into_iter()
+            .map(|(_, id, name)| (id, name))
+            .collect();
         numbers.sort_by(|a, b| a.1.cmp(&b.1));
         named.extend(numbers);
         if let Some(me) = me
@@ -3126,15 +3137,21 @@ impl App {
                 names.push(self.short_name(id, name.trim_start_matches('~')).to_owned());
             }
         }
-        names.sort_by_key(|name| name.to_lowercase());
+        // Performance optimization: Precompute the lowercase sort key once per
+        // participant into a (sort_key, name) tuple. `sort_by_key` recomputed
+        // `to_lowercase()` across O(n log n) comparisons, and adjacent duplicate
+        // counting recomputed `to_lowercase()` on every peek. Reusing the precomputed
+        // key reduces lowercase String allocations to O(n).
+        let mut keyed_names: Vec<(String, String)> = names
+            .into_iter()
+            .map(|name| (name.to_lowercase(), name))
+            .collect();
+        keyed_names.sort_by(|a, b| a.0.cmp(&b.0));
         let mut counted = Vec::new();
-        let mut iter = names.into_iter().peekable();
-        while let Some(name) = iter.next() {
+        let mut iter = keyed_names.into_iter().peekable();
+        while let Some((key, name)) = iter.next() {
             let mut count = 1;
-            while iter
-                .peek()
-                .is_some_and(|next| next.to_lowercase() == name.to_lowercase())
-            {
+            while iter.peek().is_some_and(|(next_key, _)| *next_key == key) {
                 iter.next();
                 count += 1;
             }
