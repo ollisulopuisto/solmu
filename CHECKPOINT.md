@@ -1,5 +1,106 @@
 # Fast-beeper coordination and development checkpoint
 
+## Speech-tail streaks and speaker-change shadows - November 8, 2026
+
+Branch `feat/notched-streaks-group-identity`, based on main 3fe1cb0 including
+PR244-245. WhatsApp-style bubbles keep a triangular top sender-side tail on
+every message. Eligible same-source/sender/minute text intersects by 6 points;
+the older lower edge and shadow paint in front. Quotes, forwarded/edited rows,
+status changes, pending/failed rows, reactions on the earlier row, pins/stars
+and selection break overlap. The Messages skin keeps its own geometry.
+
+Group speaker changes use a coloured body-and-tail drop shadow, with no
+accent rail, seam outline or raised top-edge border. Names and avatars stay.
+Hue is assigned to a complete loaded sender streak before viewport culling:
+12 candidates at 30-degree steps, at least 120 degrees from the previous streak,
+then closest to the sender-ID preference. Same-speaker rows keep the hue;
+returning speakers can change hue, and loading earlier history can recolour
+later streaks. Speaker transition contrast takes priority over identity colour.
+
+Reactions and time/status flow in one wrapping below-bubble row, preserving
+individual message targets. Repeated same-state ticks collapse within eligible
+streaks. Linked timelines use the shared renderer and reserve painted tail
+bounds outside the network-chip lane. Covered padding is not the next message's
+input target; current-pass geometry prevents a stale scroll position from
+creating a false overlap.
+
+Verification: strict all-feature/all-target clippy, fmt and actual demo build
+pass. Focused native harness, with unrelated test modules omitted and changed
+production renderers unchanged: 36 tests pass, including 11 demo regressions
+for 7 exact 6px intersections, both themes at 620/1180, tails, footer/reaction
+bounds, body/tail shadow colour and no extra border shapes, colliding sender
+hashes plus 1000 speaker changes, scroll/wrapped reactions, seam right-click,
+selection, time/tick dialogs, failed-draft recovery and linked chip geometry.
+The old reaction regression now checks noncollision instead of forcing two
+rows, as required by the approved compact-footer design. Full native runtime
+suite remains a CI gate, not a claimed local pass.
+
+Actual synthetic demo captures inspected in both themes, including 3x seam
+zoom after removing the last shadow-spill line. Existing narrow chat-header
+crowding is outside this patch. No screenshot/media files committed. Review
+media delivered separately; PR media-upload availability must be reported.
+No merge, release or DMG dispatch. Revert this PR to roll back.
+
+PR246 review repair: compute one adjacent-pair boundary table before rendering,
+including pin-notice times and the following row's unread divider. Both
+receipt collapsing and physical overlap consume that table. Runtime regression
+uses outgoing18:40:01, pin18:40:10, outgoing18:40:15 and verifies both receipts
+retain slots. The8pt triangular-tail inset is WhatsApp-only; Messages retains
+its original17pt sender edge in both directions.38 focused native tests pass,
+strict all-feature/all-target clippy passes. GitHub image upload retry: three
+PR navigation attempts reset the browser connection before loading; neutral
+page loads. No image URL produced. Maintainer can drag the synthetic PNGs into
+the PR-description editor; no media committed. CI must run on the repair head.
+
+Full runtime CI on544bc78 found11 failures (1905 passed,8 ignored), so that
+head is not merge-ready. The compact-footer scope inherited vertical gaps and
+horizontal minimum row height even without reactions. Set the scope's vertical
+spacing to zero, retain the explicit3pt footer gap, and use a direct15pt
+metadata slot when no reaction row exists. Use wrapping layout only for actual
+reactions. Forwarded text keeps its original top padding. These production
+changes preserve the older media, call, album-height, selection/right-click,
+keyboard-link and initial-scroll contracts instead of changing their tests.
+Expanded focused harness includes every failed test unchanged, its helpers
+and the full bubble-detail test module:55 tests pass. Changed production code
+is the PR's renderer. Strict all-feature/all-target clippy, fmt and demo build
+pass. Fresh dark/wide and light/narrow synthetic captures inspected. Full CI
+still needs to validate the next repair head; do not merge based on local tests.
+
+Maintainer waived PR screenshot embedding ("Okay nvm screenshot"); stop upload
+work, keep media out of the repository. New request: add headroom in overlapped
+bubbles. Continuations now add the6pt overlap to their normal9pt top padding,
+leaving9pt visible between the older edge and the next text. Runtime geometry
+checks this in both themes and widths. Restrict enlarged padding to actual
+streak members so ordinary text retains its original6/5pt vertical margins.
+
+Full CI one9968fb:1913 passed,3 failed,8 ignored. Expanded the local harness
+again with the full long-chat module and Ctrl+End/new-arrival regression.
+ScrollArea applies offset after layout: when new row measurements had zero
+net height correction, no discard occurred and the frame painted at the old
+offset. Request a discard whenever the output offset changed, even with zero
+height correction.60 focused tests pass, plus12 repeated keyboard phone-link
+runs and4 Ctrl+End runs. The phone-link CI failure is intermittent and is not
+claimed resolved until full CI verifies the new head. No test weakened.
+Strict all-feature/all-target clippy, fmt and demo build pass. Fresh synthetic
+dark/wide, light/narrow and3x headroom crop inspected. Separate stepped-card
+width request is approved for its own PR after this CI/headroom work, not here.
+
+Full CI on2c9a493 confirms both scroll regressions fixed. Remaining failures:
+wrapped-phone reverse Tab and two tour sender-name clicks (1913 pass,3 fail).
+Reproduced the sender helper selecting y502 while wheel easing moved the name
+to421/371 during press/release; the helper now waits for three stable frames
+before choosing the same click point. All original panel assertions remain.
+Reproduced the exact phone failure using DejaVu-only fontconfig: one phone hit
+region in the initial narrow frame became two after layout settled, invalidating
+the saved last-region ID. Finish five narrow frames before recording IDs and
+expand the unchanged focus/popup/copy/NewContact contract to360/400/520pt.
+All78 focused native tests, including the full tour module, pass; the phone
+contract also passes all three widths with DejaVu-only fonts. Strict clippy
+and fmt pass. No additional production changes in this test-input repair.
+Full new-head CI remains required. Actual timestamp/streak combination captures
+(one/two/three minutes, both directions, reactions, sender change) inspected and
+delivered privately; no behaviour changes or temporary fixtures retained.
+
 ## Linked network chip lane - November 8, 2026
 
 Instinct, branch `fix/linked-network-chip-overlap`, based on main 2498c7b

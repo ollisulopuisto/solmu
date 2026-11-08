@@ -902,6 +902,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                                 original_message,
                                                 visible.get(visible_index + 1).copied(),
                                             ),
+                                            visible_index
+                                                .checked_sub(1)
+                                                .and_then(|index| visible.get(index).copied()),
+                                            visible.get(visible_index + 1).copied(),
                                             // The shared renderer also aligns outgoing bubbles to
                                             // this edge. Do not restore the full timeline width:
                                             // that would reclaim the network chip's reserved lane.

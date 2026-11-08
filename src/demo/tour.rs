@@ -877,6 +877,25 @@ mod tests {
                 );
             }
         }
+        // A wheel notch eases over several frames. A same-pass scroll
+        // repaint can put the bubble in view before that motion has ended;
+        // finish the motion before choosing the name's click position.
+        let mut previous = None;
+        let mut settled = 0;
+        for _ in 0..60 {
+            frame(app, tour, ctx, Vec::new());
+            let rect = Tour::bubble(app, ctx, message).expect("the bubble is on screen");
+            if previous.is_some_and(|last: Rect| (last.top() - rect.top()).abs() < 0.1) {
+                settled += 1;
+                if settled >= 3 {
+                    break;
+                }
+            } else {
+                settled = 0;
+            }
+            previous = Some(rect);
+        }
+        assert!(settled >= 3, "the sender must stop moving before clicking");
         let rect = Tour::bubble(app, ctx, message).expect("the bubble is on screen");
         let pos = rect.left_top() + egui::vec2(18.0, 14.0);
         for pressed in [true, false] {
