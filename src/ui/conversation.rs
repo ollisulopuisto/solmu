@@ -5676,6 +5676,8 @@ fn bubble_frame(
 
 /// Minimum shared width for cards inside message bubbles.
 const CARD_WIDTH: f32 = 320.0;
+/// Card widths grow by this many points; the viewport cap is the final step.
+const CARD_WIDTH_STEP: f32 = 80.0;
 const CAROUSEL_CARD_WIDTH: f32 = 280.0;
 /// Location cards: a map preview across the top, then the details.
 const LOCATION_CARD_WIDTH: f32 = 300.0;
@@ -5719,12 +5721,21 @@ fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) ->
             _ => false,
         };
     card.then(|| {
-        let floor = CARD_WIDTH.min(cap).max(0.0);
-        natural_text_width(ui, view, message, cap).map_or(floor, |width| width.clamp(floor, cap))
+        stepped_card_width(
+            natural_text_width(ui, view, message, cap).unwrap_or(CARD_WIDTH),
+            cap,
+        )
     })
 }
 
-/// Widest wrapped text row, including footer space on the last line.
+/// Shared 320/400/480/... content widths, with one narrower final viewport step.
+/// Round up so text that needed a wider card is never squeezed by the rounding.
+fn stepped_card_width(natural: f32, cap: f32) -> f32 {
+    let steps = ((natural - CARD_WIDTH).max(0.0) / CARD_WIDTH_STEP).ceil();
+    (CARD_WIDTH + steps * CARD_WIDTH_STEP).min(cap.max(0.0))
+}
+
+/// Widest wrapped body-text row. Metadata sits outside the bubble.
 fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
     let palette = view.palette;
     let text = match &message.content {
@@ -13300,5 +13311,36 @@ mod copy_url_tests {
             vec![url, "https://other.com"]
         );
         assert!(super::copyable_urls("No web link; email person@example.com").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod card_width_tests {
+    use super::*;
+
+    #[test]
+    fn cards_round_up_in_shared_steps_and_stop_at_the_viewport() {
+        for (natural, cap, expected) in [
+            (0.0, 800.0, 320.0),
+            (319.0, 800.0, 320.0),
+            (320.0, 800.0, 320.0),
+            (320.1, 800.0, 400.0),
+            (400.0, 800.0, 400.0),
+            (400.1, 800.0, 480.0),
+            (480.0, 800.0, 480.0),
+            (481.0, 800.0, 560.0),
+            (620.0, 650.0, 640.0),
+            (641.0, 650.0, 650.0),
+            (1000.0, 650.0, 650.0),
+            (350.0, 375.0, 375.0),
+            (10.0, 250.0, 250.0),
+            (500.0, 0.0, 0.0),
+        ] {
+            assert_eq!(
+                stepped_card_width(natural, cap),
+                expected,
+                "natural {natural}, cap {cap}"
+            );
+        }
     }
 }

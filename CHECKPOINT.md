@@ -101,6 +101,23 @@ Full new-head CI remains required. Actual timestamp/streak combination captures
 (one/two/three minutes, both directions, reactions, sender change) inspected and
 delivered privately; no behaviour changes or temporary fixtures retained.
 
+## Stepped card widths - November 8, 2026
+
+Instinct, branch `feat/stepped-card-widths`, based on main3fe1cb0. Separate
+from PR246: common card content width320pt; wider body text rounds up to
+400/480/560/...pt, capped by the available viewport. Ordinary text stays at
+its natural width. Preserve location/image/carousel-specific sizing.
+The offline `card-widths` page compares file, voice, reply, preview, two
+wider cards with different body lengths, and ordinary text. Tests cover exact
+bucket boundaries and actual bubble bounds in both themes at620/1180pt.
+Focused native harness omits unrelated test modules, keeps production sources
+unchanged:95 tests pass, including both new width tests. Strict all-feature/
+all-target clippy and fmt pass. Actual demo rebuild and dark/light before/
+after crops inspected; narrow-window viewport caps also visually inspected.
+No review media committed. Screenshots delivered privately; no further GitHub
+media-upload retries. No merge or release dispatch. Full CI still required.
+Rollback: revert this focused change. PR246 remains independent.
+
 ## Linked network chip lane - November 8, 2026
 
 Instinct, branch `fix/linked-network-chip-overlap`, based on main 2498c7b
