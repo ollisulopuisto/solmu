@@ -9,6 +9,8 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Keep macOS package-signing and notarization passwords out of process arguments and error output during release builds.
+
 ## v0.24.7
 
 - Message widths snap to 80-point steps: short text uses 80/160/240-point content widths, cards start at 320 points, and longer text/cards share the same larger steps within the window.

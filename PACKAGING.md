@@ -251,3 +251,20 @@ the optional delegate method is installed. Adding a selector after winit assigne
 its delegate does not by itself register notification delivery. Dock reopen
 remains a separate direct delegate callback. The existing headless loop handles
 the ShowWindow action by creating a fresh window, without restarting accounts.
+
+## macOS credential transport adapter
+
+The macOS Release workflow keeps native-packages pinned to 0.11.0 but runs
+its CLI through `packaging/macos/secure_native_packages.rb`. The local adapter
+intercepts signing commands before spawning them: `security -i` receives
+quoted commands on stdin, while notary profile credentials use a private
+no-echo terminal prompt. Passwords are not command arguments or diagnostic
+output. The dependency's full-credential validation and temporary-keychain
+lifecycle remain in place; missing certificate credentials fail before
+notarization. Other packaging targets are unchanged.
+
+This is adapter code, not copied or modified dependency source. Remove it
+when a reviewed upstream release provides safe credential transport. The
+wrapper refuses another gem version and unknown password-bearing commands
+rather than silently falling back to argv. The dedicated macOS CI uses only
+a disposable, self-signed fixture identity and dummy credentials.
