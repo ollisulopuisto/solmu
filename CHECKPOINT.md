@@ -641,3 +641,5 @@ No migrations; rollback is this PR's revert.
 ## README refresh (2026-11-09)
 
 Review, owner Instinct, branch `docs/readme-refresh-20261109`. No root AGENTS/BOARD/TODO file exists at the surveyed main. Rewrite README against the Beeper adapter, Mac launcher, current packaging and scheduler implementation. Separate current code from live/native acceptance; keep upstream credit. No new screenshots or illustrations. Source checked against current adapter, launcher and release scripts. All relative links pass; Markdown rendered in Chromium and actual top/install/build/privacy sections visually inspected. No screenshots added to the repository. CI and PR review pending.
+
+README review follow-up: corrected linked macOS scheduler removal guide to actual zapfast paths, both installed binary names and control/API-token copies; preserve queue/logs by default and require service stop/reconciliation. Documented existing launcher binary/plist mismatch without changing runtime code or deploying a service.
