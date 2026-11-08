@@ -9,6 +9,10 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.7
+
+- Message widths snap to 80-point steps: short text uses 80/160/240-point content widths, cards start at 320 points, and longer text/cards share the same larger steps within the window.
+
 - Cmd-R (Ctrl-R outside macOS) in a linked chat quotes the latest loaded incoming message, selects its exact bridge/account/chat and focuses the composer. Newer outgoing messages and search filters do not change the target; nothing is sent automatically.
 
 - Text streaks overlap with the older bubble in front and keep a triangular speech tail on every bubble. Group speaker changes use contrasting colored drop shadows, including their tails, while names and avatars remain visible.

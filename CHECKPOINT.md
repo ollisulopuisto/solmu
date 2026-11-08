@@ -1,5 +1,18 @@
 # Fast-beeper coordination and development checkpoint
 
+## v0.24.7 release preparation - November 8, 2026
+
+Separate version/changelog PR rebased on merged main 0ff5f22 (includes #248 and #249). Move the existing Unreleased notes into v0.24.7 and
+include Cmd-R native replies and the merged stepped-width behavior so the existing automatic What's New
+and Help menu display the new features. Cargo.toml and Cargo.lock agree.
+No new UI, backend operation or packaging path. Maintainer merges this PR.
+
+After merge, re-read latest main and use the existing Release workflow with
+macos_arch=arm64, standard hosted runners on the public repository and direct
+release assets only. No Actions artifacts or multi-platform tag run. Signing,
+notarization and mounted-DMG verification remain workflow gates. No release
+is claimed before those gates and release-asset verification finish.
+
 ## Cmd-R replies on the latest incoming bridge - November 8, 2026
 
 Separate branch `feat/reply-latest-incoming-bridge`, based on main 3cea59b.
