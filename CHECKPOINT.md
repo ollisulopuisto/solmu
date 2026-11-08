@@ -1,5 +1,23 @@
 # Fast-beeper coordination and development checkpoint
 
+## Linked network chip lane - November 8, 2026
+
+Instinct, branch `fix/linked-network-chip-overlap`, based on main 2498c7b
+including merged PR241-243. The linked renderer reserved room for an outgoing
+network chip, then passed the full timeline edge into the shared bubble
+renderer. That edge widened the bubble back into the chip lane. Pass the
+reserved area's right edge instead. Incoming layout and grouped footers stay
+unchanged; no protocol, read-state, send or storage changes.
+
+Add the `linked-chip-lanes` offline fixture and a runtime geometry regression
+for outgoing/incoming marks at 620 and 1180 points in both themes. The focused
+native harness (unrelated test modules omitted, production renderer unchanged)
+passes; restoring the old edge fails with 12 points of outgoing overlap.
+Actual demo binary captures at wide/dark and narrow/light were inspected:
+marks stay outside bubbles, wrapped text and grouped footers remain readable.
+Review media stays outside the repository. Full native runtime suite is a CI
+gate, not a claimed local pass. No merge or new DMG; revert this PR to roll back.
+
 ## PR242 restored linked source - November 8, 2026
 
 Live read scope records a first-arriving exact linked member when that update

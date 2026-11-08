@@ -9,6 +9,8 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Keep outgoing linked-chat network icons outside message bubbles.
+
 - Opening or marking a linked person read clears the exact unlocked source chats shown together, not only the representative chat. Live updates and returning focus use the same scope; incognito and hidden-account protections remain.
 
 - Save all exports are owner-only on Unix, rather than inheriting a world-readable default mode.

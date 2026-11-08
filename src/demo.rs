@@ -2341,6 +2341,14 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 history.messages[3].status = crate::model::Delivery::Unknown;
                 history.messages[4].status = crate::model::Delivery::Failed;
             }
+            "linked-chip-lanes" => {
+                linked_sample(app);
+                minute_gutter_sample(app);
+                // Start the WhatsApp run with an outgoing message so its
+                // right-hand network chip is exercised as well as Signal's
+                // incoming left-hand chip.
+                app.conversations.get_mut(SAMPLES[0].id).unwrap().messages[0].from_me = true;
+            }
             "linked-minute-gutter" => {
                 linked_sample(app);
                 minute_gutter_sample(app);
@@ -4491,6 +4499,62 @@ fn contacts_by_id(app: &App) -> HashMap<&str, &Contact> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn linked_network_chips_never_overlap_bubbles_in_either_direction() {
+        for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+            for width in [620.0, 1180.0] {
+                let mut app = app();
+                apply_flags(&mut app, Some("linked-chip-lanes"));
+                app.settings.theme = theme;
+                let ctx = egui::Context::default();
+                crate::theme::install(&ctx);
+                for _ in 0..3 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 1400.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let ctx = ui.ctx().clone();
+                            app.background_frame(&ctx);
+                            app.frame_ui(ui);
+                        },
+                    );
+                    output.textures_delta.clear();
+                }
+                let geometry = ctx
+                    .data(|data| {
+                        data.get_temp::<Vec<(egui::Rect, egui::Rect, bool)>>(egui::Id::new(
+                            "linked-chip-geometry",
+                        ))
+                    })
+                    .unwrap();
+                assert!(geometry.iter().any(|(_, _, own)| *own));
+                assert!(geometry.iter().any(|(_, _, own)| !*own));
+                for (bubble, chip, own) in geometry {
+                    assert!(
+                        !bubble.intersects(chip),
+                        "network chip overlaps bubble: width={width}, own={own}, bubble={bubble:?}, chip={chip:?}"
+                    );
+                    if own {
+                        assert!(
+                            chip.left() >= bubble.right(),
+                            "outgoing chip must stay outside the bubble"
+                        );
+                    } else {
+                        assert!(
+                            chip.right() <= bubble.left(),
+                            "incoming chip must stay outside the bubble"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn linked_loading_fixture_marks_a_linked_member_as_fetching() {
         let mut app = app();
