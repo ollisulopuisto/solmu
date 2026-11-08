@@ -11,6 +11,9 @@ version in Cargo.toml is bumped.
 
 - Opening or marking a linked person read clears the exact unlocked source chats shown together, not only the representative chat. Live updates and returning focus use the same scope; incognito and hidden-account protections remain.
 
+- Save all exports are owner-only on Unix, rather than inheriting a world-readable default mode.
+- Save all keeps attachments with colliding sanitized filenames separate and checks the batch before writing.
+
 ## v0.24.5
 
 - Day changes have more room above and below their labels in ordinary and linked timelines.
