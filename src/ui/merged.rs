@@ -446,7 +446,28 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         && app.picture_edit.is_none()
         && app.sticker_view.is_none()
         && !egui::Popup::is_any_open(ui.ctx());
-    if can_resume && ui.input_mut(|input| input.consume_shortcut(&incoming_bridge_shortcut())) {
+    let incoming_shortcut = can_resume
+        && ui.input_mut(|input| {
+            let shortcut = incoming_bridge_shortcut();
+            let mut pressed = false;
+            input.events.retain(|event| {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                    && *key == shortcut.logical_key
+                    && modifiers.matches_exact(shortcut.modifiers)
+                {
+                    pressed = true;
+                    return false;
+                }
+                true
+            });
+            pressed
+        });
+    if incoming_shortcut {
         if app.editing.is_some() || state.reply.is_some() || !app.pending.is_empty() {
             app.toast(crate::i18n::gettext(app.locale,
                 "Finish or cancel the current reply, edit or attachment before changing bridges").as_ref());
@@ -2024,6 +2045,10 @@ mod tests {
         );
     }
     fn command_r(app: &mut App, ctx: &egui::Context, chat: &Chat) {
+        reply_key(app, ctx, chat, egui::Modifiers::COMMAND);
+    }
+
+    fn reply_key(app: &mut App, ctx: &egui::Context, chat: &Chat, modifiers: egui::Modifiers) {
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -2035,7 +2060,7 @@ mod tests {
                     physical_key: None,
                     pressed: true,
                     repeat: false,
-                    modifiers: egui::Modifiers::COMMAND,
+                    modifiers,
                 }],
                 ..Default::default()
             },
@@ -2140,6 +2165,54 @@ mod tests {
             Some((valid[0].clone(), "same-id".into()))
         );
         assert!(incoming_reply(&app, &[]).is_none());
+    }
+
+    #[test]
+    fn modified_r_keeps_filtered_reply_shortcut_and_other_modifiers() {
+        for modifiers in [
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT | egui::Modifiers::ALT,
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Modifiers::COMMAND | egui::Modifiers::ALT,
+        ] {
+            let (wa, tg, mut person) = ada_pair();
+            person.primary = Member::of(&wa);
+            let (_dir, mut app, ctx) =
+                linked_app(vec![wa.clone(), tg.clone()], vec![person.clone()]);
+            for (chat, timestamp, text) in [(&wa, 10, "meeting"), (&tg, 20, "unrelated")] {
+                let mut message = sample_message(&chat.id, text, timestamp);
+                message.content = crate::model::Content::text(text);
+                app.conversations.insert(
+                    chat.id.clone(),
+                    crate::app::Conversation {
+                        messages: vec![message],
+                        complete: true,
+                        ..Default::default()
+                    },
+                );
+            }
+            let key = egui::Id::new(("linked-person-state", &person.members));
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    key,
+                    State {
+                        search: "meeting".into(),
+                        ..Default::default()
+                    },
+                )
+            });
+            reply_key(&mut app, &ctx, &wa, modifiers);
+            let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+            if modifiers == latest_reply_shortcut().modifiers {
+                assert_eq!(
+                    state.reply,
+                    Some((person.members[0].clone(), "meeting".into()))
+                );
+                assert_eq!(state.destination, Some(person.members[0].clone()));
+            } else {
+                assert!(state.reply.is_none());
+                assert_eq!(state.destination, person.primary);
+            }
+        }
     }
 
     #[test]

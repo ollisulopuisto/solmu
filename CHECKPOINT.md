@@ -21,11 +21,18 @@ both themes: Ada's incoming Signal message is quoted despite newer outgoing
 messages. No real conversation screenshot or review media is committed.
 
 Validation: focused native target runs production code unchanged with unrelated
-test modules omitted. Full linked-view and keyboard modules pass (65 tests,
+test modules omitted. Full linked-view and keyboard modules pass (66 tests,
 1 ignored); strict all-feature,
 all-target clippy, fmt and demo build pass. Full runtime CI remains required.
 AGENTS.md and dedicated TODO/BUGS/ROADMAP ledgers are absent; existing fork
 README/routing docs take precedence over stale inherited WhatsApp-only text.
+
+Review repair: egui shortcut matching accepts extra modifiers. Consume only
+key-press events whose modifiers exactly match plain Cmd/Ctrl-R, leaving
+Cmd-Option-Shift-R for the existing filtered handler. UI regression runs both
+handlers with a matching WhatsApp message and a newer unrelated incoming
+Signal message; filtered reply keeps WhatsApp. Cmd-Shift-R and Cmd-Option-R
+also leave routing unchanged. 66 focused native tests pass, 1 ignored.
 
 To do: full CI and review on the PR head; maintainer merge only. No merge,
 release or DMG dispatched. Revert the focused PR to remove the shortcut.
