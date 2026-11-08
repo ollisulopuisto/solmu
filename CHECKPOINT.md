@@ -85,6 +85,22 @@ Strict all-feature/all-target clippy, fmt and demo build pass. Fresh synthetic
 dark/wide, light/narrow and3x headroom crop inspected. Separate stepped-card
 width request is approved for its own PR after this CI/headroom work, not here.
 
+Full CI on2c9a493 confirms both scroll regressions fixed. Remaining failures:
+wrapped-phone reverse Tab and two tour sender-name clicks (1913 pass,3 fail).
+Reproduced the sender helper selecting y502 while wheel easing moved the name
+to421/371 during press/release; the helper now waits for three stable frames
+before choosing the same click point. All original panel assertions remain.
+Reproduced the exact phone failure using DejaVu-only fontconfig: one phone hit
+region in the initial narrow frame became two after layout settled, invalidating
+the saved last-region ID. Finish five narrow frames before recording IDs and
+expand the unchanged focus/popup/copy/NewContact contract to360/400/520pt.
+All78 focused native tests, including the full tour module, pass; the phone
+contract also passes all three widths with DejaVu-only fonts. Strict clippy
+and fmt pass. No additional production changes in this test-input repair.
+Full new-head CI remains required. Actual timestamp/streak combination captures
+(one/two/three minutes, both directions, reactions, sender change) inspected and
+delivered privately; no behaviour changes or temporary fixtures retained.
+
 ## Linked network chip lane - November 8, 2026
 
 Instinct, branch `fix/linked-network-chip-overlap`, based on main 2498c7b
