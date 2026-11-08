@@ -1,5 +1,35 @@
 # Fast-beeper coordination and development checkpoint
 
+## Cmd-R replies on the latest incoming bridge - November 8, 2026
+
+Separate branch `feat/reply-latest-incoming-bridge`, based on main 3cea59b.
+Cmd-R (Ctrl-R elsewhere) in a valid linked-person view selects the newest
+loaded incoming, non-revoked message across valid member chats, quotes it on
+its exact source account/chat and focuses the composer. Newer outgoing rows,
+search text and source filters do not select a different message. Timestamp
+ties use the timeline's chat/history-order/message-id ordering. No incoming
+loaded means no route change. The saved primary destination is unchanged.
+Existing reply, edit or staged attachment must be finished/cancelled first;
+modal dialogs, previews, recording and popups do not retarget the composer.
+No send, remote fetch, new settings or backend operation is added.
+
+Plain Cmd-R previously had no binding. The existing Cmd-Option-Shift-R
+filtered-search reply and selected-message reply actions keep their semantics.
+This is a keyboard behavior change using the existing composer and quote UI,
+not a layout redesign. Synthetic actual keyboard captures were inspected in
+both themes: Ada's incoming Signal message is quoted despite newer outgoing
+messages. No real conversation screenshot or review media is committed.
+
+Validation: focused native target runs production code unchanged with unrelated
+test modules omitted. Full linked-view and keyboard modules pass (65 tests,
+1 ignored); strict all-feature,
+all-target clippy, fmt and demo build pass. Full runtime CI remains required.
+AGENTS.md and dedicated TODO/BUGS/ROADMAP ledgers are absent; existing fork
+README/routing docs take precedence over stale inherited WhatsApp-only text.
+
+To do: full CI and review on the PR head; maintainer merge only. No merge,
+release or DMG dispatched. Revert the focused PR to remove the shortcut.
+
 ## Speech-tail streaks and speaker-change shadows - November 8, 2026
 
 Branch `feat/notched-streaks-group-identity`, based on main 3fe1cb0 including

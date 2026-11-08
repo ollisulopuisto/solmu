@@ -1145,6 +1145,13 @@ const FIND: Shortcut = Shortcut {
         accelerator: "Super+KeyF",
     }),
 };
+const INCOMING_BRIDGE: Shortcut = Shortcut {
+    id: "incoming-bridge",
+    keys: &[(Modifiers::COMMAND, Key::R)],
+    label: Some("Ctrl+R"),
+    description: Some("Reply to the latest incoming message on its bridge in a linked chat"),
+    menu: None,
+};
 const SCROLL_BOTTOM: Shortcut = Shortcut {
     id: "scroll-bottom",
     keys: &[(Modifiers::COMMAND, Key::End)],
@@ -1369,6 +1376,7 @@ pub static REGISTRY: &[Row] = &[
     Row::Binding(&SEARCH_CHATS),
     Row::Binding(&PALETTE),
     Row::Binding(&FIND),
+    Row::Binding(&INCOMING_BRIDGE),
     Row::Help(
         "\u{2191} / \u{2193}, Enter",
         "Walk the open chat's search results and jump to one",
@@ -1684,6 +1692,10 @@ mod tests {
             ("Ctrl+Shift+F", "Search all messages and chats"),
             ("Ctrl+P", "Command palette: chats, filters, actions"),
             ("Ctrl+F", "Search within this chat"),
+            (
+                "Ctrl+R",
+                "Reply to the latest incoming message on its bridge in a linked chat",
+            ),
             (
                 "\u{2191} / \u{2193}, Enter",
                 "Walk the open chat's search results and jump to one",
