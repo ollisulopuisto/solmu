@@ -25,7 +25,7 @@ class NativeKeychainTransportTests(unittest.TestCase):
     def test_notary_password_uses_private_tty_prompt(self):
         # Fake only the network-facing command, exercise the real pty/fork helper.
         with tempfile.TemporaryDirectory(prefix="notary prompt smoke ") as directory:
-            folder = Path(directory)
+            folder = Path(directory).resolve()
             executable = folder / "xcrun"
             marker = folder / "passed"
             executable.write_text(
@@ -54,7 +54,7 @@ class NativeKeychainTransportTests(unittest.TestCase):
 
     def test_create_unlock_import_partition_and_delete(self):
         with tempfile.TemporaryDirectory(prefix="solmu signing smoke ") as directory:
-            folder = Path(directory)
+            folder = Path(directory).resolve()
             keychain = folder / 'transport "quoted" \\ keychain.keychain-db'
             key = folder / "test.key"
             cert = folder / "test.crt"
@@ -94,7 +94,7 @@ class NativeKeychainTransportTests(unittest.TestCase):
                     HELPER.security("list-keychains", "-d", "user"),
                 )
                 checked(set(HELPER.keychain_paths(original)).issubset(current))
-                checked(str(keychain) in current)
+                self.assertIn(str(keychain.resolve()), current)  # noqa: PT009 - stdlib runner
                 # Prove the password was not silently truncated by -i quoting.
                 HELPER.security("lock-keychain", str(keychain))
                 with self.assertRaises(RuntimeError):  # noqa: PT027 - standalone stdlib runner
