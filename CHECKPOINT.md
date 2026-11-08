@@ -13,7 +13,10 @@ identical names get distinct editable labels. Media failure measurement also
 uses the translated label. Normal mention autocomplete assigns distinct
 labels to same-name recipients, reuses a recipient's existing label, and
 encodes longest labels first. Its regression selects A, B, A with the same
-display name. No catalog changes, merge or release. Full runtime suite remains a CI gate.
+display name. A Tab-cycle regression also exposed a scrolled-off bubble mistaking the
+header search control for its child by rectangle containment. Only visible
+child-focus geometry may trigger that scroll. No catalog changes, merge
+or release. Full runtime suite remains a CI gate.
 
 ## PR217 contact-key cache check repair - November 7, 2026
 

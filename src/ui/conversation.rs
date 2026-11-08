@@ -5286,7 +5286,9 @@ fn bubble_frame(
     }) && let Some(focused) = ui
         .memory(|memory| memory.focused())
         .and_then(|id| ui.ctx().read_response(id))
-        && (focused.id == bubble.id || inner.response.rect.contains(focused.rect.center()))
+        && (focused.id == bubble.id
+            || (ui.clip_rect().contains(focused.rect.center())
+                && inner.response.rect.contains(focused.rect.center())))
     {
         view.keyboard_navigation.set(true);
         if focused.gained_focus() && !ui.clip_rect().contains_rect(focused.rect) {
