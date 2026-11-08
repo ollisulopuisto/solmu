@@ -196,3 +196,9 @@ front. Every bubble has a triangular top sender-side tail. Incoming group
 shadows choose contrasting colours per sender streak, not a permanent colour
 identity; names/avatars remain the identity cues. There are no accent rails or
 stack separator borders. Reactions and time share a wrapping footer row.
+
+
+`--demo-page card-widths` shows a file, voice note, reply and link preview at
+one shared320pt content width, a reply and preview sharing the next400pt
+step, plus plain text at80/160/240pt and longer text on the same320/400pt
+grid. Both text and cards grow in80pt steps up to the viewport cap. Use `,light` and a narrow `--demo-size` to check viewport caps.

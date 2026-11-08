@@ -101,6 +101,32 @@ Full new-head CI remains required. Actual timestamp/streak combination captures
 (one/two/three minutes, both directions, reactions, sender change) inspected and
 delivered privately; no behaviour changes or temporary fixtures retained.
 
+## Stepped card widths - November 8, 2026
+
+Instinct, branch `feat/stepped-card-widths`, based on main3fe1cb0. Separate
+from PR246: common card content width320pt; wider body text rounds up to
+400/480/560/...pt, capped by the available viewport. Plain text uses smaller80/160/240pt steps, joining the same320/400/... grid. Preserve location/image/carousel-specific sizing.
+The offline `card-widths` page compares file, voice, reply, preview, two
+wider cards with different body lengths, and ordinary text. Tests cover exact
+bucket boundaries and actual bubble bounds in both themes at620/1180pt.
+Focused native harness omits unrelated test modules, keeps production sources
+unchanged:95 tests pass, including both new width tests. Strict all-feature/
+all-target clippy and fmt pass. Actual demo rebuild and dark/light before/
+after crops inspected; narrow-window viewport caps also visually inspected.
+No review media committed. The maintainer explicitly waived PR248 screenshot
+embedding; no more upload retries. Fresh captures delivered privately.
+Review repair: the width fixture derives its body link from the inherited
+preview URL, keeping both targets at spotifast.rocks. Regression verifies
+matching targets.96 focused native tests and strict clippy/fmt pass.
+Rebased onto main3cea59b after the maintainer merged246. Preserved both
+PRs' checkpoint and demo sections; renderer/demo source merged cleanly.
+Plain text now also uses80/160/240/320/400/...pt steps per maintainer approval.
+97 focused tests pass before rebase, including text bucket boundaries and
+actual text/card geometry in both themes. Fresh combined actual-app captures
+inspected and privately delivered. Rebased verification:97 focused native tests and strict clippy/fmt pass.
+No merge or release dispatch. Full new-head CI still required.
+Rollback: revert this focused change. PR246 remains independent.
+
 ## Linked network chip lane - November 8, 2026
 
 Instinct, branch `fix/linked-network-chip-overlap`, based on main 2498c7b

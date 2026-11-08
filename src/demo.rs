@@ -2310,6 +2310,64 @@ fn rail_full_sample(app: &mut App) {
         .collect();
 }
 
+/// Synthetic short cards plus a wider reply for comparing settled width steps.
+fn card_widths_sample(app: &mut App) {
+    let chat = SAMPLES[0].id;
+    let history = app.conversations.get_mut(chat).unwrap();
+    let mut rows: Vec<_> = ["ada-doc", "you-voice", "ada-reply", "ada-link"]
+        .iter()
+        .map(|id| {
+            history
+                .messages
+                .iter()
+                .find(|row| row.id == *id)
+                .unwrap()
+                .clone()
+        })
+        .collect();
+    rows[2].content = Content::text("Yes, that works.");
+    if let Content::Text {
+        text,
+        preview: Some(preview),
+    } = &mut rows[3].content
+    {
+        *text = format!("A reference: {}", preview.url);
+    }
+    let mut wider = rows[2].clone();
+    wider.id = "card-wider".into();
+    wider.content = Content::text("The revised document is ready for review today.");
+    rows.push(wider);
+    let mut wider_preview = rows[3].clone();
+    wider_preview.id = "card-wider-preview".into();
+    if let Content::Text { text, .. } = &mut wider_preview.content {
+        *text = "This is the reference document for today's review.".into();
+    }
+    rows.push(wider_preview);
+    rows.push(message(
+        chat,
+        "card-plain",
+        true,
+        0,
+        Content::text("Thanks!"),
+    ));
+    for (id, text) in [
+        ("text-medium", "The final notes are ready."),
+        ("text-medium-two", "The final notes are ready!"),
+        (
+            "text-long",
+            "The revised document is ready for review today.",
+        ),
+    ] {
+        rows.push(message(chat, id, true, 0, Content::text(text)));
+    }
+    for (index, row) in rows.iter_mut().enumerate() {
+        row.timestamp = 1_794_157_200 + index as i64 * 60;
+    }
+    history.messages = rows;
+    app.open_chat = Some(chat.into());
+    app.scroll_to_bottom = true;
+}
+
 pub fn apply_flags(app: &mut App, page: Option<&str>) {
     let Some(page) = page else {
         return;
@@ -2317,6 +2375,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
     for part in page.split(',').map(str::trim) {
         match part {
             "history-date" => history_date_sample(app),
+            "card-widths" => card_widths_sample(app),
             "minute-gutter" => minute_gutter_sample(app),
             "group-footer-reactions" => {
                 minute_gutter_sample(app);
@@ -23017,5 +23076,120 @@ mod rail_tests {
         let chats = destination_rect(&ctx, Destination::Chats);
         click(&mut app, &ctx, 1180.0, chats.center());
         assert!(!app.show_starred && app.page == Page::Chats);
+    }
+}
+
+#[cfg(test)]
+mod card_width_tests {
+    use super::*;
+
+    #[test]
+    fn width_comparison_link_and_preview_share_the_same_target() {
+        let mut app = super::tests::app();
+        apply_flags(&mut app, Some("card-widths"));
+        let row = app.conversations[SAMPLES[0].id]
+            .message("ada-link")
+            .unwrap();
+        let Content::Text {
+            text,
+            preview: Some(preview),
+        } = &row.content
+        else {
+            panic!("the width comparison has a link preview");
+        };
+        assert_eq!(text, &format!("A reference: {}", preview.url));
+        assert_eq!(preview.url, "https://spotifast.rocks/");
+    }
+
+    #[test]
+    fn short_cards_share_a_width_and_long_replies_use_a_step_in_both_themes() {
+        for light in [false, true] {
+            for width in [620.0, 1180.0] {
+                let mut app = super::tests::app();
+                apply_flags(
+                    &mut app,
+                    Some(if light {
+                        "card-widths,light"
+                    } else {
+                        "card-widths"
+                    }),
+                );
+                let ctx = egui::Context::default();
+                app.attach(&ctx);
+                for _ in 0..5 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 1400.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let ctx = ui.ctx().clone();
+                            app.background_frame(&ctx);
+                            app.frame_ui(ui);
+                        },
+                    );
+                    output.textures_delta.clear();
+                }
+                let rect = |id| {
+                    ctx.data(|data| {
+                        data.get_temp::<egui::Rect>(
+                            crate::ui::conversation::bubble_id(SAMPLES[0].id, id).with("rect"),
+                        )
+                    })
+                    .unwrap()
+                };
+                let default = rect("ada-doc").width();
+                for id in ["you-voice", "ada-reply", "ada-link"] {
+                    assert!(
+                        (rect(id).width() - default).abs() < 1.0,
+                        "{id}: {:?} vs default {default}, width {width}, light {light}",
+                        rect(id)
+                    );
+                }
+                if width > 1000.0 {
+                    assert!((rect("card-plain").width() - 100.0).abs() < 1.0);
+                    assert!((rect("text-medium").width() - 260.0).abs() < 1.0);
+                    assert!((rect("text-medium-two").width() - 260.0).abs() < 1.0);
+                    assert!((rect("text-long").width() - 420.0).abs() < 1.0);
+                    assert!((default - 340.0).abs() < 1.0, "320pt content plus margins");
+                    assert!(
+                        (rect("card-wider").width() - 420.0).abs() < 1.0,
+                        "long reply uses the400pt content step: {:?}",
+                        rect("card-wider")
+                    );
+                    assert!(
+                        (rect("card-wider-preview").width() - 420.0).abs() < 1.0,
+                        "different body lengths share the400pt step: {:?}",
+                        rect("card-wider-preview")
+                    );
+                } else {
+                    assert!(
+                        (rect("card-wider").width() - default).abs() < 1.0,
+                        "narrow viewport caps every card equally"
+                    );
+                }
+                assert!(
+                    rect("card-plain").width() < default - 20.0,
+                    "short text uses a smaller80pt step"
+                );
+                for id in [
+                    "ada-doc",
+                    "you-voice",
+                    "ada-reply",
+                    "ada-link",
+                    "card-wider",
+                    "card-wider-preview",
+                ] {
+                    assert!(
+                        rect(id).right() <= width && rect(id).left() >= 0.0,
+                        "{id} must remain inside the viewport: {:?}",
+                        rect(id)
+                    );
+                }
+            }
+        }
     }
 }
