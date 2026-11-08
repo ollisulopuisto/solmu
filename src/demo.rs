@@ -2326,8 +2326,12 @@ fn card_widths_sample(app: &mut App) {
         })
         .collect();
     rows[2].content = Content::text("Yes, that works.");
-    if let Content::Text { text, .. } = &mut rows[3].content {
-        *text = "A useful reference: https://example.com".into();
+    if let Content::Text {
+        text,
+        preview: Some(preview),
+    } = &mut rows[3].content
+    {
+        *text = format!("A reference: {}", preview.url);
     }
     let mut wider = rows[2].clone();
     wider.id = "card-wider".into();
@@ -23068,6 +23072,24 @@ mod rail_tests {
 #[cfg(test)]
 mod card_width_tests {
     use super::*;
+
+    #[test]
+    fn width_comparison_link_and_preview_share_the_same_target() {
+        let mut app = super::tests::app();
+        apply_flags(&mut app, Some("card-widths"));
+        let row = app.conversations[SAMPLES[0].id]
+            .message("ada-link")
+            .unwrap();
+        let Content::Text {
+            text,
+            preview: Some(preview),
+        } = &row.content
+        else {
+            panic!("the width comparison has a link preview");
+        };
+        assert_eq!(text, &format!("A reference: {}", preview.url));
+        assert_eq!(preview.url, "https://spotifast.rocks/");
+    }
 
     #[test]
     fn short_cards_share_a_width_and_long_replies_use_a_step_in_both_themes() {

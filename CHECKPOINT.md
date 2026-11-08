@@ -114,8 +114,12 @@ Focused native harness omits unrelated test modules, keeps production sources
 unchanged:95 tests pass, including both new width tests. Strict all-feature/
 all-target clippy and fmt pass. Actual demo rebuild and dark/light before/
 after crops inspected; narrow-window viewport caps also visually inspected.
-No review media committed. Screenshots delivered privately; no further GitHub
-media-upload retries. No merge or release dispatch. Full CI still required.
+No review media committed. The maintainer explicitly waived PR248 screenshot
+embedding; no more upload retries. Fresh captures delivered privately.
+Review repair: the width fixture derives its body link from the inherited
+preview URL, keeping both targets at spotifast.rocks. Regression verifies
+matching targets.96 focused native tests and strict clippy/fmt pass.
+No merge or release dispatch. Full new-head CI still required.
 Rollback: revert this focused change. PR246 remains independent.
 
 ## Linked network chip lane - November 8, 2026
