@@ -51,3 +51,37 @@ portable adapter tests passed. Strict all-feature/all-target clippy passed. The
 focused native build kept production code unchanged and omitted unrelated test
 modules. The complete native test build exceeded local resources; full CI is
 still required. No network account was used for these regression tests.
+
+## Unlink and independent paging outcomes
+
+| Current state | Input | Next state and effect |
+| --- | --- | --- |
+| Any tracked state | Link removed, exact identity no longer matches, or source no longer belongs to valid linked scope | Absent; retire token and reset requested so individual history can fetch |
+| Failed | Older/live history succeeds and clears generic paging error | Remain Failed; restoration Retry history remains visible |
+| Failed | Retry history | Fresh pending/requested token; only its tagged initial completion can load it |
+| Absent after unlink | Old tagged completion | Stay Absent; cannot recreate readiness |
+
+Both Unlink and Remove local link use one invalidation method. Fetch, automatic
+read, tagged completion and displayed-source paths also reconcile scope, covering
+settings changes outside those two controls. Individual reopening uses its
+ordinary fresh fetch/read behavior rather than inheriting a linked-read guard.
+
+Generic-error audit: the only production reads/writes are in app.rs and the
+linked retry UI in ui/merged.rs. BeeperHistoryState sets/clears ordinary paging
+errors; new restoration, Retry history and scope invalidation clear them.
+ensure_person_loaded consults them to avoid repeated failed requests, and the
+visible-source finish path blocks while an error exists. None of those generic
+error clears changes Failed to Loaded. The UI now uses person_history_error:
+ordinary errors take priority, with a separate Failed-state fallback. Older
+LoadChat bypasses ensure_loaded intentionally and cannot complete restoration.
+Reconnection and inventory refresh fetch the open source through ensure_loaded.
+Open/refocus automatic reads reconcile scope and retain valid pending guards.
+
+Verification adds all four pending phases through unlink and two individual
+reopens, stale completion after unlink, and paging success while Failed through
+retry/new token/loaded/read. The latter runs the actual linked UI and checks its
+painted Retry history button after the generic error disappears. Local focused
+native app tests: 17 passed. Pure state tests exercise scope retention/removal
+from all six states. A synthetic runtime capture was inspected: the fallback
+warning and Retry history button are visible after the paging error is cleared.
+No review media was committed.

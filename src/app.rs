@@ -5486,6 +5486,7 @@ impl App {
                 token,
                 success,
             } => {
+                self.reconcile_linked_read_scope(&chat);
                 if let Some(history) = self.conversations.get_mut(&chat) {
                     history.linked_read.complete(token, success);
                 }
@@ -6657,6 +6658,44 @@ impl App {
         }
     }
 
+    // Restoration state belongs to a valid linked source, never an ordinary
+    // conversation. Unlinking/invalidating that scope retires its request token
+    // and permits the ordinary reopen/fetch/read path again.
+    fn reconcile_linked_read_scope(&mut self, chat: &str) {
+        let valid = self.read_chat_ids(chat).len() >= 2
+            && self
+                .conversations
+                .get(chat)
+                .and_then(|history| history.linked_read.member())
+                .is_none_or(|member| self.chat(chat).is_some_and(|known| member.matches(known)));
+        if !valid
+            && let Some(history) = self.conversations.get_mut(chat)
+            && history.linked_read.member().is_some()
+        {
+            history.linked_read.retain_scope(false);
+            history.requested = false;
+            self.beeper_history_errors.remove(chat);
+        }
+    }
+
+    pub(crate) fn unlink_person(&mut self, person: &crate::merged::Person) {
+        self.settings.beeper.people.retain(|known| known != person);
+        let ids: Vec<_> = self.conversations.keys().cloned().collect();
+        for id in ids {
+            self.reconcile_linked_read_scope(&id);
+        }
+        self.mark_settings_dirty();
+    }
+
+    pub(crate) fn person_history_error(&self, chat: &str) -> Option<String> {
+        self.beeper_history_errors.get(chat).cloned().or_else(|| {
+            self.conversations
+                .get(chat)
+                .filter(|history| history.linked_read.failed())
+                .map(|_| "Initial history did not load".into())
+        })
+    }
+
     pub fn retry_person_history(&mut self, chat: &str) {
         self.beeper_history_errors.remove(chat);
         if let Some(history) = self.conversations.get_mut(chat) {
@@ -6692,6 +6731,7 @@ impl App {
         };
         let eligible = self.read_chat_ids(&open);
         for id in visible {
+            self.reconcile_linked_read_scope(id);
             let ready = eligible.contains(id)
                 && !self.beeper_history_errors.contains_key(id)
                 && self
@@ -6715,6 +6755,7 @@ impl App {
     }
 
     fn ensure_loaded(&mut self, chat: &str) {
+        self.reconcile_linked_read_scope(chat);
         let history = self.conversations.entry(chat.to_owned()).or_default();
         if let Some(token) = history.linked_read.request() {
             history.requested = true;
@@ -6877,6 +6918,7 @@ impl App {
 
     fn mark_read_automatically(&mut self, chat: &str) {
         for id in self.read_chat_ids(chat) {
+            self.reconcile_linked_read_scope(&id);
             if self
                 .conversations
                 .get(&id)
@@ -27182,6 +27224,169 @@ mod person_tests {
                 |command| matches!(command, Command::MarkRead { chat, .. } if chat == "ada-tg")
             )
         );
+    }
+
+    #[test]
+    fn unlink_retires_each_restoration_phase_and_reopens_individual_history() {
+        for phase in ["pending", "requested", "loaded", "failed"] {
+            let mut app = linked_unread_app();
+            let member = Member::of(app.chat("ada-tg").unwrap()).unwrap();
+            let state = &mut app
+                .conversations
+                .entry("ada-tg".into())
+                .or_default()
+                .linked_read;
+            state.restore(member);
+            let mut old = None;
+            if phase != "pending" {
+                old = state.request();
+                if phase == "loaded" || phase == "failed" {
+                    state.complete(old.unwrap(), phase == "loaded");
+                }
+            }
+            let person = app.settings.beeper.people[0].clone();
+            app.unlink_person(&person);
+            assert_eq!(
+                app.conversations["ada-tg"].linked_read,
+                crate::linked_read::State::Absent
+            );
+            app.conversations.get_mut("ada-tg").unwrap().requested = true;
+            let (backend, mut commands) = Backend::recording();
+            app.backend = backend;
+            app.open_chat("ada-tg".into());
+            assert_eq!(
+                app.conversations["ada-tg"].linked_read,
+                crate::linked_read::State::Absent,
+                "{phase}"
+            );
+            assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(|command| matches!(command, Command::LoadChat { chat, before: None } if chat == "ada-tg")), "{phase}");
+            if let Some(token) = old {
+                app.apply_backend_event(
+                    Event::BeeperRestoredHistory {
+                        chat: "ada-tg".into(),
+                        token,
+                        success: true,
+                    },
+                    true,
+                );
+                assert_eq!(
+                    app.conversations["ada-tg"].linked_read,
+                    crate::linked_read::State::Absent
+                );
+            }
+            app.open_chat("ada-wa".into());
+            while commands.try_recv().is_ok() {}
+            app.open_chat("ada-tg".into());
+            assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(|command| matches!(command, Command::LoadChat { chat, before: None } if chat == "ada-tg")), "every individual reopen fetches {phase}");
+            app.mark_read_automatically("ada-tg");
+            assert_eq!(
+                app.chat("ada-tg").unwrap().unread,
+                0,
+                "ordinary read is not blocked {phase}"
+            );
+        }
+    }
+
+    #[test]
+    fn paging_success_cannot_hide_failed_restoration_retry_or_complete_it() {
+        let mut app = linked_unread_app();
+        app.open_chat = Some("ada-wa".into());
+        app.page = Page::Chats;
+        app.window_focused = true;
+        app.window_hidden = false;
+        let member = Member::of(app.chat("ada-tg").unwrap()).unwrap();
+        let state = &mut app
+            .conversations
+            .entry("ada-tg".into())
+            .or_default()
+            .linked_read;
+        state.restore(member);
+        let old = state.request().unwrap();
+        state.complete(old, false);
+        app.apply_backend_event(
+            Event::BeeperHistoryState {
+                chat: "ada-tg".into(),
+                error: Some("initial failed".into()),
+            },
+            true,
+        );
+        app.apply_backend_event(
+            Event::BeeperHistoryState {
+                chat: "ada-tg".into(),
+                error: None,
+            },
+            true,
+        );
+        app.apply_backend_event(
+            Event::Messages {
+                chat: "ada-tg".into(),
+                messages: vec![],
+                older: true,
+                complete: true,
+            },
+            true,
+        );
+        assert!(!app.beeper_history_errors.contains_key("ada-tg"));
+        assert!(
+            app.person_history_error("ada-tg").is_some(),
+            "retry UI remains visible independently of paging errors"
+        );
+        assert!(app.conversations["ada-tg"].linked_read.failed());
+        let ctx = egui::Context::default();
+        let source = app.chat("ada-wa").unwrap().clone();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert!(crate::ui::merged::show(&mut app, ui, &source));
+        });
+        output.textures_delta.clear();
+        fn retry_drawn(shape: &egui::Shape) -> bool {
+            match shape {
+                egui::Shape::Text(text) => text.galley.text() == "Retry history",
+                egui::Shape::Vec(shapes) => shapes.iter().any(retry_drawn),
+                _ => false,
+            }
+        }
+        assert!(
+            output
+                .shapes
+                .iter()
+                .any(|clipped| retry_drawn(&clipped.shape)),
+            "failed restoration still paints its retry button after paging success"
+        );
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        app.ensure_person_loaded(&["ada-wa".into(), "ada-tg".into()]);
+        app.finish_deferred_linked_reads(&["ada-tg".into()]);
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
+        app.retry_person_history("ada-tg");
+        let token = std::iter::from_fn(|| commands.try_recv().ok())
+            .find_map(|command| match command {
+                Command::LoadRestoredChat { token, .. } => Some(token),
+                _ => None,
+            })
+            .unwrap();
+        assert_ne!(old, token);
+        app.apply_backend_event(
+            Event::BeeperRestoredHistory {
+                chat: "ada-tg".into(),
+                token: old,
+                success: true,
+            },
+            true,
+        );
+        assert!(matches!(
+            app.conversations["ada-tg"].linked_read,
+            crate::linked_read::State::Requested(_)
+        ));
+        app.apply_backend_event(
+            Event::BeeperRestoredHistory {
+                chat: "ada-tg".into(),
+                token,
+                success: true,
+            },
+            true,
+        );
+        app.finish_deferred_linked_reads(&["ada-tg".into()]);
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 0);
     }
 
     #[test]

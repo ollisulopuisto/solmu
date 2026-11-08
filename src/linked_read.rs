@@ -83,6 +83,14 @@ impl State {
             | Self::Failed(r) => *self = Self::ReadSent(r.clone()),
         }
     }
+    pub fn retain_scope(&mut self, linked: bool) {
+        if !linked {
+            *self = Self::Absent;
+        }
+    }
+    pub fn failed(&self) -> bool {
+        matches!(self, Self::Failed(_))
+    }
     pub fn retain_identity(&mut self, member: Option<&Member>) {
         if self.member().is_some() && self.member() != member {
             *self = Self::Absent;
@@ -158,6 +166,13 @@ mod tests {
                     State::ReadSent(r.clone())
                 }
             );
+            let mut scoped = initial.clone();
+            scoped.retain_scope(true);
+            assert_eq!(scoped, initial);
+            scoped.retain_scope(false);
+            scoped.complete(17, true);
+            assert_eq!(scoped, State::Absent);
+            assert_eq!(initial.failed(), matches!(initial, State::Failed(_)));
             let mut state = initial.clone();
             state.retain_identity(Some(&r.member));
             assert_eq!(state, initial);

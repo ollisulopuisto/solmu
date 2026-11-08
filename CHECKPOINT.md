@@ -11,7 +11,11 @@ and focus/incognito gates apply. Regression covers first restoration plus
 unfocused, hidden, incognito, locked, foreign identity/origin, group and
 non-live exclusions. The explicit transition table and verification map are in LINKED-READ.md.
 Only a matching tagged fetch completion can authorize the loaded state;
-manual read is separate from automatic read. No merge or release.
+manual read is separate from automatic read. Unlink retires all restoration
+phases and reopens ordinary fetch/read behavior. Failed restoration owns its
+retry visibility independently of paging errors. Scope invalidation and paging
+success while Failed are covered in LINKED-READ.md and native app tests.
+No merge or release.
 
 ## PR240 follow-up: batch filename collisions - November 8, 2026
 

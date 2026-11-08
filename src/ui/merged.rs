@@ -144,8 +144,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     if valid.len() < 2 {
         app.ensure_person_loaded(&[]);
         if ui.button("Remove local link").clicked() {
-            app.settings.beeper.people.retain(|p| p != &person);
-            app.mark_settings_dirty();
+            app.unlink_person(&person);
         }
         ui.colored_label(egui::Color32::YELLOW,"Linked person unavailable: member identity missing or locked. Open members separately.");
         return true;
@@ -350,7 +349,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         ui.colored_label(warning, note);
     }
     for member in &valid {
-        if let Some(error) = app.beeper_history_errors.get(&member.chat).cloned() {
+        if let Some(error) = app.person_history_error(&member.chat) {
             let source = source_label(app, &valid, member);
             ui.horizontal(|ui| {
                 ui.colored_label(
@@ -1557,8 +1556,7 @@ pub(crate) fn sidebar(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         ui.ctx().data_mut(|d| d.insert_temp(state_key, linked));
         if ui.button("Unlink").clicked() {
             app.ensure_person_loaded(&[]);
-            app.settings.beeper.people.retain(|p| p != person);
-            app.mark_settings_dirty();
+            app.unlink_person(person);
             ui.ctx().data_mut(|d| d.insert_temp(key, Picker::default()));
             return true;
         }
