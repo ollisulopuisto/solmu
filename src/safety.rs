@@ -197,12 +197,28 @@ pub fn call_link(value: &str) -> Option<(String, bool)> {
 /// Only common document/media formats go to their desktop application.
 /// Unknown files, scripts, installers and application bundles can be revealed
 /// in their folder instead. Sender-provided MIME types cannot grant permission.
+fn is_reserved_dos_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(lower.as_str(), "con" | "prn" | "aux" | "nul")
+        || (lower.starts_with("com") || lower.starts_with("lpt"))
+            && lower.len() == 4
+            && lower.as_bytes()[3].is_ascii_digit()
+}
+
 pub fn can_open_attachment(path: &Path) -> bool {
     // Reject filenames with trailing whitespace or periods which can mask extensions or alter execution.
     let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
         return false;
     };
-    if name.ends_with('.') || name.ends_with(' ') {
+    if name.ends_with('.') || name.ends_with(' ') || name.contains(':') {
+        return false;
+    }
+    // Reject Windows DOS device names (e.g. CON, PRN, AUX, NUL, COM1..9, LPT1..9)
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    if is_reserved_dos_name(stem) {
         return false;
     }
     let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
@@ -476,6 +492,15 @@ mod tests {
             "malware.vbe",
             "document.docx.",
             "document.pdf ",
+            "document.pdf:stream",
+            "file.png:$DATA",
+            "CON.txt",
+            "con.png",
+            "prn.pdf",
+            "AUX.docx",
+            "NUL.jpg",
+            "com1.txt",
+            "lpt1.pdf",
         ] {
             assert!(!can_open_attachment(Path::new(name)), "{name}");
         }
