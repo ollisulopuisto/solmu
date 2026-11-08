@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -47,6 +48,7 @@ class NativeKeychainTransportTests(unittest.TestCase):
                  "-in", str(cert), "-out", str(bundle), "-passout",
                  "file:" + str(password_file)], capture_output=True, check=True,
             )
+            original = HELPER.security("list-keychains", "-d", "user")
             try:
                 with patch.dict(os.environ, env):
                     HELPER.import_certificate()
@@ -56,9 +58,17 @@ class NativeKeychainTransportTests(unittest.TestCase):
                     capture_output=True, check=True,
                 )
                 checked(b"Solmu transport smoke test" in result.stdout)
+                current = shlex.split(HELPER.security("list-keychains", "-d", "user"))
+                checked(set(shlex.split(original)).issubset(current))
                 # Prove the password was not silently truncated by -i quoting.
                 HELPER.security("lock-keychain", str(keychain))
+                with self.assertRaises(RuntimeError):  # noqa: PT027 - standalone stdlib runner
+                    HELPER.security("unlock-keychain", "-p", "incorrect-dummy-password",
+                                    str(keychain))
                 HELPER.security("unlock-keychain", "-p", value, str(keychain))
+                with self.assertRaises(RuntimeError):  # noqa: PT027 - standalone stdlib runner
+                    HELPER.security("import", str(folder / "missing.p12"), "-P", value,
+                                    "-k", str(keychain))
             finally:
                 HELPER.security("delete-keychain", str(keychain))
 

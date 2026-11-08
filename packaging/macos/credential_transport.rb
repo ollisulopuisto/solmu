@@ -45,8 +45,8 @@ module SolmuMacosCredentialTransport
 
   def secure_capture(argv, input, additions)
     env = PRIVATE_ENV.to_h { |key| [key, nil] }.merge(additions)
-    output, _error, status = Open3.capture3(env, *argv, stdin_data: input.to_s, chdir: root.to_s)
-    raise NativePackages::Error, 'Credential transport failed (output withheld)' unless status.success?
+    output, error, status = Open3.capture3(env, *argv, stdin_data: input.to_s, chdir: root.to_s)
+    raise NativePackages::Error, 'Credential transport failed (output withheld)' unless status.success? && error.strip.empty?
     output.strip
   end
 end

@@ -5,6 +5,7 @@ import os
 import pty
 import re
 import select
+import shlex
 import signal
 import subprocess
 import sys
@@ -27,19 +28,23 @@ def child_env():
 
 
 def security(*args):
-    # One command per invocation: propagate its exit status and never log input.
+    # One command per invocation prevents a later success masking a failure.
+    # Interactive security may report command errors on stderr with exit zero.
+    # Fail closed on all diagnostics; never print secret-bearing input/output.
     line = " ".join(quote(a) for a in args) + "\n"
     result = subprocess.run(
         ["/usr/bin/security", "-i"], input=line, text=True,
         capture_output=True, env=child_env(), check=False,
     )
-    if result.returncode:
+    if result.returncode or (result.stderr or "").strip():
         raise RuntimeError("Keychain operation failed (output withheld)")
+    return result.stdout or ""
 
 
 def import_certificate():
     keychain = os.environ["KEYCHAIN_PATH"]
     password = os.environ["KEYCHAIN_PASSWORD"]
+    original = shlex.split(security("list-keychains", "-d", "user"))
     security("create-keychain", "-p", password, keychain)
     security("set-keychain-settings", "-lut", "21600", keychain)
     security("unlock-keychain", "-p", password, keychain)
@@ -47,7 +52,9 @@ def import_certificate():
              os.environ["P12_PASSWORD"], "-T", "/usr/bin/codesign", "-k", keychain)
     security("set-key-partition-list", "-S", "apple-tool:,apple:,codesign:",
              "-s", "-k", password, keychain)
-    security("list-keychains", "-d", "user", "-s", keychain)
+    current = shlex.split(security("list-keychains", "-d", "user"))
+    paths = list(dict.fromkeys([*original, *current, keychain]))
+    security("list-keychains", "-d", "user", "-s", *paths)
 
 
 def store_notary_credentials():
