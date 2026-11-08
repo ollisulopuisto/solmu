@@ -168,6 +168,10 @@ pub struct Conversation {
     pub loading_older: bool,
     /// Whether the initial page was requested.
     pub requested: bool,
+    /// Successful initial history response, not merely a queued request.
+    pub(crate) history_loaded: bool,
+    /// First-arriving linked source awaiting a displayable history.
+    pub(crate) deferred_linked_read: Option<crate::merged::Member>,
     /// Whether a phone history request is active.
     pub fetching_phone: bool,
     /// Whether the active phone request is the reader's own (see
@@ -4352,6 +4356,9 @@ impl App {
                 let (was_empty, bare, still_unresolved) = {
                     let conversation = self.conversations.entry(chat.clone()).or_default();
                     let was_empty = conversation.messages.is_empty();
+                    if !older {
+                        conversation.history_loaded = true;
+                    }
                     if older && !messages.is_empty() {
                         conversation.phone_delivered = true;
                     }
@@ -5760,8 +5767,19 @@ impl App {
                     crate::merged::Member::of(known) == crate::merged::Member::of(&chat)
                 })
         });
+        let restored = self.chat(&chat.id).is_none() && reading;
+        if restored && live && (chat.unread > 0 || chat.marked_unread) {
+            self.conversations
+                .entry(chat.id.clone())
+                .or_default()
+                .deferred_linked_read = crate::merged::Member::of(&chat);
+        }
+        let awaiting_history = self
+            .conversations
+            .get(&chat.id)
+            .is_some_and(|history| history.deferred_linked_read.is_some());
         let is_open = live && remembered && self.chat_view();
-        let is_reading = live && reading && self.chat_view();
+        let is_reading = live && reading && !awaiting_history && self.chat_view();
         let mut chat = chat;
         self.apply_silence(&mut chat);
         if chat.unread == 0 {
@@ -6614,12 +6632,43 @@ impl App {
                 self.ensure_loaded(member);
             }
         }
+        self.finish_deferred_linked_reads(members);
         if self.watched_beeper_chats != members {
             self.watched_beeper_chats = members.to_vec();
             self.backend
                 .send(Command::WatchBeeperChats(members.to_vec()));
         }
     }
+    fn finish_deferred_linked_reads(&mut self, visible: &[ChatId]) {
+        if !self.chat_view()
+            || !self.window_focused
+            || self.window_hidden
+            || self.events_hidden
+            || self.settings.beeper.incognito
+            || self.app_lock.is_locked()
+        {
+            return;
+        }
+        let Some(open) = self.open_chat.clone() else {
+            return;
+        };
+        let eligible = self.read_chat_ids(&open);
+        for id in visible {
+            let ready = self.conversations.get(id).is_some_and(|history| {
+                history.history_loaded
+                    && history.deferred_linked_read.as_ref().is_some_and(|member| {
+                        self.chat(id)
+                            .is_some_and(|chat| member.matches(chat) && !chat.locked)
+                            && eligible.contains(id)
+                    })
+            });
+            if ready {
+                self.conversations.get_mut(id).unwrap().deferred_linked_read = None;
+                self.mark_source_read(id);
+            }
+        }
+    }
+
     fn ensure_loaded(&mut self, chat: &str) {
         let request = {
             let conversation = self.conversations.entry(chat.to_owned()).or_default();
@@ -6774,6 +6823,13 @@ impl App {
 
     fn mark_read(&mut self, chat: &str) {
         for id in self.read_chat_ids(chat) {
+            if self
+                .conversations
+                .get(&id)
+                .is_some_and(|history| history.deferred_linked_read.is_some())
+            {
+                continue;
+            }
             self.mark_source_read(&id);
         }
     }
@@ -26870,15 +26926,83 @@ mod person_tests {
             let (backend, mut commands) = Backend::recording();
             app.backend = backend;
             app.handle_chat_updated(update, mode != "not-live");
+            assert_eq!(app.chat("ada-tg").unwrap().unread, 3, "unloaded {mode}");
+            assert!(
+                !std::iter::from_fn(|| commands.try_recv().ok()).any(
+                    |command| matches!(command, Command::MarkRead { chat, .. } if chat == "ada-tg")
+                ),
+                "no receipt before history: {mode}"
+            );
+            app.apply_backend_event(
+                Event::Messages {
+                    chat: "ada-tg".into(),
+                    messages: vec![],
+                    older: false,
+                    complete: true,
+                },
+                true,
+            );
+            let visible = vec!["ada-wa".into(), "ada-tg".into()];
+            app.ensure_person_loaded(&visible);
             assert_eq!(
                 app.chat("ada-tg").unwrap().unread,
                 if mode == "eligible" { 0 } else { 3 },
-                "{mode}"
+                "loaded {mode}"
             );
             let read = std::iter::from_fn(|| commands.try_recv().ok()).any(
                 |command| matches!(command, Command::MarkRead { chat, .. } if chat == "ada-tg"),
             );
             assert_eq!(read, mode == "eligible", "{mode}");
+        }
+    }
+
+    #[test]
+    fn deferred_linked_read_rechecks_identity_and_focus_after_loading() {
+        for mode in [
+            "closed",
+            "unfocused",
+            "incognito",
+            "changed-identity",
+            "hidden",
+            "locked",
+        ] {
+            let mut app = linked_unread_app();
+            let update = app.chats.remove(1);
+            app.open_chat = Some("ada-wa".into());
+            app.page = Page::Chats;
+            app.window_focused = true;
+            app.window_hidden = false;
+            let (backend, mut commands) = Backend::recording();
+            app.backend = backend;
+            app.handle_chat_updated(update, true);
+            app.apply_backend_event(
+                Event::Messages {
+                    chat: "ada-tg".into(),
+                    messages: vec![],
+                    older: false,
+                    complete: true,
+                },
+                true,
+            );
+            match mode {
+                "closed" => app.open_chat = None,
+                "unfocused" => app.window_focused = false,
+                "incognito" => app.settings.beeper.incognito = true,
+                "changed-identity" => {
+                    app.chat_mut("ada-tg").unwrap().backend_account = Some("replacement".into())
+                }
+                "hidden" => app.window_hidden = true,
+                "locked" => app.chat_mut("ada-tg").unwrap().locked = true,
+                _ => unreachable!(),
+            }
+            app.ensure_person_loaded(&["ada-wa".into(), "ada-tg".into()]);
+            assert_eq!(app.chat("ada-tg").unwrap().unread, 3, "{mode}");
+            assert!(
+                !std::iter::from_fn(|| commands.try_recv().ok()).any(
+                    |command| matches!(command, Command::MarkRead { chat, .. } if chat == "ada-tg")
+                ),
+                "{mode}"
+            );
         }
     }
 
