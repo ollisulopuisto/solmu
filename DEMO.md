@@ -200,5 +200,5 @@ stack separator borders. Reactions and time share a wrapping footer row.
 
 `--demo-page card-widths` shows a file, voice note, reply and link preview at
 one shared320pt content width, a reply and preview sharing the next400pt
-step, and ordinary short text. Wider cards grow in80pt steps up to the
-viewport cap. Use `,light` and a narrow `--demo-size` to check viewport caps.
+step, plus plain text at80/160/240pt and longer text on the same320/400pt
+grid. Both text and cards grow in80pt steps up to the viewport cap. Use `,light` and a narrow `--demo-size` to check viewport caps.
