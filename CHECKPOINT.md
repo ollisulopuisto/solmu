@@ -1,5 +1,24 @@
 # Fast-beeper coordination and development checkpoint
 
+## PR242 restored linked source - November 8, 2026
+
+Live read scope records a first-arriving exact linked member when that update
+will make the combined timeline valid, but does not mark it read yet. Only a
+successful initial history response plus a visible linked-view render can
+finish the read, rechecking identity, focus, lock, incognito and open chat. Existing known identities are never
+replaced for eligibility. The same direct/unlocked/origin/unique/2-to-8 rules
+and focus/incognito gates apply. Regression covers first restoration plus
+unfocused, hidden, incognito, locked, foreign identity/origin, group and
+non-live exclusions. The explicit transition table and verification map are in LINKED-READ.md.
+Only a matching tagged fetch completion can authorize the loaded state;
+manual read is separate from automatic read. Unlink retires all restoration
+phases and reopens ordinary fetch/read behavior. Failed restoration owns its
+retry visibility independently of paging errors. Scope invalidation and paging
+success while Failed are covered in LINKED-READ.md and native app tests.
+Restoration notice, partial-timeline template and retry button use gettext;
+fallback lookup is tested across every offered locale.
+No merge or release.
+
 ## PR241 review repair - November 8, 2026
 
 Retry now carries display-name text and its mention selections through the

@@ -168,6 +168,8 @@ pub struct Conversation {
     pub loading_older: bool,
     /// Whether the initial page was requested.
     pub requested: bool,
+    /// Current restoration, separate from cached history and paging state.
+    pub(crate) linked_read: crate::linked_read::State,
     /// Whether a phone history request is active.
     pub fetching_phone: bool,
     /// Whether the active phone request is the reader's own (see
@@ -4276,6 +4278,19 @@ impl App {
                         .map(|chat| (chat.id.clone(), chat.pinned))
                         .collect(),
                 ));
+                for (id, history) in &mut self.accounts[self.active].conversations {
+                    let member = chats
+                        .iter()
+                        .find(|chat| chat.id == *id)
+                        .and_then(crate::merged::Member::of);
+                    history.linked_read.retain_identity(member.as_ref());
+                }
+                // Inventory snapshots can restore a source too, not only live updates.
+                if live {
+                    for chat in &chats {
+                        self.defer_restored_linked_source(chat);
+                    }
+                }
                 self.chats = chats;
                 // A fresh list carries no favorite marks; the backend's
                 // numbering decides them.
@@ -5473,6 +5488,16 @@ impl App {
                     self.beeper_live_errors.remove(&chat);
                 }
             }
+            Event::BeeperRestoredHistory {
+                chat,
+                token,
+                success,
+            } => {
+                self.reconcile_linked_read_scope(&chat);
+                if let Some(history) = self.conversations.get_mut(&chat) {
+                    history.linked_read.complete(token, success);
+                }
+            }
             Event::BeeperHistoryState { chat, error } => {
                 if let Some(error) = error {
                     self.beeper_history_errors.insert(chat.clone(), error);
@@ -5755,11 +5780,47 @@ impl App {
         }
     }
 
+    fn defer_restored_linked_source(&mut self, chat: &Chat) {
+        let linked = self.open_chat.as_deref().is_some_and(|open| {
+            self.read_chat_ids_with_incoming(open, Some(chat))
+                .iter()
+                .any(|id| id == &chat.id)
+        });
+        if self.chat(&chat.id).is_none()
+            && linked
+            && (chat.unread > 0 || chat.marked_unread)
+            && let Some(member) = crate::merged::Member::of(chat)
+        {
+            self.conversations
+                .entry(chat.id.clone())
+                .or_default()
+                .linked_read
+                .restore(member);
+            self.beeper_history_errors.remove(&chat.id);
+        }
+    }
+
     fn handle_chat_updated(&mut self, chat: Chat, live: bool) {
         // A hidden account's remembered chat is not being read: marking it
         // read would send receipts for messages nobody has seen.
         let remembered = self.open_chat.as_deref() == Some(chat.id.as_str());
+        let reading = self.open_chat.as_deref().is_some_and(|open| {
+            self.read_chat_ids_with_incoming(open, Some(&chat))
+                .iter()
+                .any(|id| id == &chat.id)
+                && self.chat(&chat.id).is_none_or(|known| {
+                    crate::merged::Member::of(known) == crate::merged::Member::of(&chat)
+                })
+        });
+        if live {
+            self.defer_restored_linked_source(&chat);
+        }
+        let awaiting_history = self
+            .conversations
+            .get(&chat.id)
+            .is_some_and(|history| history.linked_read.pending());
         let is_open = live && remembered && self.chat_view();
+        let is_reading = live && reading && !awaiting_history && self.chat_view();
         let mut chat = chat;
         self.apply_silence(&mut chat);
         if chat.unread == 0 {
@@ -5769,16 +5830,17 @@ impl App {
                 self.reset_notification_throttle(&chat.id);
             }
         }
-        if is_open
+        if is_reading
             && !self.settings.beeper.incognito
             && (!chat.locked || self.locked_folder_open())
-            && chat.unread > 0
+            && (chat.unread > 0 || chat.marked_unread)
             && self.window_focused
             && !self.window_hidden
         {
             chat.unread = 0;
+            chat.marked_unread = false;
             chat.unread_mention = None;
-            self.mark_read(&chat.id);
+            self.mark_source_read(&chat.id);
         }
         // Inside the authenticated folder the chat stays open; otherwise a
         // lock closes and clears everything it left behind.
@@ -5798,6 +5860,11 @@ impl App {
             } else {
                 self.open_chat = None;
             }
+        }
+        if let Some(history) = self.conversations.get_mut(&chat.id) {
+            history
+                .linked_read
+                .retain_identity(crate::merged::Member::of(&chat).as_ref());
         }
         let newly_locked = chat.locked && self.chat(&chat.id).is_none_or(|known| !known.locked);
         let locked_id = chat.id.clone();
@@ -6598,10 +6665,51 @@ impl App {
         }
     }
 
+    // Restoration state belongs to a valid linked source, never an ordinary
+    // conversation. Unlinking/invalidating that scope retires its request token
+    // and permits the ordinary reopen/fetch/read path again.
+    fn reconcile_linked_read_scope(&mut self, chat: &str) {
+        let valid = self.read_chat_ids(chat).len() >= 2
+            && self
+                .conversations
+                .get(chat)
+                .and_then(|history| history.linked_read.member())
+                .is_none_or(|member| self.chat(chat).is_some_and(|known| member.matches(known)));
+        if !valid
+            && let Some(history) = self.conversations.get_mut(chat)
+            && history.linked_read.member().is_some()
+        {
+            history.linked_read.retain_scope(false);
+            history.requested = false;
+            self.beeper_history_errors.remove(chat);
+        }
+    }
+
+    pub(crate) fn unlink_person(&mut self, person: &crate::merged::Person) {
+        self.settings.beeper.people.retain(|known| known != person);
+        let ids: Vec<_> = self.conversations.keys().cloned().collect();
+        for id in ids {
+            self.reconcile_linked_read_scope(&id);
+        }
+        self.mark_settings_dirty();
+    }
+
+    pub(crate) fn person_history_error(&self, chat: &str) -> Option<String> {
+        self.beeper_history_errors.get(chat).cloned().or_else(|| {
+            self.conversations
+                .get(chat)
+                .filter(|history| history.linked_read.failed())
+                .map(|_| {
+                    crate::i18n::gettext(self.locale, "Initial history did not load").into_owned()
+                })
+        })
+    }
+
     pub fn retry_person_history(&mut self, chat: &str) {
         self.beeper_history_errors.remove(chat);
         if let Some(history) = self.conversations.get_mut(chat) {
             history.requested = false;
+            history.linked_read.retry();
         }
         self.ensure_loaded(chat);
     }
@@ -6617,17 +6725,56 @@ impl App {
                 .send(Command::WatchBeeperChats(members.to_vec()));
         }
     }
-    fn ensure_loaded(&mut self, chat: &str) {
-        let request = {
-            let conversation = self.conversations.entry(chat.to_owned()).or_default();
-            if conversation.requested {
-                false
-            } else {
-                conversation.requested = true;
-                true
-            }
+    pub(crate) fn finish_deferred_linked_reads(&mut self, visible: &[ChatId]) {
+        if !self.chat_view()
+            || !self.window_focused
+            || self.window_hidden
+            || self.events_hidden
+            || self.settings.beeper.incognito
+            || self.app_lock.is_locked()
+        {
+            return;
+        }
+        let Some(open) = self.open_chat.clone() else {
+            return;
         };
-        if request {
+        let eligible = self.read_chat_ids(&open);
+        for id in visible {
+            self.reconcile_linked_read_scope(id);
+            let ready = eligible.contains(id)
+                && !self.beeper_history_errors.contains_key(id)
+                && self
+                    .chat(id)
+                    .filter(|chat| !chat.locked)
+                    .and_then(crate::merged::Member::of)
+                    .is_some_and(|member| {
+                        self.conversations
+                            .get(id)
+                            .is_some_and(|history| history.linked_read.ready(&member))
+                    });
+            if ready {
+                self.conversations
+                    .get_mut(id)
+                    .unwrap()
+                    .linked_read
+                    .read_sent();
+                self.mark_source_read(id);
+            }
+        }
+    }
+
+    fn ensure_loaded(&mut self, chat: &str) {
+        self.reconcile_linked_read_scope(chat);
+        let history = self.conversations.entry(chat.to_owned()).or_default();
+        if let Some(token) = history.linked_read.request() {
+            history.requested = true;
+            self.backend.send(Command::LoadRestoredChat {
+                chat: chat.to_owned(),
+                token,
+            });
+            self.backend.send(Command::LoadPins(chat.to_owned()));
+        } else if !history.requested && !history.linked_read.pending() {
+            history.requested = true;
             self.backend.send(Command::LoadChat {
                 chat: chat.to_owned(),
                 before: None,
@@ -6709,7 +6856,90 @@ impl App {
         });
     }
 
+    /// Exact unlocked source chats displayed together in a linked timeline.
+    /// Match the view's eligibility checks; a stale link never expands reads.
+    fn read_chat_ids(&self, chat: &str) -> Vec<ChatId> {
+        self.read_chat_ids_with_incoming(chat, None)
+    }
+
+    fn read_chat_ids_with_incoming(&self, chat: &str, incoming: Option<&Chat>) -> Vec<ChatId> {
+        // A newly restored exact member is visible after this update even
+        // though it is not in the loaded list yet. Never replace a known
+        // identity here: the live-update guard handles changed identities.
+        let incoming =
+            incoming.filter(|incoming| !self.chats.iter().any(|known| known.id == incoming.id));
+        let candidates: Vec<&Chat> = self.chats.iter().chain(incoming).collect();
+        let Some(source) = self.chat(chat) else {
+            return vec![chat.to_owned()];
+        };
+        let Some(person) = self
+            .settings
+            .beeper
+            .people
+            .iter()
+            .find(|person| person.members.iter().any(|member| member.matches(source)))
+        else {
+            return vec![chat.to_owned()];
+        };
+        let ids: Vec<_> = person
+            .members
+            .iter()
+            .filter_map(|member| {
+                candidates
+                    .iter()
+                    .copied()
+                    .find(|known| {
+                        member.matches(known)
+                            && !known.locked
+                            && known.kind == crate::model::ChatKind::Direct
+                            && known.backend_origin == source.backend_origin
+                            && candidates
+                                .iter()
+                                .filter(|other| other.id == known.id)
+                                .count()
+                                == 1
+                    })
+                    .map(|known| known.id.clone())
+            })
+            .collect();
+        if (2..=8).contains(&ids.len()) && ids.iter().any(|id| id == chat) {
+            ids
+        } else {
+            vec![chat.to_owned()]
+        }
+    }
+
+    fn reading_chat_has_unread(&self, chat: &str) -> bool {
+        self.read_chat_ids(chat).iter().any(|id| {
+            self.chat(id)
+                .is_some_and(|known| known.unread > 0 || known.marked_unread)
+        })
+    }
+
     fn mark_read(&mut self, chat: &str) {
+        for id in self.read_chat_ids(chat) {
+            if let Some(history) = self.conversations.get_mut(&id) {
+                history.linked_read.read_sent();
+            }
+            self.mark_source_read(&id);
+        }
+    }
+
+    fn mark_read_automatically(&mut self, chat: &str) {
+        for id in self.read_chat_ids(chat) {
+            self.reconcile_linked_read_scope(&id);
+            if self
+                .conversations
+                .get(&id)
+                .is_some_and(|history| history.linked_read.pending())
+            {
+                continue;
+            }
+            self.mark_source_read(&id);
+        }
+    }
+
+    fn mark_source_read(&mut self, chat: &str) {
         self.clear_chat_notifications(chat);
         self.reset_notification_throttle(chat);
         if let Some(known) = self.chat_mut(chat) {
@@ -6995,12 +7225,8 @@ impl App {
         {
             self.fetch_older(&id, false);
         }
-        if self
-            .chat(&id)
-            .is_some_and(|chat| chat.unread > 0 || chat.marked_unread)
-            && !self.settings.beeper.incognito
-        {
-            self.mark_read(&id);
+        if self.reading_chat_has_unread(&id) && !self.settings.beeper.incognito {
+            self.mark_read_automatically(&id);
         }
         if self.settings.last_chat.as_deref() != Some(id.as_str()) {
             self.settings.last_chat = Some(id.clone());
@@ -11882,9 +12108,9 @@ impl App {
             && !self.settings.beeper.incognito
             && self.chat_view()
             && let Some(open) = self.open_chat.clone()
-            && self.chat(&open).is_some_and(|chat| chat.unread > 0)
+            && self.reading_chat_has_unread(&open)
         {
-            self.mark_read(&open);
+            self.mark_read_automatically(&open);
         }
         // Coming back to the window (Alt+Tab, a screen reader dialog) leaves
         // the reader on whatever had focus, in any section: egui keeps it
@@ -26881,6 +27107,641 @@ mod person_tests {
             members,
             primary: None,
         }
+    }
+
+    fn linked_unread_app() -> App {
+        let mut app = app();
+        let wa = member_chat("ada-wa", "whatsapp", 0, 10);
+        let mut tg = member_chat("ada-tg", "telegram", 3, 20);
+        tg.marked_unread = true;
+        app.chats = vec![wa.clone(), tg.clone()];
+        app.settings.beeper.people.push(ada(vec![
+            Member::of(&wa).unwrap(),
+            Member::of(&tg).unwrap(),
+        ]));
+        app
+    }
+
+    #[test]
+    fn explicit_read_clears_all_exact_linked_members_and_sends_each_source() {
+        let mut app = linked_unread_app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        app.mark_read("ada-wa");
+        let display = app.beeper_person_preview(app.chat("ada-wa").unwrap());
+        assert_eq!(display.unread, 0);
+        assert!(!display.marked_unread);
+        let read: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok())
+            .filter_map(|command| match command {
+                Command::MarkRead { chat, .. } => Some(chat),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(read, ["ada-wa", "ada-tg"]);
+    }
+
+    #[test]
+    fn explicit_linked_read_keeps_read_receipt_privacy_flag_for_every_source() {
+        let mut app = linked_unread_app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        app.account_mut().settings.send_read_receipts = false;
+        app.mark_read("ada-wa");
+        assert!(!app.reading_chat_has_unread("ada-wa"));
+        let read: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok())
+            .filter_map(|command| match command {
+                Command::MarkRead { receipts, .. } => Some(receipts),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(read, [false, false]);
+    }
+
+    #[test]
+    fn opening_linked_chat_clears_unread_on_a_nonrepresentative_member() {
+        let mut app = linked_unread_app();
+        app.open_chat("ada-wa".into());
+        assert!(!app.reading_chat_has_unread("ada-wa"));
+    }
+
+    #[test]
+    fn live_nonrepresentative_updates_clear_only_while_reading_and_focused() {
+        for focused in [true, false] {
+            let mut app = linked_unread_app();
+            app.open_chat = Some("ada-wa".into());
+            app.page = Page::Chats;
+            app.window_focused = focused;
+            app.window_hidden = false;
+            let update = app.chat("ada-tg").unwrap().clone();
+            app.handle_chat_updated(update, true);
+            assert_eq!(
+                app.chat("ada-tg").unwrap().unread,
+                if focused { 0 } else { 3 }
+            );
+            assert_eq!(app.chat("ada-tg").unwrap().marked_unread, !focused);
+        }
+    }
+
+    #[test]
+    fn linked_read_preserves_incognito_hidden_and_stale_or_locked_sources() {
+        let mut app = linked_unread_app();
+        app.settings.beeper.incognito = true;
+        app.open_chat("ada-wa".into());
+        assert!(app.reading_chat_has_unread("ada-wa"));
+        app.handle_chat_updated(app.chat("ada-tg").unwrap().clone(), false);
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
+        app.settings.beeper.incognito = false;
+        app.chat_mut("ada-tg").unwrap().locked = true;
+        app.mark_read("ada-wa");
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
+        app.chat_mut("ada-tg").unwrap().locked = false;
+        app.chat_mut("ada-tg").unwrap().backend_account = Some("replacement-account".into());
+        app.mark_read("ada-wa");
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
+    }
+
+    #[test]
+    fn instagram_third_member_unread_clears_even_when_latest_reply_is_elsewhere() {
+        let mut app = linked_unread_app();
+        let mut instagram = member_chat("ada-instagram", "instagram", 1, 5);
+        instagram.backend_network = Some("Instagram".into());
+        app.settings.beeper.people[0]
+            .members
+            .push(Member::of(&instagram).unwrap());
+        app.chats.push(instagram.clone());
+        app.chat_mut("ada-tg").unwrap().unread = 0;
+        app.chat_mut("ada-tg").unwrap().marked_unread = false;
+        app.chat_mut("ada-wa").unwrap().last_activity = 50;
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        app.open_chat("ada-wa".into());
+        assert_eq!(
+            app.beeper_person_preview(app.chat("ada-wa").unwrap())
+                .unread,
+            0
+        );
+        assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(|command| matches!(command, Command::MarkRead { chat, receipts: true } if chat == "ada-instagram")));
+        app.window_focused = true;
+        app.window_hidden = false;
+        // A later stale server refresh must not revive the visible member's badge.
+        app.handle_chat_updated(instagram, true);
+        assert_eq!(app.chat("ada-instagram").unwrap().unread, 0);
+        assert_eq!(
+            app.beeper_person_preview(app.chat("ada-wa").unwrap())
+                .unread,
+            0
+        );
+    }
+
+    #[test]
+    fn restored_linked_member_is_read_on_its_first_live_update_only_when_eligible() {
+        for mode in [
+            "eligible",
+            "unfocused",
+            "hidden",
+            "incognito",
+            "locked",
+            "wrong-account",
+            "wrong-origin",
+            "group",
+            "not-live",
+        ] {
+            let mut app = linked_unread_app();
+            let mut update = app.chats.remove(1);
+            app.open_chat = Some("ada-wa".into());
+            app.page = Page::Chats;
+            app.window_focused = mode != "unfocused";
+            app.window_hidden = mode == "hidden";
+            app.settings.beeper.incognito = mode == "incognito";
+            match mode {
+                "locked" => update.locked = true,
+                "wrong-account" => update.backend_account = Some("replacement".into()),
+                "wrong-origin" => update.backend_origin = Some("other".into()),
+                "group" => update.kind = ChatKind::Group,
+                _ => {}
+            }
+            let (backend, mut commands) = Backend::recording();
+            app.backend = backend;
+            app.handle_chat_updated(update, mode != "not-live");
+            assert_eq!(app.chat("ada-tg").unwrap().unread, 3, "unloaded {mode}");
+            assert!(
+                !std::iter::from_fn(|| commands.try_recv().ok()).any(
+                    |command| matches!(command, Command::MarkRead { chat, .. } if chat == "ada-tg")
+                ),
+                "no receipt before history: {mode}"
+            );
+            app.apply_backend_event(
+                Event::Messages {
+                    chat: "ada-tg".into(),
+                    messages: vec![],
+                    older: false,
+                    complete: true,
+                },
+                true,
+            );
+            app.ensure_person_loaded(&["ada-wa".into(), "ada-tg".into()]);
+            if let crate::linked_read::State::Requested(request) =
+                app.conversations["ada-tg"].linked_read.clone()
+            {
+                app.apply_backend_event(
+                    Event::BeeperRestoredHistory {
+                        chat: "ada-tg".into(),
+                        token: request.token,
+                        success: true,
+                    },
+                    true,
+                );
+            }
+            let visible = vec!["ada-wa".into(), "ada-tg".into()];
+            app.ensure_person_loaded(&visible);
+            app.finish_deferred_linked_reads(&visible);
+            assert_eq!(
+                app.chat("ada-tg").unwrap().unread,
+                if mode == "eligible" { 0 } else { 3 },
+                "loaded {mode}"
+            );
+            let read = std::iter::from_fn(|| commands.try_recv().ok()).any(
+                |command| matches!(command, Command::MarkRead { chat, .. } if chat == "ada-tg"),
+            );
+            assert_eq!(read, mode == "eligible", "{mode}");
+        }
+    }
+
+    #[test]
+    fn deferred_linked_read_rechecks_identity_and_focus_after_loading() {
+        for mode in [
+            "closed",
+            "unfocused",
+            "incognito",
+            "changed-identity",
+            "hidden",
+            "locked",
+            "events-hidden",
+            "link-removed",
+            "duplicate-id",
+            "history-error",
+        ] {
+            let mut app = linked_unread_app();
+            let update = app.chats.remove(1);
+            app.open_chat = Some("ada-wa".into());
+            app.page = Page::Chats;
+            app.window_focused = true;
+            app.window_hidden = false;
+            let (backend, mut commands) = Backend::recording();
+            app.backend = backend;
+            app.handle_chat_updated(update, true);
+            app.apply_backend_event(
+                Event::Messages {
+                    chat: "ada-tg".into(),
+                    messages: vec![],
+                    older: false,
+                    complete: true,
+                },
+                true,
+            );
+            app.ensure_person_loaded(&["ada-wa".into(), "ada-tg".into()]);
+            if let crate::linked_read::State::Requested(request) =
+                app.conversations["ada-tg"].linked_read.clone()
+            {
+                app.apply_backend_event(
+                    Event::BeeperRestoredHistory {
+                        chat: "ada-tg".into(),
+                        token: request.token,
+                        success: true,
+                    },
+                    true,
+                );
+            }
+            match mode {
+                "closed" => app.open_chat = None,
+                "unfocused" => app.window_focused = false,
+                "incognito" => app.settings.beeper.incognito = true,
+                "changed-identity" => {
+                    app.chat_mut("ada-tg").unwrap().backend_account = Some("replacement".into())
+                }
+                "hidden" => app.window_hidden = true,
+                "locked" => app.chat_mut("ada-tg").unwrap().locked = true,
+                "events-hidden" => app.events_hidden = true,
+                "link-removed" => app.settings.beeper.people.clear(),
+                "duplicate-id" => {
+                    let duplicate = app.chat("ada-tg").unwrap().clone();
+                    app.chats.push(duplicate);
+                }
+                "history-error" => {
+                    app.beeper_history_errors
+                        .insert("ada-tg".into(), "later refresh failed".into());
+                }
+                _ => unreachable!(),
+            }
+            app.ensure_person_loaded(&["ada-wa".into(), "ada-tg".into()]);
+            app.finish_deferred_linked_reads(&["ada-wa".into(), "ada-tg".into()]);
+            assert_eq!(app.chat("ada-tg").unwrap().unread, 3, "{mode}");
+            assert!(
+                !std::iter::from_fn(|| commands.try_recv().ok()).any(
+                    |command| matches!(command, Command::MarkRead { chat, .. } if chat == "ada-tg")
+                ),
+                "{mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn cached_or_failed_history_never_completes_a_restored_read_but_manual_read_can() {
+        let mut app = linked_unread_app();
+        let update = app.chats.remove(1);
+        let cached = &mut app
+            .conversations
+            .entry("ada-tg".into())
+            .or_default()
+            .linked_read;
+        cached.restore(crate::merged::Member::of(&update).unwrap());
+        let old = cached.request().unwrap();
+        cached.complete(old, true);
+        app.open_chat = Some("ada-wa".into());
+        app.page = Page::Chats;
+        app.window_focused = true;
+        app.window_hidden = false;
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        app.handle_chat_updated(update, true);
+        app.ensure_person_loaded(&["ada-wa".into(), "ada-tg".into()]);
+        let recorded: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok()).collect();
+        let token = recorded
+            .iter()
+            .find_map(|command| match command {
+                Command::LoadRestoredChat { chat, token } if chat == "ada-tg" => Some(*token),
+                _ => None,
+            })
+            .unwrap();
+        assert_ne!(token, old);
+        app.apply_backend_event(
+            Event::BeeperRestoredHistory {
+                chat: "ada-tg".into(),
+                token: old,
+                success: true,
+            },
+            true,
+        );
+        assert!(matches!(
+            app.conversations["ada-tg"].linked_read,
+            crate::linked_read::State::Requested(_)
+        ));
+        app.apply_backend_event(
+            Event::BeeperRestoredHistory {
+                chat: "ada-tg".into(),
+                token,
+                success: false,
+            },
+            true,
+        );
+        app.apply_backend_event(
+            Event::BeeperHistoryState {
+                chat: "ada-tg".into(),
+                error: Some("load failed".into()),
+            },
+            true,
+        );
+        app.apply_backend_event(
+            Event::Messages {
+                chat: "ada-tg".into(),
+                messages: vec![],
+                older: false,
+                complete: false,
+            },
+            true,
+        );
+        app.ensure_person_loaded(&["ada-wa".into(), "ada-tg".into()]);
+        app.finish_deferred_linked_reads(&["ada-wa".into(), "ada-tg".into()]);
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
+        assert!(
+            !std::iter::from_fn(|| commands.try_recv().ok()).any(
+                |command| matches!(command, Command::MarkRead { chat, .. } if chat == "ada-tg")
+            )
+        );
+        app.apply(Action::MarkRead("ada-wa".into()), &egui::Context::default());
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 0);
+        assert!(
+            std::iter::from_fn(|| commands.try_recv().ok()).any(
+                |command| matches!(command, Command::MarkRead { chat, .. } if chat == "ada-tg")
+            )
+        );
+    }
+
+    #[test]
+    fn unlink_retires_each_restoration_phase_and_reopens_individual_history() {
+        for phase in ["pending", "requested", "loaded", "failed"] {
+            let mut app = linked_unread_app();
+            let member = Member::of(app.chat("ada-tg").unwrap()).unwrap();
+            let state = &mut app
+                .conversations
+                .entry("ada-tg".into())
+                .or_default()
+                .linked_read;
+            state.restore(member);
+            let mut old = None;
+            if phase != "pending" {
+                old = state.request();
+                if phase == "loaded" || phase == "failed" {
+                    state.complete(old.unwrap(), phase == "loaded");
+                }
+            }
+            let person = app.settings.beeper.people[0].clone();
+            app.unlink_person(&person);
+            assert_eq!(
+                app.conversations["ada-tg"].linked_read,
+                crate::linked_read::State::Absent
+            );
+            app.conversations.get_mut("ada-tg").unwrap().requested = true;
+            let (backend, mut commands) = Backend::recording();
+            app.backend = backend;
+            app.open_chat("ada-tg".into());
+            assert_eq!(
+                app.conversations["ada-tg"].linked_read,
+                crate::linked_read::State::Absent,
+                "{phase}"
+            );
+            assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(|command| matches!(command, Command::LoadChat { chat, before: None } if chat == "ada-tg")), "{phase}");
+            if let Some(token) = old {
+                app.apply_backend_event(
+                    Event::BeeperRestoredHistory {
+                        chat: "ada-tg".into(),
+                        token,
+                        success: true,
+                    },
+                    true,
+                );
+                assert_eq!(
+                    app.conversations["ada-tg"].linked_read,
+                    crate::linked_read::State::Absent
+                );
+            }
+            app.open_chat("ada-wa".into());
+            while commands.try_recv().is_ok() {}
+            app.open_chat("ada-tg".into());
+            assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(|command| matches!(command, Command::LoadChat { chat, before: None } if chat == "ada-tg")), "every individual reopen fetches {phase}");
+            app.mark_read_automatically("ada-tg");
+            assert_eq!(
+                app.chat("ada-tg").unwrap().unread,
+                0,
+                "ordinary read is not blocked {phase}"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_restoration_notice_uses_the_current_interface_locale() {
+        let mut app = linked_unread_app();
+        let member = Member::of(app.chat("ada-tg").unwrap()).unwrap();
+        let state = &mut app
+            .conversations
+            .entry("ada-tg".into())
+            .or_default()
+            .linked_read;
+        state.restore(member);
+        let token = state.request().unwrap();
+        state.complete(token, false);
+        for locale in crate::i18n::Locale::ALL {
+            app.locale = locale;
+            assert_eq!(
+                app.person_history_error("ada-tg").unwrap(),
+                crate::i18n::gettext(locale, "Initial history did not load")
+            );
+        }
+    }
+
+    #[test]
+    fn paging_success_cannot_hide_failed_restoration_retry_or_complete_it() {
+        let mut app = linked_unread_app();
+        app.open_chat = Some("ada-wa".into());
+        app.page = Page::Chats;
+        app.window_focused = true;
+        app.window_hidden = false;
+        let member = Member::of(app.chat("ada-tg").unwrap()).unwrap();
+        let state = &mut app
+            .conversations
+            .entry("ada-tg".into())
+            .or_default()
+            .linked_read;
+        state.restore(member);
+        let old = state.request().unwrap();
+        state.complete(old, false);
+        app.apply_backend_event(
+            Event::BeeperHistoryState {
+                chat: "ada-tg".into(),
+                error: Some("initial failed".into()),
+            },
+            true,
+        );
+        app.apply_backend_event(
+            Event::BeeperHistoryState {
+                chat: "ada-tg".into(),
+                error: None,
+            },
+            true,
+        );
+        app.apply_backend_event(
+            Event::Messages {
+                chat: "ada-tg".into(),
+                messages: vec![],
+                older: true,
+                complete: true,
+            },
+            true,
+        );
+        assert!(!app.beeper_history_errors.contains_key("ada-tg"));
+        assert!(
+            app.person_history_error("ada-tg").is_some(),
+            "retry UI remains visible independently of paging errors"
+        );
+        assert!(app.conversations["ada-tg"].linked_read.failed());
+        let ctx = egui::Context::default();
+        let source = app.chat("ada-wa").unwrap().clone();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert!(crate::ui::merged::show(&mut app, ui, &source));
+        });
+        output.textures_delta.clear();
+        fn retry_drawn(shape: &egui::Shape) -> bool {
+            match shape {
+                egui::Shape::Text(text) => text.galley.text() == "Retry history",
+                egui::Shape::Vec(shapes) => shapes.iter().any(retry_drawn),
+                _ => false,
+            }
+        }
+        assert!(
+            output
+                .shapes
+                .iter()
+                .any(|clipped| retry_drawn(&clipped.shape)),
+            "failed restoration still paints its retry button after paging success"
+        );
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        app.ensure_person_loaded(&["ada-wa".into(), "ada-tg".into()]);
+        app.finish_deferred_linked_reads(&["ada-tg".into()]);
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
+        app.retry_person_history("ada-tg");
+        let token = std::iter::from_fn(|| commands.try_recv().ok())
+            .find_map(|command| match command {
+                Command::LoadRestoredChat { token, .. } => Some(token),
+                _ => None,
+            })
+            .unwrap();
+        assert_ne!(old, token);
+        app.apply_backend_event(
+            Event::BeeperRestoredHistory {
+                chat: "ada-tg".into(),
+                token: old,
+                success: true,
+            },
+            true,
+        );
+        assert!(matches!(
+            app.conversations["ada-tg"].linked_read,
+            crate::linked_read::State::Requested(_)
+        ));
+        app.apply_backend_event(
+            Event::BeeperRestoredHistory {
+                chat: "ada-tg".into(),
+                token,
+                success: true,
+            },
+            true,
+        );
+        app.finish_deferred_linked_reads(&["ada-tg".into()]);
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 0);
+    }
+
+    #[test]
+    fn restored_read_waits_for_visible_source_and_rejects_removed_generation() {
+        let mut app = linked_unread_app();
+        let update = app.chats.remove(1);
+        app.open_chat = Some("ada-wa".into());
+        app.page = Page::Chats;
+        app.window_focused = true;
+        app.window_hidden = false;
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        app.handle_chat_updated(update, true);
+        app.ensure_person_loaded(&["ada-wa".into(), "ada-tg".into()]);
+        let token = std::iter::from_fn(|| commands.try_recv().ok())
+            .find_map(|command| match command {
+                Command::LoadRestoredChat { token, .. } => Some(token),
+                _ => None,
+            })
+            .unwrap();
+        app.apply_backend_event(
+            Event::BeeperRestoredHistory {
+                chat: "ada-tg".into(),
+                token,
+                success: true,
+            },
+            true,
+        );
+        app.finish_deferred_linked_reads(&["ada-wa".into()]);
+        assert_eq!(
+            app.chat("ada-tg").unwrap().unread,
+            3,
+            "offscreen or filtered source is not read"
+        );
+        // A list refresh removing the member invalidates its loaded generation.
+        let wa = app.chat("ada-wa").unwrap().clone();
+        app.apply_backend_event(Event::Chats(vec![wa]), true);
+        app.apply_backend_event(
+            Event::BeeperRestoredHistory {
+                chat: "ada-tg".into(),
+                token,
+                success: true,
+            },
+            true,
+        );
+        assert_eq!(
+            app.conversations["ada-tg"].linked_read,
+            crate::linked_read::State::Absent
+        );
+        assert!(
+            !std::iter::from_fn(|| commands.try_recv().ok()).any(
+                |command| matches!(command, Command::MarkRead { chat, .. } if chat == "ada-tg")
+            )
+        );
+        let restored = linked_unread_app().chat("ada-tg").unwrap().clone();
+        let mut inventory = app.chats.clone();
+        inventory.push(restored);
+        app.apply_backend_event(Event::Chats(inventory), true);
+        assert!(matches!(
+            app.conversations["ada-tg"].linked_read,
+            crate::linked_read::State::Pending(_)
+        ));
+        app.ensure_person_loaded(&["ada-wa".into(), "ada-tg".into()]);
+        let new_token = std::iter::from_fn(|| commands.try_recv().ok())
+            .find_map(|command| match command {
+                Command::LoadRestoredChat { token, .. } => Some(token),
+                _ => None,
+            })
+            .unwrap();
+        assert_ne!(token, new_token);
+        app.apply_backend_event(
+            Event::BeeperRestoredHistory {
+                chat: "ada-tg".into(),
+                token,
+                success: true,
+            },
+            true,
+        );
+        app.finish_deferred_linked_reads(&["ada-tg".into()]);
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
+    }
+
+    #[test]
+    fn a_changed_live_member_identity_is_not_marked_read_by_a_stale_link() {
+        let mut app = linked_unread_app();
+        app.open_chat = Some("ada-wa".into());
+        app.page = Page::Chats;
+        app.window_focused = true;
+        app.window_hidden = false;
+        let mut update = app.chat("ada-tg").unwrap().clone();
+        update.backend_account = Some("replacement".into());
+        app.handle_chat_updated(update, true);
+        assert_eq!(app.chat("ada-tg").unwrap().unread, 3);
     }
 
     #[test]

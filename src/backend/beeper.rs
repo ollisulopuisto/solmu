@@ -2606,6 +2606,7 @@ pub fn run(
                     Ok(Command::SendImage { chat, width, height, rgba, view_once, caption, quoting, .. }) => emit(Event::SendRefused {
                         chat, quoting, unsent: crate::backend::Unsent::Image { width, height, rgba, view_once, caption }, reason: crate::backend::Refusal::Offline,
                     }),
+                    Ok(Command::LoadRestoredChat { chat, token }) => emit(Event::BeeperRestoredHistory { chat, token, success: false }),
                     Ok(command) => match refuse_unsupported_payload(command) {
                         Err(event)=>emit(*event),
                         Ok(_)=>emit(Event::Info("Beeper is not connected yet. Requested action was not performed; retry after connection recovers.".into())),
@@ -2707,6 +2708,12 @@ pub fn run(
                     emit(*event);
                     continue;
                 }
+            };
+            let (cmd, restoration) = match cmd {
+                Command::LoadRestoredChat { chat, token } => {
+                    (Command::LoadChat { chat, before: None }, Some(token))
+                }
+                cmd => (cmd, None),
             };
             match cmd {
                 Command::Shutdown => return,
@@ -2880,6 +2887,7 @@ pub fn run(
                             if let Some(error) = &error {
                                 emit(Event::Error(error.clone()));
                             }
+                            let successful = error.is_none();
                             emit(Event::BeeperHistoryState {
                                 chat: chat.clone(),
                                 error,
@@ -2892,11 +2900,18 @@ pub fn run(
                                 .collect();
                             messages.sort_by_key(|m| m.timestamp);
                             emit(Event::Messages {
-                                chat,
+                                chat: chat.clone(),
                                 messages,
                                 older,
                                 complete: !page.has_more,
                             });
+                            if let Some(token) = restoration {
+                                emit(Event::BeeperRestoredHistory {
+                                    chat,
+                                    token,
+                                    success: successful,
+                                });
+                            }
                         }
                         Err(e) => {
                             if not_found(&e) {
@@ -2908,11 +2923,18 @@ pub fn run(
                                 error: Some(copy.clone()),
                             });
                             emit(Event::Messages {
-                                chat,
+                                chat: chat.clone(),
                                 messages: Vec::new(),
                                 older,
                                 complete: false,
                             });
+                            if let Some(token) = restoration {
+                                emit(Event::BeeperRestoredHistory {
+                                    chat,
+                                    token,
+                                    success: false,
+                                });
+                            }
                             emit(Event::Error(copy));
                         }
                     }
@@ -5856,6 +5878,10 @@ mod tests {
                             .unwrap()
                             .push((method.clone(), path.clone(), body));
                         let (base, query) = path.split_once('?').unwrap_or((path.as_str(), ""));
+                        if base == "/v1/chats/fail-history/messages" {
+                            let _ = stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                            continue;
+                        }
                         let payload = match (method.as_str(), base) {
                         ("GET", "/v1/accounts") => ACCOUNTS_JSON.to_string(),
                         ("GET", "/v1/chats") => CHATS_JSON.to_string(),
@@ -5939,6 +5965,68 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn restored_history_completion_is_tagged_and_emitted_only_after_the_fetch_result() {
+        let (base_url, _requests, stop) = start_stub();
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = AppDirs::under(dir.path()).as_account();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let worker = std::thread::spawn(move || {
+            run(
+                BeeperConfig {
+                    base_url,
+                    token: "test".into(),
+                },
+                dirs,
+                event_tx,
+                rx,
+                Waker::default(),
+            )
+        });
+        collect_until(&event_rx, Duration::from_secs(5), &|event| {
+            matches!(event, Event::Chats(_))
+        });
+        tx.send(Command::LoadChat {
+            chat: "!fam:beeper.local".into(),
+            before: None,
+        })
+        .unwrap();
+        let ordinary = collect_until(
+            &event_rx,
+            Duration::from_secs(5),
+            &|event| matches!(event, Event::Messages { chat, older: false, .. } if chat == "!fam:beeper.local"),
+        );
+        assert!(
+            !ordinary
+                .iter()
+                .any(|event| matches!(event, Event::BeeperRestoredHistory { .. }))
+        );
+        for (chat, token, success) in [
+            ("!fam:beeper.local", 41, true),
+            ("foreign-chat", 42, false),
+            ("fail-history", 43, false),
+        ] {
+            tx.send(Command::LoadRestoredChat {
+                chat: chat.into(),
+                token,
+            })
+            .unwrap();
+            let events = collect_until(
+                &event_rx,
+                Duration::from_secs(5),
+                &|event| matches!(event, Event::BeeperRestoredHistory { token: got, .. } if *got == token),
+            );
+            assert!(
+                matches!(events.last(), Some(Event::BeeperRestoredHistory { token: got, success: got_success, .. }) if *got == token && *got_success == success)
+            );
+            assert!(events.iter().any(|event| matches!(event, Event::Messages { chat: got, older: false, .. } if got == chat)), "history (or failure placeholder) arrives before completion");
+        }
+        tx.send(Command::Shutdown).unwrap();
+        worker.join().unwrap();
+        stop.store(true, Ordering::Relaxed);
     }
 
     #[test]

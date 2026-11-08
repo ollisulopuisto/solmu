@@ -144,8 +144,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     if valid.len() < 2 {
         app.ensure_person_loaded(&[]);
         if ui.button("Remove local link").clicked() {
-            app.settings.beeper.people.retain(|p| p != &person);
-            app.mark_settings_dirty();
+            app.unlink_person(&person);
         }
         ui.colored_label(egui::Color32::YELLOW,"Linked person unavailable: member identity missing or locked. Open members separately.");
         return true;
@@ -350,14 +349,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         ui.colored_label(warning, note);
     }
     for member in &valid {
-        if let Some(error) = app.beeper_history_errors.get(&member.chat).cloned() {
+        if let Some(error) = app.person_history_error(&member.chat) {
             let source = source_label(app, &valid, member);
             ui.horizontal(|ui| {
                 ui.colored_label(
                     egui::Color32::YELLOW,
-                    format!("Partial timeline: {source} history failed: {error}"),
+                    crate::i18n::gettext(
+                        app.locale,
+                        "Partial timeline: {source} history failed: {error}",
+                    )
+                    .replace("{source}", &source)
+                    .replace("{error}", &error),
                 );
-                if ui.button("Retry history").clicked() {
+                if ui
+                    .button(crate::i18n::gettext(app.locale, "Retry history"))
+                    .clicked()
+                {
                     app.retry_person_history(&member.chat);
                 }
             });
@@ -663,6 +670,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     let mut previous: Option<&crate::model::Message> = None;
     let mut previous_laid_out = false;
     let mut previous_on_screen = false;
+    let mut displayed_sources = std::collections::HashSet::new();
     let output = ui
         // The scroll area runs to the pane's edge so its overlay bar sits in
         // the side margin; rows keep the inset width and never sit under it.
@@ -893,6 +901,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                     },
                                 )
                                 .inner;
+                            if bubble_rect.is_some_and(|rect| rect.intersects(viewport)) {
+                                displayed_sources.insert(message.chat.clone());
+                            }
                             if show_mark && let Some(rect) = bubble_rect {
                                 let side = if message.from_me {
                                     area.max.x + ui.spacing().item_spacing.x
@@ -994,6 +1005,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             "Open this source chat separately for that action; linked routing was not guessed",
         );
     }
+    app.finish_deferred_linked_reads(&displayed_sources.into_iter().collect::<Vec<_>>());
     app.actions.extend(actions);
     ui.ctx().data_mut(|d| d.insert_temp(key, state));
     true
@@ -1570,8 +1582,7 @@ pub(crate) fn sidebar(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         ui.ctx().data_mut(|d| d.insert_temp(state_key, linked));
         if ui.button("Unlink").clicked() {
             app.ensure_person_loaded(&[]);
-            app.settings.beeper.people.retain(|p| p != person);
-            app.mark_settings_dirty();
+            app.unlink_person(person);
             ui.ctx().data_mut(|d| d.insert_temp(key, Picker::default()));
             return true;
         }
