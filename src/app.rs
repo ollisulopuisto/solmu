@@ -3849,27 +3849,37 @@ impl App {
         if needle.is_empty() || self.search_scope_active() {
             return Vec::new();
         }
-        let mut contacts: Vec<&Contact> = self
+        // Performance optimization:
+        // Precompute the lowercase sort key once per matching candidate contact (similar
+        // to `contact_choices()` in `src/ui/dialogs.rs`). Pairing `(sort_key, contact)`
+        // avoids allocating a new lowercased String repeatedly across O(n log n) comparisons
+        // in `sort_by`.
+        let mut contacts: Vec<(String, &Contact)> = self
             .contacts
             .values()
             .filter(|contact| crate::model::phone_of(&contact.id).is_some())
             .filter(|contact| self.me.as_deref() != Some(contact.id.as_str()))
             .filter(|contact| !self.chats.iter().any(|chat| chat.id == contact.id))
-            .filter(|contact| {
-                contact
-                    .display_name()
-                    .is_some_and(|name| crate::util::search_key(name).contains(&needle))
-                    || contact
-                        .id
-                        .split('@')
-                        .next()
-                        .is_some_and(|phone| phone.contains(&needle))
+            .filter_map(|contact| {
+                let name = contact.display_name();
+                let matches_name =
+                    name.is_some_and(|n| crate::util::search_key(n).contains(&needle));
+                let matches_phone = contact
+                    .id
+                    .split('@')
+                    .next()
+                    .is_some_and(|phone| phone.contains(&needle));
+                if matches_name || matches_phone {
+                    let sort_key = name.unwrap_or(&contact.id).to_lowercase();
+                    Some((sort_key, contact))
+                } else {
+                    None
+                }
             })
             .collect();
-        contacts
-            .sort_by_key(|contact| contact.display_name().unwrap_or(&contact.id).to_lowercase());
+        contacts.sort_by(|a, b| a.0.cmp(&b.0));
         contacts.truncate(15);
-        contacts
+        contacts.into_iter().map(|(_, contact)| contact).collect()
     }
 
     /// Archived chats with unread messages, for the Archived chip.
