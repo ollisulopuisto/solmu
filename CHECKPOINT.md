@@ -9,6 +9,8 @@ Use create_new to refuse a raced-in file rather than overwrite it. Tests cover
 whitespace/path/case collisions with distinct bytes, reserved suffixes, and
 existing-file/missing-source refusals before any writes. Later I/O failures
 can still leave a partial batch; this is not a filesystem transaction.
+Unix batch exports explicitly request mode 0600 before copying bytes,
+with a regression that exports a 0644 source and checks owner-only output.
 No UI, merge or release changes.
 
 ## PR217 contact-key cache check repair - November 7, 2026

@@ -103,9 +103,16 @@ fn save_batch(folder: &Path, files: Vec<(PathBuf, String)>) -> Result<(), String
         plan.push((source, destination));
     }
     for (mut source, destination) in plan {
-        let mut output = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // Exported private conversations must not become readable to other
+        // local users through the default 0666 masked by a common 022 umask.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut output = options
             .open(&destination)
             .map_err(|error| error.to_string())?;
         std::io::copy(&mut source, &mut output).map_err(|error| error.to_string())?;
@@ -243,6 +250,25 @@ mod tests {
             run(command(), Some(destination)),
             Some(Event::Error(_))
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn batch_exports_are_owner_only_even_when_the_source_is_public() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("shared");
+        std::fs::create_dir(&folder).unwrap();
+        let source = root.path().join("source");
+        std::fs::write(&source, b"private attachment").unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).unwrap();
+        save_batch(&folder, vec![(source, "private.txt".into())]).unwrap();
+        let output = folder.join("private.txt");
+        assert_eq!(
+            std::fs::metadata(&output).unwrap().permissions().mode() & 0o077,
+            0
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), b"private attachment");
     }
 
     #[test]

@@ -9,6 +9,7 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Save all exports are owner-only on Unix, rather than inheriting a world-readable default mode.
 - Save all keeps attachments with colliding sanitized filenames separate and checks the batch before writing.
 
 ## v0.24.5
