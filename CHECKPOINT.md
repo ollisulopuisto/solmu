@@ -15,6 +15,16 @@ native harness (unrelated test modules omitted, production renderer unchanged)
 passes; restoring the old edge fails with 12 points of outgoing overlap.
 Actual demo binary captures at wide/dark and narrow/light were inspected:
 marks stay outside bubbles, wrapped text and grouped footers remain readable.
+Fixture review: rebase Signal timestamps after the final WhatsApp fixture row,
+not launch time. Order is always outgoing WhatsApp first, incoming Signal next.
+A separate fixed-clock regression compares all row timestamps at 00:00, 12:00,
+18:00, 19:00 and 23:00 UTC; it and the geometry test pass in the focused native
+harness. Updated wide/dark and narrow/light captures inspected after this fix.
+Adversarial check: rebasing preserves Signal sender direction, exact chat IDs,
+minute spacing and both chip directions; other demo fixtures are untouched.
+CI on c4c3fc8 failed in mr-boxington setup after cache restore with repeated
+HTTP504 responses, before either clippy or project tests ran. Local strict
+clippy passes; the next head still needs real runtime CI.
 Review media stays outside the repository. Full native runtime suite is a CI
 gate, not a claimed local pass. No merge or new DMG; revert this PR to roll back.
 

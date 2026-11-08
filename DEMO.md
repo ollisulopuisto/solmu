@@ -182,3 +182,6 @@ message and a Signal run with an incoming message. Use `--demo-size 620x1000`
 and `1180x1000`, with and without `,light`, to inspect the icon lanes and
 wrapped message/footer layout. The runtime geometry regression also checks
 both directions, themes and widths.
+
+The chip-lanes fixture always puts WhatsApp before Signal, independent of the
+launch hour. Signal timestamps are rebased after the fixed WhatsApp sample.
