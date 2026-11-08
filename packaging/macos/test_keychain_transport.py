@@ -22,6 +22,36 @@ def checked(condition):
 
 
 class NativeKeychainTransportTests(unittest.TestCase):
+    def test_notary_password_uses_private_tty_prompt(self):
+        # Fake only the network-facing command, exercise the real pty/fork helper.
+        with tempfile.TemporaryDirectory(prefix="notary prompt smoke ") as directory:
+            folder = Path(directory)
+            executable = folder / "xcrun"
+            marker = folder / "passed"
+            executable.write_text(
+                '#!/usr/bin/env python3\n'
+                'import getpass, os, pathlib, sys, termios\n'
+                'if not sys.stdin.isatty(): raise SystemExit(3)\n'
+                'if termios.tcgetattr(0)[3] & termios.ECHO: raise SystemExit(4)\n'
+                'if "--password" in sys.argv or "APPLE_APP_PASSWORD" in os.environ:\n'
+                '    raise SystemExit(5)\n'
+                'if sys.argv[1:3] != ["notarytool", "store-credentials"]:\n'
+                '    raise SystemExit(6)\n'
+                'value = getpass.getpass("App-specific password: ")\n'
+                'if value != \'dummy "quotes" \\\\ backslash $value\':\n'
+                '    raise SystemExit(7)\n'
+                'pathlib.Path(os.environ["TEST_MARKER"]).write_text("passed")\n'
+            )
+            executable.chmod(0o700)
+            env = {"PATH": str(folder) + os.pathsep + os.environ["PATH"],
+                   "APPLE_APP_PASSWORD": 'dummy "quotes" \\ backslash $value',
+                   "APPLE_ID": "dummy@example.invalid", "APPLE_TEAM_ID": "DUMMYTEAM",
+                   "KEYCHAIN_PATH": str(folder / "dummy.keychain"),
+                   "TEST_MARKER": str(marker)}
+            with patch.dict(os.environ, env):
+                HELPER.store_notary_credentials()
+            checked(marker.read_text() == "passed")
+
     def test_create_unlock_import_partition_and_delete(self):
         with tempfile.TemporaryDirectory(prefix="solmu signing smoke ") as directory:
             folder = Path(directory)
@@ -64,6 +94,7 @@ class NativeKeychainTransportTests(unittest.TestCase):
                     HELPER.security("list-keychains", "-d", "user"),
                 )
                 checked(set(HELPER.keychain_paths(original)).issubset(current))
+                checked(str(keychain) in current)
                 # Prove the password was not silently truncated by -i quoting.
                 HELPER.security("lock-keychain", str(keychain))
                 with self.assertRaises(RuntimeError):  # noqa: PT027 - standalone stdlib runner
