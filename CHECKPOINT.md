@@ -15,7 +15,10 @@ labels to same-name recipients, reuses a recipient's existing label, and
 encodes longest labels first. Its regression selects A, B, A with the same
 display name. A Tab-cycle regression also exposed a scrolled-off bubble mistaking the
 header search control for its child by rectangle containment. Only visible
-child-focus geometry may trigger that scroll. No catalog changes, merge
+child-focus geometry may trigger that scroll. The full path audit also switched
+mention encoding to original-draft spans only, so generated wire tokens cannot
+be reinterpreted as another recipient name. Ambiguous legacy labels remain
+literal rather than guessing. See MENTION-RETRY.md. No catalog changes, merge
 or release. Full runtime suite remains a CI gate.
 
 ## PR217 contact-key cache check repair - November 7, 2026

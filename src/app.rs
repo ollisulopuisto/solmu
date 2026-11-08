@@ -7236,28 +7236,48 @@ impl App {
         // Disambiguated labels may contain another member's shorter name.
         // Encode the longest first so @Mira cannot consume @Mira (2).
         selected.sort_by_key(|mention| std::cmp::Reverse(mention.name.len()));
+        selected.retain(|mention| participants.contains(&mention.id) && !mention.name.is_empty());
+        let ambiguous: std::collections::HashSet<_> = selected
+            .iter()
+            .filter(|mention| {
+                selected
+                    .iter()
+                    .any(|other| other.name == mention.name && other.id != mention.id)
+            })
+            .map(|mention| mention.name.clone())
+            .collect();
+        selected.retain(|mention| !ambiguous.contains(&mention.name));
         let mut mentions = Vec::new();
-        for mention in selected {
-            if !participants.iter().any(|id| id == &mention.id) {
-                continue;
-            }
-            let Some(user) = mention.id.split('@').next().filter(|user| !user.is_empty()) else {
-                continue;
-            };
-            let shown = format!("@{}", mention.name);
-            let mut at = 0;
-            let mut found = false;
-            while let Some(relative) = find_named_mention(&text[at..], &shown) {
-                let start = at + relative;
-                let wire = format!("@{user}");
-                text.replace_range(start..start + shown.len(), &wire);
-                at = start + wire.len();
-                found = true;
-            }
-            if found && !mentions.iter().any(|id| id == &mention.id) {
-                mentions.push(mention.id);
+        let mut encoded = String::with_capacity(text.len());
+        let mut at = 0;
+        // Match only the original draft. Newly emitted numeric wire tokens
+        // must never become another recipient's display-name match.
+        while at < text.len() {
+            let matched = selected.iter().find_map(|mention| {
+                let user = mention
+                    .id
+                    .split('@')
+                    .next()
+                    .filter(|user| !user.is_empty())?;
+                let shown = format!("@{}", mention.name);
+                (text[at..].starts_with(&shown)
+                    && find_named_mention(&text[at..], &shown) == Some(0))
+                .then_some((mention, user, shown.len()))
+            });
+            if let Some((mention, user, len)) = matched {
+                encoded.push('@');
+                encoded.push_str(user);
+                if !mentions.contains(&mention.id) {
+                    mentions.push(mention.id.clone());
+                }
+                at += len;
+            } else {
+                let character = text[at..].chars().next().expect("character remains");
+                encoded.push(character);
+                at += character.len_utf8();
             }
         }
+        text = encoded;
         // Preserve mentions in an edited draft that already contains wire
         // tokens, even when it did not originate in this composer session.
         for id in participants {
@@ -15124,6 +15144,47 @@ mod tests {
         assert_eq!(recipients.len(), 2);
         assert!(recipients.contains(&first.to_owned()));
         assert!(recipients.contains(&second.to_owned()));
+    }
+
+    #[test]
+    fn mention_encoding_never_rewrites_generated_wire_tokens() {
+        let mut app = app();
+        let chat = "123@g.us";
+        let first = "12345@s.whatsapp.net";
+        let second = "67890@s.whatsapp.net";
+        let mut group = Chat::new(chat.into(), "Group".into());
+        group.participants = vec![first.into(), second.into()];
+        app.chats.push(group);
+        app.composer_mentions = vec![
+            ComposerMention {
+                id: first.into(),
+                name: "Mira".into(),
+            },
+            ComposerMention {
+                id: second.into(),
+                name: "12345".into(),
+            },
+        ];
+        let (wire, recipients) =
+            app.encode_composer_mentions(chat, "@Mira and @12345 and *@Mira*".into());
+        assert_eq!(wire, "@12345 and @67890 and *@12345*");
+        assert_eq!(recipients, [first, second]);
+    }
+
+    #[test]
+    fn legacy_ambiguous_mention_labels_do_not_guess_a_recipient() {
+        let mut app = app();
+        let chat = "123@g.us";
+        let mut group = Chat::new(chat.into(), "Group".into());
+        group.participants = vec!["12345@s.whatsapp.net".into(), "67890@s.whatsapp.net".into()];
+        app.chats.push(group);
+        app.composer_mentions = vec![
+            ComposerMention::new("12345@s.whatsapp.net".into(), "Mira".into()),
+            ComposerMention::new("67890@s.whatsapp.net".into(), "Mira".into()),
+        ];
+        let (wire, recipients) = app.encode_composer_mentions(chat, "@Mira and @Mira".into());
+        assert_eq!(wire, "@Mira and @Mira");
+        assert!(recipients.is_empty());
     }
 
     #[test]
