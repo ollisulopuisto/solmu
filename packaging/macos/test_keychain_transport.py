@@ -48,6 +48,9 @@ class NativeKeychainTransportTests(unittest.TestCase):
                  "-in", str(cert), "-out", str(bundle), "-passout",
                  "file:" + str(password_file)], capture_output=True, check=True,
             )
+            with self.assertRaises(RuntimeError):  # noqa: PT027 - stdlib runner
+                HELPER.security("unlock-keychain", "-p", "dummy",
+                                str(folder / "missing.keychain-db"))
             original = HELPER.security("list-keychains", "-d", "user")
             try:
                 with patch.dict(os.environ, env):
