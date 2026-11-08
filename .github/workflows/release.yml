@@ -260,7 +260,7 @@ jobs:
 
       - name: Package, sign and notarize macOS app
         run: |
-          native-packages build \
+          ruby packaging/macos/secure_native_packages.rb build \
             --version "$PACKAGE_VERSION" --target "$PACKAGE_TARGET" --defer-recipes \
             --output "$RUNNER_TEMP/macos-packages"
           mv "$RUNNER_TEMP/macos-packages/packages/$PACKAGE_TARGET/dmg/"*.dmg "dist/$DMG_NAME"
