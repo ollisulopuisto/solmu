@@ -111,6 +111,16 @@ targets:
     native:
       command: [ruby, packaging/macos/dmg.rb, '@PAYLOAD@', '@PACKAGE@']
       output: 'solmu-@TAG@-macos-universal.dmg'
+  macos-arm64:
+    platform: macos
+    arch: arm64
+    formats: [dmg]
+    input:
+      kind: directory
+      local: dist/macos-input
+    native:
+      command: [ruby, packaging/macos/dmg.rb, '@PAYLOAD@', '@PACKAGE@']
+      output: 'solmu-@TAG@-macos-arm64.dmg'
   windows-amd64:
     platform: windows
     arch: amd64
