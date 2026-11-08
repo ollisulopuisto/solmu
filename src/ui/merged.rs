@@ -354,9 +354,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             ui.horizontal(|ui| {
                 ui.colored_label(
                     egui::Color32::YELLOW,
-                    format!("Partial timeline: {source} history failed: {error}"),
+                    crate::i18n::gettext(
+                        app.locale,
+                        "Partial timeline: {source} history failed: {error}",
+                    )
+                    .replace("{source}", &source)
+                    .replace("{error}", &error),
                 );
-                if ui.button("Retry history").clicked() {
+                if ui
+                    .button(crate::i18n::gettext(app.locale, "Retry history"))
+                    .clicked()
+                {
                     app.retry_person_history(&member.chat);
                 }
             });

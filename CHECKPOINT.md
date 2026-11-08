@@ -15,6 +15,8 @@ manual read is separate from automatic read. Unlink retires all restoration
 phases and reopens ordinary fetch/read behavior. Failed restoration owns its
 retry visibility independently of paging errors. Scope invalidation and paging
 success while Failed are covered in LINKED-READ.md and native app tests.
+Restoration notice, partial-timeline template and retry button use gettext;
+fallback lookup is tested across every offered locale.
 No merge or release.
 
 ## PR240 follow-up: batch filename collisions - November 8, 2026

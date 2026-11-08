@@ -85,3 +85,18 @@ native app tests: 17 passed. Pure state tests exercise scope retention/removal
 from all six states. A synthetic runtime capture was inspected: the fallback
 warning and Retry history button are visible after the paging error is cleared.
 No review media was committed.
+
+## Localization review
+
+The restoration fallback, partial-timeline message template and Retry history
+button now all use the active-locale gettext path. Template placeholders keep
+source/error values separate from translated prose. The PR production diff was
+swept for other new user-facing literals; remaining English additions are test
+fixtures/assertions or internal invariant messages. Existing broader linked-view
+copy outside this PR is unchanged. No speculative catalog translations were
+added: missing catalog entries retain the existing English fallback.
+
+The fallback test covers every offered locale. All 18 focused native app tests,
+strict all-feature/all-target clippy, format and diff checks pass. Refreshed
+synthetic capture inspected: partial-history notice and Retry history remain
+readable. Full current-head CI remains the final gate.

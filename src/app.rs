@@ -6692,7 +6692,9 @@ impl App {
             self.conversations
                 .get(chat)
                 .filter(|history| history.linked_read.failed())
-                .map(|_| "Initial history did not load".into())
+                .map(|_| {
+                    crate::i18n::gettext(self.locale, "Initial history did not load").into_owned()
+                })
         })
     }
 
@@ -27283,6 +27285,27 @@ mod person_tests {
                 app.chat("ada-tg").unwrap().unread,
                 0,
                 "ordinary read is not blocked {phase}"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_restoration_notice_uses_the_current_interface_locale() {
+        let mut app = linked_unread_app();
+        let member = Member::of(app.chat("ada-tg").unwrap()).unwrap();
+        let state = &mut app
+            .conversations
+            .entry("ada-tg".into())
+            .or_default()
+            .linked_read;
+        state.restore(member);
+        let token = state.request().unwrap();
+        state.complete(token, false);
+        for locale in crate::i18n::Locale::ALL {
+            app.locale = locale;
+            assert_eq!(
+                app.person_history_error("ada-tg").unwrap(),
+                crate::i18n::gettext(locale, "Initial history did not load")
             );
         }
     }
