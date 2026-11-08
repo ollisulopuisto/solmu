@@ -52,6 +52,20 @@ PR navigation attempts reset the browser connection before loading; neutral
 page loads. No image URL produced. Maintainer can drag the synthetic PNGs into
 the PR-description editor; no media committed. CI must run on the repair head.
 
+Full runtime CI on544bc78 found11 failures (1905 passed,8 ignored), so that
+head is not merge-ready. The compact-footer scope inherited vertical gaps and
+horizontal minimum row height even without reactions. Set the scope's vertical
+spacing to zero, retain the explicit3pt footer gap, and use a direct15pt
+metadata slot when no reaction row exists. Use wrapping layout only for actual
+reactions. Forwarded text keeps its original top padding. These production
+changes preserve the older media, call, album-height, selection/right-click,
+keyboard-link and initial-scroll contracts instead of changing their tests.
+Expanded focused harness includes every failed test unchanged, its helpers
+and the full bubble-detail test module:55 tests pass. Changed production code
+is the PR's renderer. Strict all-feature/all-target clippy, fmt and demo build
+pass. Fresh dark/wide and light/narrow synthetic captures inspected. Full CI
+still needs to validate the next repair head; do not merge based on local tests.
+
 ## Linked network chip lane - November 8, 2026
 
 Instinct, branch `fix/linked-network-chip-overlap`, based on main 2498c7b

@@ -4609,6 +4609,7 @@ fn bubble(
             .max_rect(area)
             .layout(Layout::top_down(if own { Align::Max } else { Align::Min })),
         |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
             if with_avatar {
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
@@ -4739,7 +4740,7 @@ fn bubble(
                     };
                     let footer_area = Rect::from_min_max(pos2(start, ui.cursor().top()), area.max);
                     ui.scope_builder(egui::UiBuilder::new().max_rect(footer_area), |ui| {
-                        ui.horizontal_wrapped(|ui| {
+                        let mut draw = |ui: &mut egui::Ui| {
                             ui.spacing_mut().item_spacing.x = 5.0;
                             for member in members.iter().filter(|row| !row.reactions.is_empty()) {
                                 reactions(ui, view, member, actions);
@@ -4754,7 +4755,7 @@ fn bubble(
                                     width -= 19.0;
                                 }
                                 let (slot, _) = ui.allocate_exact_size(
-                                    vec2(width.max(1.0), 22.0),
+                                    vec2(width.max(1.0), if reacted { 22.0 } else { 15.0 }),
                                     Sense::hover(),
                                 );
                                 footer(ui, view, last, Some(slot), starred, pinned, actions);
@@ -4763,7 +4764,12 @@ fn bubble(
                                     data.remove::<Rect>(footer_id(&last.chat, &last.id))
                                 });
                             }
-                        });
+                        };
+                        if reacted {
+                            ui.horizontal_wrapped(draw);
+                        } else {
+                            draw(ui);
+                        }
                     });
                 } else {
                     ui.ctx()
@@ -5292,7 +5298,10 @@ fn bubble_margin(palette: &Palette, message: &Message, over_picture: bool) -> Ma
         Margin {
             left: 10,
             right: 10,
-            top: if matches!(message.content, Content::Text { .. }) {
+            top: if matches!(message.content, Content::Text { .. })
+                && !message.forwarded
+                && message.quoted.is_none()
+            {
                 9
             } else {
                 6
