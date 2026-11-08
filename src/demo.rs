@@ -2318,6 +2318,23 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
         match part {
             "history-date" => history_date_sample(app),
             "minute-gutter" => minute_gutter_sample(app),
+            "group-footer-reactions" => {
+                minute_gutter_sample(app);
+                let chat = SAMPLES[0].id;
+                let mut row = message(
+                    chat,
+                    "reaction-clock",
+                    false,
+                    crate::util::now() - 60,
+                    Content::text("OK, the clock stays clear of my reactions."),
+                );
+                row.reactions.push(Reaction {
+                    sender: ME.into(),
+                    from_me: true,
+                    emoji: "👍".into(),
+                });
+                app.conversations.get_mut(chat).unwrap().messages = vec![row];
+            }
             "group-footer-status" => {
                 minute_gutter_sample(app);
                 let history = app.conversations.get_mut(SAMPLES[0].id).unwrap();
@@ -10665,6 +10682,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn reactions_never_cover_group_footer_clocks() {
+        for page in ["chat", "chat,light"] {
+            let mut app = app();
+            apply_flags(&mut app, Some(page));
+            let chat = SAMPLES[0].id;
+            let mut row = message(
+                chat,
+                "reaction-clock",
+                false,
+                1_700_000_000,
+                Content::text("OK"),
+            );
+            row.reactions.push(Reaction {
+                sender: ME.into(),
+                from_me: true,
+                emoji: "👍".into(),
+            });
+            app.conversations.get_mut(chat).unwrap().messages = vec![row];
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            render(&mut app, &ctx);
+            let footer = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(crate::ui::conversation::footer_id(
+                        chat,
+                        "reaction-clock",
+                    ))
+                })
+                .unwrap();
+            let pill = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(
+                        crate::ui::conversation::bubble_id(chat, "reaction-clock")
+                            .with(("reaction", "👍")),
+                    )
+                })
+                .unwrap();
+            assert!(
+                pill.top() >= footer.bottom(),
+                "{page}: reaction {pill:?} must be below footer {footer:?}"
+            );
+        }
+    }
+
     /// Our time or ticks open "Message info"; an incoming time opens nothing.
     #[test]
     fn clicking_the_time_or_ticks_opens_message_info() {
@@ -17697,6 +17759,12 @@ mod tests {
             })
             .count();
         assert_eq!(hints, 1, "exactly the failed message carries the hint");
+        assert!(
+            tree.nodes.iter().any(|(_, node)| node.label()
+                == Some("Restore failed text to composer")
+                && node.role() == egui::accesskit::Role::Button),
+            "retry is a named accessible button"
+        );
     }
 
     /// Every control the line under the header draws is reachable without a

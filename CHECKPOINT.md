@@ -1,5 +1,16 @@
 # Fast-beeper coordination and development checkpoint
 
+## PR241 review repair - November 8, 2026
+
+Retry now carries display-name text and its mention selections through the
+ordinary and linked composer paths, without changing empty-draft guards or
+automatically sending. Original markup stays intact. Reaction pills reserve
+room below group clocks instead of overlapping them. New status/retry strings
+use gettext, including footer measurement, and retry has an accessible button
+label. Regression tests cover mention round-trip/draft retention, reaction
+separation in both themes and the accessible retry label. No catalog changes,
+merge or release. Full runtime suite remains a CI gate.
+
 ## PR217 contact-key cache check repair - November 7, 2026
 
 Instinct updates the Option-returning filter_map to use ? for its missing

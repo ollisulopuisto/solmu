@@ -387,6 +387,7 @@ fn run() -> eframe::Result<()> {
             app.actions.push(solmu::model::Action::PrefillComposer {
                 chat: request.chat.clone(),
                 text: text.clone(),
+                mentions: Vec::new(),
             });
         }
     }

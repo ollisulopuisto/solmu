@@ -1026,6 +1026,12 @@ pub struct ComposerMention {
     name: String,
 }
 
+impl ComposerMention {
+    pub(crate) fn new(id: String, name: String) -> Self {
+        Self { id, name }
+    }
+}
+
 impl Pending {
     /// Whether the composer can preview the file as an image.
     pub fn is_picture_file(path: &std::path::Path) -> bool {
@@ -2190,6 +2196,7 @@ impl App {
                         self.actions.push(Action::PrefillComposer {
                             chat: request.chat.clone(),
                             text,
+                            mentions: Vec::new(),
                         });
                     }
                 }
@@ -7836,7 +7843,11 @@ impl App {
                         self.app_lock.defer(crate::app_lock::Deferred::Invite(code));
                     }
                 }
-                Action::PrefillComposer { chat, text } => {
+                Action::PrefillComposer {
+                    chat,
+                    text,
+                    mentions,
+                } if mentions.is_empty() => {
                     // The chat it belongs to arrives in the request the
                     // StartChat above is holding; a template without its
                     // chat has nowhere to go.
@@ -7972,7 +7983,11 @@ impl App {
                     self.dialog = None;
                 }
             }
-            Action::PrefillComposer { chat, text } => {
+            Action::PrefillComposer {
+                chat,
+                text,
+                mentions,
+            } => {
                 // The composer belongs to whoever is reading: a template is
                 // only a start, and only where nothing is already written.
                 if self.open_chat.as_deref() != Some(chat.as_str()) {
@@ -7989,12 +8004,18 @@ impl App {
                 {
                     self.composer = text.clone();
                     self.prefilled = Some((chat, text));
-                    self.composer_mentions.clear();
+                    self.composer_mentions = mentions;
                     self.emoji_start = None;
                     self.mention_start = None;
                     self.focus_composer = true;
                 } else {
-                    self.toast("Keep or clear your current draft before restoring this text.");
+                    self.toast(
+                        crate::i18n::gettext(
+                            self.locale,
+                            "Keep or clear your current draft before restoring this text.",
+                        )
+                        .into_owned(),
+                    );
                 }
             }
             Action::MessageYourself => {
@@ -11228,6 +11249,7 @@ impl App {
                     self.actions.push(Action::PrefillComposer {
                         chat: request.chat,
                         text,
+                        mentions: Vec::new(),
                     });
                 }
             }
@@ -15025,6 +15047,7 @@ mod tests {
             Action::PrefillComposer {
                 chat: locked.into(),
                 text: "This is not here".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
@@ -15035,6 +15058,50 @@ mod tests {
             "the template stayed out of the open chat: {:?}",
             app.composer
         );
+    }
+
+    #[test]
+    fn a_retry_prefill_preserves_mentions_and_never_replaces_a_draft() {
+        let ctx = egui::Context::default();
+        for draft in ["", "keep my draft"] {
+            let mut app = app();
+            let chat = "123@g.us";
+            let mut group = Chat::new(chat.into(), "Group".into());
+            group.participants = vec!["174057861464188@s.whatsapp.net".into()];
+            app.chats.push(group);
+            app.open_chat = Some(chat.into());
+            app.composer = draft.into();
+            let prior = ComposerMention::new("old".into(), "Existing".into());
+            app.composer_mentions = vec![prior.clone()];
+            let mention =
+                ComposerMention::new("174057861464188@s.whatsapp.net".into(), "Mira".into());
+            let shown = crate::markup::editable_mentions(
+                "hi *@174057861464188*",
+                &[crate::markup::Mention {
+                    user: "174057861464188".into(),
+                    name: "Mira".into(),
+                }],
+            );
+            app.apply(
+                Action::PrefillComposer {
+                    chat: chat.into(),
+                    text: shown,
+                    mentions: vec![mention.clone()],
+                },
+                &ctx,
+            );
+            if draft.is_empty() {
+                assert_eq!(app.composer, "hi *@Mira*");
+                assert_eq!(app.composer_mentions, vec![mention]);
+                let text = app.composer.clone();
+                let (wire, mentions) = app.encode_composer_mentions(chat, text);
+                assert_eq!(wire, "hi *@174057861464188*");
+                assert_eq!(mentions, vec!["174057861464188@s.whatsapp.net"]);
+            } else {
+                assert_eq!(app.composer, draft);
+                assert_eq!(app.composer_mentions, vec![prior]);
+            }
+        }
     }
 
     /// A link's template is a start, not something the reader left behind:
@@ -15060,6 +15127,7 @@ mod tests {
             Action::PrefillComposer {
                 chat: chat.into(),
                 text: "Invoice 123 is attached".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
@@ -15102,6 +15170,7 @@ mod tests {
                 Action::PrefillComposer {
                     chat: chat.into(),
                     text: "Invoice 123".into(),
+                    mentions: Vec::new(),
                 },
                 &ctx,
             );
@@ -15175,6 +15244,7 @@ mod tests {
             Action::PrefillComposer {
                 chat: chat.into(),
                 text: "Invoice 123".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
@@ -15206,6 +15276,7 @@ mod tests {
             Action::PrefillComposer {
                 chat: chat.into(),
                 text: "Invoice 123".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
@@ -15243,6 +15314,7 @@ mod tests {
             Action::PrefillComposer {
                 chat: chat.into(),
                 text: "Invoice 123".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
@@ -25839,6 +25911,7 @@ mod app_lock_tests {
             Action::PrefillComposer {
                 chat: CHAT.into(),
                 text: "Invoice 123 is attached".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );
@@ -25992,6 +26065,7 @@ mod app_lock_tests {
             Action::PrefillComposer {
                 chat: CHAT.into(),
                 text: "Invoice 123 is attached".into(),
+                mentions: Vec::new(),
             },
             &ctx,
         );

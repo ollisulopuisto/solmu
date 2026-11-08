@@ -4590,7 +4590,16 @@ fn bubble(
             // reacting to its own item.
             let members = album.unwrap_or(std::slice::from_ref(message));
             if members.iter().any(|member| !member.reactions.is_empty()) {
-                ui.add_space(-7.0);
+                // The footer already expanded the row below the bubble. A
+                // negative overlap here would paint reactions over the clock.
+                let last = members.last().unwrap_or(message);
+                let footer_bottom = ui
+                    .ctx()
+                    .data(|data| data.get_temp::<Rect>(footer_id(&last.chat, &last.id)))
+                    .map(|rect| rect.bottom());
+                let gap =
+                    footer_bottom.map_or(2.0, |bottom| (bottom + 4.0 - ui.cursor().top()).max(2.0));
+                ui.add_space(gap);
                 ui.horizontal(|ui| {
                     if with_avatar {
                         ui.add_space(SENDER_AVATAR + 8.0);
@@ -5244,7 +5253,10 @@ fn bubble_frame(
             ui.id().with(("unknown-delivery", &last.id)),
             Sense::hover(),
         )
-        .on_hover_text("Delivery status unavailable");
+        .on_hover_text(crate::i18n::gettext(
+            view.locale,
+            "Delivery status unavailable",
+        ));
     }
     if fill != Color32::TRANSPARENT && ui.is_rect_visible(inner.response.rect) {
         ui.painter().set(
@@ -5893,7 +5905,7 @@ fn footer_width(
         ui.painter()
             .layout_no_wrap(
                 if matches!(message.content, Content::Text { .. }) {
-                    "Not sent · Try again".to_owned()
+                    crate::i18n::gettext(locale, "Not sent · Try again").into_owned()
                 } else {
                     NOT_SENT.to_owned()
                 },
@@ -6064,12 +6076,12 @@ fn footer(
     // to read, and the red icon beside it already carries the alarm.
     let failed = not_sent(message).then(|| {
         let label = if matches!(message.content, Content::Text { .. }) {
-            "Not sent · Try again"
+            crate::i18n::gettext(view.locale, "Not sent · Try again")
         } else {
-            NOT_SENT
+            crate::i18n::gettext(view.locale, "Not sent")
         };
         ui.painter()
-            .layout_no_wrap(label.to_owned(), theme::medium(11.0), palette.text)
+            .layout_no_wrap(label.into_owned(), theme::medium(11.0), palette.text)
     });
     let status = shown_delivery(view, message);
     let has_tick = message.from_me && !matches!(status, Delivery::None | Delivery::Unknown);
@@ -6164,12 +6176,29 @@ fn footer(
                     Sense::click(),
                 )
                 .on_hover_text(
-                    "Restore text to an empty composer for review. Send it yourself; existing drafts are never replaced.",
+                    crate::i18n::gettext(view.locale, "Restore text to an empty composer for review. Send it yourself; existing drafts are never replaced."),
                 );
+            retry.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    true,
+                    crate::i18n::gettext(view.locale, "Restore failed text to composer"),
+                )
+            });
             if retry.clicked() {
                 actions.push(Action::PrefillComposer {
                     chat: message.chat.clone(),
-                    text: text.clone(),
+                    text: markup::editable_mentions(text, &mentions_of(view, message)),
+                    mentions: message
+                        .mentions
+                        .iter()
+                        .map(|mention| {
+                            crate::app::ComposerMention::new(
+                                mention.id.clone(),
+                                (view.mention_names)(&mention.id),
+                            )
+                        })
+                        .collect(),
                 });
             }
         }
@@ -6220,6 +6249,12 @@ fn reactions(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: &mu
         let line = widgets::line(ui, &label, theme::regular(13.0), palette.text, 200.0, 1);
         let size = line.size() + vec2(12.0, 6.0);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(
+                bubble_id(&message.chat, &message.id).with(("reaction", &emoji)),
+                rect,
+            )
+        });
         if ui.is_rect_visible(rect) {
             // Lifted as gently as a hovered chat-list row, so the pill
             // stands off the bubble it overlaps.
