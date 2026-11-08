@@ -2943,6 +2943,23 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                 .nth(divider.count.saturating_sub(1) as usize)
                 .map(|message| (message.id.clone(), divider.count, divider.placed))
         });
+    // One boundary decision per adjacent pair drives both receipt collapsing
+    // and overlap. Notices/dividers must not hide a receipt without stacking.
+    let stack_edges: Vec<bool> = conversation
+        .messages
+        .windows(2)
+        .map(|pair| {
+            let previous = &pair[0];
+            let next = &pair[1];
+            let separated = view.pin_notices.iter().any(|notice| {
+                notice.pinned_at > previous.timestamp && notice.pinned_at <= next.timestamp
+            }) || divider.as_ref().is_some_and(|(id, _, _)| id == &next.id);
+            !view.selecting
+                && palette.bubbles != theme::BubbleStyle::Messages
+                && !separated
+                && stack_pair(&view, previous, next)
+        })
+        .collect();
     let mut divider_placed = false;
     let selection: Option<Vec<String>> = app
         .selection
@@ -3449,20 +3466,15 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                             show_sender,
                                             show_avatar,
                                             tailed,
-                                            next_stacks: conversation
-                                                .messages
-                                                .get(message_index + 1)
-                                                .is_some_and(|next| {
-                                                    stack_pair(&view, message, next)
-                                                })
-                                                && palette.bubbles != theme::BubbleStyle::Messages,
+                                            next_stacks: stack_edges
+                                                .get(message_index)
+                                                .copied()
+                                                .unwrap_or(false),
                                             overlap_previous: previous
-                                                .filter(|previous| {
-                                                    here == 0
-                                                        && !divider.as_ref().is_some_and(
-                                                            |(id, _, _)| row_contains(id),
-                                                        )
-                                                        && stack_pair(&view, previous, message)
+                                                .filter(|_| {
+                                                    message_index
+                                                        .checked_sub(1)
+                                                        .is_some_and(|index| stack_edges[index])
                                                 })
                                                 .map(|previous| {
                                                     bubble_id(&previous.chat, &previous.id)
@@ -4587,8 +4599,11 @@ fn bubble(
     let mut response = None;
     let mut area = ui.available_rect_before_wrap();
     // Tails are part of the painted bounds, including beside a linked chip.
-    area.min.x += widgets::TAIL_WIDTH;
-    area.max.x = area.max.x.min(footer_right) - widgets::TAIL_WIDTH;
+    area.max.x = area.max.x.min(footer_right);
+    if view.palette.bubbles != theme::BubbleStyle::Messages {
+        area.min.x += widgets::TAIL_WIDTH;
+        area.max.x -= widgets::TAIL_WIDTH;
+    }
     ui.scope_builder(
         egui::UiBuilder::new()
             .max_rect(area)

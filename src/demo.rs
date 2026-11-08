@@ -4843,6 +4843,100 @@ mod tests {
     }
 
     #[test]
+    fn pin_notice_between_same_minute_outgoing_rows_keeps_both_receipts() {
+        let mut app = app();
+        group_stacks_sample(&mut app);
+        let chat = SAMPLES[0].id;
+        let base: jiff::Timestamp = "2026-11-08T18:40:00Z".parse().unwrap();
+        let mut rows = app.conversations[chat].messages[10..].to_vec();
+        rows[0].timestamp = base.as_second() + 1;
+        rows[1].timestamp = base.as_second() + 15;
+        app.conversations.get_mut(chat).unwrap().messages = rows;
+        app.chat_pins.insert(
+            chat.into(),
+            vec![crate::archive::Pinned {
+                chat: chat.into(),
+                id: "different-pinned-row".into(),
+                pinned_at: base.as_second() + 10,
+                expires_at: base.as_second() + 86400,
+                text: "Pinned note".into(),
+                from_me: false,
+                sent_at: base.as_second(),
+                pinner: crate::archive::Pinner {
+                    by_me: true,
+                    sender: String::new(),
+                },
+            }],
+        );
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..4 {
+            streak_test_frame(&mut app, &ctx, 1180.0, 1000.0, vec![]);
+        }
+        let mut bodies = Vec::new();
+        for index in [10, 11] {
+            let name = format!("group-stack-{index}");
+            let id = crate::ui::conversation::bubble_id(chat, &name);
+            let footer = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(crate::ui::conversation::footer_id(chat, &name))
+                })
+                .expect("both outgoing receipts must have a footer");
+            assert!(
+                footer.width() >= 19.0,
+                "receipt slot survives the pin notice"
+            );
+            bodies.push(
+                ctx.data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
+                    .unwrap(),
+            );
+        }
+        assert!(
+            bodies[1].top() > bodies[0].bottom(),
+            "pin notice separates the bubbles"
+        );
+    }
+
+    #[test]
+    fn messages_skin_keeps_its_sender_edge_without_whatsapp_tail_insets() {
+        use crate::ui::conversation::bubble_id;
+        for own in [false, true] {
+            let mut app = app();
+            apply_flags(&mut app, Some("messages"));
+            let chat = SAMPLES[0].id;
+            let mut row = message(
+                chat,
+                "messages-edge",
+                own,
+                1700000000,
+                Content::text("A single line"),
+            );
+            row.status = Delivery::Read;
+            app.conversations.get_mut(chat).unwrap().messages = vec![row];
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            for _ in 0..4 {
+                streak_test_frame(&mut app, &ctx, 1180.0, 1000.0, vec![]);
+            }
+            let body = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(bubble_id(chat, "messages-edge").with("rect"))
+                })
+                .unwrap();
+            let viewport = app.selection_view.lock().unwrap().unwrap();
+            let edge = if own {
+                viewport.right() - body.right()
+            } else {
+                body.left() - viewport.left()
+            };
+            assert!(
+                (edge - 17.0).abs() < 1.0,
+                "Messages edge must retain its original17pt side margin: {edge}"
+            );
+        }
+    }
+
+    #[test]
     fn streak_boundary_table_preserves_source_sender_metadata_and_controls() {
         use crate::ui::conversation::stacks_after;
         let mut app = app();

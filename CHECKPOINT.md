@@ -41,6 +41,17 @@ crowding is outside this patch. No screenshot/media files committed. Review
 media delivered separately; PR media-upload availability must be reported.
 No merge, release or DMG dispatch. Revert this PR to roll back.
 
+PR246 review repair: compute one adjacent-pair boundary table before rendering,
+including pin-notice times and the following row's unread divider. Both
+receipt collapsing and physical overlap consume that table. Runtime regression
+uses outgoing18:40:01, pin18:40:10, outgoing18:40:15 and verifies both receipts
+retain slots. The8pt triangular-tail inset is WhatsApp-only; Messages retains
+its original17pt sender edge in both directions.38 focused native tests pass,
+strict all-feature/all-target clippy passes. GitHub image upload retry: three
+PR navigation attempts reset the browser connection before loading; neutral
+page loads. No image URL produced. Maintainer can drag the synthetic PNGs into
+the PR-description editor; no media committed. CI must run on the repair head.
+
 ## Linked network chip lane - November 8, 2026
 
 Instinct, branch `fix/linked-network-chip-overlap`, based on main 2498c7b
