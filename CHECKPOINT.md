@@ -1,5 +1,16 @@
 # Fast-beeper coordination and development checkpoint
 
+## Routine Mac builds use Apple Silicon - November 8, 2026
+
+Per maintainer request, manual Release runs default to arm64. Universal is an
+explicit input and remains the tag-release setting. The build script does not
+install/compile Intel when arm64 is selected. Matching packaging targets and
+architecture-specific filenames are used; verification checks exact slices in
+both launcher and client. Shell-stub regressions cover arm64, universal, invalid
+input and wrong slices. The already running manual.20 universal build is left
+alone to avoid discarding a long compile. No merge, release dispatch or tag is
+part of this workflow-default PR.
+
 ## PR242 restored linked source - November 8, 2026
 
 Live read scope records a first-arriving exact linked member when that update
