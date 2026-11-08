@@ -2350,6 +2350,16 @@ fn card_widths_sample(app: &mut App) {
         0,
         Content::text("Thanks!"),
     ));
+    for (id, text) in [
+        ("text-medium", "The final notes are ready."),
+        ("text-medium-two", "The final notes are ready!"),
+        (
+            "text-long",
+            "The revised document is ready for review today.",
+        ),
+    ] {
+        rows.push(message(chat, id, true, 0, Content::text(text)));
+    }
     for (index, row) in rows.iter_mut().enumerate() {
         row.timestamp = 1_794_157_200 + index as i64 * 60;
     }
@@ -23140,6 +23150,10 @@ mod card_width_tests {
                     );
                 }
                 if width > 1000.0 {
+                    assert!((rect("card-plain").width() - 100.0).abs() < 1.0);
+                    assert!((rect("text-medium").width() - 260.0).abs() < 1.0);
+                    assert!((rect("text-medium-two").width() - 260.0).abs() < 1.0);
+                    assert!((rect("text-long").width() - 420.0).abs() < 1.0);
                     assert!((default - 340.0).abs() < 1.0, "320pt content plus margins");
                     assert!(
                         (rect("card-wider").width() - 420.0).abs() < 1.0,
@@ -23159,7 +23173,7 @@ mod card_width_tests {
                 }
                 assert!(
                     rect("card-plain").width() < default - 20.0,
-                    "plain text must keep its natural width"
+                    "short text uses a smaller80pt step"
                 );
                 for id in [
                     "ada-doc",
