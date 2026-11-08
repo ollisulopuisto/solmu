@@ -9,6 +9,8 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Cmd-R (Ctrl-R outside macOS) in a linked chat quotes the latest loaded incoming message, selects its exact bridge/account/chat and focuses the composer. Newer outgoing messages and search filters do not change the target; nothing is sent automatically.
+
 - Text streaks overlap with the older bubble in front and keep a triangular speech tail on every bubble. Group speaker changes use contrasting colored drop shadows, including their tails, while names and avatars remain visible.
 - Reactions and message time share a compact row that wraps when needed without covering one another.
 

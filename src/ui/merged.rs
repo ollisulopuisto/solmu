@@ -85,6 +85,33 @@ pub fn latest_reply_shortcut() -> egui::KeyboardShortcut {
         egui::Key::R,
     )
 }
+/// A plain reply resumes the conversation on the other person's latest source.
+pub fn incoming_bridge_shortcut() -> egui::KeyboardShortcut {
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::R)
+}
+
+fn incoming_reply(app: &App, valid: &[Member]) -> Option<(Member, String)> {
+    let latest = valid
+        .iter()
+        .filter_map(|member| app.conversations.get(&member.chat))
+        .flat_map(|conversation| &conversation.messages)
+        .filter(|message| {
+            !message.from_me && !matches!(message.content, crate::model::Content::Revoked)
+        })
+        .max_by(|a, b| {
+            a.timestamp
+                .cmp(&b.timestamp)
+                .then(a.chat.cmp(&b.chat))
+                .then(a.history_order.cmp(&b.history_order))
+                .then(a.id.cmp(&b.id))
+        })?;
+    valid
+        .iter()
+        .find(|member| member.chat == latest.chat)
+        .cloned()
+        .map(|member| (member, latest.id.clone()))
+}
+
 fn bounded_note(ui: &mut egui::Ui, palette: &crate::theme::Palette, text: &str, small: bool) {
     let width = (ui.clip_rect().right() - ui.cursor().left())
         .min(ui.available_width())
@@ -407,6 +434,58 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 state.source_filter = None;
             }
         });
+    }
+    // Handle before the composer so Enter in the same frame cannot use the old
+    // route. Search filters do not change which incoming source is newest.
+    let can_resume = app.dialog.is_none()
+        && !app.show_update
+        && app.picker.is_none()
+        && app.reaction_target.is_none()
+        && app.recording.is_none()
+        && app.image_preview.is_none()
+        && app.picture_edit.is_none()
+        && app.sticker_view.is_none()
+        && !egui::Popup::is_any_open(ui.ctx());
+    let incoming_shortcut = can_resume
+        && ui.input_mut(|input| {
+            let shortcut = incoming_bridge_shortcut();
+            let mut pressed = false;
+            input.events.retain(|event| {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                    && *key == shortcut.logical_key
+                    && modifiers.matches_exact(shortcut.modifiers)
+                {
+                    pressed = true;
+                    return false;
+                }
+                true
+            });
+            pressed
+        });
+    if incoming_shortcut {
+        if app.editing.is_some() || state.reply.is_some() || !app.pending.is_empty() {
+            app.toast(crate::i18n::gettext(app.locale,
+                "Finish or cancel the current reply, edit or attachment before changing bridges").as_ref());
+        } else if let Some((member, id)) = incoming_reply(app, &valid) {
+            state.reply = Some((member.clone(), id.clone()));
+            state.destination = Some(member.clone());
+            state.explicit = false;
+            app.reply_to = crate::merged::reply_route(&member, &member, &id);
+            app.focus_composer = true;
+        } else {
+            app.toast(
+                crate::i18n::gettext(
+                    app.locale,
+                    "No incoming message is loaded in this linked chat",
+                )
+                .as_ref(),
+            );
+        }
     }
     // Routing safety: no reply target and no chosen destination means no
     // route at all - new text goes nowhere without an explicit choice.
@@ -1964,5 +2043,226 @@ mod tests {
                 (tg.id.clone(), 1)
             ]
         );
+    }
+    fn command_r(app: &mut App, ctx: &egui::Context, chat: &Chat) {
+        reply_key(app, ctx, chat, egui::Modifiers::COMMAND);
+    }
+
+    fn reply_key(app: &mut App, ctx: &egui::Context, chat: &Chat, modifiers: egui::Modifiers) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::R,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                show(app, ui, chat);
+            },
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn command_r_quotes_latest_incoming_exact_source_despite_outgoing_and_search() {
+        let (wa, tg, mut person) = ada_pair();
+        person.primary = Member::of(&wa);
+        let valid = person.members.clone();
+        let (_dir, mut app, ctx) = linked_app(vec![wa.clone(), tg.clone()], vec![person.clone()]);
+        app.composer = "unsent draft".into();
+        let mut outgoing = sample_message(&wa.id, "outgoing", 40);
+        outgoing.from_me = true;
+        let mut revoked = sample_message(&wa.id, "deleted", 50);
+        revoked.content = crate::model::Content::Revoked;
+        app.conversations.insert(
+            wa.id.clone(),
+            crate::app::Conversation {
+                messages: vec![sample_message(&wa.id, "same-id", 10), outgoing, revoked],
+                complete: true,
+                ..Default::default()
+            },
+        );
+        app.conversations.insert(
+            tg.id.clone(),
+            crate::app::Conversation {
+                messages: vec![sample_message(&tg.id, "same-id", 30)],
+                complete: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            incoming_reply(&app, &valid),
+            Some((valid[1].clone(), "same-id".into()))
+        );
+        let key = egui::Id::new(("linked-person-state", &person.members));
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                key,
+                State {
+                    destination: Some(valid[0].clone()),
+                    explicit: true,
+                    search: "does not match".into(),
+                    source_filter: Some(valid[0].clone()),
+                    ..Default::default()
+                },
+            )
+        });
+        command_r(&mut app, &ctx, &wa);
+        let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+        assert_eq!(state.destination, Some(valid[1].clone()));
+        assert_eq!(state.reply, Some((valid[1].clone(), "same-id".into())));
+        assert_eq!(
+            app.reply_to,
+            crate::merged::reply_route(&valid[1], &valid[1], "same-id")
+        );
+        assert_eq!(app.composer, "unsent draft");
+        assert_eq!(
+            app.settings.beeper.people[0].primary,
+            Some(valid[0].clone())
+        );
+        assert!(
+            !app.actions.iter().any(|action| matches!(
+                action,
+                Action::SendText { .. } | Action::SendPending { .. }
+            ))
+        );
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            Some(egui::Id::new("composer-text"))
+        );
+    }
+
+    #[test]
+    fn incoming_reply_stays_within_valid_exact_accounts_and_orders_ties() {
+        let first = member_chat("ada-personal", "wa-personal");
+        let second = member_chat("ada-work", "wa-work");
+        let valid = vec![Member::of(&first).unwrap(), Member::of(&second).unwrap()];
+        let (_dir, mut app, _ctx) = linked_app(vec![first.clone(), second.clone()], vec![]);
+        for chat in [&second, &first] {
+            app.conversations.insert(
+                chat.id.clone(),
+                crate::app::Conversation {
+                    messages: vec![sample_message(&chat.id, "same-id", 20)],
+                    complete: true,
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(
+            incoming_reply(&app, &valid),
+            Some((valid[1].clone(), "same-id".into()))
+        );
+        assert_eq!(
+            incoming_reply(&app, &valid[..1]),
+            Some((valid[0].clone(), "same-id".into()))
+        );
+        assert!(incoming_reply(&app, &[]).is_none());
+    }
+
+    #[test]
+    fn modified_r_keeps_filtered_reply_shortcut_and_other_modifiers() {
+        for modifiers in [
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT | egui::Modifiers::ALT,
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Modifiers::COMMAND | egui::Modifiers::ALT,
+        ] {
+            let (wa, tg, mut person) = ada_pair();
+            person.primary = Member::of(&wa);
+            let (_dir, mut app, ctx) =
+                linked_app(vec![wa.clone(), tg.clone()], vec![person.clone()]);
+            for (chat, timestamp, text) in [(&wa, 10, "meeting"), (&tg, 20, "unrelated")] {
+                let mut message = sample_message(&chat.id, text, timestamp);
+                message.content = crate::model::Content::text(text);
+                app.conversations.insert(
+                    chat.id.clone(),
+                    crate::app::Conversation {
+                        messages: vec![message],
+                        complete: true,
+                        ..Default::default()
+                    },
+                );
+            }
+            let key = egui::Id::new(("linked-person-state", &person.members));
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    key,
+                    State {
+                        search: "meeting".into(),
+                        ..Default::default()
+                    },
+                )
+            });
+            reply_key(&mut app, &ctx, &wa, modifiers);
+            let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+            if modifiers == latest_reply_shortcut().modifiers {
+                assert_eq!(
+                    state.reply,
+                    Some((person.members[0].clone(), "meeting".into()))
+                );
+                assert_eq!(state.destination, Some(person.members[0].clone()));
+            } else {
+                assert!(state.reply.is_none());
+                assert_eq!(state.destination, person.primary);
+            }
+        }
+    }
+
+    #[test]
+    fn command_r_without_incoming_keeps_destination_and_no_quote() {
+        let (wa, tg, mut person) = ada_pair();
+        person.primary = Member::of(&wa);
+        let (_dir, mut app, ctx) = linked_app(vec![wa.clone(), tg], vec![person.clone()]);
+        let mut outgoing = sample_message(&wa.id, "ours", 20);
+        outgoing.from_me = true;
+        app.conversations.insert(
+            wa.id.clone(),
+            crate::app::Conversation {
+                messages: vec![outgoing],
+                complete: true,
+                ..Default::default()
+            },
+        );
+        command_r(&mut app, &ctx, &wa);
+        let key = egui::Id::new(("linked-person-state", &person.members));
+        let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+        assert_eq!(state.destination, person.primary);
+        assert!(state.reply.is_none());
+        assert!(app.reply_to.is_none());
+    }
+
+    #[test]
+    fn command_r_does_not_retarget_an_edit_or_modal() {
+        for modal in [false, true] {
+            let (wa, tg, mut person) = ada_pair();
+            person.primary = Member::of(&wa);
+            let (_dir, mut app, ctx) =
+                linked_app(vec![wa.clone(), tg.clone()], vec![person.clone()]);
+            app.conversations.insert(
+                tg.id.clone(),
+                crate::app::Conversation {
+                    messages: vec![sample_message(&tg.id, "incoming", 30)],
+                    complete: true,
+                    ..Default::default()
+                },
+            );
+            if modal {
+                app.show_update = true;
+            } else {
+                app.editing = Some("ours".into());
+            }
+            command_r(&mut app, &ctx, &wa);
+            let key = egui::Id::new(("linked-person-state", &person.members));
+            let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+            assert_eq!(state.destination, person.primary);
+            assert!(state.reply.is_none());
+        }
     }
 }
