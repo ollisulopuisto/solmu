@@ -663,6 +663,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     let mut previous: Option<&crate::model::Message> = None;
     let mut previous_laid_out = false;
     let mut previous_on_screen = false;
+    let mut displayed_sources = std::collections::HashSet::new();
     let output = ui
         // The scroll area runs to the pane's edge so its overlay bar sits in
         // the side margin; rows keep the inset width and never sit under it.
@@ -893,6 +894,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                     },
                                 )
                                 .inner;
+                            if bubble_rect.is_some_and(|rect| rect.intersects(viewport)) {
+                                displayed_sources.insert(message.chat.clone());
+                            }
                             if show_mark && let Some(rect) = bubble_rect {
                                 let side = if message.from_me {
                                     area.max.x + ui.spacing().item_spacing.x
@@ -976,6 +980,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             "Open this source chat separately for that action; linked routing was not guessed",
         );
     }
+    app.finish_deferred_linked_reads(&displayed_sources.into_iter().collect::<Vec<_>>());
     app.actions.extend(actions);
     ui.ctx().data_mut(|d| d.insert_temp(key, state));
     true

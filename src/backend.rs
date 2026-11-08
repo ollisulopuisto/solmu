@@ -227,6 +227,11 @@ pub enum Command {
         chat: ChatId,
         before: Option<PageKey>,
     },
+    /// Fresh initial history for a restored source, with an opaque request token.
+    LoadRestoredChat {
+        chat: ChatId,
+        token: u64,
+    },
     /// Asks for one chat's active pins, for the line under its header.
     LoadPins(ChatId),
     /// Requests messages before the archive's earliest message. `explicit`
@@ -1432,6 +1437,12 @@ pub enum Event {
         id: String,
         text: String,
         message: String,
+    },
+    /// Tagged initial-fetch outcome, after its messages or failure placeholder.
+    BeeperRestoredHistory {
+        chat: ChatId,
+        token: u64,
+        success: bool,
     },
     BeeperHistoryState {
         chat: ChatId,
