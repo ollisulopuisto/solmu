@@ -174,3 +174,14 @@ Use `linked-day-separators` for the same dates in a linked-person timeline.
 `--demo-page queue-counts` shows 12 available chats, 3 unread, 5 Reply later and 2 Read later. Add `,queue-counts-off` for the original icon-only control, `,light` for light theme, or `,settings-search=queue` for the preference. Counts are local queue items, not message totals.
 
 `--demo-page active-avatar` opens the unread group in the collapsed rail to check its selected ring and unread badge. Add `,light` for the light theme; `--demo-hover 26,195` checks hover without moving the real pointer.
+
+### Linked network chip lanes
+
+`--demo-page linked-chip-lanes` starts a WhatsApp network run with an outgoing
+message and a Signal run with an incoming message. Use `--demo-size 620x1000`
+and `1180x1000`, with and without `,light`, to inspect the icon lanes and
+wrapped message/footer layout. The runtime geometry regression also checks
+both directions, themes and widths.
+
+The chip-lanes fixture always puts WhatsApp before Signal, independent of the
+launch hour. Signal timestamps are rebased after the fixed WhatsApp sample.

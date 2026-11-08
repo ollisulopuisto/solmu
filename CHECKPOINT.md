@@ -1,5 +1,33 @@
 # Fast-beeper coordination and development checkpoint
 
+## Linked network chip lane - November 8, 2026
+
+Instinct, branch `fix/linked-network-chip-overlap`, based on main 2498c7b
+including merged PR241-243. The linked renderer reserved room for an outgoing
+network chip, then passed the full timeline edge into the shared bubble
+renderer. That edge widened the bubble back into the chip lane. Pass the
+reserved area's right edge instead. Incoming layout and grouped footers stay
+unchanged; no protocol, read-state, send or storage changes.
+
+Add the `linked-chip-lanes` offline fixture and a runtime geometry regression
+for outgoing/incoming marks at 620 and 1180 points in both themes. The focused
+native harness (unrelated test modules omitted, production renderer unchanged)
+passes; restoring the old edge fails with 12 points of outgoing overlap.
+Actual demo binary captures at wide/dark and narrow/light were inspected:
+marks stay outside bubbles, wrapped text and grouped footers remain readable.
+Fixture review: rebase Signal timestamps after the final WhatsApp fixture row,
+not launch time. Order is always outgoing WhatsApp first, incoming Signal next.
+A separate fixed-clock regression compares all row timestamps at 00:00, 12:00,
+18:00, 19:00 and 23:00 UTC; it and the geometry test pass in the focused native
+harness. Updated wide/dark and narrow/light captures inspected after this fix.
+Adversarial check: rebasing preserves Signal sender direction, exact chat IDs,
+minute spacing and both chip directions; other demo fixtures are untouched.
+CI on c4c3fc8 failed in mr-boxington setup after cache restore with repeated
+HTTP504 responses, before either clippy or project tests ran. Local strict
+clippy passes; the next head still needs real runtime CI.
+Review media stays outside the repository. Full native runtime suite is a CI
+gate, not a claimed local pass. No merge or new DMG; revert this PR to roll back.
+
 ## Routine Mac builds use Apple Silicon - November 8, 2026
 
 Per maintainer request, manual Release runs default to arm64. Universal is an

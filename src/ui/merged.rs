@@ -671,6 +671,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     let mut previous_laid_out = false;
     let mut previous_on_screen = false;
     let mut displayed_sources = std::collections::HashSet::new();
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new("linked-chip-geometry"),
+            Vec::<(egui::Rect, egui::Rect, bool)>::new(),
+        )
+    });
     let output = ui
         // The scroll area runs to the pane's edge so its overlay bar sits in
         // the side margin; rows keep the inset width and never sit under it.
@@ -895,7 +902,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                                 original_message,
                                                 visible.get(visible_index + 1).copied(),
                                             ),
-                                            timeline.right() - 8.0,
+                                            // The shared renderer also aligns outgoing bubbles to
+                                            // this edge. Do not restore the full timeline width:
+                                            // that would reclaim the network chip's reserved lane.
+                                            area.right(),
                                             &mut actions,
                                         )
                                     },
@@ -914,6 +924,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                 let centre = egui::pos2(side + chip / 2.0, y);
                                 let slot =
                                     egui::Rect::from_center_size(centre, egui::Vec2::splat(chip));
+                                #[cfg(test)]
+                                ui.ctx().data_mut(|data| {
+                                    let mut geometry = data
+                                        .get_temp::<Vec<(egui::Rect, egui::Rect, bool)>>(
+                                            egui::Id::new("linked-chip-geometry"),
+                                        )
+                                        .unwrap_or_default();
+                                    geometry.push((rect, slot, message.from_me));
+                                    data.insert_temp(
+                                        egui::Id::new("linked-chip-geometry"),
+                                        geometry,
+                                    );
+                                });
                                 let response = ui.interact(
                                     slot,
                                     ui.id().with(("network-chip", &message.chat, &message.id)),
