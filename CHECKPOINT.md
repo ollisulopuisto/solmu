@@ -721,3 +721,34 @@ must use that same identity. Native regression reproduced the bug with distinct
 outgoing IDs, then passed with the explicit sender check. Same-sender and incoming
 boundaries are asserted too. Focused runtime uses the memory-bounded validation
 build; full current-head CI/review remain pending. No merge or release.
+
+
+## SQLite advisory investigation - November 9, 2026
+
+Owner Instinct, branch fix/sqlite-advisory, base86ccc73. Main request is a
+separate minimal rusqlite/lock upgrade for RUSTSEC-2026-0459 after PR257.
+No AGENTS.md/BOARD.md exists in this main tree; contributing, scope and CI
+notes read. Prepared rusqlite0.41.1/libsqlite3-sys0.39.1 with required
+sqlcipher-src419.0.6. Removed unrelated lock resolver changes. All-target/all-
+feature cargo check passes. Seven unchanged archive encryption/WAL/migration
+unit tests pass in an isolated harness with this dependency (not full app).
+
+BLOCKED: this is not a complete security fix. Solmu enables bundled-sqlcipher-
+vendored-openssl. libsqlite3-sys0.39.1 pins sqlcipher-src exactly=419.0.6,
+which embeds SQLite3.53.4, still vulnerable according to the advisory. The
+patched plain bundled SQLite3.54.1 is not what this feature compiles. A newer
+sqlcipher-src420.0.0 embeds SQLite3.54.1 but cannot satisfy that exact pin.
+No new fork, vendor source, system-library conversion, build override or
+security-ignore was introduced. Olli selected option (a), a clearly blocked draft partial-bump PR, on
+November9 at14:52:54 (phonemsg-01M705WSJA76T6A56W3A8M1K4C).
+Open draft only, no merge, release or claim that this fixes the advisory. Do not claim an audit version pass fixes
+the actual SQLCipher source.
+
+Sources: https://raw.githubusercontent.com/RustSec/advisory-db/main/crates/libsqlite3-sys/RUSTSEC-2026-0459.md
+https://crates.io/api/v1/crates/sqlcipher-src
+
+Keep package version0.24.7 unchanged in this blocked draft, avoiding a collision
+with attachment PR257's0.24.8. Assign a release version only after the actual
+patched SQLCipher source is available and this draft is made ready for review.
+Upstream source update PRs: https://github.com/rusqlite/rusqlite/pull/1932
+https://github.com/rusqlite/rusqlite/pull/1946

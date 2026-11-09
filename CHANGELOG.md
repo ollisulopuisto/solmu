@@ -9,6 +9,8 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Partial SQLite dependency update under review: rusqlite 0.41.1 and libsqlite3-sys 0.39.1. This is blocked, not a security fix: the selected bundled SQLCipher source still embeds affected SQLite 3.53.4 until its upstream source pin is updated.
+
 - Follow-up text bubbles use each sender/source's recent cadence instead of a fixed calendar-minute boundary. The last ten minutes of completed gaps set a 1.5x average allowance, bounded to 2-5 minutes. A long pause starts a new burst; replies, metadata and other existing boundaries still stay separate.
 
 - Cancelling a reply with X or Esc in a linked chat keeps the quote cleared, preserves the draft, and sends the next message without the cancelled quote.
