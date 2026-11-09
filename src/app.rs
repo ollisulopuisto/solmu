@@ -8897,6 +8897,7 @@ impl App {
                 }
             }
             Action::CancelReply => {
+                crate::ui::merged::cancel_reply(self, ctx);
                 self.reply_to = None;
                 self.reply_when_loaded = None;
             }
@@ -22694,6 +22695,132 @@ mod tests {
         app.apply(Action::CancelReply, &egui::Context::default());
         assert!(app.reply_to.is_none());
         assert!(app.reply_when_loaded.is_none());
+    }
+
+    /// Drive the real composer and deferred action boundary, then draw again:
+    /// linked-person state must not resurrect the cancelled quote.
+    #[test]
+    fn linked_reply_cancel_x_and_escape_survive_redraw_and_send_unquoted() {
+        for escape in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+            let (backend, mut commands) = Backend::recording();
+            app.backend = backend;
+            let mut wa = Chat::new("ada-wa".into(), "Ada WhatsApp".into());
+            wa.kind = ChatKind::Direct;
+            wa.backend_origin = Some("local".into());
+            wa.backend_account = Some("whatsapp".into());
+            let mut tg = wa.clone();
+            tg.id = "ada-tg".into();
+            tg.backend_account = Some("telegram".into());
+            let member = crate::merged::Member::of(&wa).unwrap();
+            app.settings.beeper.people.push(crate::merged::Person {
+                name: "Ada".into(),
+                members: vec![member.clone(), crate::merged::Member::of(&tg).unwrap()],
+                primary: Some(member),
+            });
+            app.chats = vec![wa.clone(), tg];
+            app.open_chat = Some(wa.id.clone());
+            app.page = Page::Chats;
+            app.link = LinkStatus::Connected;
+            app.conversations.insert(
+                wa.id.clone(),
+                Conversation {
+                    messages: vec![message(&wa.id, "original", 10)],
+                    complete: true,
+                    ..Default::default()
+                },
+            );
+            app.composer = "Keep this draft".into();
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            let frame = |app: &mut App, events| {
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        crate::ui::keys::handle(app, &ctx);
+                        assert!(crate::ui::merged::show(app, ui, &wa));
+                    },
+                );
+            };
+            let key = |key, modifiers| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            };
+            frame(
+                &mut app,
+                vec![key(
+                    egui::Key::R,
+                    crate::ui::merged::incoming_bridge_shortcut().modifiers,
+                )],
+            );
+            frame(&mut app, vec![]);
+            assert!(app.reply_to.is_some(), "the fixture started a reply");
+            app.actions.clear();
+            if escape {
+                frame(
+                    &mut app,
+                    vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+                );
+            } else {
+                let strip = ctx
+                    .data(|data| {
+                        data.get_temp::<egui::Rect>(crate::ui::conversation::reply_strip_id())
+                    })
+                    .unwrap();
+                let pos = egui::pos2(strip.right() - 20.0, strip.center().y);
+                let pointer = |pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                frame(
+                    &mut app,
+                    vec![egui::Event::PointerMoved(pos), pointer(true)],
+                );
+                frame(&mut app, vec![pointer(false)]);
+            }
+            assert!(
+                app.actions
+                    .iter()
+                    .any(|action| matches!(action, Action::CancelReply)),
+                "the actual X/Esc queued cancellation"
+            );
+            app.reply_when_loaded = Some((wa.id.clone(), "pending".into()));
+            app.apply_actions(&ctx);
+            for _ in 0..2 {
+                frame(&mut app, vec![]);
+                app.apply_actions(&ctx);
+                assert!(
+                    app.reply_to.is_none(),
+                    "cancelled quote stays cleared across redraw"
+                );
+                assert!(app.reply_when_loaded.is_none());
+                assert_eq!(app.composer, "Keep this draft");
+            }
+            while commands.try_recv().is_ok() {}
+            ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("composer-text")));
+            frame(&mut app, vec![key(egui::Key::Enter, egui::Modifiers::NONE)]);
+            app.apply_actions(&ctx);
+            let sent: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok())
+                .filter(|command| matches!(command, Command::SendText { .. }))
+                .collect();
+            assert_eq!(sent.len(), 1, "Enter sends exactly once");
+            assert!(
+                matches!(&sent[0], Command::SendText { chat, text, quoting: None, .. } if chat == &wa.id && text == "Keep this draft")
+            );
+        }
     }
 
     #[test]

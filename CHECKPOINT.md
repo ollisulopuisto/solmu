@@ -643,3 +643,15 @@ No migrations; rollback is this PR's revert.
 Review, owner Instinct, branch `docs/readme-refresh-20261109`. No root AGENTS/BOARD/TODO file exists at the surveyed main. Rewrite README against the Beeper adapter, Mac launcher, current packaging and scheduler implementation. Separate current code from live/native acceptance; keep upstream credit. No new screenshots or illustrations. Source checked against current adapter, launcher and release scripts. All relative links pass; Markdown rendered in Chromium and actual top/install/build/privacy sections visually inspected. No screenshots added to the repository. CI and PR review pending.
 
 README review follow-up: corrected linked macOS scheduler removal guide to actual zapfast paths, both installed binary names and control/API-token copies; preserve queue/logs by default and require service stop/reconciliation. Documented existing launcher binary/plist mismatch without changing runtime code or deploying a service.
+
+## Cancel linked replies - November 9, 2026
+
+In progress, owner Instinct; branch `fix/cancel-reply-quote`, isolated worktree
+`/downloads/solmu-cancel-reply`, based on main f652135. The reply X/Esc action
+clears the app target but the linked-person view restores its own cached target
+next frame. Clear both through the same cancellation action, preserve draft
+text and explicit destination choices, and verify a later send has no quote.
+Keep unrelated linked people untouched. Native `cargo check --locked --tests`
+and formatting pass. Real composer regression and state-isolation tests are
+written; runtime test execution and synthetic pixel verification are pending.
+No README scope changes, merge, release or deployment.
