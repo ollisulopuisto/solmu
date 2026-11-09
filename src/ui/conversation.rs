@@ -11389,6 +11389,40 @@ mod tests {
     }
 
     #[test]
+    fn round_video_notes_never_stack_but_ordinary_videos_do() {
+        let video = |note: bool| {
+            let mut row = message(Content::Video {
+                caption: None,
+                media: crate::model::Media {
+                    mime: "video/mp4".into(),
+                    size: 1,
+                    width: None,
+                    height: None,
+                    album: None,
+                    path: None,
+                    state: Default::default(),
+                },
+                seconds: None,
+                gif: false,
+                note,
+            });
+            row.timestamp = 12 * 3600;
+            row.id = format!("video-{note}");
+            row
+        };
+        let text_at = |timestamp: i64| {
+            let mut row = message(Content::text("text"));
+            row.timestamp = timestamp;
+            row
+        };
+        let (before, after) = (text_at(12 * 3600 - 30), text_at(12 * 3600 + 30));
+        assert!(!stacks_with_limit(&video(true), &after, 120), "note then text");
+        assert!(!stacks_with_limit(&before, &video(true), 120), "text then note");
+        assert!(stacks_with_limit(&video(false), &after, 120), "video head");
+        assert!(stacks_with_limit(&before, &video(false), 120), "video follower");
+    }
+
+    #[test]
     fn adaptive_cadence_keeps_distinct_outgoing_senders_separate() {
         let mut first = message(Content::text("first sender"));
         first.timestamp = 18 * 3600 + 40 * 60;
