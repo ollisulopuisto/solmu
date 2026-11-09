@@ -11374,9 +11374,16 @@ mod tests {
             stacks_with_limit(&last, &quoted, 120),
             "quote joins mid-run"
         );
+        let mut after_quote = last.clone();
+        after_quote.id = "after-quote".into();
+        after_quote.timestamp = quoted.timestamp + 30;
         assert!(
-            stacks_with_limit(&quoted, &last, 120),
+            stacks_with_limit(&quoted, &after_quote, 120),
             "text follows a quote"
+        );
+        assert!(
+            !stacks_with_limit(&quoted, &last, 120),
+            "reverse chronology still breaks the run"
         );
         let mut late = last.clone();
         late.timestamp = head.timestamp + 3600;
