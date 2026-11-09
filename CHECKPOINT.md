@@ -800,3 +800,8 @@ No real uploads or sends, no merge, and no release build. SQLite draft #258 rema
 ### Lifecycle review follow-up
 
 The next automatic review confirmed the previous three findings resolved and identified account-removal and shutdown edges. Cleanup now runs after an account and its parked drafts are removed. Backend shutdown joins GIF search, closes its old event receiver, and reclaims queued media; other late producers reclaim rejected media events. A single deletion worker performs filesystem cleanup away from the UI thread, with a shutdown barrier. Added hidden-account removal and unpolled/rejected media regressions. The unchanged-production reduced native build passes 29 focused tests, the portable adapter passes 239 tests, and full all-target/all-feature clippy plus fmt pass locally.
+
+
+### Native CI shutdown-test contract
+
+Native CI at b041035 passed 1959 tests and failed one old combined draft test because it injected a logout event after `App::shutdown`. Shutdown now deliberately closes event delivery to reclaim unpolled media. Split that test into shutdown saving/rejection and live-account logout clearing. Both exact production tests pass in the reduced build, alongside all 29 linked regressions; full all-target/all-feature clippy and fmt pass. No production shutdown cleanup was weakened.

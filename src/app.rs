@@ -19140,7 +19140,7 @@ mod tests {
     }
 
     #[test]
-    fn drafts_come_back_after_a_restart_and_leave_with_the_account() {
+    fn restored_drafts_are_saved_before_shutdown_closes_event_delivery() {
         let mut app = app();
         let (backend, mut commands, events) = Backend::recording_with_events();
         app.backend = backend;
@@ -19168,7 +19168,25 @@ mod tests {
             saved,
             [(open.to_owned(), "half a reply, finished".to_owned())]
         );
-        // Unlinking forgets every draft.
+        // Shutdown closes event delivery; no backend can mutate the stopped app.
+        assert!(events.send(Event::Link(LinkStatus::LoggedOut)).is_err());
+    }
+
+    #[test]
+    fn unlinking_a_live_account_forgets_every_draft() {
+        let mut app = app();
+        let (backend, _commands, events) = Backend::recording_with_events();
+        app.backend = backend;
+        app.open_chat = Some("1@s.whatsapp.net".into());
+        events
+            .send(Event::Drafts(vec![
+                ("1@s.whatsapp.net".into(), "half a reply".into()),
+                ("2@s.whatsapp.net".into(), "later".into()),
+            ]))
+            .unwrap();
+        app.handle_events();
+        assert!(!app.drafts.is_empty());
+        assert_eq!(app.composer, "half a reply");
         events.send(Event::Link(LinkStatus::LoggedOut)).unwrap();
         app.handle_events();
         assert!(app.drafts.is_empty());
