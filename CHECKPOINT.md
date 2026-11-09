@@ -4,9 +4,9 @@
 
 Branch `fix/reply-bubble-stacking`, based on main ba51fa1, version 0.24.10 (0.24.9 is PR #259). stacks_with_limit let only plain
 text stack and required identical delivery status, so a reply, picture, GIF or video head and a run whose
-receipts differed (Read, Delivered, Sent) each broke the stack. A run may now open with a quoted reply,
-picture or video and plain text follows; own Sent/Delivered/Read rows stack. Cadence limits, quotes
-as followers, Unknown, Pending and Failed remain boundaries. Messages bubble style still draws no stacks.
+receipts differed (Read, Delivered, Sent) each broke the stack. Plain text, quoted replies, pictures and videos
+now join a run in any position; own Sent/Delivered/Read rows stack. Cadence limits, album members, Unknown,
+Pending and Failed remain boundaries. Messages bubble style still draws no stacks.
 Not compiled locally (no Rust toolchain); CI is the check. Author does not merge.
 
 ## v0.24.7 release preparation - November 8, 2026

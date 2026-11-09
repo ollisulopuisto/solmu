@@ -11,7 +11,7 @@ version in Cargo.toml is bumped.
 
 ## v0.24.10
 
-- A quoted reply, picture, GIF or video now starts a run that the plain messages after it join, and Sent, Delivered and Read receipts of your own messages no longer split a run. The time-gap rules are unchanged.
+- Quoted replies, pictures, GIFs and videos now join a run of plain messages anywhere in it, not only at its start, and Sent, Delivered and Read receipts of your own messages no longer split a run. The time-gap rules are unchanged.
 
 ## v0.24.8
 

@@ -5312,23 +5312,19 @@ pub(crate) fn cadence_limits(messages: &[&Message]) -> Vec<i64> {
         .collect()
 }
 
-/// Adjacent rows stack within the sender's current cadence. A run may open
-/// with a quoted reply or a picture, GIF or video; what follows is plain text.
-/// Controls, metadata and failure states remain hard boundaries, and a quote
-/// opens a run, never joins one.
+/// Adjacent rows stack within the sender's current cadence: plain text,
+/// quoted replies, pictures and videos all join a run, in any order. Controls,
+/// metadata, album members and failure states remain hard boundaries.
 fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
-    let steady = |row: &Message| {
-        !row.forwarded && !row.edited && !matches!(row.status, Delivery::Pending | Delivery::Failed)
-    };
-    let head = |row: &Message| {
-        steady(row)
+    let joins = |row: &Message| {
+        !row.forwarded
+            && !row.edited
+            && !matches!(row.status, Delivery::Pending | Delivery::Failed)
+            && album_id(row).is_none()
             && matches!(
                 row.content,
                 Content::Text { .. } | Content::Image { .. } | Content::Video { .. }
             )
-    };
-    let follower = |row: &Message| {
-        steady(row) && matches!(row.content, Content::Text { .. }) && row.quoted.is_none()
     };
     // Receipts of one run collapse onto its last row, so Sent, Delivered and
     // Read rows still stack; anything else must match exactly.
@@ -5347,8 +5343,8 @@ fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
         && previous.reactions.is_empty()
         && (previous.status == next.status
             || (previous.from_me && receipt(previous.status) && receipt(next.status)))
-        && head(previous)
-        && follower(next)
+        && joins(previous)
+        && joins(next)
 }
 
 #[cfg(test)]
@@ -11338,7 +11334,7 @@ mod tests {
     }
 
     #[test]
-    fn a_quoted_reply_opens_a_run_and_receipts_do_not_split_it() {
+    fn quoted_replies_join_a_run_anywhere_and_receipts_do_not_split_it() {
         let mut head = message(Content::text("mitä"));
         head.from_me = true;
         head.sender = "me".into();
@@ -11367,8 +11363,13 @@ mod tests {
             stacks_with_limit(&middle, &last, 120),
             "Delivered then Sent"
         );
-        // A quote still opens a new run instead of joining one.
-        assert!(!stacks_with_limit(&last, &head, 120));
+        // A quote can also join a run mid-way.
+        let mut quoted = last.clone();
+        quoted.id = "quoted-later".into();
+        quoted.timestamp += 30;
+        quoted.quoted = head.quoted.clone();
+        assert!(stacks_with_limit(&last, &quoted, 120), "quote joins mid-run");
+        assert!(stacks_with_limit(&quoted, &last, 120), "text follows a quote");
         let mut late = last.clone();
         late.timestamp = head.timestamp + 3600;
         assert!(
