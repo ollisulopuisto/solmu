@@ -9,6 +9,10 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.8
+
+- Paste, drop, or pick pictures and files in linked chats. They send through the saved default source, or the source you choose from the network/account picker. Missing or unavailable defaults require a choice; attachments never fall back to the visible member chat.
+
 - Follow-up text bubbles use each sender/source's recent cadence instead of a fixed calendar-minute boundary. The last ten minutes of completed gaps set a 1.5x average allowance, bounded to 2-5 minutes. A long pause starts a new burst; replies, metadata and other existing boundaries still stay separate.
 
 - Cancelling a reply with X or Esc in a linked chat keeps the quote cleared, preserves the draft, and sends the next message without the cancelled quote.

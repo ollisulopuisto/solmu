@@ -22,6 +22,13 @@ pub fn linked_reply() -> bool {
     SHOT_LINK_REPLY.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static SHOT_ATTACHMENT_PICKER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn attachment_picker() -> bool {
+    SHOT_ATTACHMENT_PICKER.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Set by the `linked-picker` shot page: the Contact info link picker opens
 /// mid-search, with these chat ids checked.
 static SHOT_LINK_PICKER: std::sync::Mutex<Option<(String, Vec<String>)>> =
@@ -3984,6 +3991,30 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 }
             }
             // The linked person with a chosen primary: the composer is live.
+            "linked-attachments" => {
+                linked_sample(app);
+                if let Some(person) = app.settings.beeper.people.last_mut() {
+                    person.primary = person.members.get(1).cloned();
+                }
+                app.composer = "Synthetic photo for the default source".into();
+                let rgba = (0..96 * 64)
+                    .flat_map(|pixel| {
+                        if (pixel / 96 / 8 + pixel % 96 / 8) % 2 == 0 {
+                            [65, 155, 180, 255]
+                        } else {
+                            [185, 220, 160, 255]
+                        }
+                    })
+                    .collect();
+                app.actions.push(crate::model::Action::PasteImage {
+                    width: 96,
+                    height: 64,
+                    rgba,
+                });
+            }
+            "linked-attachment-picker" => {
+                SHOT_ATTACHMENT_PICKER.store(true, std::sync::atomic::Ordering::Relaxed)
+            }
             "linked-primary" => {
                 if let Some(person) = app.settings.beeper.people.last_mut() {
                     person.primary = person.members.get(1).cloned();

@@ -1746,7 +1746,7 @@ pub(crate) fn composer_with_capabilities(
                             palette.secondary
                         },
                         palette.text,
-                        if attachments { "Emoji, GIFs, and stickers" } else { "Emoji (text only)" },
+                        if attachments && send_extras.is_none() { "Emoji, GIFs, and stickers" } else { "Emoji (text only)" },
                     )).tab_stop(Stop::Emoji);
                     app.picker_anchor = Some(smile.rect);
                     if smile.clicked() {
@@ -1985,7 +1985,7 @@ pub(crate) fn composer_with_capabilities(
                 } else {
                     (palette.surface, palette.surface_hover, palette.dim)
                 };
-                last_line(ui, line, |ui| if !ready && app.editing.is_none() && attachments {
+                last_line(ui, line, |ui| if !ready && app.editing.is_none() && attachments && send_extras.is_none() {
                     // An empty composer changes the send button to record.
                     if theme::circle_button(
                         ui,

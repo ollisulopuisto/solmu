@@ -721,3 +721,26 @@ must use that same identity. Native regression reproduced the bug with distinct
 outgoing IDs, then passed with the explicit sender check. Same-sender and incoming
 boundaries are asserted too. Focused runtime uses the memory-bounded validation
 build; full current-head CI/review remain pending. No merge or release.
+
+
+## Linked-chat attachments - November 9, 2026
+
+In progress, owner Instinct, branch `fix/linked-default-attachments`, based on
+main 86ccc73. Olli reported the linked-chat clipboard refusal. Allow clipboard,
+drop and file/document-picker staging in the linked composer. The visible chat
+owns the draft, but sending resolves the exact selected/default source using
+the existing network/account picker. Missing/stale/locked/ambiguous sources
+refuse without fallback. A queued send whose route changed keeps its draft.
+Keep destination-chat drafts untouched, and keep account/owner guards. Returned
+attachments cannot silently retry on a changed source; choosing a destination
+explicitly allows moving that returned draft. Voice recording remains outside
+this slice; the linked picker stays emoji-only. No real attachments sent.
+
+Version 0.24.8, What's New/changelog updated. Native all-feature clippy passes;
+five focused native regressions pass in a reduced-test validation build, including refusal recovery and changed-source retry protection.
+Actual synthetic native light/dark before/after and source-picker pixels
+inspected. Final all-target/all-feature clippy passes. Full CI pending. Local RED attempt did not finish due to disk/codegen limits, so no failing-before claim. No main merge or release.
+The Release workflow rejects branch-only commits before building a DMG; draft
+arm64 DMG remains held under the standing build rules, not worked around.
+
+Synthetic before/after and picker evidence: https://files.instinct.com/nioka8nka98f-solmu-linked-attachments (public, no real conversations). Page inspected at 320/390/1280px and live preview photo viewer checked.
