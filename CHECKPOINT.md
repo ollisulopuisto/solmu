@@ -670,3 +670,8 @@ tests to fit memory. Removing the seam fix makes its rendered regression fail
 (31.5pt intermediate clock), restoring it passes. Both ordinary and linked
 native before/after pixels inspected. No full-suite pass claimed. Separate
 from reply cancellation PR255. No merge, release or README changes.
+
+CI executed 1,929 passing tests with one old RTL geometry fixture failing: its
+one-minute gaps now intentionally collapse clocks. Spaced only that test's rows
+six minutes apart, keeping all RTL, emoji and clock-position assertions intact;
+its focused native execution and all-feature clippy now pass. Full CI rerun pending.

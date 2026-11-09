@@ -5639,6 +5639,14 @@ mod tests {
         }
         let mut app = app();
         apply_flags(&mut app, Some("rtl-self"));
+        // This test checks each independent bubble's clock/RTL/emoji geometry.
+        // Keep its rows outside the adaptive cadence ceiling; cadence clock
+        // collapsing has separate rendered coverage above.
+        let rows = &mut app.conversations.get_mut(ME).unwrap().messages;
+        let start = rows[0].timestamp;
+        for (index, row) in rows.iter_mut().enumerate() {
+            row.timestamp = start + index as i64 * 6 * 60;
+        }
         let ctx = egui::Context::default();
         app.attach(&ctx);
         render(&mut app, &ctx);
