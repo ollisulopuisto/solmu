@@ -22735,7 +22735,7 @@ mod tests {
             let ctx = egui::Context::default();
             app.attach(&ctx);
             let frame = |app: &mut App, events| {
-                let _ = ctx.run_ui(
+                let mut output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -22749,6 +22749,7 @@ mod tests {
                         assert!(crate::ui::merged::show(app, ui, &wa));
                     },
                 );
+                output.textures_delta.clear();
             };
             let key = |key, modifiers| egui::Event::Key {
                 key,

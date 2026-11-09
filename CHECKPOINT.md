@@ -653,5 +653,10 @@ next frame. Clear both through the same cancellation action, preserve draft
 text and explicit destination choices, and verify a later send has no quote.
 Keep unrelated linked people untouched. Native `cargo check --locked --tests`
 and formatting pass. Real composer regression and state-isolation tests are
-written; runtime test execution and synthetic pixel verification are pending.
+written. Focused native runtime regression passes for X/Esc/redraw/unquoted
+send and state isolation, using a local reduced-test build because full local
+code generation was resource-killed. Removing the production fix makes the
+new regression fail on quote restoration, then restoring it passes. Native
+demo pixels confirm X/Esc remove the strip and preserve the draft. Full CI
+is blocked before test execution by repeated cache HTTP504, not marked pass.
 No README scope changes, merge, release or deployment.
