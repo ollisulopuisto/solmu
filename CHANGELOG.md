@@ -9,6 +9,10 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.11
+
+- The command palette (Ctrl+P) shows the key next to each command, lists Jump to open chat (Ctrl+K), and stays open after you pick a filter so you can try several in a row.
+
 ## v0.24.8
 
 - Reclaim discarded linked-media downloads and old GIF thumbnails, keep native media types with each draft, and allow Send Later when a failed voice note belongs to another conversation. GIF search coalesces edits instead of starting a request thread for every keystroke.

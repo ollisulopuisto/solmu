@@ -4,7 +4,7 @@
 
 use egui::{Key, Modifiers, Sense, vec2};
 
-use super::{theme, widgets};
+use super::{keys, theme, widgets};
 use crate::app::App;
 use crate::model::{Action, ChatFilter, ChatId, Dialog, Page};
 
@@ -24,6 +24,7 @@ pub enum PaletteRow {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaletteCommand {
     SearchChats,
+    JumpToChat,
     NewChat,
     Unreplied,
     ReplyLater,
@@ -35,8 +36,9 @@ pub enum PaletteCommand {
 }
 
 impl PaletteCommand {
-    const EVERY: [Self; 9] = [
+    const EVERY: [Self; 10] = [
         Self::SearchChats,
+        Self::JumpToChat,
         Self::NewChat,
         Self::Unreplied,
         Self::ReplyLater,
@@ -51,6 +53,7 @@ impl PaletteCommand {
         use crate::i18n::gettext;
         match self {
             Self::SearchChats => gettext(locale, "Search chats"),
+            Self::JumpToChat => gettext(locale, "Jump to open chat"),
             Self::NewChat => gettext(locale, "New chat"),
             Self::Unreplied => gettext(locale, "Show unreplied chats"),
             Self::ReplyLater => gettext(locale, "Show reply-later queue"),
@@ -61,13 +64,36 @@ impl PaletteCommand {
             Self::SendLater => gettext(locale, "Schedule this message"),
         }
     }
+
+    /// The registry id of the key that does the same thing, so the row can
+    /// show it. Commands with no key of their own show none.
+    fn shortcut_id(self) -> Option<&'static str> {
+        match self {
+            Self::SearchChats => Some("find"),
+            Self::JumpToChat => Some("jump-to-chat"),
+            Self::NewChat => Some("new-chat"),
+            Self::Settings => Some("settings"),
+            Self::Shortcuts => Some("shortcuts"),
+            _ => None,
+        }
+    }
 }
 
 /// A rendered row: what it says and what it does.
 pub struct PaletteEntry {
     pub title: String,
     pub detail: String,
+    /// The key that does the same thing, in the platform's own notation.
+    pub keys: Option<String>,
     pub row: PaletteRow,
+}
+
+impl PaletteRow {
+    /// Filters can be tried one after another, so the palette stays open
+    /// after one. Opening a chat or running a command is a one-off: it closes.
+    fn keeps_palette_open(&self) -> bool {
+        matches!(self, Self::Filter(_))
+    }
 }
 
 /// Computes the palette rows for a query. Pure over app state, so the
@@ -88,6 +114,7 @@ pub fn entries(app: &App, query: &str) -> Vec<PaletteEntry> {
         out.push(PaletteEntry {
             title,
             detail,
+            keys: None,
             row: PaletteRow::Chat(chat.id.clone()),
         });
         if out.len() >= 8 {
@@ -102,6 +129,7 @@ pub fn entries(app: &App, query: &str) -> Vec<PaletteEntry> {
         out.push(PaletteEntry {
             detail: crate::i18n::gettext(app.locale, "Filter").into_owned(),
             title,
+            keys: None,
             row: PaletteRow::Filter(filter),
         });
     }
@@ -121,6 +149,10 @@ pub fn entries(app: &App, query: &str) -> Vec<PaletteEntry> {
         out.push(PaletteEntry {
             detail: crate::i18n::gettext(app.locale, "Action").into_owned(),
             title,
+            keys: command
+                .shortcut_id()
+                .and_then(|id| keys::shortcut(id).label)
+                .map(keys::label),
             row: PaletteRow::Command(command),
         });
     }
@@ -140,6 +172,7 @@ fn execute(app: &mut App, row: &PaletteRow) {
         }
         PaletteRow::Command(command) => match command {
             PaletteCommand::SearchChats => app.actions.push(Action::FocusSearch),
+            PaletteCommand::JumpToChat => app.actions.push(Action::ShowDialog(Dialog::JumpToChat)),
             PaletteCommand::NewChat => app.actions.push(Action::ShowDialog(Dialog::NewChat)),
             PaletteCommand::Unreplied => {
                 app.beeper_unreplied = true;
@@ -161,7 +194,9 @@ fn execute(app: &mut App, row: &PaletteRow) {
             PaletteCommand::SendLater => app.actions.push(Action::ShowDialog(Dialog::SendLater)),
         },
     }
-    app.actions.push(Action::CloseDialog);
+    if !row.keeps_palette_open() {
+        app.actions.push(Action::CloseDialog);
+    }
 }
 
 /// Renders the palette dialog.
@@ -246,12 +281,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     theme::regular(11.0),
                     palette.secondary,
                 );
-                if index == app.palette_selected {
+                let hint_x = if index == app.palette_selected {
                     ui.painter().text(
                         rect.right_center() + vec2(-10.0, 0.0),
                         egui::Align2::RIGHT_CENTER,
                         "⏎",
                         theme::regular(13.0),
+                        palette.secondary,
+                    );
+                    -34.0
+                } else {
+                    -10.0
+                };
+                if let Some(hint) = &entry.keys {
+                    ui.painter().text(
+                        rect.right_center() + vec2(hint_x, 0.0),
+                        egui::Align2::RIGHT_CENTER,
+                        hint,
+                        theme::regular(12.0),
                         palette.secondary,
                     );
                 }
@@ -321,6 +368,49 @@ mod tests {
             entries(&app, "zzz-no-such-chat")
                 .iter()
                 .all(|e| !matches!(e.row, PaletteRow::Chat(_)))
+        );
+    }
+
+    #[test]
+    fn commands_show_their_keys_and_chats_do_not() {
+        let (_root, app) = app();
+        let rows = entries(&app, "");
+        let keys_of = |wanted: PaletteCommand| {
+            rows.iter()
+                .find(|e| e.row == PaletteRow::Command(wanted))
+                .and_then(|e| e.keys.clone())
+        };
+        assert_eq!(keys_of(PaletteCommand::JumpToChat), Some(keys::label("Ctrl+K")));
+        assert_eq!(keys_of(PaletteCommand::Settings), Some(keys::label("Ctrl+,")));
+        assert_eq!(keys_of(PaletteCommand::WhatsNew), None);
+    }
+
+    #[test]
+    fn filters_keep_the_palette_open_and_everything_else_closes_it() {
+        let (_root, mut app) = app();
+        execute(&mut app, &PaletteRow::Filter(ChatFilter::Unread));
+        assert!(!app.actions.iter().any(|a| matches!(a, Action::CloseDialog)));
+        app.actions.clear();
+        execute(&mut app, &PaletteRow::Command(PaletteCommand::Settings));
+        assert!(app.actions.iter().any(|a| matches!(a, Action::CloseDialog)));
+        app.actions.clear();
+        execute(&mut app, &PaletteRow::Chat("1@example".into()));
+        assert!(app.actions.iter().any(|a| matches!(a, Action::CloseDialog)));
+    }
+
+    #[test]
+    fn jump_to_chat_is_listed_and_opens_the_switcher() {
+        let (_root, mut app) = app();
+        assert!(
+            entries(&app, "jump")
+                .iter()
+                .any(|e| e.row == PaletteRow::Command(PaletteCommand::JumpToChat))
+        );
+        execute(&mut app, &PaletteRow::Command(PaletteCommand::JumpToChat));
+        assert!(
+            app.actions
+                .iter()
+                .any(|a| matches!(a, Action::ShowDialog(Dialog::JumpToChat)))
         );
     }
 

@@ -1,5 +1,9 @@
 # Fast-beeper coordination and development checkpoint
 
+## Command palette polish - November 9, 2026
+
+Branch `feat/palette-polish`, based on main, version 0.24.11 (0.24.9 and 0.24.10 are open PRs #259 and #260, so expect a version/CHANGELOG conflict in whichever merges later). From the unsung article on command palettes: rows show their key, Jump to open chat (Ctrl+K) is listed, and a filter row keeps the palette open. Ctrl+K stays the chat switcher, so the palette stays on Ctrl+P. Three tests in src/ui/palette.rs; not run locally (no Rust toolchain in this checkout), CI is the check. No merge by the author.
+
 ## v0.24.7 release preparation - November 8, 2026
 
 Separate version/changelog PR rebased on merged main 0ff5f22 (includes #248 and #249). Move the existing Unreleased notes into v0.24.7 and
