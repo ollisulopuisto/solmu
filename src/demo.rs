@@ -5014,8 +5014,8 @@ mod tests {
         changed.from_me = true;
         cases.push(("direction", first.clone(), changed));
         let mut changed = next.clone();
-        changed.timestamp += 60;
-        cases.push(("minute", first.clone(), changed));
+        changed.timestamp += 301;
+        cases.push(("long pause", first.clone(), changed));
         let mut changed = next.clone();
         changed.timestamp = first.timestamp - 1;
         cases.push(("reverse chronology", first.clone(), changed));

@@ -643,3 +643,24 @@ No migrations; rollback is this PR's revert.
 Review, owner Instinct, branch `docs/readme-refresh-20261109`. No root AGENTS/BOARD/TODO file exists at the surveyed main. Rewrite README against the Beeper adapter, Mac launcher, current packaging and scheduler implementation. Separate current code from live/native acceptance; keep upstream credit. No new screenshots or illustrations. Source checked against current adapter, launcher and release scripts. All relative links pass; Markdown rendered in Chromium and actual top/install/build/privacy sections visually inspected. No screenshots added to the repository. CI and PR review pending.
 
 README review follow-up: corrected linked macOS scheduler removal guide to actual zapfast paths, both installed binary names and control/API-token copies; preserve queue/logs by default and require service stop/reconciliation. Documented existing launcher binary/plist mismatch without changing runtime code or deploying a service.
+
+## Adaptive sender cadence - November 9, 2026
+
+In progress, owner Instinct; separate branch `feat/adaptive-streak-cadence`,
+worktree `/downloads/solmu-adaptive-streak`, based on main f652135. User asks
+for recent cadence rather than a fixed-minute stacking boundary. The synthetic
+acceptance case is one sender at 07:54, 08:52, 08:54, 08:55: the last three
+belong together, but the first does not. No private screenshot in the PR.
+
+Implemented rough rule: compute a sender/source's completed
+positive gaps in the preceding ten minutes, excluding the candidate gap; allow
+1.5 times their arithmetic mean, clamped between two and five minutes. No prior
+gaps uses the two-minute bootstrap. A gap over five minutes resets cadence.
+Keep adjacency, exact source/direction/sender, content/metadata/control,
+selection, pin and notice boundaries. Both ordinary and linked renderers must
+use the same precomputed decision, not a viewport-limited lookback.
+
+Two synthetic cadence regressions and the existing metadata boundary table are
+updated. Native test checking and clippy pass. Runtime tests, synthetic pixel
+verification and PR remain pending. Separate
+from reply cancellation PR255. No merge, release or README changes.
