@@ -86,7 +86,7 @@ pub(crate) fn cancel_reply(app: &App, ctx: &egui::Context) {
 pub(crate) fn attachment_destination(
     app: &App,
     ctx: &egui::Context,
-) -> Result<Option<String>, &'static str> {
+) -> Result<Option<String>, std::borrow::Cow<'static, str>> {
     let Some(chat) = app.open_chat.as_deref().and_then(|id| app.chat(id)) else {
         return Ok(None);
     };
@@ -104,7 +104,10 @@ pub(crate) fn attachment_destination(
     };
     let valid = valid_members(app, person, chat);
     if !(2..=8).contains(&valid.len()) {
-        return Err("Linked person unavailable. Open a source chat separately.");
+        return Err(crate::i18n::gettext(
+            app.locale,
+            "Linked person unavailable. Open a source chat separately.",
+        ));
     }
     let key = egui::Id::new(("linked-person-state", &person.members));
     let state = ctx
@@ -113,13 +116,21 @@ pub(crate) fn attachment_destination(
     let destination = if state.destination.is_some() {
         state.destination.as_ref()
     } else {
-        person.default_destination(&valid)?
+        person
+            .default_destination(&valid)
+            .map_err(|_| crate::i18n::gettext(app.locale, "Primary chat unavailable. Choose a destination explicitly; no fallback was selected."))?
     };
     let Some(destination) = destination.filter(|member| valid.contains(member)) else {
-        return Err("Choose a destination for this linked chat before attaching files.");
+        return Err(crate::i18n::gettext(
+            app.locale,
+            "Choose a destination for this linked chat before attaching files.",
+        ));
     };
     if !app.chat(&destination.chat).is_some_and(Chat::can_send) {
-        return Err("The selected source chat cannot send messages.");
+        return Err(crate::i18n::gettext(
+            app.locale,
+            "The selected source chat cannot send messages.",
+        ));
     }
     Ok(Some(destination.chat.clone()))
 }
@@ -566,6 +577,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 .as_ref(),
             );
         }
+    }
+    // Seed a recovered quote only on its exact original source. Each staged
+    // item retains its quote independently; a newer reply cannot replace it.
+    if state.reply.is_none()
+        && let Some((source, quote)) = app.pending.iter().find_map(|item| {
+            Some((
+                app.attachment_retry_sources.get(&item.id)?,
+                app.attachment_retry_quotes.get(&item.id)?,
+            ))
+        })
+        && valid.contains(source)
+    {
+        state.reply = Some((source.clone(), quote.id.clone()));
+        state.destination = Some(source.clone());
     }
     // Routing safety: no reply target and no chosen destination means no
     // route at all - new text goes nowhere without an explicit choice.
@@ -1280,7 +1305,9 @@ fn destination_entries(
             state.destination = Some(member.clone());
             // Choosing a route is explicit approval to move a returned draft.
             for staged in &app.pending {
-                app.attachment_retry_sources.remove(&staged.id);
+                if !app.attachment_retry_quotes.contains_key(&staged.id) {
+                    app.attachment_retry_sources.remove(&staged.id);
+                }
             }
             app.reply_to = state
                 .reply

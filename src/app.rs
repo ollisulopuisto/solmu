@@ -594,6 +594,8 @@ pub struct App {
     pub(crate) attachment_retry_sources:
         std::collections::HashMap<AttachmentId, crate::merged::Member>,
     /// Whether the single staged photo will be sent as view-once media.
+    pub(crate) attachment_retry_quotes:
+        std::collections::HashMap<AttachmentId, crate::model::ReplyTarget>,
     pub(crate) pending_view_once: bool,
     /// The next identity to give a staged attachment.
     next_pending_id: AttachmentId,
@@ -1020,6 +1022,8 @@ impl App {
             }
         }
         self.attachment_retry_sources
+            .retain(|id, _| live.contains(id));
+        self.attachment_retry_quotes
             .retain(|id, _| live.contains(id));
         self.picture_origins.retain(|id, _| live.contains(id));
         self.picture_applying.retain(|id, _| live.contains(id));
@@ -1531,6 +1535,7 @@ impl App {
             emoji_jump: None,
             pending: Vec::new(),
             attachment_retry_sources: Default::default(),
+            attachment_retry_quotes: Default::default(),
             pending_view_once: false,
             next_pending_id: 0,
             composer_tools_open: false,
@@ -5425,31 +5430,15 @@ impl App {
                 caption,
                 message,
             } => {
-                if self.open_chat.as_deref() == Some(chat.as_str()) {
+                let pending = paths.into_iter().map(|path| {
                     if documents {
-                        self.stage_documents(paths);
+                        Pending::Document(path)
                     } else {
-                        self.stage_files(paths);
+                        Pending::File(path)
                     }
-                } else {
-                    let staged: Vec<Staged> = paths
-                        .into_iter()
-                        .map(|path| Staged {
-                            id: self.next_attachment_id(),
-                            item: if documents {
-                                Pending::Document(path)
-                            } else {
-                                Pending::File(path)
-                            },
-                        })
-                        .collect();
-                    self.attachment_drafts
-                        .entry(chat.clone())
-                        .or_default()
-                        .pending
-                        .extend(staged);
-                }
-                let recovery = caption.and_then(|text| self.restore_beeper_text(&chat, text));
+                });
+                let owner = self.restore_attachments(&chat, pending, None, false);
+                let recovery = caption.and_then(|text| self.restore_beeper_text(&owner, text));
                 self.toast_error(if let Some(recovery) = recovery {
                     format!("{message}\n{recovery}")
                 } else {
@@ -6319,7 +6308,10 @@ impl App {
         let open = !self.events_hidden && self.open_chat.as_deref() == Some(chat.as_str());
         // Re-arm the reply banner, unless the user has moved on to another
         // reply or an edit since.
-        if let Some(target) = quoting.clone() {
+        if let Some(target) = quoting
+            .clone()
+            .filter(|_| !matches!(&unsent, Unsent::Files { .. } | Unsent::Image { .. }))
+        {
             if open && self.reply_to.is_none() && self.editing.is_none() {
                 self.reply_to = Some(target);
                 self.focus_composer = true;
@@ -6441,20 +6433,8 @@ impl App {
         quoting: Option<crate::model::ReplyTarget>,
         view_once: bool,
     ) -> ChatId {
-        // Quoted refusals stay on their exact source draft, together with the
-        // quote. An unquoted returned attachment can rejoin the visible person.
-        let linked_open =
-            quoting.is_none()
-                && self.open_chat.as_deref().is_some_and(|open| {
-                    self.settings.beeper.people.iter().any(|person| {
-                        person.members.iter().any(|m| {
-                            m.chat == open && self.chat(open).is_some_and(|c| m.matches(c))
-                        }) && person.members.iter().any(|m| {
-                            m.chat == chat && self.chat(chat).is_some_and(|c| m.matches(c))
-                        })
-                    })
-                });
-        if !self.events_hidden && (self.open_chat.as_deref() == Some(chat) || linked_open) {
+        let owner = self.linked_draft_owner(chat);
+        if !self.events_hidden && self.open_chat.as_deref() == Some(owner.as_str()) {
             let preserve_view_once = self.pending_view_once || view_once;
             let source = self.chat(chat).and_then(crate::merged::Member::of);
             for item in pending {
@@ -6462,11 +6442,17 @@ impl App {
                 if let Some(source) = &source {
                     self.attachment_retry_sources.insert(id, source.clone());
                 }
+                if let Some(quote) = &quoting {
+                    self.attachment_retry_quotes.insert(id, quote.clone());
+                }
             }
             // Recovery can merge with a newer draft. Keep the privacy choice;
             // send_pending refuses an unsupported combination until the user
             // removes the extra attachments or explicitly turns the option off.
             self.pending_view_once = preserve_view_once;
+            if self.reply_to.is_none() && self.editing.is_none() {
+                self.reply_to = quoting;
+            }
             return self.open_chat.clone().unwrap_or_else(|| chat.to_owned());
         } else if self.chat(chat).is_some() {
             // Named here as well, so the draft carries an identity back with
@@ -6478,14 +6464,47 @@ impl App {
                     Staged { id, item }
                 })
                 .collect();
-            let draft = self.attachment_drafts.entry(chat.to_owned()).or_default();
+            if let Some(source) = self.chat(chat).and_then(crate::merged::Member::of) {
+                for staged in &staged {
+                    self.attachment_retry_sources
+                        .insert(staged.id, source.clone());
+                }
+            }
+            if let Some(quote) = &quoting {
+                for item in &staged {
+                    self.attachment_retry_quotes.insert(item.id, quote.clone());
+                }
+            }
+            let draft = self.attachment_drafts.entry(owner.clone()).or_default();
             draft.pending.extend(staged);
             draft.view_once |= view_once;
             if draft.quoting.is_none() {
                 draft.quoting = quoting;
             }
         }
-        chat.to_owned()
+        owner
+    }
+
+    /// Use the same reachable draft key as open_chat, including late failures
+    /// after the user has moved to another conversation.
+    fn linked_draft_owner(&self, chat: &str) -> ChatId {
+        self.settings
+            .beeper
+            .people
+            .iter()
+            .find(|p| {
+                p.members
+                    .iter()
+                    .any(|m| m.chat == chat && self.chat(chat).is_some_and(|c| m.matches(c)))
+            })
+            .and_then(|p| {
+                p.members.iter().find(|m| {
+                    self.chat(&m.chat)
+                        .is_some_and(|c| m.matches(c) && !c.locked)
+                })
+            })
+            .map(|m| m.chat.clone())
+            .unwrap_or_else(|| chat.to_owned())
     }
 
     /// A late Beeper failure must not overwrite a newer draft or discard the old text.
@@ -7672,6 +7691,15 @@ impl App {
                 "Returned attachments belong to another source chat. Choose their original source, or explicitly pick a new destination before retrying.").into_owned());
             return;
         }
+        if self.pending.iter().any(|staged| {
+            self.attachment_retry_quotes
+                .get(&staged.id)
+                .is_some_and(|quote| self.reply_to.as_ref() != Some(quote))
+        }) {
+            self.restore_text(&owner, caption);
+            self.toast_error(crate::i18n::gettext(self.locale, "Returned attachments have another reply. Cancel the reply before sending without that quote.").into_owned());
+            return;
+        }
         if self.pending_view_once && !self.pending_supports_view_once() {
             let restore_mentions = self.composer.trim().is_empty() && self.editing.is_none();
             self.restore_text(&owner, caption);
@@ -8197,7 +8225,7 @@ impl App {
             Action::Attach { .. } | Action::SendFiles(_) | Action::PasteImage { .. }
         ) && let Err(error) = crate::ui::merged::attachment_destination(self, ctx)
         {
-            self.toast_error(crate::i18n::gettext(self.locale, error).into_owned());
+            self.toast_error(error.into_owned());
             return;
         }
         let reply_send = match &action {
@@ -8940,6 +8968,9 @@ impl App {
                 }
             }
             Action::CancelReply => {
+                for item in &self.pending {
+                    self.attachment_retry_quotes.remove(&item.id);
+                }
                 crate::ui::merged::cancel_reply(self, ctx);
                 self.reply_to = None;
                 self.reply_when_loaded = None;
@@ -9252,8 +9283,8 @@ impl App {
                         if let Some(owner) = self.open_chat.clone() {
                             self.restore_text(&owner, caption);
                         }
-                        let error = other.err().unwrap_or("Attachment destination changed. Review the selected source and send again.");
-                        self.toast_error(crate::i18n::gettext(self.locale, error).into_owned());
+                        let error = other.err().unwrap_or_else(|| crate::i18n::gettext(self.locale, "Attachment destination changed. Review the selected source and send again."));
+                        self.toast_error(error.into_owned());
                     }
                 }
             }
@@ -9885,6 +9916,10 @@ impl App {
                 quoting,
                 replaces,
             } => {
+                if !self.pending.is_empty() {
+                    self.toast_error(crate::i18n::gettext(self.locale, "Send Later cannot include attachments. Remove the staged files before scheduling text.").into_owned());
+                    return;
+                }
                 // The composer and quote stay until the scheduler confirms
                 // (`Event::ScheduledAccepted`); a failure loses nothing.
                 self.backend.send(Command::ScheduleSend {
@@ -10010,6 +10045,11 @@ impl App {
                 }
             }
             Action::ShowDialog(dialog) => {
+                if dialog == Dialog::SendLater && !self.pending.is_empty() {
+                    self.toast_error(crate::i18n::gettext(self.locale, "Send Later cannot include attachments. Remove the staged files before scheduling text.").into_owned());
+                    return;
+                }
+
                 self.cancel_contact_dialog_request();
                 self.clear_chat_lock_entry();
                 if let Dialog::TranscriptionLanguage { chat, message } = &dialog {
@@ -12422,7 +12462,7 @@ impl App {
     /// remain deferred until the frame ends.
     fn stage_clipboard(&mut self, ctx: &egui::Context, contents: ClipboardPaste) {
         if let Err(error) = crate::ui::merged::attachment_destination(self, ctx) {
-            self.toast_error(crate::i18n::gettext(self.locale, error).into_owned());
+            self.toast_error(error.into_owned());
             return;
         }
         match contents {
@@ -29156,6 +29196,97 @@ mod linked_attachment_tests {
         );
         assert!(app.pending.is_empty());
         assert!(app.attachment_retry_sources.is_empty());
+    }
+
+    #[test]
+    fn linked_attachment_schedule_paths_preserve_the_whole_draft() {
+        let (_root, mut app, ctx, mut commands) = fixture();
+        app.stage(Pending::File("synthetic.pdf".into()));
+        app.composer = "Caption".into();
+        app.apply(Action::ShowDialog(Dialog::SendLater), &ctx);
+        assert_ne!(app.dialog, Some(Dialog::SendLater));
+        app.apply(
+            Action::ScheduleSend {
+                chat: "visible".into(),
+                text: "Caption".into(),
+                due_at: 9999999999,
+                quoting: None,
+                replaces: None,
+            },
+            &ctx,
+        );
+        assert_eq!(app.pending.len(), 1);
+        assert_eq!(app.composer, "Caption");
+        assert!(
+            !std::iter::from_fn(|| commands.try_recv().ok())
+                .any(|c| matches!(c, Command::ScheduleSend { .. }))
+        );
+    }
+
+    #[test]
+    fn late_quoted_linked_refusal_uses_reachable_owner_and_retains_source() {
+        let (_root, mut app, _ctx, _commands) = fixture();
+        app.open_chat = Some("other".into());
+        let quote: crate::model::ReplyTarget = "quote-id".into();
+        app.restore_unsent(
+            "default".into(),
+            Some(quote.clone()),
+            Unsent::Files {
+                paths: vec!["returned.pdf".into()],
+                documents: true,
+                view_once: false,
+                caption: Some("Caption".into()),
+            },
+        );
+        let draft = app.attachment_drafts.get("visible").unwrap();
+        assert_eq!(draft.quoting, Some(quote));
+        assert_eq!(draft.pending.len(), 1);
+        assert_eq!(
+            app.attachment_retry_sources[&draft.pending[0].id].chat,
+            "default"
+        );
+        assert_eq!(
+            app.drafts.get("visible").map(String::as_str),
+            Some("Caption")
+        );
+        assert!(!app.attachment_drafts.contains_key("default"));
+    }
+
+    #[test]
+    fn uncertain_linked_upload_returns_files_and_caption_to_reachable_owner() {
+        for moved in [false, true] {
+            let (_root, mut app, _ctx, _commands) = fixture();
+            if moved {
+                app.open_chat = Some("other".into());
+            }
+            let (backend, _sent, events) = Backend::recording_with_events();
+            app.backend = backend;
+            events
+                .send(Event::BeeperFilesUncertain {
+                    chat: "default".into(),
+                    paths: vec!["returned.pdf".into()],
+                    documents: true,
+                    caption: Some("Caption".into()),
+                    message: "Upload unconfirmed".into(),
+                })
+                .unwrap();
+            app.handle_events();
+            if moved {
+                assert_eq!(app.attachment_drafts["visible"].pending.len(), 1);
+                assert_eq!(
+                    app.drafts.get("visible").map(String::as_str),
+                    Some("Caption")
+                );
+            } else {
+                assert_eq!(app.pending.len(), 1);
+                assert_eq!(app.composer, "Caption");
+                assert_eq!(
+                    app.attachment_retry_sources[&app.pending[0].id].chat,
+                    "default"
+                );
+            }
+            assert!(!app.attachment_drafts.contains_key("default"));
+        }
     }
 
     #[test]

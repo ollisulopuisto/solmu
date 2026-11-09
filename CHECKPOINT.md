@@ -733,7 +733,9 @@ the existing network/account picker. Missing/stale/locked/ambiguous sources
 refuse without fallback. A queued send whose route changed keeps its draft.
 Keep destination-chat drafts untouched, and keep account/owner guards. Returned
 attachments cannot silently retry on a changed source; choosing a destination
-explicitly allows moving that returned draft. Voice recording remains outside
+explicitly allows moving an unquoted returned draft. Quoted returns stay tied to
+their source until Cancel reply. Both kinds restore to the reachable person draft,
+including delayed Beeper upload failures after navigating away. Voice recording remains outside
 this slice; the linked picker stays emoji-only. No real attachments sent.
 
 Version 0.24.8, What's New/changelog updated. Native all-feature clippy passes;
@@ -744,3 +746,19 @@ The Release workflow rejects branch-only commits before building a DMG; draft
 arm64 DMG remains held under the standing build rules, not worked around.
 
 Synthetic before/after and picker evidence: https://files.instinct.com/nioka8nka98f-solmu-linked-attachments (public, no real conversations). Page inspected at 320/390/1280px and live preview photo viewer checked.
+
+
+PR257 review follow-up: fixed four findings. BeeperFilesUncertain and quoted
+attachment refusals restore files plus captions under the same canonical member
+key as open_chat, not an inaccessible nonrepresentative draft. Per-attachment
+source/quote identities survive parking and account switches; conflicting quotes
+refuse until Cancel reply. Send Later refuses staged media at both dialog and
+execution boundaries, retaining caption and files. Route errors use direct
+gettext literals. Eight targeted native tests plus an existing linked demo test
+pass in the reduced validation build; all-target/all-feature clippy and fmt pass.
+RED proof: restored the published 8570625 recovery and scheduling functions in
+the validation checkout with the new tests unchanged; all three new recovery/
+scheduling regressions fail. Restored fixed production code, all nine pass.
+
+Dependency advisory CI fails on unchanged libsqlite3-sys0.38.2, RUSTSEC-2026-0459.
+A separate dependency PR is assigned; do not fold it into attachment scope.

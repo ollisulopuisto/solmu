@@ -11,6 +11,7 @@ version in Cargo.toml is bumped.
 
 ## v0.24.8
 
+- Keep returned linked attachments and captions in a reachable draft, preserve their original reply/source on retry, and refuse Send Later while media is staged.
 - Paste, drop, or pick pictures and files in linked chats. They send through the saved default source, or the source you choose from the network/account picker. Missing or unavailable defaults require a choice; attachments never fall back to the visible member chat.
 
 - Follow-up text bubbles use each sender/source's recent cadence instead of a fixed calendar-minute boundary. The last ten minutes of completed gaps set a 1.5x average allowance, bounded to 2-5 minutes. A long pause starts a new burst; replies, metadata and other existing boundaries still stay separate.
