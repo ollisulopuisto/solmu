@@ -6,7 +6,8 @@ use std::path::Path;
 /// e.g. `%2500` (double-encoded null) that could inject arguments into desktop handlers.
 fn has_encoded_control(value: &str) -> bool {
     let mut current = value.as_bytes().to_vec();
-    for _ in 0..3 {
+    // Decode bounded nested percent-encoding layers to detect hidden control characters.
+    for _ in 0..16 {
         if current.windows(3).any(|w| {
             w[0] == b'%'
                 && (w[1] as char).to_digit(16).and_then(|h1| {
@@ -375,12 +376,16 @@ mod tests {
             "https://example.com/%7f",
             "mailto:user@example.com%00payload",
             "mailto:user@example.com%0D%0Acc:admin@example.com",
-            // Nested / double percent-encoded control characters
+            // Nested / double / multi percent-encoded control characters
             "https://example.com/%2500evil",
             "https://example.com/%250d%250ainjection",
             "https://example.com/%252500nested",
+            "https://example.com/%25252500quad",
+            "https://example.com/%2525250dquad_cr",
+            "https://example.com/%2525252500deep",
             "https://example.com/%257f",
             "mailto:user@example.com%2500payload",
+            "mailto:user@example.com%25252500payload",
             "mailto:user@example.com%250D%250Acc:admin@example.com",
         ] {
             assert_eq!(preview_url(bad), None, "{bad}");
