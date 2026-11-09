@@ -13370,9 +13370,11 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
                             );
                             theme::paint_icon(ui, Icon::FileText, icon, 22.0, palette.secondary);
                             let name = match app.attachment_kinds.get(&item.id) {
-                                Some(crate::backend::MediaKind::Gif) => Some("GIF".to_owned()),
+                                Some(crate::backend::MediaKind::Gif) => {
+                                    Some(crate::i18n::gettext(app.locale, "GIF").into_owned())
+                                }
                                 Some(crate::backend::MediaKind::Sticker) => {
-                                    Some("Sticker".to_owned())
+                                    Some(crate::i18n::gettext(app.locale, "Sticker").into_owned())
                                 }
                                 None => None,
                             }

@@ -2398,6 +2398,26 @@ fn history_cursor(
     Ok(next.or(previous).map(str::to_owned))
 }
 
+/// Received cache entries must not be relabeled as saved favorites.
+fn local_sticker_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .take(512)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("webp"))
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files.dedup();
+    files
+}
+
 pub fn run(
     mut cfg: BeeperConfig,
     dirs: AccountDirs,
@@ -3656,24 +3676,11 @@ pub fn run(
                     }
                 }
                 Command::RecentStickers => {
-                    let mut files = Vec::new();
-                    for dir in [dirs.saved_sticker_dir(), dirs.sticker_cache_dir()] {
-                        if let Ok(entries) = std::fs::read_dir(dir) {
-                            files.extend(entries.flatten().take(512).map(|e| e.path()).filter(
-                                |p| {
-                                    p.extension()
-                                        .is_some_and(|e| e.eq_ignore_ascii_case("webp"))
-                                },
-                            ));
-                        }
-                    }
-                    files.sort();
-                    files.dedup();
                     emit(Event::Stickers {
-                        favorites: files,
+                        favorites: local_sticker_files(&dirs.saved_sticker_dir()),
                         packs: Vec::new(),
                         recent: Vec::new(),
-                        received: Vec::new(),
+                        received: local_sticker_files(&dirs.sticker_cache_dir()),
                         emojis: Default::default(),
                     });
                 }

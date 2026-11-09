@@ -7786,7 +7786,7 @@ impl App {
                 .iter()
                 .any(|item| self.attachment_kinds.contains_key(&item.id))
         {
-            self.toast_error("GIF and sticker captions cannot carry selected mentions. Remove the mentions or send them separately; media kept.");
+            self.toast_error(crate::i18n::gettext(self.locale, "GIF and sticker captions cannot carry selected mentions. Remove the mentions or send them separately; media kept.").into_owned());
             return;
         }
         self.drafts.remove(&owner);
