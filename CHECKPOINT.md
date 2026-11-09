@@ -712,3 +712,12 @@ reply-cancellation and DOS-device-name fixes; the resulting conflict was only
 in the changelog and this planning log. Preserve both entries and all upstream
 code with a branch-only merge from main. No feature behavior changed in this
 resolution. Fresh integrated CI/review pending; no merge to main or release.
+
+
+Hidden review finding follow-up: exact outgoing sender IDs are now also a hard
+cadence boundary. The shared visual run helper intentionally treats all outgoing
+messages as one side, but cadence history is keyed by exact sender; stacking
+must use that same identity. Native regression reproduced the bug with distinct
+outgoing IDs, then passed with the explicit sender check. Same-sender and incoming
+boundaries are asserted too. Focused runtime uses the memory-bounded validation
+build; full current-head CI/review remain pending. No merge or release.

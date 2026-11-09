@@ -5324,6 +5324,7 @@ fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
     };
     let gap = next.timestamp.saturating_sub(previous.timestamp);
     previous.chat == next.chat
+        && previous.sender == next.sender
         && same_run(previous, next)
         && crate::util::day_key(previous.timestamp) == crate::util::day_key(next.timestamp)
         && (0..=limit).contains(&gap)
@@ -11307,6 +11308,30 @@ mod tests {
                 0.0
             );
         });
+    }
+
+    #[test]
+    fn adaptive_cadence_keeps_distinct_outgoing_senders_separate() {
+        let mut first = message(Content::text("first sender"));
+        first.timestamp = 18 * 3600 + 40 * 60;
+        first.sender = "outgoing-account-a".into();
+        let mut next = first.clone();
+        next.id = "second".into();
+        next.timestamp += 60;
+        next.sender = "outgoing-account-b".into();
+        for from_me in [false, true] {
+            first.from_me = from_me;
+            next.from_me = from_me;
+            let limits = cadence_limits(&[&first, &next]);
+            assert_eq!(limits, vec![120, 120]);
+            assert!(
+                !stacks_with_limit(&first, &next, limits[1]),
+                "different sender IDs cannot share a cadence streak, outgoing={from_me}"
+            );
+            next.sender = first.sender.clone();
+            assert!(stacks_with_limit(&first, &next, 120));
+            next.sender = "outgoing-account-b".into();
+        }
     }
 
     #[test]
