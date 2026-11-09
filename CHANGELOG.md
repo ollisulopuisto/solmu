@@ -9,6 +9,10 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.10
+
+- A quoted reply, picture, GIF or video now starts a run that the plain messages after it join, and Sent, Delivered and Read receipts of your own messages no longer split a run. The time-gap rules are unchanged.
+
 ## v0.24.8
 
 - Reclaim discarded linked-media downloads and old GIF thumbnails, keep native media types with each draft, and allow Send Later when a failed voice note belongs to another conversation. GIF search coalesces edits instead of starting a request thread for every keystroke.

@@ -5312,15 +5312,33 @@ pub(crate) fn cadence_limits(messages: &[&Message]) -> Vec<i64> {
         .collect()
 }
 
-/// Plain adjacent text can stack within the sender's current cadence.
-/// Controls, metadata, quotes and failure states remain hard boundaries.
+/// Adjacent rows stack within the sender's current cadence. A run may open
+/// with a quoted reply or a picture, GIF or video; what follows is plain text.
+/// Controls, metadata and failure states remain hard boundaries, and a quote
+/// opens a run, never joins one.
 fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
-    let plain = |row: &Message| {
-        matches!(row.content, Content::Text { .. })
-            && row.quoted.is_none()
-            && !row.forwarded
+    let steady = |row: &Message| {
+        !row.forwarded
             && !row.edited
             && !matches!(row.status, Delivery::Pending | Delivery::Failed)
+    };
+    let head = |row: &Message| {
+        steady(row)
+            && matches!(
+                row.content,
+                Content::Text { .. } | Content::Image { .. } | Content::Video { .. }
+            )
+    };
+    let follower = |row: &Message| {
+        steady(row) && matches!(row.content, Content::Text { .. }) && row.quoted.is_none()
+    };
+    // Receipts of one run collapse onto its last row, so Sent, Delivered and
+    // Read rows still stack; anything else must match exactly.
+    let receipt = |status: Delivery| {
+        matches!(
+            status,
+            Delivery::Sent | Delivery::Delivered | Delivery::ReadBySome | Delivery::Read
+        )
     };
     let gap = next.timestamp.saturating_sub(previous.timestamp);
     previous.chat == next.chat
@@ -5329,9 +5347,10 @@ fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
         && crate::util::day_key(previous.timestamp) == crate::util::day_key(next.timestamp)
         && (0..=limit).contains(&gap)
         && previous.reactions.is_empty()
-        && previous.status == next.status
-        && plain(previous)
-        && plain(next)
+        && (previous.status == next.status
+            || (previous.from_me && receipt(previous.status) && receipt(next.status)))
+        && head(previous)
+        && follower(next)
 }
 
 #[cfg(test)]
@@ -11318,6 +11337,42 @@ mod tests {
                 0.0
             );
         });
+    }
+
+    #[test]
+    fn a_quoted_reply_opens_a_run_and_receipts_do_not_split_it() {
+        let mut head = message(Content::text("mitä"));
+        head.from_me = true;
+        head.sender = "me".into();
+        head.timestamp = 22 * 3600 + 15 * 60;
+        head.status = Delivery::Read;
+        head.quoted = Some(crate::model::Quoted {
+            chat: None,
+            id: "quoted".into(),
+            sender: "tea".into(),
+            sender_name: None,
+            summary: "GIF".into(),
+            labelled: None,
+            mentions: vec![],
+        });
+        let mut middle = head.clone();
+        middle.id = "middle".into();
+        middle.quoted = None;
+        middle.timestamp += 30;
+        middle.status = Delivery::Delivered;
+        let mut last = middle.clone();
+        last.id = "last".into();
+        last.timestamp += 30;
+        last.status = Delivery::Sent;
+        assert!(stacks_with_limit(&head, &middle, 120), "quoted head");
+        assert!(stacks_with_limit(&middle, &last, 120), "Delivered then Sent");
+        // A quote still opens a new run instead of joining one.
+        assert!(!stacks_with_limit(&last, &head, 120));
+        let mut late = last.clone();
+        late.timestamp = head.timestamp + 3600;
+        assert!(!stacks_with_limit(&middle, &late, 120), "the cadence limit stays");
+        last.status = Delivery::Pending;
+        assert!(!stacks_with_limit(&middle, &last, 120));
     }
 
     #[test]

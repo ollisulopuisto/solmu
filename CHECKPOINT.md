@@ -1,5 +1,14 @@
 # Fast-beeper coordination and development checkpoint
 
+## Quoted and media heads, receipts in a run - November 9, 2026
+
+Branch `fix/reply-bubble-stacking`, based on main ba51fa1, version 0.24.10 (0.24.9 is PR #259). stacks_with_limit let only plain
+text stack and required identical delivery status, so a reply, picture, GIF or video head and a run whose
+receipts differed (Read, Delivered, Sent) each broke the stack. A run may now open with a quoted reply,
+picture or video and plain text follows; own Sent/Delivered/Read rows stack. Cadence limits, quotes
+as followers, Unknown, Pending and Failed remain boundaries. Messages bubble style still draws no stacks.
+Not compiled locally (no Rust toolchain); CI is the check. Author does not merge.
+
 ## v0.24.7 release preparation - November 8, 2026
 
 Separate version/changelog PR rebased on merged main 0ff5f22 (includes #248 and #249). Move the existing Unreleased notes into v0.24.7 and
