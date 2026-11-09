@@ -4690,6 +4690,32 @@ mod tests {
     }
 
     #[test]
+    fn linked_messages_style_keeps_clocks_without_cadence_overlap() {
+        let mut app = app();
+        apply_flags(&mut app, Some("linked-minute-gutter,messages"));
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..4 {
+            streak_test_frame(&mut app, &ctx, 1100.0, 900.0, vec![]);
+        }
+        assert_eq!(
+            app.conversation_palette().bubbles,
+            crate::theme::BubbleStyle::Messages
+        );
+        let footer = |index| {
+            ctx.data(|data| {
+                data.get_temp::<egui::Rect>(crate::ui::conversation::footer_id(
+                    SAMPLES[0].id,
+                    &format!("minute-gutter-{index}"),
+                ))
+            })
+            .map_or(0.0, |rect| rect.width())
+        };
+        assert!(footer(0) > 0.0, "separate 18:40 bubble keeps its clock");
+        assert!(footer(2) > 0.0, "last 18:41 bubble keeps its clock");
+    }
+
+    #[test]
     fn streak_seam_menu_targets_the_older_bubble_and_selection_unstacks() {
         let mut app = app();
         group_stacks_sample(&mut app);

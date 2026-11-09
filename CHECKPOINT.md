@@ -675,3 +675,15 @@ CI executed 1,929 passing tests with one old RTL geometry fixture failing: its
 one-minute gaps now intentionally collapse clocks. Spaced only that test's rows
 six minutes apart, keeping all RTL, emoji and clock-position assertions intact;
 its focused native execution and all-feature clippy now pass. Full CI rerun pending.
+
+
+PR256 review follow-up: full applicable CI passed at c536c0e and the PR is ready,
+not merged. Fixed the reviewer-found linked Messages-style clock regression:
+that style does not overlap bubbles, so it must keep its independent clocks.
+The new rendered-footer regression fails without the guard and passes with it
+in the memory-bounded native validation build; all-feature clippy passes.
+Published synthetic dark/light native before-and-after captures plus the
+Messages-style guard capture at
+https://files.instinct.com/xlkcf5cm0tyf-solmu-cadence-review
+The public page and image viewers were visually inspected. Full CI and renewed
+review for the follow-up commit remain pending. No release build or merge.
