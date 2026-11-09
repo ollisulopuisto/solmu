@@ -534,6 +534,9 @@ pub struct App {
     pub palette_query: String,
     /// Highlighted row in the command palette.
     pub palette_selected: usize,
+    /// Set when the palette is about to be shown again after one of its own rows navigated
+    /// elsewhere (a filter picked from another page): the query and selection stay.
+    pub palette_restore: bool,
     /// Last answer from the slow code verifier, keyed by what was checked.
     chat_lock_check: std::cell::RefCell<Option<(String, Option<String>, bool)>>,
     /// Receipts of the message whose "Message info" is open.
@@ -1521,6 +1524,7 @@ impl App {
             jump_selected: 0,
             palette_query: String::new(),
             palette_selected: 0,
+            palette_restore: false,
             chat_lock_check: Default::default(),
             message_receipts: None,
             receipts_watch: None,
@@ -10277,8 +10281,12 @@ impl App {
                     self.new_group = None;
                 }
                 if dialog == Dialog::Palette {
-                    self.palette_query.clear();
-                    self.palette_selected = 0;
+                    if std::mem::take(&mut self.palette_restore) {
+                        // Reopened by a palette row: keep what the user typed.
+                    } else {
+                        self.palette_query.clear();
+                        self.palette_selected = 0;
+                    }
                 }
                 if dialog == Dialog::JumpToChat {
                     self.jump_query.clear();

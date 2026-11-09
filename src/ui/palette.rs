@@ -190,6 +190,7 @@ fn execute(app: &mut App, row: &PaletteRow) {
             if app.page != Page::Chats {
                 // Opening a page clears the dialog, so bring the palette back.
                 app.actions.push(Action::Open(Page::Chats));
+                app.palette_restore = true;
                 app.actions.push(Action::ShowDialog(Dialog::Palette));
             }
         }
@@ -403,8 +404,14 @@ mod tests {
                 .find(|e| e.row == PaletteRow::Command(wanted))
                 .and_then(|e| e.keys.clone())
         };
-        assert_eq!(keys_of(PaletteCommand::JumpToChat), Some(keys::label("Ctrl+K")));
-        assert_eq!(keys_of(PaletteCommand::Settings), Some(keys::label("Ctrl+,")));
+        assert_eq!(
+            keys_of(PaletteCommand::JumpToChat),
+            Some(keys::label("Ctrl+K"))
+        );
+        assert_eq!(
+            keys_of(PaletteCommand::Settings),
+            Some(keys::label("Ctrl+,"))
+        );
         assert_eq!(keys_of(PaletteCommand::WhatsNew), None);
     }
 
@@ -431,12 +438,36 @@ mod tests {
     fn a_filter_keeps_the_palette_open_from_any_page() {
         for page in [Page::Chats, Page::Settings] {
             let (_root, mut app) = app();
-            app.page = page;
+            app.page = page.clone();
             pick(&mut app, &PaletteRow::Filter(ChatFilter::Unread));
             assert_eq!(app.dialog, Some(Dialog::Palette), "from {page:?}");
             assert_eq!(app.page, Page::Chats);
             assert_eq!(app.chat_filter, ChatFilter::Unread);
         }
+    }
+
+    #[test]
+    fn a_filter_picked_from_another_page_keeps_the_typed_query() {
+        let (_root, mut app) = app();
+        app.page = Page::Settings;
+        let ctx = egui::Context::default();
+        app.actions.push(Action::ShowDialog(Dialog::Palette));
+        app.apply_queued_for_test(&ctx);
+        app.palette_query = "unread".into();
+        app.palette_selected = 1;
+        execute(&mut app, &PaletteRow::Filter(ChatFilter::Unread));
+        app.apply_queued_for_test(&ctx);
+        assert_eq!(app.dialog, Some(Dialog::Palette));
+        assert_eq!(app.page, Page::Chats);
+        assert_eq!(app.palette_query, "unread");
+        assert_eq!(app.palette_selected, 1);
+        assert!(!app.palette_restore, "the restore flag is used up");
+        // A genuinely new opening still starts empty.
+        app.actions.push(Action::CloseDialog);
+        app.actions.push(Action::ShowDialog(Dialog::Palette));
+        app.apply_queued_for_test(&ctx);
+        assert_eq!(app.palette_query, "");
+        assert_eq!(app.palette_selected, 0);
     }
 
     #[test]
