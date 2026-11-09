@@ -2945,10 +2945,12 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         });
     // One boundary decision per adjacent pair drives both receipt collapsing
     // and overlap. Notices/dividers must not hide a receipt without stacking.
+    let cadence = cadence_limits(&conversation.messages.iter().collect::<Vec<_>>());
     let stack_edges: Vec<bool> = conversation
         .messages
         .windows(2)
-        .map(|pair| {
+        .enumerate()
+        .map(|(index, pair)| {
             let previous = &pair[0];
             let next = &pair[1];
             let separated = view.pin_notices.iter().any(|notice| {
@@ -2957,7 +2959,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             !view.selecting
                 && palette.bubbles != theme::BubbleStyle::Messages
                 && !separated
-                && stack_pair(&view, previous, next)
+                && stack_pair(&view, previous, next, cadence[index + 1])
         })
         .collect();
     let mut divider_placed = false;
@@ -3462,7 +3464,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                                     message_index
                                                         + album.map_or(1, |items| items.len()),
                                                 ),
-                                            ),
+                                            ) && !stack_edges
+                                                .get(message_index)
+                                                .copied()
+                                                .unwrap_or(false),
                                             show_sender,
                                             show_avatar,
                                             tailed,
@@ -5263,9 +5268,53 @@ pub(crate) fn sender_streak_hues(messages: &[Message]) -> Vec<f32> {
     hues
 }
 
-/// Only plain, adjacent text from the same exact source/sender/minute stacks.
-/// Controls, metadata, quotes and failure states are hard boundaries.
-pub(crate) fn stacks_after(previous: &Message, next: &Message) -> bool {
+/// A causal cadence limit for each row, computed before viewport filtering.
+/// The candidate gap never teaches its own limit. Long pauses start a new burst.
+pub(crate) fn cadence_limits(messages: &[&Message]) -> Vec<i64> {
+    use std::collections::{HashMap, VecDeque};
+    type History = (i64, VecDeque<(i64, i64)>, i64);
+    let mut histories: HashMap<(&str, &str, bool), History> = HashMap::new();
+    messages
+        .iter()
+        .map(|message| {
+            let key = (
+                message.chat.as_str(),
+                message.sender.as_str(),
+                message.from_me,
+            );
+            let Some((last, gaps, total)) = histories.get_mut(&key) else {
+                histories.insert(key, (message.timestamp, VecDeque::new(), 0));
+                return 120;
+            };
+            let gap = message.timestamp.saturating_sub(*last);
+            if !(0..=300).contains(&gap) {
+                gaps.clear();
+                *total = 0;
+            }
+            while gaps
+                .front()
+                .is_some_and(|(end, _)| message.timestamp.saturating_sub(*end) > 600)
+            {
+                *total -= gaps.pop_front().expect("front was present").1;
+            }
+            let limit = if gaps.is_empty() {
+                120
+            } else {
+                (total.saturating_mul(3) / (2 * gaps.len() as i64)).clamp(120, 300)
+            };
+            if (1..=300).contains(&gap) {
+                gaps.push_back((message.timestamp, gap));
+                *total += gap;
+            }
+            *last = message.timestamp;
+            limit
+        })
+        .collect()
+}
+
+/// Plain adjacent text can stack within the sender's current cadence.
+/// Controls, metadata, quotes and failure states remain hard boundaries.
+fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
     let plain = |row: &Message| {
         matches!(row.content, Content::Text { .. })
             && row.quoted.is_none()
@@ -5273,22 +5322,29 @@ pub(crate) fn stacks_after(previous: &Message, next: &Message) -> bool {
             && !row.edited
             && !matches!(row.status, Delivery::Pending | Delivery::Failed)
     };
+    let gap = next.timestamp.saturating_sub(previous.timestamp);
     previous.chat == next.chat
+        && previous.sender == next.sender
         && same_run(previous, next)
-        && previous.timestamp.div_euclid(60) == next.timestamp.div_euclid(60)
-        && next.timestamp >= previous.timestamp
+        && crate::util::day_key(previous.timestamp) == crate::util::day_key(next.timestamp)
+        && (0..=limit).contains(&gap)
         && previous.reactions.is_empty()
         && previous.status == next.status
         && plain(previous)
         && plain(next)
 }
 
-fn stack_pair(view: &View<'_>, previous: &Message, next: &Message) -> bool {
+#[cfg(test)]
+pub(crate) fn stacks_after(previous: &Message, next: &Message) -> bool {
+    stacks_with_limit(previous, next, 120)
+}
+
+fn stack_pair(view: &View<'_>, previous: &Message, next: &Message, limit: i64) -> bool {
     let marked = |row: &Message| {
         view.starred.is_some_and(|ids| ids.contains(&row.id))
             || view.pins.is_some_and(|ids| ids.contains(&row.id))
     };
-    stacks_after(previous, next) && !marked(previous) && !marked(next)
+    stacks_with_limit(previous, next, limit) && !marked(previous) && !marked(next)
 }
 
 const STREAK_OVERLAP: f32 = 6.0;
@@ -6758,6 +6814,7 @@ pub(crate) fn linked_bubble(
     previous: Option<&Message>,
     next: Option<&Message>,
     footer_right: f32,
+    cadence: (Option<i64>, Option<i64>),
     actions: &mut Vec<Action>,
 ) -> Option<egui::Rect> {
     // The message's own source network hues its bubbles; a small network
@@ -6826,14 +6883,24 @@ pub(crate) fn linked_bubble(
         None,
         RunPlace {
             sender_hue: None,
-            show_timestamp,
+            show_timestamp: show_timestamp
+                && (palette.bubbles == theme::BubbleStyle::Messages
+                    || !next
+                        .zip(cadence.1)
+                        .is_some_and(|(next, limit)| stack_pair(&view, message, next, limit))),
             show_sender: false,
             show_avatar: false,
             tailed: true,
-            next_stacks: next.is_some_and(|next| stack_pair(&view, message, next))
+            next_stacks: next
+                .zip(cadence.1)
+                .is_some_and(|(next, limit)| stack_pair(&view, message, next, limit))
                 && palette.bubbles != theme::BubbleStyle::Messages,
             overlap_previous: previous
-                .filter(|previous| stack_pair(&view, previous, message))
+                .filter(|previous| {
+                    cadence
+                        .0
+                        .is_some_and(|limit| stack_pair(&view, previous, message, limit))
+                })
                 .map(|previous| bubble_id(&previous.chat, &previous.id)),
         },
         actions,
@@ -11241,6 +11308,84 @@ mod tests {
                 0.0
             );
         });
+    }
+
+    #[test]
+    fn adaptive_cadence_keeps_distinct_outgoing_senders_separate() {
+        let mut first = message(Content::text("first sender"));
+        first.timestamp = 18 * 3600 + 40 * 60;
+        first.sender = "outgoing-account-a".into();
+        let mut next = first.clone();
+        next.id = "second".into();
+        next.timestamp += 60;
+        next.sender = "outgoing-account-b".into();
+        for from_me in [false, true] {
+            first.from_me = from_me;
+            next.from_me = from_me;
+            let limits = cadence_limits(&[&first, &next]);
+            assert_eq!(limits, vec![120, 120]);
+            assert!(
+                !stacks_with_limit(&first, &next, limits[1]),
+                "different sender IDs cannot share a cadence streak, outgoing={from_me}"
+            );
+            next.sender = first.sender.clone();
+            assert!(stacks_with_limit(&first, &next, 120));
+            next.sender = "outgoing-account-b".into();
+        }
+    }
+
+    #[test]
+    fn adaptive_cadence_joins_a_new_burst_without_the_old_message() {
+        let mut rows: Vec<_> = [474 * 60, 532 * 60, 534 * 60, 535 * 60]
+            .into_iter()
+            .map(|timestamp| {
+                let mut row = message(Content::text("synthetic burst"));
+                row.timestamp = timestamp;
+                row
+            })
+            .collect();
+        let limits = cadence_limits(&rows.iter().collect::<Vec<_>>());
+        assert_eq!(limits, vec![120, 120, 120, 180]);
+        let edges: Vec<_> = rows
+            .windows(2)
+            .enumerate()
+            .map(|(i, pair)| stacks_with_limit(&pair[0], &pair[1], limits[i + 1]))
+            .collect();
+        assert_eq!(edges, vec![false, true, true]);
+        // A candidate cannot inflate its own threshold; a long pause resets.
+        rows[3].timestamp = rows[2].timestamp + 240;
+        let limits = cadence_limits(&rows.iter().collect::<Vec<_>>());
+        assert_eq!(limits[3], 180);
+        assert!(!stacks_with_limit(&rows[2], &rows[3], limits[3]));
+        rows[3].timestamp = rows[2].timestamp + 301;
+        assert_eq!(cadence_limits(&rows.iter().collect::<Vec<_>>())[3], 120);
+    }
+
+    #[test]
+    fn adaptive_cadence_is_source_scoped_bounded_and_ignores_zero_gaps() {
+        let mut rows: Vec<_> = [0, 120, 240, 420, 600, 780, 960, 1140]
+            .into_iter()
+            .map(|timestamp| {
+                let mut row = message(Content::text("synthetic cadence"));
+                row.timestamp = timestamp;
+                row
+            })
+            .collect();
+        let limits = cadence_limits(&rows.iter().collect::<Vec<_>>());
+        assert!(limits.iter().all(|limit| (120..=300).contains(limit)));
+        assert!(limits[7] > 120);
+        rows[7].chat = "another-source".into();
+        assert_eq!(cadence_limits(&rows.iter().collect::<Vec<_>>())[7], 120);
+        rows[7] = rows[6].clone();
+        rows[7].timestamp = rows[6].timestamp;
+        let baseline = cadence_limits(&rows.iter().collect::<Vec<_>>())[7];
+        rows.push(rows[7].clone());
+        assert_eq!(
+            cadence_limits(&rows.iter().collect::<Vec<_>>())[8],
+            baseline
+        );
+        rows[8].timestamp = -1;
+        assert_eq!(cadence_limits(&rows.iter().collect::<Vec<_>>())[8], 120);
     }
 
     #[test]

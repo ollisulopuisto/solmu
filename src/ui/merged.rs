@@ -698,9 +698,38 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 .and_then(|conv| conv.messages.get(*idx))
         })
         .collect();
+    // Compute once from the full loaded timeline. Filtering and culling must
+    // neither teach a different cadence nor join non-adjacent originals.
+    let cadence = super::conversation::cadence_limits(&messages);
+    let cadence_edges: std::collections::HashMap<_, _> = messages
+        .windows(2)
+        .enumerate()
+        .map(|(index, pair)| {
+            (
+                (
+                    pair[0].id.as_str(),
+                    pair[0].chat.as_str(),
+                    pair[1].id.as_str(),
+                    pair[1].chat.as_str(),
+                ),
+                cadence[index + 1],
+            )
+        })
+        .collect();
+    let cadence_between = |left: &crate::model::Message, right: &crate::model::Message| {
+        cadence_edges
+            .get(&(
+                left.id.as_str(),
+                left.chat.as_str(),
+                right.id.as_str(),
+                right.chat.as_str(),
+            ))
+            .copied()
+    };
     let filtered = !state.search.trim().is_empty() || state.source_filter.is_some();
     let visible: Vec<_> = messages
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|message| {
             if state
                 .source_filter
@@ -1022,6 +1051,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                             // this edge. Do not restore the full timeline width:
                                             // that would reclaim the network chip's reserved lane.
                                             area.right(),
+                                            (
+                                                visible_index
+                                                    .checked_sub(1)
+                                                    .and_then(|index| visible.get(index))
+                                                    .and_then(|previous| {
+                                                        cadence_between(previous, original_message)
+                                                    }),
+                                                visible.get(visible_index + 1).and_then(|next| {
+                                                    cadence_between(original_message, next)
+                                                }),
+                                            ),
                                             &mut actions,
                                         )
                                     },

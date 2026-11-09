@@ -4663,6 +4663,59 @@ mod tests {
     }
 
     #[test]
+    fn cadence_stack_removes_the_old_minute_clock_from_its_seam() {
+        let mut app = app();
+        minute_gutter_sample(&mut app);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..4 {
+            streak_test_frame(&mut app, &ctx, 1100.0, 900.0, vec![]);
+        }
+        let footer = |index| {
+            ctx.data(|data| {
+                data.get_temp::<egui::Rect>(crate::ui::conversation::footer_id(
+                    SAMPLES[0].id,
+                    &format!("minute-gutter-{index}"),
+                ))
+            })
+            .map_or(0.0, |rect| rect.width())
+        };
+        assert_eq!(
+            footer(0),
+            0.0,
+            "18:40 clock must not split the cadence stack"
+        );
+        assert_eq!(footer(1), 0.0);
+        assert!(footer(2) > 0.0, "the final row keeps its clock");
+    }
+
+    #[test]
+    fn linked_messages_style_keeps_clocks_without_cadence_overlap() {
+        let mut app = app();
+        apply_flags(&mut app, Some("linked-minute-gutter,messages"));
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..4 {
+            streak_test_frame(&mut app, &ctx, 1100.0, 900.0, vec![]);
+        }
+        assert_eq!(
+            app.conversation_palette().bubbles,
+            crate::theme::BubbleStyle::Messages
+        );
+        let footer = |index| {
+            ctx.data(|data| {
+                data.get_temp::<egui::Rect>(crate::ui::conversation::footer_id(
+                    SAMPLES[0].id,
+                    &format!("minute-gutter-{index}"),
+                ))
+            })
+            .map_or(0.0, |rect| rect.width())
+        };
+        assert!(footer(0) > 0.0, "separate 18:40 bubble keeps its clock");
+        assert!(footer(2) > 0.0, "last 18:41 bubble keeps its clock");
+    }
+
+    #[test]
     fn streak_seam_menu_targets_the_older_bubble_and_selection_unstacks() {
         let mut app = app();
         group_stacks_sample(&mut app);
@@ -5014,8 +5067,8 @@ mod tests {
         changed.from_me = true;
         cases.push(("direction", first.clone(), changed));
         let mut changed = next.clone();
-        changed.timestamp += 60;
-        cases.push(("minute", first.clone(), changed));
+        changed.timestamp += 301;
+        cases.push(("long pause", first.clone(), changed));
         let mut changed = next.clone();
         changed.timestamp = first.timestamp - 1;
         cases.push(("reverse chronology", first.clone(), changed));
@@ -5612,6 +5665,14 @@ mod tests {
         }
         let mut app = app();
         apply_flags(&mut app, Some("rtl-self"));
+        // This test checks each independent bubble's clock/RTL/emoji geometry.
+        // Keep its rows outside the adaptive cadence ceiling; cadence clock
+        // collapsing has separate rendered coverage above.
+        let rows = &mut app.conversations.get_mut(ME).unwrap().messages;
+        let start = rows[0].timestamp;
+        for (index, row) in rows.iter_mut().enumerate() {
+            row.timestamp = start + index as i64 * 6 * 60;
+        }
         let ctx = egui::Context::default();
         app.attach(&ctx);
         render(&mut app, &ctx);

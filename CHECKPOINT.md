@@ -644,6 +644,50 @@ Review, owner Instinct, branch `docs/readme-refresh-20261109`. No root AGENTS/BO
 
 README review follow-up: corrected linked macOS scheduler removal guide to actual zapfast paths, both installed binary names and control/API-token copies; preserve queue/logs by default and require service stop/reconciliation. Documented existing launcher binary/plist mismatch without changing runtime code or deploying a service.
 
+## Adaptive sender cadence - November 9, 2026
+
+In progress, owner Instinct; separate branch `feat/adaptive-streak-cadence`,
+worktree `/downloads/solmu-adaptive-streak`, based on main f652135. User asks
+for recent cadence rather than a fixed-minute stacking boundary. The synthetic
+acceptance case is one sender at 07:54, 08:52, 08:54, 08:55: the last three
+belong together, but the first does not. No private screenshot in the PR.
+
+Implemented rough rule: compute a sender/source's completed
+positive gaps in the preceding ten minutes, excluding the candidate gap; allow
+1.5 times their arithmetic mean, clamped between two and five minutes. No prior
+gaps uses the two-minute bootstrap. A gap over five minutes resets cadence.
+Keep adjacency, exact source/direction/sender, content/metadata/control,
+selection, pin and notice boundaries. Both ordinary and linked renderers must
+use the same precomputed decision, not a viewport-limited lookback.
+
+Two synthetic cadence regressions and the existing metadata boundary table are
+updated. Native test checking and clippy pass. Native before/after pixels verified: the 18:40/18:41 fixture joins and hides
+the intermediate clock. Added rendered-footer regression after visual checking
+caught the clock seam. Draft PR256; full runtime CI is pending (cache HTTP504
+blocked its quality job before compilation). Focused native runtime tests pass for burst grouping, source/bounds/zero
+gaps and the rendered minute-clock seam, in a local build omitting unrelated
+tests to fit memory. Removing the seam fix makes its rendered regression fail
+(31.5pt intermediate clock), restoring it passes. Both ordinary and linked
+native before/after pixels inspected. No full-suite pass claimed. Separate
+from reply cancellation PR255. No merge, release or README changes.
+
+CI executed 1,929 passing tests with one old RTL geometry fixture failing: its
+one-minute gaps now intentionally collapse clocks. Spaced only that test's rows
+six minutes apart, keeping all RTL, emoji and clock-position assertions intact;
+its focused native execution and all-feature clippy now pass. Full CI rerun pending.
+
+
+PR256 review follow-up: full applicable CI passed at c536c0e and the PR is ready,
+not merged. Fixed the reviewer-found linked Messages-style clock regression:
+that style does not overlap bubbles, so it must keep its independent clocks.
+The new rendered-footer regression fails without the guard and passes with it
+in the memory-bounded native validation build; all-feature clippy passes.
+Published synthetic dark/light native before-and-after captures plus the
+Messages-style guard capture at
+https://files.instinct.com/xlkcf5cm0tyf-solmu-cadence-review
+The public page and image viewers were visually inspected. Full CI and renewed
+review for the follow-up commit remain pending. No release build or merge.
+
 ## Cancel linked replies - November 9, 2026
 
 In progress, owner Instinct; branch `fix/cancel-reply-quote`, isolated worktree
@@ -660,3 +704,20 @@ new regression fail on quote restoration, then restoring it passes. Native
 demo pixels confirm X/Esc remove the strip and preserve the draft. Full CI
 is blocked before test execution by repeated cache HTTP504, not marked pass.
 No README scope changes, merge, release or deployment.
+
+
+PR256 integration follow-up: full applicable CI passed at 343f39a. Both posted
+review findings were marked resolved. Main then advanced to 1021909 with the
+reply-cancellation and DOS-device-name fixes; the resulting conflict was only
+in the changelog and this planning log. Preserve both entries and all upstream
+code with a branch-only merge from main. No feature behavior changed in this
+resolution. Fresh integrated CI/review pending; no merge to main or release.
+
+
+Hidden review finding follow-up: exact outgoing sender IDs are now also a hard
+cadence boundary. The shared visual run helper intentionally treats all outgoing
+messages as one side, but cadence history is keyed by exact sender; stacking
+must use that same identity. Native regression reproduced the bug with distinct
+outgoing IDs, then passed with the explicit sender check. Same-sender and incoming
+boundaries are asserted too. Focused runtime uses the memory-bounded validation
+build; full current-head CI/review remain pending. No merge or release.
