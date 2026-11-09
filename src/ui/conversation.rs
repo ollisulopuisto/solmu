@@ -5318,9 +5318,7 @@ pub(crate) fn cadence_limits(messages: &[&Message]) -> Vec<i64> {
 /// opens a run, never joins one.
 fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
     let steady = |row: &Message| {
-        !row.forwarded
-            && !row.edited
-            && !matches!(row.status, Delivery::Pending | Delivery::Failed)
+        !row.forwarded && !row.edited && !matches!(row.status, Delivery::Pending | Delivery::Failed)
     };
     let head = |row: &Message| {
         steady(row)
@@ -11365,12 +11363,18 @@ mod tests {
         last.timestamp += 30;
         last.status = Delivery::Sent;
         assert!(stacks_with_limit(&head, &middle, 120), "quoted head");
-        assert!(stacks_with_limit(&middle, &last, 120), "Delivered then Sent");
+        assert!(
+            stacks_with_limit(&middle, &last, 120),
+            "Delivered then Sent"
+        );
         // A quote still opens a new run instead of joining one.
         assert!(!stacks_with_limit(&last, &head, 120));
         let mut late = last.clone();
         late.timestamp = head.timestamp + 3600;
-        assert!(!stacks_with_limit(&middle, &late, 120), "the cadence limit stays");
+        assert!(
+            !stacks_with_limit(&middle, &late, 120),
+            "the cadence limit stays"
+        );
         last.status = Delivery::Pending;
         assert!(!stacks_with_limit(&middle, &last, 120));
     }
