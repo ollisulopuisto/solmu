@@ -2489,6 +2489,46 @@ mod tests {
     }
 
     #[test]
+    fn the_filtered_reply_shortcut_focuses_the_composer_after_the_view_draws() {
+        let (wa, tg, mut person) = ada_pair();
+        person.primary = Member::of(&wa);
+        let (_dir, mut app, ctx) = linked_app(vec![wa.clone(), tg], vec![person.clone()]);
+        let mut message = sample_message(&wa.id, "meeting", 10);
+        message.content = crate::model::Content::text("meeting");
+        app.conversations.insert(
+            wa.id.clone(),
+            crate::app::Conversation {
+                messages: vec![message],
+                complete: true,
+                ..Default::default()
+            },
+        );
+        assert!(!app.focus_composer);
+        // The same selection path as the reply arrow and a double-click: the
+        // view picks a message, then draws.
+        reply_key(&mut app, &ctx, &wa, latest_reply_shortcut().modifiers);
+        assert!(app.reply_to.is_some(), "the shortcut starts a reply");
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                show(&mut app, ui, &wa);
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            Some(egui::Id::new("composer-text")),
+            "the reply starts with the composer focused"
+        );
+    }
+
+    #[test]
     fn command_r_without_incoming_keeps_destination_and_no_quote() {
         let (wa, tg, mut person) = ada_pair();
         person.primary = Member::of(&wa);
