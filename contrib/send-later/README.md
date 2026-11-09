@@ -75,19 +75,48 @@ permission - this directory only prepares the artifacts.
 
 ## Bundled in the DMG (Studio deploy)
 
-The trial DMG ships `solmu-scheduler` inside Solmu.app
-(`Contents/MacOS/solmu-scheduler`, same ad-hoc signature as the client).
+The current release workflow does not bundle the optional scheduler binary.
+A custom bundle can include `solmu-scheduler` inside Solmu.app at
+`Contents/MacOS/solmu-scheduler`. Do not assume an installed DMG contains it.
 The launcher offers a one-time install on the Server Mac over the existing
 SSH trust, only after explicit in-app approval: it checks the remote
 architecture (Apple Silicon only), copies the daemon, writes the 0600
 control token and the launchd agent, and kickstarts the service. Nothing
 is installed or started without that approval.
 
-Rollback on the Server Mac:
+## Stop and remove the macOS scheduler
 
+Run these commands on the host where the scheduler was installed, not merely
+on the client Mac. First inspect and reconcile any pending or uncertain sends.
+Stopping the service prevents future queue processing; it cannot recall a send
+already in flight.
+
+```sh
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.solmu.scheduler.plist"
 ```
-launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.solmu.scheduler.plist
-rm ~/Library/LaunchAgents/com.solmu.scheduler.plist \
-   ~/Library/Application\ Support/solmu/bin/solmu-scheduler \
-   ~/Library/Application\ Support/solmu/scheduler-token
+
+Check that the service is no longer loaded before removing its files. Both the
+standalone installer and launcher use **zapfast**, not **solmu**, for their
+Application Support directory. Inspect the installed plist's ProgramArguments
+before deleting it. The standalone installer names its binary `solmu-scheduler`;
+the current launcher copy step names it `zapfast-scheduler` even though its
+plist references `solmu-scheduler`. That installer mismatch is a separate code
+issue, not a reason to create or start a second service during removal.
+
+After the service is stopped, remove only its known files:
+
+```sh
+rm -f "$HOME/Library/LaunchAgents/com.solmu.scheduler.plist" \
+  "$HOME/Library/Application Support/zapfast/bin/solmu-scheduler" \
+  "$HOME/Library/Application Support/zapfast/bin/zapfast-scheduler" \
+  "$HOME/.config/zapfast/scheduler-token" \
+  "$HOME/Library/Application Support/zapfast/scheduler-token" \
+  "$HOME/Library/Application Support/zapfast/beeper-token"
 ```
+
+Do not delete the whole `zapfast` directory: other app data can live there.
+`queue.json` and `scheduler.log` remain for reconciliation. They can contain
+private data; inspect your retention/backup needs before removing them separately.
+A client-side cached scheduler token may also remain in its isolated profile;
+stop the client and remove that token if you intend to retire the connection.
+Removing a local token copy does not revoke the Beeper API token at its source.

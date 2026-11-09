@@ -1,112 +1,110 @@
 # Solmu
 
-A fast, native macOS client for [Beeper](https://www.beeper.com). It pairs
-the egui interface from [ZapFast](https://github.com/crmne/zapfast) with a
-Beeper Client API backend instead of a direct WhatsApp connection, so chats
-from every network connected to your Beeper account live in one lightweight
-native window. No browser engine.
+Solmu is a native desktop chat client for a Beeper account. It uses Rust and egui to show chats from the networks connected to your Beeper Desktop or Server endpoint, without embedding a browser engine.
 
-This is a personal tester build, not a product release: the app is unsigned
-(ad-hoc signed, not notarized), targets Apple Silicon (arm64, macOS 11+),
-and is distributed as versioned DMGs on this repository's
-[Releases](https://github.com/ollisulopuisto/solmu/releases) page.
+This fork builds on [ZapFast](https://github.com/crmne/zapfast). Its macOS app adds a launcher that connects to an existing Beeper Server host through SSH. Solmu is not a Beeper Server distribution and does not connect directly to Beeper Cloud on its own.
 
-## How it works
+## Install on macOS
 
-```
-Solmu.app (your Mac)
-        |  SSH tunnel, fixed command, loopback only
-        v
-127.0.0.1:23374 - Beeper Server API (your Server Mac)
-        |  Beeper bridges
-        v
-WhatsApp and your other connected networks
-```
+Choose an available Solmu DMG from this repository's [Releases](https://github.com/ollisulopuisto/solmu/releases). Check its source commit, architecture and release notes. Routine manual builds target **Apple Silicon**; a universal build is a separate choice. Draft releases require repository access and can contain several older assets, so use the intended version, not an arbitrary file in the list.
 
-The Beeper Server runs on a second Mac (installed with the official Beeper
-CLI). The app never talks to a public interface: it opens an SSH tunnel to
-the Server Mac and reaches the Server API on loopback port 23374. A Linux
-Server host is prepared but not yet in use - see
-[contrib/linux-server/README.md](contrib/linux-server/README.md). iMessage
-is not part of the Linux setup.
+1. Download the DMG. Compare its SHA-256 with the release asset digest or build attestation when provided: `shasum -a 256 path/to/Solmu.dmg`.
+2. Open the image and drag **Solmu.app** to **Applications**.
+3. Open Solmu and configure the existing Server connection as described below.
 
-## Install
+The current macOS release workflow signs with a Developer ID, notarizes the DMG, validates the stapled ticket, and checks the app inside it. This does not apply retroactively to older unsigned trial downloads or to an ad-hoc local build. Do not disable system-wide protections for an unverified file.
 
-1. Download `Solmu-Beeper-<version>-<commit>.dmg` from the latest
-   [release](https://github.com/ollisulopuisto/solmu/releases) and
-   check it against the attached `.sha256`.
-2. Drag **Solmu.app** to Applications. Because the build is
-   unsigned, open it the first time with right-click > Open.
+The repository also contains Linux and Windows build paths. The packaged Mac connection flow is the focus here; do not assume the inherited cross-platform packaging or old trial instructions provide the same setup.
 
-## First run
+## First connection
 
-The Connect window asks for two things only:
+The packaged app expects:
 
-- the Server Mac's SSH hostname or Tailscale IP, and
-- your SSH username on it.
+- An already configured Beeper Server host, with its existing CLI target named `server` pointing to `http://127.0.0.1:23374`.
+- Working SSH key authentication and a trusted host key between the client and Server host.
+- That host remaining awake, running and reachable for live chat access.
 
-Existing SSH key trust between the two Macs is required. The app never asks
-for or saves an SSH password, installs nothing on the Server Mac without
-your approval, and does not link or reset any account. Close any old manual
-tunnel using port 23374 before connecting.
+Enter the Server host's SSH hostname/IP and your SSH username in the Connect window. The launcher reads the existing target and owns a loopback SSH tunnel. It does not install Beeper Server, link networks, reset accounts or ask for an SSH password. Close any old manual tunnel occupying local port `23374` first; an occupied port is an error, not a connection to borrow.
 
-The client starts read-only. Choose write mode explicitly when you want to
-send. Your Beeper access token is stored in the macOS keychain; no tokens
-live in this repository.
+The packaged launcher starts **read-only** unless you explicitly enable write mode. Write mode permits actions such as sending, typing indicators and read-state changes. This is a client-side guard, not a less-powerful API token: treat the token as sensitive either way.
 
-## What you get
+The launcher also recognizes the prepared Linux target-reader helper. Linux host deployment, network availability and permissions need their own setup; do not assume a Mac-only service such as iMessage can move to Linux. See [Linux server notes](contrib/linux-server/README.md).
 
-- Chats from every network connected to your Beeper account, including
-  multiple accounts on one network.
-- Chat tabs: keep several conversations open and switch between them.
-- Replies with exact-source quoting, avatars, unread badges, and search over
-  loaded history.
-- Send Later: schedule messages; a small `solmu-scheduler` daemon on the
-  Server Mac owns the durable queue, so scheduled messages go out even while
-  the app is closed. The app offers a one-time, approval-gated install;
-  details in [contrib/send-later/README.md](contrib/send-later/README.md).
+The adapter can also use an existing Beeper Desktop/Server API directly. That is a separate developer/launcher route, not the packaged SSH connection above. It still requires the chosen endpoint and its authorization to remain available. See [the source launcher](contrib/beeper-tools/run_client.py).
 
-Feature-by-feature status and known gaps live in [PARITY.md](PARITY.md);
-treat it as a living ledger that can lag development.
+## Features
+
+- **Multi-network chat lists.** Account/network filters, unread and unreplied views, plus a persistent Reply Later queue.
+- **Chat tabs and linked conversations.** Keep several chats open, or manually group related chats across accounts while preserving their source identity.
+- **Reading and replying.** Message history, quoted replies, avatars, unread badges, text search and supported media/file handling through the Beeper API.
+- **Search with limits shown.** Loaded-history search is distinct from API search. API searches fetch a bounded page and can be partial; linked-view API search targets the selected member rather than every linked source.
+- **Draft safety.** Failed and uncertain sends are surfaced instead of blindly retried. Inspect history before retrying an uncertain send.
+- **Desktop controls.** Keyboard shortcuts, light/dark themes, app lock and macOS background/window behavior.
+
+Availability depends on what the endpoint and connected network support. A visible control or inherited ZapFast feature does not establish Beeper parity. For example, the current Beeper adapter refuses location sends and attachment sends with reply/mention/view-once metadata rather than pretending to send them. History pagination and network errors can leave content incomplete.
+
+[PARITY.md](PARITY.md) and [BACKEND.md](BACKEND.md) contain detailed limits and historical acceptance notes. Some inherited documents still describe a WhatsApp-only client or older unsigned trials; the adapter, launcher and current build scripts are the authority for what this fork builds. Automated tests and notarization do not establish a successful live network login, complete history or delivery.
+
+### Send Later
+
+A separate `solmu-scheduler` daemon implements a durable queue against the Beeper API. It must run next to the backend and remain awake/reachable for delivery while the desktop is closed. A timeout or crash with an unknown send result is marked uncertain, not automatically resent.
+
+Scheduler installation is an explicit deployment step. The Mac launcher has an approval-gated installer when a compatible scheduler binary is bundled; the current release workflow does **not** bundle that optional binary. Do not assume downloading a DMG installs or enables Send Later. See [scheduler setup and removal](contrib/send-later/README.md) and verify your setup before depending on scheduled delivery.
 
 ## Build from source
 
-Requires the pinned Rust toolchain (1.98.0, see `rust-toolchain.toml`) and a
-macOS build host for the app bundle:
+The repository pins Rust **1.98.0** in [`rust-toolchain.toml`](rust-toolchain.toml). Native builds need the platform's GUI, audio and media development libraries. On macOS, install Xcode Command Line Tools as well.
 
 ```sh
+git clone https://github.com/ollisulopuisto/solmu.git
+cd solmu
 cargo build --locked --release --bin solmu
-cargo build --locked --release --bin solmu-scheduler
-python contrib/beeper-tools/package_app_dmg.py \
-  --binary target/aarch64-apple-darwin/release/solmu \
-  --scheduler-binary target/aarch64-apple-darwin/release/solmu-scheduler \
-  --output app-dist --version <version> --commit <full-commit-sha>
 ```
 
-For interface work without a Server, the mock speaks the same API with
-generic data:
+A bare developer binary is not the signed Finder app. To assemble the Beeper Mac app on a Mac:
+
+```sh
+bash packaging/macos/bundle.sh \
+  target/release/solmu dist/Solmu.app 0.24.7 beeper
+```
+
+Without a configured Developer ID this produces an ad-hoc-signed app, not a notarized release. Version numbers in this example must match the version you build. The release workflow uses [`build-release.sh`](packaging/macos/build-release.sh), [`bundle.sh`](packaging/macos/bundle.sh) and the native-packages configuration to produce its DMG. Signing/notarization needs separately configured credentials; they are not part of this repository.
+
+To exercise the adapter against generic local data, start the mock and then the client in another terminal:
 
 ```sh
 uv run contrib/beeper-mock/mock_server.py
-SOLMU_BACKEND=beeper BEEPER_DESKTOP_BASE_URL=http://127.0.0.1:8077 \
-  BEEPER_ACCESS_TOKEN=mock cargo run
 ```
 
-`./contrib/beeper-tools/check-source.sh` stages the current adapter/model
-sources into a portable harness and runs its checks; CI runs the full test
-suite and an explicit on-demand trial build (`trial-binaries` workflow)
-packages the unsigned DMG. None of these replace native on-Mac acceptance.
+```sh
+SOLMU_BACKEND=beeper \
+BEEPER_DESKTOP_BASE_URL=http://127.0.0.1:8077 \
+BEEPER_ACCESS_TOKEN=mock BEEPER_READONLY=1 cargo run --bin solmu
+```
 
-## More docs
+`mock` is a fixture credential, not an instruction to put a real token in shell history. The mock cannot establish real-network behavior.
 
-- [BACKEND.md](BACKEND.md) - backend routes and deployment status.
-- [HEADLESS-SETUP.md](HEADLESS-SETUP.md) - a separate read-only Server trial.
-- [MAC-TRIAL.md](MAC-TRIAL.md) - Mac build/assembly helper and acceptance log.
-- [contrib/linux-server/README.md](contrib/linux-server/README.md) - moving
-  the Server to a Linux host (prepared, not run).
-- [README-BEEPER.md](README-BEEPER.md) - the original backend-swap checkpoint.
+Common source checks:
 
-## License
+```sh
+cargo fmt --all --check
+cargo test --locked --all-targets
+cargo test --locked --all-targets --all-features
+cargo clippy --locked --all-targets -- -D warnings
+```
 
-MIT, as upstream ZapFast. See [LICENSE](LICENSE) and
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the larger check matrix. `contrib/beeper-tools/check-source.sh` is a portable adapter harness, not a substitute for the full native app build or installed-app acceptance.
+
+## Privacy and security
+
+The client is native, but your messaging still depends on Beeper and its network bridges. Solmu does not replace their service, encryption or retention rules. The backend host can access the data and credentials needed to serve your chats; protect it and its backups.
+
+The Mac SSH launcher saves its host, username and write-mode choice locally. It obtains the API token from the existing remote target and passes it to the client in process environment/memory, not in its saved launcher configuration. Other in-app authorization paths use the OS keyring and refuse a plaintext fallback. These are different paths, not a promise that every token is always stored in Keychain.
+
+Local profiles, caches, drafts and scheduler queues contain private data. App lock is not a replacement for disk encryption, a secure OS account or backend access control. Optional media, GIF and local-model features have their own network/data paths; inspect settings before using them with private content.
+
+Direct API configuration accepts loopback HTTP or remote HTTPS and does not follow redirects with the bearer token. Do not expose a Beeper API, scheduler socket or token publicly. Never post real conversations, contact names, tokens, recovery keys, QR codes or unredacted logs in an issue.
+
+## License and credits
+
+[MIT License](LICENSE), with upstream ZapFast credit retained. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for dependency notices. Beeper Server and connected network services are separate dependencies, not software licensed or redistributed by this README.
