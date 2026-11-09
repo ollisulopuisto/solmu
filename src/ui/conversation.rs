@@ -3464,7 +3464,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                                     message_index
                                                         + album.map_or(1, |items| items.len()),
                                                 ),
-                                            ),
+                                            ) && !stack_edges
+                                                .get(message_index)
+                                                .copied()
+                                                .unwrap_or(false),
                                             show_sender,
                                             show_avatar,
                                             tailed,
@@ -6879,7 +6882,10 @@ pub(crate) fn linked_bubble(
         None,
         RunPlace {
             sender_hue: None,
-            show_timestamp,
+            show_timestamp: show_timestamp
+                && !next
+                    .zip(cadence.1)
+                    .is_some_and(|(next, limit)| stack_pair(&view, message, next, limit)),
             show_sender: false,
             show_avatar: false,
             tailed: true,

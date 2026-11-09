@@ -4663,6 +4663,33 @@ mod tests {
     }
 
     #[test]
+    fn cadence_stack_removes_the_old_minute_clock_from_its_seam() {
+        let mut app = app();
+        minute_gutter_sample(&mut app);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..4 {
+            streak_test_frame(&mut app, &ctx, 1100.0, 900.0, vec![]);
+        }
+        let footer = |index| {
+            ctx.data(|data| {
+                data.get_temp::<egui::Rect>(crate::ui::conversation::footer_id(
+                    SAMPLES[0].id,
+                    &format!("minute-gutter-{index}"),
+                ))
+            })
+            .expect("rendered footer")
+        };
+        assert_eq!(
+            footer(0).width(),
+            0.0,
+            "18:40 clock must not split the cadence stack"
+        );
+        assert_eq!(footer(1).width(), 0.0);
+        assert!(footer(2).width() > 0.0, "the final row keeps its clock");
+    }
+
+    #[test]
     fn streak_seam_menu_targets_the_older_bubble_and_selection_unstacks() {
         let mut app = app();
         group_stacks_sample(&mut app);

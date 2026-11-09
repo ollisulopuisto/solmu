@@ -661,6 +661,8 @@ selection, pin and notice boundaries. Both ordinary and linked renderers must
 use the same precomputed decision, not a viewport-limited lookback.
 
 Two synthetic cadence regressions and the existing metadata boundary table are
-updated. Native test checking and clippy pass. Runtime tests, synthetic pixel
-verification and PR remain pending. Separate
+updated. Native test checking and clippy pass. Native before/after pixels verified: the 18:40/18:41 fixture joins and hides
+the intermediate clock. Added rendered-footer regression after visual checking
+caught the clock seam. Draft PR256; full runtime CI is pending (cache HTTP504
+blocked its quality job before compilation). No full-suite pass claimed. Separate
 from reply cancellation PR255. No merge, release or README changes.
