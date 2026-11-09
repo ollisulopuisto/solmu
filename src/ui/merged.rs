@@ -48,6 +48,39 @@ struct State {
     source_filter: Option<Member>,
     search_open: bool,
 }
+/// Cancel the displayed person's cached reply at the deferred action boundary.
+/// Clearing only App::reply_to lets the next linked frame restore the quote.
+/// An explicitly chosen destination remains useful for the unquoted draft.
+pub(crate) fn cancel_reply(app: &App, ctx: &egui::Context) {
+    let Some(current) = app
+        .open_chat
+        .as_deref()
+        .and_then(|id| app.chat(id))
+        .and_then(Member::of)
+    else {
+        return;
+    };
+    let Some(person) = app
+        .settings
+        .beeper
+        .people
+        .iter()
+        .find(|person| person.members.contains(&current))
+    else {
+        return;
+    };
+    let key = egui::Id::new(("linked-person-state", &person.members));
+    ctx.data_mut(|data| {
+        if let Some(mut state) = data.get_temp::<State>(key) {
+            state.reply = None;
+            if !state.explicit {
+                state.destination = None;
+            }
+            data.insert_temp(key, state);
+        }
+    });
+}
+
 /// What "Load older" could not do, once it stopped: the networks whose older
 /// messages did not come, and why. `None` when every chat caught up or ran out.
 fn older_note(app: &App, catch_up: &crate::merged::CatchUp) -> Option<String> {
@@ -1806,6 +1839,45 @@ mod tests {
             primary: None,
         };
         (wa, tg, person)
+    }
+
+    #[test]
+    fn cancelling_only_clears_the_displayed_reply_and_keeps_explicit_routes() {
+        for explicit in [false, true] {
+            let (wa, tg, person) = ada_pair();
+            let mut other = person.clone();
+            other.members[0].chat = "another-person".into();
+            let (_dir, mut app, ctx) =
+                linked_app(vec![wa.clone(), tg], vec![person.clone(), other.clone()]);
+            app.open_chat = Some(wa.id.clone());
+            let key = egui::Id::new(("linked-person-state", &person.members));
+            let other_key = egui::Id::new(("linked-person-state", &other.members));
+            let state = State {
+                reply: Some((person.members[0].clone(), "original".into())),
+                destination: Some(person.members[0].clone()),
+                explicit,
+                search: "keep filter".into(),
+                ..Default::default()
+            };
+            ctx.data_mut(|data| {
+                data.insert_temp(key, state.clone());
+                data.insert_temp(other_key, state.clone());
+            });
+            cancel_reply(&app, &ctx);
+            let cleared = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+            assert!(cleared.reply.is_none());
+            assert_eq!(
+                cleared.destination,
+                if explicit { state.destination } else { None }
+            );
+            assert_eq!(cleared.search, "keep filter");
+            assert!(
+                ctx.data(|data| data.get_temp::<State>(other_key))
+                    .unwrap()
+                    .reply
+                    .is_some()
+            );
+        }
     }
 
     #[test]

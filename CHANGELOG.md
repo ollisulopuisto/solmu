@@ -9,6 +9,8 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Cancelling a reply with X or Esc in a linked chat keeps the quote cleared, preserves the draft, and sends the next message without the cancelled quote.
+
 - Keep macOS package-signing and notarization passwords out of process arguments and error output during release builds.
 
 ## v0.24.7
