@@ -1664,6 +1664,7 @@ pub struct Backend {
     thread: Option<std::thread::JoinHandle<()>>,
     offline: bool,
     local_events: Option<(std::sync::mpsc::Sender<Event>, Waker)>,
+    gif_search: Option<linked_media::SearchQueue>,
     #[cfg(any(test, feature = "demo"))]
     demo_commands: Option<std::sync::Mutex<Vec<Command>>>,
 }
@@ -1675,6 +1676,7 @@ impl Backend {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         let local_events = Some((event_tx.clone(), waker.clone()));
+        let gif_search = linked_media::search_queue(event_tx.clone(), waker.clone());
         let thread = std::thread::Builder::new()
             .name("solmu-beeper-backend".to_string())
             .spawn(move || beeper::run(cfg, dirs, event_tx, command_rx, waker))
@@ -1686,6 +1688,7 @@ impl Backend {
             thread: Some(thread),
             offline: false,
             local_events,
+            gif_search,
             #[cfg(any(test, feature = "demo"))]
             demo_commands: None,
         }
@@ -1703,6 +1706,7 @@ impl Backend {
                 thread: None,
                 offline: true,
                 local_events: None,
+                gif_search: None,
                 #[cfg(any(test, feature = "demo"))]
                 demo_commands: None,
             },
@@ -1750,6 +1754,24 @@ impl Backend {
     }
 
     pub fn send(&self, command: Command) {
+        if let Command::SearchGifs { query, key } = &command
+            && let Some((events, waker)) = &self.local_events
+        {
+            if let Some(queue) = &self.gif_search {
+                queue.enqueue(query.clone(), key.clone());
+            } else {
+                let _ = events.send(Event::Gifs {
+                    query: query.clone(),
+                    results: Err(crate::model::GifError {
+                        message: "Could not start GIF search worker".into(),
+                        bad_key: false,
+                    }),
+                });
+                waker.wake();
+            }
+            return;
+        }
+
         // Copy/save are desktop operations, not API commands. Handle them
         // even when the network worker is disconnected or has stopped.
         if local_files::handles(&command)
@@ -1815,6 +1837,7 @@ impl Backend {
     }
 
     pub fn shutdown(&mut self) {
+        self.gif_search.take();
         self.startup.take();
         self.send(Command::Shutdown);
         if let Some(thread) = self.thread.take() {

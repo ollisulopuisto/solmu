@@ -786,3 +786,12 @@ checked at 320/390/1280px, with all images loaded and its viewer opened/closed.
 A wider 475-test reduced-harness run hit the execution timeout before completion;
 no full-suite pass is claimed. Current-head CI follows the commit. No merge;
 DMG remains held.
+
+
+## PR #257 follow-up: portable staging and media ownership
+
+The portable adapter now stages the production linked_media module. Its 239 Rust tests and all 102 Python tool/packaging tests pass locally. The current-source reduced native build passes 27 focused linked-media regressions, including draft removal, parked-draft retention, ownership transfer to upload, orphan preparation, stale thumbnails, and unrelated failed-voice scheduling. Full all-target/all-feature clippy with warnings denied and fmt pass. No full native-suite pass is claimed locally.
+
+Prepared GIF/sticker paths are owned by staged attachment IDs, transferred to the upload worker before send, and reclaimed only when a draft drops them. User-owned files are never removed. Attachment kinds are pruned across all account drafts. Search thumbnails are reclaimed on replacement, stale results, account change, and shutdown. Search uses one worker with a replaceable pending query and a 300ms quiet period, limiting network fan-out while typing. Send Later uses the same current-owner media predicate in the toolbar, dialog, and deferred action.
+
+No real uploads or sends, no merge, and no release build. SQLite draft #258 remains intentionally blocked on the vulnerable bundled SQLCipher dependency.

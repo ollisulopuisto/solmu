@@ -1397,11 +1397,8 @@ fn destination_extras(
         .and_then(|member| app.chat(&member.chat))
         .map(|chat| format!("{}{}", network_label(chat), account_name(app, chat)))
         .unwrap_or_else(|| chosen.to_owned());
-    let schedulable = app.editing.is_none()
-        && !app.composer.trim().is_empty()
-        && app.pending.is_empty()
-        && app.recording.is_none()
-        && app.unsent_voice.is_none();
+    let schedulable =
+        app.editing.is_none() && !app.composer.trim().is_empty() && !app.has_unsent_media_here();
     let clock = ui
         .add_enabled_ui(schedulable, |ui| {
             crate::theme::icon_button(

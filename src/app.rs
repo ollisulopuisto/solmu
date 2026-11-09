@@ -595,6 +595,7 @@ pub struct App {
         std::collections::HashMap<AttachmentId, crate::merged::Member>,
     /// Preserve native GIF/sticker semantics through staging and recovery.
     pub(crate) attachment_kinds: std::collections::HashMap<AttachmentId, crate::backend::MediaKind>,
+    attachment_temporary_paths: std::collections::HashMap<AttachmentId, PathBuf>,
     pub(crate) attachment_retry_quotes:
         std::collections::HashMap<AttachmentId, crate::model::ReplyTarget>,
     /// Whether the single staged photo will be sent as view-once media.
@@ -1025,6 +1026,15 @@ impl App {
                 live.extend(draft.pending.iter().map(|staged| staged.id));
             }
         }
+        self.attachment_kinds.retain(|id, _| live.contains(id));
+        self.attachment_temporary_paths.retain(|id, path| {
+            if live.contains(id) {
+                true
+            } else {
+                crate::backend::beeper::discard_temp_upload(path);
+                false
+            }
+        });
         self.attachment_retry_sources
             .retain(|id, _| live.contains(id));
         self.attachment_retry_quotes
@@ -1543,6 +1553,7 @@ impl App {
             attachment_retry_sources: Default::default(),
             attachment_retry_quotes: Default::default(),
             attachment_kinds: Default::default(),
+            attachment_temporary_paths: Default::default(),
             pending_view_once: false,
             next_pending_id: 0,
             composer_tools_open: false,
@@ -1816,8 +1827,26 @@ impl App {
         self.nav_history.clear();
     }
 
+    fn discard_gif_thumbnails(&mut self) {
+        for gif in self.gif_results.drain(..) {
+            if let Some(path) = gif.still {
+                crate::backend::beeper::discard_temp_upload(&path);
+            }
+        }
+    }
+
+    pub(crate) fn has_unsent_media_here(&self) -> bool {
+        !self.pending.is_empty()
+            || self.recording.is_some()
+            || self.unsent_voice.as_ref().is_some_and(|(source, _)| {
+                self.open_chat.as_deref() == Some(self.linked_draft_owner(source).as_str())
+            })
+    }
+
     /// Drops App-owned pointers into the previous account's chats and media.
     fn clear_account_ui(&mut self) {
+        self.discard_gif_thumbnails();
+        self.gif_pending = false;
         self.invalidate_composer_undo();
         self.forward_recipients.clear();
         self.forward_reviewing = false;
@@ -4840,7 +4869,18 @@ impl App {
                 );
             }
             Event::Gifs { query, results } => {
+                if query != self.gif_query {
+                    if let Ok(results) = results {
+                        for gif in results {
+                            if let Some(path) = gif.still {
+                                crate::backend::beeper::discard_temp_upload(&path);
+                            }
+                        }
+                    }
+                    return;
+                }
                 if query == self.gif_query {
+                    self.discard_gif_thumbnails();
                     self.gif_pending = false;
                     match results {
                         Ok(results) => {
@@ -5438,8 +5478,12 @@ impl App {
                 Ok(path) => {
                     let before = self.next_pending_id;
                     let source = self.open_chat.clone();
-                    let owner =
-                        self.restore_attachments(&owner, [Pending::Document(path)], None, false);
+                    let owner = self.restore_attachments(
+                        &owner,
+                        [Pending::Document(path.clone())],
+                        None,
+                        false,
+                    );
                     // Preparation is not a failed send. Source selection remains
                     // live until Send, while the owning draft stays fixed.
                     let ids: Vec<_> = self
@@ -5449,8 +5493,12 @@ impl App {
                         .filter(|item| item.id >= before)
                         .map(|item| item.id)
                         .collect();
+                    if ids.is_empty() {
+                        crate::backend::beeper::discard_temp_upload(&path);
+                    }
                     for id in ids {
                         self.attachment_kinds.insert(id, kind);
+                        self.attachment_temporary_paths.insert(id, path.clone());
                         self.attachment_retry_sources.remove(&id);
                     }
                     if source.as_deref() == Some(owner.as_str()) {
@@ -5468,8 +5516,12 @@ impl App {
                 message,
             } => {
                 let before = self.next_pending_id;
-                let owner =
-                    self.restore_attachments(&chat, [Pending::Document(path)], quoting, false);
+                let owner = self.restore_attachments(
+                    &chat,
+                    [Pending::Document(path.clone())],
+                    quoting,
+                    false,
+                );
                 let ids: Vec<_> = self
                     .pending
                     .iter()
@@ -5477,8 +5529,12 @@ impl App {
                     .filter(|item| item.id >= before)
                     .map(|item| item.id)
                     .collect();
+                if ids.is_empty() {
+                    crate::backend::beeper::discard_temp_upload(&path);
+                }
                 for id in ids {
                     self.attachment_kinds.insert(id, kind);
+                    self.attachment_temporary_paths.insert(id, path.clone());
                 }
                 let recovery = caption.and_then(|text| self.restore_beeper_text(&owner, text));
                 self.toast_error(recovery.map_or(message.clone(), |r| format!("{message}\n{r}")));
@@ -7823,6 +7879,8 @@ impl App {
             if let Some(kind) = self.attachment_kinds.remove(&staged.id)
                 && let Pending::File(path) | Pending::Document(path) = &staged.item
             {
+                // Upload now owns the path, including uncertain-send recovery.
+                self.attachment_temporary_paths.remove(&staged.id);
                 self.backend.send(Command::SendTypedMedia {
                     chat: chat.clone(),
                     path: path.clone(),
@@ -10056,12 +10114,7 @@ impl App {
                 quoting,
                 replaces,
             } => {
-                if !self.pending.is_empty()
-                    || self.recording.is_some()
-                    || self.unsent_voice.as_ref().is_some_and(|(source, _)| {
-                        self.open_chat.as_deref() == Some(self.linked_draft_owner(source).as_str())
-                    })
-                {
+                if self.has_unsent_media_here() {
                     self.toast_error(crate::i18n::gettext(self.locale, "Send Later cannot include attachments. Remove the staged files before scheduling text.").into_owned());
                     return;
                 }
@@ -10190,14 +10243,7 @@ impl App {
                 }
             }
             Action::ShowDialog(dialog) => {
-                if dialog == Dialog::SendLater
-                    && (!self.pending.is_empty()
-                        || self.recording.is_some()
-                        || self.unsent_voice.as_ref().is_some_and(|(source, _)| {
-                            self.open_chat.as_deref()
-                                == Some(self.linked_draft_owner(source).as_str())
-                        }))
-                {
+                if dialog == Dialog::SendLater && self.has_unsent_media_here() {
                     self.toast_error(crate::i18n::gettext(self.locale, "Send Later cannot include attachments. Remove the staged files before scheduling text.").into_owned());
                     return;
                 }
@@ -12757,6 +12803,11 @@ impl App {
     }
 
     pub fn shutdown(&mut self) {
+        self.discard_gif_thumbnails();
+        for (_, path) in self.attachment_temporary_paths.drain() {
+            crate::backend::beeper::discard_temp_upload(&path);
+        }
+
         self.save_state();
         self.flush_open_draft();
         self.recording = None;
@@ -29637,5 +29688,123 @@ mod linked_attachment_tests {
         );
         assert_eq!(app.sticker_draft, Some(draft));
         assert!(commands.try_recv().is_err());
+    }
+    #[test]
+    fn linked_discard_cleans_owned_media_and_prunes_kind_without_deleting_originals() {
+        let (root, mut app, _ctx, _commands) = fixture();
+        let prepared = root.path().join("prepared.mp4");
+        std::fs::write(&prepared, b"prepared").unwrap();
+        crate::backend::beeper::register_temp_upload(&prepared);
+        app.apply_backend_event(
+            Event::PreparedMedia {
+                owner: "visible".into(),
+                kind: crate::backend::MediaKind::Gif,
+                result: Ok(prepared.clone()),
+            },
+            true,
+        );
+        assert!(prepared.exists());
+        app.pending.clear();
+        app.forget_unstaged_pictures();
+        assert!(!prepared.exists());
+        assert!(app.attachment_kinds.is_empty());
+        assert!(app.attachment_temporary_paths.is_empty());
+        let original = root.path().join("original.webp");
+        std::fs::write(&original, b"original").unwrap();
+        let id = app.stage(Pending::Document(original.clone()));
+        app.attachment_kinds
+            .insert(id, crate::backend::MediaKind::Sticker);
+        app.pending.clear();
+        app.forget_unstaged_pictures();
+        assert!(original.exists());
+        assert!(app.attachment_kinds.is_empty());
+    }
+
+    #[test]
+    fn linked_prepared_media_survives_parked_draft_and_transfer_to_upload() {
+        let (root, mut app, ctx, mut commands) = fixture();
+        let prepared = root.path().join("prepared.mp4");
+        std::fs::write(&prepared, b"prepared").unwrap();
+        crate::backend::beeper::register_temp_upload(&prepared);
+        app.apply_backend_event(
+            Event::PreparedMedia {
+                owner: "visible".into(),
+                kind: crate::backend::MediaKind::Gif,
+                result: Ok(prepared.clone()),
+            },
+            true,
+        );
+        app.open_chat("other".into());
+        app.forget_unstaged_pictures();
+        assert!(prepared.exists());
+        assert_eq!(app.attachment_kinds.len(), 1);
+        app.open_chat("visible".into());
+        send_staged(&mut app, &ctx, "default");
+        assert!(
+            std::iter::from_fn(|| commands.try_recv().ok())
+                .any(|c| matches!(c, Command::SendTypedMedia { .. }))
+        );
+        assert!(
+            prepared.exists(),
+            "upload owns this file now, not draft cleanup"
+        );
+        assert!(app.attachment_temporary_paths.is_empty());
+        assert!(app.attachment_kinds.is_empty());
+        crate::backend::beeper::discard_temp_upload(&prepared);
+    }
+
+    #[test]
+    fn linked_thumbnail_replacement_and_stale_results_clean_owned_files() {
+        let (root, mut app, _ctx, _commands) = fixture();
+        for stale in [false, true] {
+            let path = root.path().join(format!("thumb-{stale}.gif"));
+            std::fs::write(&path, b"thumbnail").unwrap();
+            crate::backend::beeper::register_temp_upload(&path);
+            app.gif_query = "current".into();
+            app.apply_backend_event(
+                Event::Gifs {
+                    query: if stale { "old" } else { "current" }.into(),
+                    results: Ok(vec![Gif {
+                        id: "fixture".into(),
+                        still: Some(path.clone()),
+                        mp4: String::new(),
+                        width: 1,
+                        height: 1,
+                    }]),
+                },
+                true,
+            );
+            if !stale {
+                assert!(path.exists());
+                app.discard_gif_thumbnails();
+            }
+            assert!(!path.exists());
+        }
+    }
+
+    #[test]
+    fn linked_unrelated_failed_voice_does_not_disable_scheduling() {
+        let (_root, mut app, _ctx, _commands) = fixture();
+        app.unsent_voice = Some(("other".into(), vec![0.1; 10]));
+        assert!(!app.has_unsent_media_here());
+        app.unsent_voice = Some(("default".into(), vec![0.1; 10]));
+        assert!(app.has_unsent_media_here());
+    }
+    #[test]
+    fn linked_prepared_media_for_removed_chat_is_not_leaked() {
+        let (root, mut app, _ctx, _commands) = fixture();
+        let path = root.path().join("orphan.mp4");
+        std::fs::write(&path, b"prepared").unwrap();
+        crate::backend::beeper::register_temp_upload(&path);
+        app.apply_backend_event(
+            Event::PreparedMedia {
+                owner: "removed-chat".into(),
+                kind: crate::backend::MediaKind::Gif,
+                result: Ok(path.clone()),
+            },
+            true,
+        );
+        assert!(!path.exists());
+        assert!(app.attachment_temporary_paths.is_empty());
     }
 }

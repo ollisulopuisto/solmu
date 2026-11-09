@@ -593,7 +593,7 @@ fn encode_png(image: &image::DynamicImage) -> Result<Vec<u8>, String> {
 static TEMP_UPLOADS: std::sync::Mutex<Option<std::collections::HashSet<std::path::PathBuf>>> =
     std::sync::Mutex::new(None);
 
-pub(super) fn register_temp_upload(path: &std::path::Path) {
+pub(crate) fn register_temp_upload(path: &std::path::Path) {
     TEMP_UPLOADS
         .lock()
         .unwrap()
@@ -602,6 +602,13 @@ pub(super) fn register_temp_upload(path: &std::path::Path) {
 }
 
 /// Claims a temporary file for deletion: true at most once per file.
+/// Remove only explicitly registered app-created files, never user originals.
+pub(crate) fn discard_temp_upload(path: &std::path::Path) {
+    if take_temp_upload(path) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 fn take_temp_upload(path: &std::path::Path) -> bool {
     TEMP_UPLOADS
         .lock()

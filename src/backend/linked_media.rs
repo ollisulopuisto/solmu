@@ -71,8 +71,11 @@ fn save_temporary(bytes: &[u8], extension: &str) -> Result<PathBuf, String> {
     let mut file = options
         .open(&path)
         .map_err(|_| "Could not create media file")?;
-    file.write_all(bytes)
-        .map_err(|_| "Could not save media file")?;
+    if file.write_all(bytes).is_err() {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err("Could not save media file".into());
+    }
     Ok(path)
 }
 fn thumbnail(url: &str) -> Option<PathBuf> {
@@ -96,7 +99,80 @@ fn thumbnail(url: &str) -> Option<PathBuf> {
     {
         return None;
     }
-    save_temporary(&bytes, "gif").ok()
+    let path = save_temporary(&bytes, "gif").ok()?;
+    super::beeper::register_temp_upload(&path);
+    Some(path)
+}
+// One request worker per backend, with one replaceable pending search. Typing
+// cannot start an unbounded thread/request fan-out or queue obsolete searches.
+pub(super) struct SearchQueue {
+    pending: std::sync::Arc<std::sync::Mutex<Option<(String, String, u64)>>>,
+    generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    signal: std::sync::mpsc::SyncSender<()>,
+}
+impl SearchQueue {
+    pub(super) fn enqueue(&self, query: String, key: String) {
+        let generation = self
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        *self.pending.lock().unwrap_or_else(|p| p.into_inner()) = Some((query, key, generation));
+        let _ = self.signal.try_send(());
+    }
+}
+impl Drop for SearchQueue {
+    fn drop(&mut self) {
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.pending
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take();
+    }
+}
+pub(super) fn search_queue(
+    events: std::sync::mpsc::Sender<Event>,
+    waker: super::Waker,
+) -> Option<SearchQueue> {
+    let pending: std::sync::Arc<std::sync::Mutex<Option<(String, String, u64)>>> =
+        Default::default();
+    let generation = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let (signal, receiver) = std::sync::mpsc::sync_channel(1);
+    let next = pending.clone();
+    let current = generation.clone();
+    std::thread::Builder::new()
+        .name("solmu-gif-search".into())
+        .spawn(move || {
+            while receiver.recv().is_ok() {
+                // Reset the quiet period on every edit, without issuing requests.
+                while receiver.recv_timeout(Duration::from_millis(300)).is_ok() {}
+                let job = next.lock().unwrap_or_else(|p| p.into_inner()).take();
+                if let Some((query, key, expected)) = job {
+                    let results = search(&query, &key, &current, expected);
+                    if let Err(error) = events.send(Event::Gifs { query, results }) {
+                        if let Event::Gifs {
+                            results: Ok(results),
+                            ..
+                        } = error.0
+                        {
+                            for gif in results {
+                                if let Some(path) = gif.still {
+                                    super::beeper::discard_temp_upload(&path);
+                                }
+                            }
+                        }
+                        return;
+                    }
+                    waker.wake();
+                }
+            }
+        })
+        .ok()?;
+    Some(SearchQueue {
+        pending,
+        generation,
+        signal,
+    })
 }
 pub(super) fn run(command: Command) -> Option<Event> {
     match command {
@@ -115,10 +191,6 @@ pub(super) fn run(command: Command) -> Option<Event> {
             kind: super::MediaKind::Sticker,
             result: make_sticker(&source, crop, transparent),
         }),
-        Command::SearchGifs { query, key } => {
-            let results = search(&query, &key);
-            Some(Event::Gifs { query, results })
-        }
         _ => None,
     }
 }
@@ -170,11 +242,19 @@ fn make_sticker(
     super::beeper::register_temp_upload(&path);
     Ok(path)
 }
-fn search(query: &str, key: &str) -> Result<Vec<crate::model::Gif>, crate::model::GifError> {
+fn search(
+    query: &str,
+    key: &str,
+    current: &std::sync::atomic::AtomicU64,
+    expected: u64,
+) -> Result<Vec<crate::model::Gif>, crate::model::GifError> {
     let fail = |message: &str, bad_key| crate::model::GifError {
         message: message.into(),
         bad_key,
     };
+    if current.load(std::sync::atomic::Ordering::SeqCst) != expected {
+        return Err(fail("GIF search replaced by a newer request", false));
+    }
     if key.trim().is_empty() {
         return Err(fail("Set a GIPHY API key in Settings", true));
     }
@@ -214,6 +294,8 @@ fn search(query: &str, key: &str) -> Result<Vec<crate::model::Gif>, crate::model
         .as_array()
         .into_iter()
         .flatten()
+        .take(12)
+        .take_while(|_| current.load(std::sync::atomic::Ordering::SeqCst) == expected)
         .filter_map(|item| {
             let image = &item["images"]["fixed_height"];
             let mp4 = image["mp4"].as_str()?;
@@ -275,5 +357,19 @@ mod tests {
             255
         );
         std::fs::remove_file(output).unwrap();
+    }
+    #[test]
+    fn linked_gif_search_coalesces_edits_and_keeps_only_latest_pending_query() {
+        let (events, receiver) = std::sync::mpsc::channel();
+        let queue = search_queue(events, super::super::Waker::default()).unwrap();
+        for n in 0..100 {
+            queue.enqueue(format!("old-{n}"), String::new());
+        }
+        queue.enqueue("latest".into(), String::new());
+        let event = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(
+            matches!(event, Event::Gifs { query, results: Err(error) } if query == "latest" && error.bad_key)
+        );
+        assert!(receiver.try_recv().is_err());
     }
 }

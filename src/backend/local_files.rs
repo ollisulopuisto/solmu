@@ -9,7 +9,6 @@ pub(super) fn handles(command: &Command) -> bool {
         command,
         Command::PrepareSticker { .. }
             | Command::PrepareGif { .. }
-            | Command::SearchGifs { .. }
             | Command::PrepareClipboardImage(_)
             | Command::SaveAttachmentAs { .. }
             | Command::SaveAttachments { .. }
@@ -19,7 +18,7 @@ pub(super) fn handles(command: &Command) -> bool {
 pub(super) fn run(command: Command) -> Option<Event> {
     if matches!(
         &command,
-        Command::PrepareSticker { .. } | Command::PrepareGif { .. } | Command::SearchGifs { .. }
+        Command::PrepareSticker { .. } | Command::PrepareGif { .. }
     ) {
         return super::linked_media::run(command);
     }
