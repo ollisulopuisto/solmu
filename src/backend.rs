@@ -1656,6 +1656,29 @@ pub enum Unsent {
 /// Cross-thread window wake handle: repaints whichever window exists.
 pub use fastframe_shell::Waker;
 
+impl Event {
+    /// A receiver that closes before polling must release media still in transit.
+    pub(crate) fn discard_owned_media(self) {
+        match self {
+            Event::Gifs {
+                results: Ok(results),
+                ..
+            } => {
+                for gif in results {
+                    if let Some(path) = gif.still {
+                        beeper::discard_temp_upload(&path);
+                    }
+                }
+            }
+            Event::PreparedMedia {
+                result: Ok(path), ..
+            }
+            | Event::TypedMediaUncertain { path, .. } => beeper::discard_temp_upload(&path),
+            _ => {}
+        }
+    }
+}
+
 /// UI handle to the backend runtime.
 pub struct Backend {
     startup: Option<tokio::sync::oneshot::Sender<()>>,
@@ -1785,7 +1808,9 @@ impl Backend {
                 .name("solmu-local-file".into())
                 .spawn(move || {
                     if let Some(event) = local_files::run(command) {
-                        let _ = events.send(event);
+                        if let Err(error) = events.send(event) {
+                            error.0.discard_owned_media();
+                        }
                         waker.wake();
                     }
                 })
@@ -1838,6 +1863,15 @@ impl Backend {
 
     pub fn shutdown(&mut self) {
         self.gif_search.take();
+        self.local_events.take();
+        // Search has joined, so every produced thumbnail is now queued.
+        // Other late workers clean their rejected event after receiver close.
+        let (_, empty) = std::sync::mpsc::channel();
+        let events = std::mem::replace(&mut self.events, empty);
+        for event in events.try_iter() {
+            event.discard_owned_media();
+        }
+        drop(events);
         self.startup.take();
         self.send(Command::Shutdown);
         if let Some(thread) = self.thread.take() {

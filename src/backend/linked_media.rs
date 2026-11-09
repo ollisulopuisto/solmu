@@ -109,6 +109,7 @@ pub(super) struct SearchQueue {
     pending: std::sync::Arc<std::sync::Mutex<Option<(String, String, u64)>>>,
     generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
     signal: std::sync::mpsc::SyncSender<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 impl SearchQueue {
     pub(super) fn enqueue(&self, query: String, key: String) {
@@ -128,6 +129,11 @@ impl Drop for SearchQueue {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .take();
+        let (closed, _) = std::sync::mpsc::sync_channel(1);
+        drop(std::mem::replace(&mut self.signal, closed));
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 pub(super) fn search_queue(
@@ -140,7 +146,7 @@ pub(super) fn search_queue(
     let (signal, receiver) = std::sync::mpsc::sync_channel(1);
     let next = pending.clone();
     let current = generation.clone();
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("solmu-gif-search".into())
         .spawn(move || {
             while receiver.recv().is_ok() {
@@ -172,6 +178,7 @@ pub(super) fn search_queue(
         pending,
         generation,
         signal,
+        thread: Some(thread),
     })
 }
 pub(super) fn run(command: Command) -> Option<Event> {

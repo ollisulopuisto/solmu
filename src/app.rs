@@ -2012,6 +2012,8 @@ impl App {
             self.wallpaper_image.reload();
             self.nav_history.clear();
         }
+        // Prune only after the removed account's parked drafts are gone.
+        self.forget_unstaged_pictures();
         self.save_roster();
         self.report_presence();
         if let Some(error) = state_error.or(cache_error) {
@@ -12818,6 +12820,7 @@ impl App {
         for account in &mut self.accounts {
             account.backend.shutdown();
         }
+        crate::backend::beeper::flush_temp_cleanup();
         self.files.flush(fastframe_file::FLUSH_TIMEOUT);
     }
 
@@ -29706,6 +29709,7 @@ mod linked_attachment_tests {
         assert!(prepared.exists());
         app.pending.clear();
         app.forget_unstaged_pictures();
+        crate::backend::beeper::flush_temp_cleanup();
         assert!(!prepared.exists());
         assert!(app.attachment_kinds.is_empty());
         assert!(app.attachment_temporary_paths.is_empty());
@@ -29778,6 +29782,7 @@ mod linked_attachment_tests {
                 assert!(path.exists());
                 app.discard_gif_thumbnails();
             }
+            crate::backend::beeper::flush_temp_cleanup();
             assert!(!path.exists());
         }
     }
@@ -29804,7 +29809,71 @@ mod linked_attachment_tests {
             },
             true,
         );
+        crate::backend::beeper::flush_temp_cleanup();
         assert!(!path.exists());
         assert!(app.attachment_temporary_paths.is_empty());
+    }
+    #[test]
+    fn linked_removing_hidden_account_reclaims_its_parked_media_only() {
+        let (root, mut app, _ctx, _commands) = fixture();
+        let removed = root.path().join("removed.mp4");
+        std::fs::write(&removed, b"prepared").unwrap();
+        crate::backend::beeper::register_temp_upload(&removed);
+        app.apply_backend_event(
+            Event::PreparedMedia {
+                owner: "visible".into(),
+                kind: crate::backend::MediaKind::Gif,
+                result: Ok(removed.clone()),
+            },
+            true,
+        );
+        app.add_account();
+        let original = root.path().join("original.webp");
+        std::fs::write(&original, b"original").unwrap();
+        app.stage(Pending::Document(original.clone()));
+        app.finish_removed(0);
+        crate::backend::beeper::flush_temp_cleanup();
+        assert!(!removed.exists());
+        assert!(original.exists());
+        assert!(app.attachment_temporary_paths.is_empty());
+        assert!(app.attachment_kinds.is_empty());
+    }
+
+    #[test]
+    fn linked_shutdown_reclaims_unpolled_and_rejected_media_events() {
+        let (root, mut app, _ctx, _commands) = fixture();
+        let (backend, events) = Backend::detached();
+        app.backend = backend;
+        let path = root.path().join("queued.gif");
+        std::fs::write(&path, b"thumbnail").unwrap();
+        crate::backend::beeper::register_temp_upload(&path);
+        events
+            .send(Event::Gifs {
+                query: "test".into(),
+                results: Ok(vec![Gif {
+                    id: "fixture".into(),
+                    still: Some(path.clone()),
+                    mp4: String::new(),
+                    width: 1,
+                    height: 1,
+                }]),
+            })
+            .unwrap();
+        app.backend.shutdown();
+        let late = root.path().join("late.mp4");
+        std::fs::write(&late, b"prepared").unwrap();
+        crate::backend::beeper::register_temp_upload(&late);
+        events
+            .send(Event::PreparedMedia {
+                owner: "visible".into(),
+                kind: crate::backend::MediaKind::Gif,
+                result: Ok(late.clone()),
+            })
+            .unwrap_err()
+            .0
+            .discard_owned_media();
+        crate::backend::beeper::flush_temp_cleanup();
+        assert!(!path.exists());
+        assert!(!late.exists());
     }
 }

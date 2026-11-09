@@ -795,3 +795,8 @@ The portable adapter now stages the production linked_media module. Its 239 Rust
 Prepared GIF/sticker paths are owned by staged attachment IDs, transferred to the upload worker before send, and reclaimed only when a draft drops them. User-owned files are never removed. Attachment kinds are pruned across all account drafts. Search thumbnails are reclaimed on replacement, stale results, account change, and shutdown. Search uses one worker with a replaceable pending query and a 300ms quiet period, limiting network fan-out while typing. Send Later uses the same current-owner media predicate in the toolbar, dialog, and deferred action.
 
 No real uploads or sends, no merge, and no release build. SQLite draft #258 remains intentionally blocked on the vulnerable bundled SQLCipher dependency.
+
+
+### Lifecycle review follow-up
+
+The next automatic review confirmed the previous three findings resolved and identified account-removal and shutdown edges. Cleanup now runs after an account and its parked drafts are removed. Backend shutdown joins GIF search, closes its old event receiver, and reclaims queued media; other late producers reclaim rejected media events. A single deletion worker performs filesystem cleanup away from the UI thread, with a shutdown barrier. Added hidden-account removal and unpolled/rejected media regressions. The unchanged-production reduced native build passes 29 focused tests, the portable adapter passes 239 tests, and full all-target/all-feature clippy plus fmt pass locally.

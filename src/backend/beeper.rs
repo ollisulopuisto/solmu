@@ -601,11 +601,48 @@ pub(crate) fn register_temp_upload(path: &std::path::Path) {
         .insert(path.to_path_buf());
 }
 
-/// Claims a temporary file for deletion: true at most once per file.
-/// Remove only explicitly registered app-created files, never user originals.
+// A single deletion worker keeps filesystem stalls off the UI thread.
+enum TempCleanup {
+    Remove(std::path::PathBuf),
+    Flush(std::sync::mpsc::Sender<()>),
+}
+fn temp_cleanup() -> &'static std::sync::mpsc::Sender<TempCleanup> {
+    static WORKER: std::sync::OnceLock<std::sync::mpsc::Sender<TempCleanup>> =
+        std::sync::OnceLock::new();
+    WORKER.get_or_init(|| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("solmu-media-cleanup".into())
+            .spawn(move || {
+                for job in receiver {
+                    match job {
+                        TempCleanup::Remove(path) => {
+                            let _ = std::fs::remove_file(path);
+                        }
+                        TempCleanup::Flush(done) => {
+                            let _ = done.send(());
+                        }
+                    }
+                }
+            })
+            .expect("media cleanup worker");
+        sender
+    })
+}
+
+/// Claims a temporary file at most once; never deletes user originals.
+/// Only the worker touches the filesystem.
 pub(crate) fn discard_temp_upload(path: &std::path::Path) {
     if take_temp_upload(path) {
-        let _ = std::fs::remove_file(path);
+        let _ = temp_cleanup().send(TempCleanup::Remove(path.to_path_buf()));
+    }
+}
+
+/// Used at process shutdown, after producers stop, and by deterministic tests.
+pub(crate) fn flush_temp_cleanup() {
+    let (done, finished) = std::sync::mpsc::channel();
+    if temp_cleanup().send(TempCleanup::Flush(done)).is_ok() {
+        let _ = finished.recv();
     }
 }
 
@@ -2668,14 +2705,16 @@ pub fn run(
                         }
                     }
                     Err(error) => {
-                        let _ = typed_events.send(Event::TypedMediaUncertain {
+                        if let Err(error) = typed_events.send(Event::TypedMediaUncertain {
                             chat,
                             path,
                             kind,
                             caption,
                             quoting,
                             message: format!("{error}. Media kept; check history before retrying."),
-                        });
+                        }) {
+                            error.0.discard_owned_media();
+                        }
                     }
                 }
                 typed_waker.wake();
