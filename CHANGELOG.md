@@ -9,6 +9,15 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.8
+
+- Reclaim discarded linked-media downloads and old GIF thumbnails, keep native media types with each draft, and allow Send Later when a failed voice note belongs to another conversation. GIF search coalesces edits instead of starting a request thread for every keystroke.
+
+- Voice notes, GIFs and stickers in linked chats use the same default or chosen source. GIFs and stickers stage before Send, keep their native media types, and return to the owning draft after an uncertain upload. The source picker remains available while recording.
+
+- Keep returned linked attachments and captions in a reachable draft, preserve their original reply/source on retry, and refuse Send Later while media is staged.
+- Paste, drop, or pick pictures and files in linked chats. They send through the saved default source, or the source you choose from the network/account picker. Missing or unavailable defaults require a choice; attachments never fall back to the visible member chat.
+
 - Follow-up text bubbles use each sender/source's recent cadence instead of a fixed calendar-minute boundary. The last ten minutes of completed gaps set a 1.5x average allowance, bounded to 2-5 minutes. A long pause starts a new burst; replies, metadata and other existing boundaries still stay separate.
 
 - Cancelling a reply with X or Esc in a linked chat keeps the quote cleared, preserves the draft, and sends the next message without the cancelled quote.

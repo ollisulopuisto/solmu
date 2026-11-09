@@ -81,6 +81,77 @@ pub(crate) fn cancel_reply(app: &App, ctx: &egui::Context) {
     });
 }
 
+/// Resolve attachments through the same exact source picker as new text.
+/// The visible member is only the draft owner, never an implicit fallback.
+pub(crate) fn attachment_destination(
+    app: &App,
+    ctx: &egui::Context,
+) -> Result<Option<String>, std::borrow::Cow<'static, str>> {
+    let Some(chat) = app.open_chat.as_deref().and_then(|id| app.chat(id)) else {
+        return Ok(None);
+    };
+    let Some(current) = Member::of(chat) else {
+        return Ok(None);
+    };
+    let Some(person) = app
+        .settings
+        .beeper
+        .people
+        .iter()
+        .find(|p| p.members.contains(&current))
+    else {
+        return Ok(None);
+    };
+    let valid = valid_members(app, person, chat);
+    if !(2..=8).contains(&valid.len()) {
+        return Err(crate::i18n::gettext(
+            app.locale,
+            "Linked person unavailable. Open a source chat separately.",
+        ));
+    }
+    let key = egui::Id::new(("linked-person-state", &person.members));
+    let state = ctx
+        .data(|data| data.get_temp::<State>(key))
+        .unwrap_or_default();
+    let destination = if state.destination.is_some() {
+        state.destination.as_ref()
+    } else {
+        person
+            .default_destination(&valid)
+            .map_err(|_| crate::i18n::gettext(app.locale, "Primary chat unavailable. Choose a destination explicitly; no fallback was selected."))?
+    };
+    let Some(destination) = destination.filter(|member| valid.contains(member)) else {
+        return Err(crate::i18n::gettext(
+            app.locale,
+            "Choose a destination for this linked chat before attaching files.",
+        ));
+    };
+    if !app.chat(&destination.chat).is_some_and(Chat::can_send) {
+        return Err(crate::i18n::gettext(
+            app.locale,
+            "The selected source chat cannot send messages.",
+        ));
+    }
+    Ok(Some(destination.chat.clone()))
+}
+
+fn valid_members(app: &App, person: &Person, chat: &Chat) -> Vec<Member> {
+    person
+        .members
+        .iter()
+        .filter(|m| {
+            app.chats.iter().any(|c| {
+                m.matches(c)
+                    && !c.locked
+                    && c.kind == ChatKind::Direct
+                    && c.backend_origin == chat.backend_origin
+                    && app.chats.iter().filter(|known| known.id == c.id).count() == 1
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 /// What "Load older" could not do, once it stopped: the networks whose older
 /// messages did not come, and why. `None` when every chat caught up or ran out.
 fn older_note(app: &App, catch_up: &crate::merged::CatchUp) -> Option<String> {
@@ -187,20 +258,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         return false;
     }
     let person = person.unwrap();
-    let valid: Vec<_> = person
-        .members
-        .iter()
-        .filter(|m| {
-            app.chats.iter().any(|c| {
-                m.matches(c)
-                    && !c.locked
-                    && c.kind == ChatKind::Direct
-                    && c.backend_origin == chat.backend_origin
-                    && app.chats.iter().filter(|known| known.id == c.id).count() == 1
-            })
-        })
-        .cloned()
-        .collect();
+    let valid = valid_members(app, &person, chat);
     if valid.len() < 2 {
         app.ensure_person_loaded(&[]);
         if ui.button("Remove local link").clicked() {
@@ -520,6 +578,28 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             );
         }
     }
+    if state.reply.is_none()
+        && let Some(source) = app.unsent_voice_source.as_ref()
+        && let Some(quote) = app.unsent_voice_quote.as_ref()
+        && valid.contains(source)
+    {
+        state.reply = Some((source.clone(), quote.id.clone()));
+        state.destination = Some(source.clone());
+    }
+    // Seed a recovered quote only on its exact original source. Each staged
+    // item retains its quote independently; a newer reply cannot replace it.
+    if state.reply.is_none()
+        && let Some((source, quote)) = app.pending.iter().find_map(|item| {
+            Some((
+                app.attachment_retry_sources.get(&item.id)?,
+                app.attachment_retry_quotes.get(&item.id)?,
+            ))
+        })
+        && valid.contains(source)
+    {
+        state.reply = Some((source.clone(), quote.id.clone()));
+        state.destination = Some(source.clone());
+    }
     // Routing safety: no reply target and no chosen destination means no
     // route at all - new text goes nowhere without an explicit choice.
     if state.reply.is_none() {
@@ -554,7 +634,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             app,
             ui,
             destination,
-            false,
+            true,
             Some(super::conversation::ComposerExtras {
                 width: extras_width,
                 render: &mut render,
@@ -568,7 +648,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         }
         if app.actions[before..]
             .iter()
-            .any(|a| matches!(a, Action::SendText { .. } | Action::SendPending { .. }))
+            .any(|a| matches!(a, Action::SendText { .. }))
         {
             state.reply = None;
             if !state.explicit {
@@ -1231,6 +1311,22 @@ fn destination_entries(
         {
             state.explicit = true;
             state.destination = Some(member.clone());
+            let returned_here = app.unsent_voice.as_ref().is_some_and(|(source, _)| {
+                app.open_chat.as_deref() == Some(app.linked_draft_owner(source).as_str())
+            });
+            if returned_here
+                && app.unsent_voice_quote.is_none()
+                && let Some((source, _)) = &mut app.unsent_voice
+            {
+                *source = member.chat.clone();
+                app.unsent_voice_source = Some(member.clone());
+            }
+            // Choosing a route is explicit approval to move a returned draft.
+            for staged in &app.pending {
+                if !app.attachment_retry_quotes.contains_key(&staged.id) {
+                    app.attachment_retry_sources.remove(&staged.id);
+                }
+            }
             app.reply_to = state
                 .reply
                 .as_ref()
@@ -1302,7 +1398,7 @@ fn destination_extras(
         .map(|chat| format!("{}{}", network_label(chat), account_name(app, chat)))
         .unwrap_or_else(|| chosen.to_owned());
     let schedulable =
-        app.editing.is_none() && (!app.composer.trim().is_empty() || !app.pending.is_empty());
+        app.editing.is_none() && !app.composer.trim().is_empty() && !app.has_unsent_media_here();
     let clock = ui
         .add_enabled_ui(schedulable, |ui| {
             crate::theme::icon_button(
@@ -1359,6 +1455,10 @@ fn destination_extras(
     let response = response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(hint);
+    #[cfg(feature = "demo")]
+    if crate::demo::attachment_picker() {
+        egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&response));
+    }
     egui::Popup::menu(&response).show(|ui| destination_entries(app, ui, state, valid, person));
 }
 
@@ -1879,6 +1979,43 @@ mod tests {
             primary: None,
         };
         (wa, tg, person)
+    }
+
+    #[test]
+    fn linked_attachments_use_explicit_picker_then_default_without_fallback() {
+        let (wa, tg, mut person) = ada_pair();
+        person.primary = Some(person.members[1].clone());
+        let (_dir, mut app, ctx) = linked_app(vec![wa.clone(), tg.clone()], vec![person.clone()]);
+        app.open_chat = Some(wa.id.clone());
+        assert_eq!(attachment_destination(&app, &ctx), Ok(Some(tg.id.clone())));
+        let key = egui::Id::new(("linked-person-state", &person.members));
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                key,
+                State {
+                    destination: Some(person.members[0].clone()),
+                    explicit: true,
+                    ..Default::default()
+                },
+            )
+        });
+        assert_eq!(attachment_destination(&app, &ctx), Ok(Some(wa.id.clone())));
+        // Explicit valid choice still works if the saved default is unavailable.
+        app.settings.beeper.people[0]
+            .primary
+            .as_mut()
+            .unwrap()
+            .account = "stale-account".into();
+        assert_eq!(attachment_destination(&app, &ctx), Ok(Some(wa.id.clone())));
+        ctx.data_mut(|data| data.remove::<State>(key));
+        assert!(attachment_destination(&app, &ctx).is_err());
+        app.settings.beeper.people[0].primary = None;
+        assert!(
+            attachment_destination(&app, &ctx).is_err(),
+            "no visible-chat fallback"
+        );
+        app.chats[1].backend_account = Some("replacement-account".into());
+        assert!(attachment_destination(&app, &ctx).is_err());
     }
 
     #[test]

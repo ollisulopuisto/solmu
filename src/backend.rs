@@ -17,6 +17,7 @@ pub(crate) mod picture_edit;
 
 // Re-exported so the picker can detect pasted Signal pack links.
 pub mod beeper;
+mod linked_media;
 pub mod local_ai;
 mod local_files;
 pub(crate) mod sticker_import;
@@ -765,6 +766,26 @@ pub enum Command {
         to_phone: bool,
         registered: Result<bool, String>,
     },
+    /// Prepare a sticker locally before it joins the owning linked draft.
+    PrepareSticker {
+        owner: ChatId,
+        source: PathBuf,
+        crop: crate::model::StickerCrop,
+        transparent: bool,
+    },
+    /// Retrieve a public GIF without using the authenticated Beeper client.
+    PrepareGif {
+        owner: ChatId,
+        gif: Gif,
+    },
+    /// Send a staged native GIF or sticker with its exact source/reply.
+    SendTypedMedia {
+        chat: ChatId,
+        path: PathBuf,
+        kind: MediaKind,
+        caption: Option<String>,
+        quoting: Option<crate::model::ReplyTarget>,
+    },
     /// Downloads and sends a GIF as a short looping video.
     SendGif {
         chat: ChatId,
@@ -1243,6 +1264,19 @@ pub enum Event {
         chat: ChatId,
         through: i64,
     },
+    PreparedMedia {
+        owner: ChatId,
+        kind: MediaKind,
+        result: Result<PathBuf, String>,
+    },
+    TypedMediaUncertain {
+        chat: ChatId,
+        path: PathBuf,
+        kind: MediaKind,
+        caption: Option<String>,
+        quoting: Option<crate::model::ReplyTarget>,
+        message: String,
+    },
     /// GIF search results or failure.
     Gifs {
         query: String,
@@ -1585,6 +1619,12 @@ pub enum Refusal {
     UnsupportedViewOnce,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaKind {
+    Gif,
+    Sticker,
+}
+
 /// The content of a refused send.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Unsent {
@@ -1616,6 +1656,29 @@ pub enum Unsent {
 /// Cross-thread window wake handle: repaints whichever window exists.
 pub use fastframe_shell::Waker;
 
+impl Event {
+    /// A receiver that closes before polling must release media still in transit.
+    pub(crate) fn discard_owned_media(self) {
+        match self {
+            Event::Gifs {
+                results: Ok(results),
+                ..
+            } => {
+                for gif in results {
+                    if let Some(path) = gif.still {
+                        beeper::discard_temp_upload(&path);
+                    }
+                }
+            }
+            Event::PreparedMedia {
+                result: Ok(path), ..
+            }
+            | Event::TypedMediaUncertain { path, .. } => beeper::discard_temp_upload(&path),
+            _ => {}
+        }
+    }
+}
+
 /// UI handle to the backend runtime.
 pub struct Backend {
     startup: Option<tokio::sync::oneshot::Sender<()>>,
@@ -1624,6 +1687,7 @@ pub struct Backend {
     thread: Option<std::thread::JoinHandle<()>>,
     offline: bool,
     local_events: Option<(std::sync::mpsc::Sender<Event>, Waker)>,
+    gif_search: Option<linked_media::SearchQueue>,
     #[cfg(any(test, feature = "demo"))]
     demo_commands: Option<std::sync::Mutex<Vec<Command>>>,
 }
@@ -1635,6 +1699,7 @@ impl Backend {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         let local_events = Some((event_tx.clone(), waker.clone()));
+        let gif_search = linked_media::search_queue(event_tx.clone(), waker.clone());
         let thread = std::thread::Builder::new()
             .name("solmu-beeper-backend".to_string())
             .spawn(move || beeper::run(cfg, dirs, event_tx, command_rx, waker))
@@ -1646,6 +1711,7 @@ impl Backend {
             thread: Some(thread),
             offline: false,
             local_events,
+            gif_search,
             #[cfg(any(test, feature = "demo"))]
             demo_commands: None,
         }
@@ -1663,6 +1729,7 @@ impl Backend {
                 thread: None,
                 offline: true,
                 local_events: None,
+                gif_search: None,
                 #[cfg(any(test, feature = "demo"))]
                 demo_commands: None,
             },
@@ -1710,6 +1777,24 @@ impl Backend {
     }
 
     pub fn send(&self, command: Command) {
+        if let Command::SearchGifs { query, key } = &command
+            && let Some((events, waker)) = &self.local_events
+        {
+            if let Some(queue) = &self.gif_search {
+                queue.enqueue(query.clone(), key.clone());
+            } else {
+                let _ = events.send(Event::Gifs {
+                    query: query.clone(),
+                    results: Err(crate::model::GifError {
+                        message: "Could not start GIF search worker".into(),
+                        bad_key: false,
+                    }),
+                });
+                waker.wake();
+            }
+            return;
+        }
+
         // Copy/save are desktop operations, not API commands. Handle them
         // even when the network worker is disconnected or has stopped.
         if local_files::handles(&command)
@@ -1723,7 +1808,9 @@ impl Backend {
                 .name("solmu-local-file".into())
                 .spawn(move || {
                     if let Some(event) = local_files::run(command) {
-                        let _ = events.send(event);
+                        if let Err(error) = events.send(event) {
+                            error.0.discard_owned_media();
+                        }
                         waker.wake();
                     }
                 })
@@ -1775,6 +1862,16 @@ impl Backend {
     }
 
     pub fn shutdown(&mut self) {
+        self.gif_search.take();
+        self.local_events.take();
+        // Search has joined, so every produced thumbnail is now queued.
+        // Other late workers clean their rejected event after receiver close.
+        let (_, empty) = std::sync::mpsc::channel();
+        let events = std::mem::replace(&mut self.events, empty);
+        for event in events.try_iter() {
+            event.discard_owned_media();
+        }
+        drop(events);
         self.startup.take();
         self.send(Command::Shutdown);
         if let Some(thread) = self.thread.take() {

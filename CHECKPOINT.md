@@ -721,3 +721,87 @@ must use that same identity. Native regression reproduced the bug with distinct
 outgoing IDs, then passed with the explicit sender check. Same-sender and incoming
 boundaries are asserted too. Focused runtime uses the memory-bounded validation
 build; full current-head CI/review remain pending. No merge or release.
+
+
+## Linked-chat attachments - November 9, 2026
+
+In progress, owner Instinct, branch `fix/linked-default-attachments`, based on
+main 86ccc73. Olli reported the linked-chat clipboard refusal. Allow clipboard,
+drop and file/document-picker staging in the linked composer. The visible chat
+owns the draft, but sending resolves the exact selected/default source using
+the existing network/account picker. Missing/stale/locked/ambiguous sources
+refuse without fallback. A queued send whose route changed keeps its draft.
+Keep destination-chat drafts untouched, and keep account/owner guards. Returned
+attachments cannot silently retry on a changed source; choosing a destination
+explicitly allows moving an unquoted returned draft. Quoted returns stay tied to
+their source until Cancel reply. Both kinds restore to the reachable person draft,
+including delayed Beeper upload failures after navigating away. Expanded below to include
+voice, GIFs and stickers under the owner's correction. No real attachments sent.
+
+Version 0.24.8, What's New/changelog updated. Native all-feature clippy passes;
+five focused native regressions pass in a reduced-test validation build, including refusal recovery and changed-source retry protection.
+Actual synthetic native light/dark before/after and source-picker pixels
+inspected. Final all-target/all-feature clippy passes. Full CI pending. Local RED attempt did not finish due to disk/codegen limits, so no failing-before claim. No main merge or release.
+The Release workflow rejects branch-only commits before building a DMG; draft
+arm64 DMG remains held under the standing build rules, not worked around.
+
+Synthetic before/after and picker evidence: https://files.instinct.com/nioka8nka98f-solmu-linked-attachments (public, no real conversations). Page inspected at 320/390/1280px and live preview photo viewer checked.
+
+
+PR257 review follow-up: fixed four findings. BeeperFilesUncertain and quoted
+attachment refusals restore files plus captions under the same canonical member
+key as open_chat, not an inaccessible nonrepresentative draft. Per-attachment
+source/quote identities survive parking and account switches; conflicting quotes
+refuse until Cancel reply. Send Later refuses staged media at both dialog and
+execution boundaries, retaining caption and files. Route errors use direct
+gettext literals. Eight targeted native tests plus an existing linked demo test
+pass in the reduced validation build; all-target/all-feature clippy and fmt pass.
+RED proof: restored the published 8570625 recovery and scheduling functions in
+the validation checkout with the new tests unchanged; all three new recovery/
+scheduling regressions fail. Restored fixed production code, all nine pass.
+
+Dependency advisory CI fails on unchanged libsqlite3-sys0.38.2, RUSTSEC-2026-0459.
+A separate dependency PR is assigned; do not fold it into attachment scope.
+
+
+PR257 media scope correction (2026-11-09): voice, GIFs and stickers are included.
+Linked voice sends resolve the exact default/chosen source; returned recordings
+keep their source identity, samples and reply until an explicit safe retry.
+The destination picker remains available on the recording bar. GIFs and stickers
+join the owning staged draft and use native API `gif`/`sticker` attachment hints,
+not document disguises. A bounded separate worker keeps typed upload failures
+with their original source, reply, media type and caption. Accepted IDs enter the
+existing pending-message reconciliation path. GIF search uses the user's GIPHY
+key and bounded HTTPS media retrieval without Beeper credentials or redirects.
+Linked sticker creation prepares cropped WebP locally before staging. Picker
+favorites include locally saved/cached WebP; remote sticker-pack import remains
+its existing separate workflow. No real message/media calls used for tests.
+
+Local validation: all-target/all-feature clippy with warnings denied passes.
+21 focused reduced-build regressions pass, including native HTTP fixture payloads,
+source routing, asynchronous ownership, retained media type/caption, voice route
+refusal, URL boundaries and sticker preparation. Actual native dark/light GIF/sticker staging, voice recording, voice source-picker
+and restored media tabs were inspected. The updated public evidence page was
+checked at 320/390/1280px, with all images loaded and its viewer opened/closed.
+A wider 475-test reduced-harness run hit the execution timeout before completion;
+no full-suite pass is claimed. Current-head CI follows the commit. No merge;
+DMG remains held.
+
+
+## PR #257 follow-up: portable staging and media ownership
+
+The portable adapter now stages the production linked_media module. Its 239 Rust tests and all 102 Python tool/packaging tests pass locally. The current-source reduced native build passes 27 focused linked-media regressions, including draft removal, parked-draft retention, ownership transfer to upload, orphan preparation, stale thumbnails, and unrelated failed-voice scheduling. Full all-target/all-feature clippy with warnings denied and fmt pass. No full native-suite pass is claimed locally.
+
+Prepared GIF/sticker paths are owned by staged attachment IDs, transferred to the upload worker before send, and reclaimed only when a draft drops them. User-owned files are never removed. Attachment kinds are pruned across all account drafts. Search thumbnails are reclaimed on replacement, stale results, account change, and shutdown. Search uses one worker with a replaceable pending query and a 300ms quiet period, limiting network fan-out while typing. Send Later uses the same current-owner media predicate in the toolbar, dialog, and deferred action.
+
+No real uploads or sends, no merge, and no release build. SQLite draft #258 remains intentionally blocked on the vulnerable bundled SQLCipher dependency.
+
+
+### Lifecycle review follow-up
+
+The next automatic review confirmed the previous three findings resolved and identified account-removal and shutdown edges. Cleanup now runs after an account and its parked drafts are removed. Backend shutdown joins GIF search, closes its old event receiver, and reclaims queued media; other late producers reclaim rejected media events. A single deletion worker performs filesystem cleanup away from the UI thread, with a shutdown barrier. Added hidden-account removal and unpolled/rejected media regressions. The unchanged-production reduced native build passes 29 focused tests, the portable adapter passes 239 tests, and full all-target/all-feature clippy plus fmt pass locally.
+
+
+### Native CI shutdown-test contract
+
+Native CI at b041035 passed 1959 tests and failed one old combined draft test because it injected a logout event after `App::shutdown`. Shutdown now deliberately closes event delivery to reclaim unpolled media. Split that test into shutdown saving/rejection and live-account logout clearing. Both exact production tests pass in the reduced build, alongside all 29 linked regressions; full all-target/all-feature clippy and fmt pass. No production shutdown cleanup was weakened.
