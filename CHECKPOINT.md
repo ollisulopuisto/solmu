@@ -687,3 +687,28 @@ Messages-style guard capture at
 https://files.instinct.com/xlkcf5cm0tyf-solmu-cadence-review
 The public page and image viewers were visually inspected. Full CI and renewed
 review for the follow-up commit remain pending. No release build or merge.
+
+## Cancel linked replies - November 9, 2026
+
+In progress, owner Instinct; branch `fix/cancel-reply-quote`, isolated worktree
+`/downloads/solmu-cancel-reply`, based on main f652135. The reply X/Esc action
+clears the app target but the linked-person view restores its own cached target
+next frame. Clear both through the same cancellation action, preserve draft
+text and explicit destination choices, and verify a later send has no quote.
+Keep unrelated linked people untouched. Native `cargo check --locked --tests`
+and formatting pass. Real composer regression and state-isolation tests are
+written. Focused native runtime regression passes for X/Esc/redraw/unquoted
+send and state isolation, using a local reduced-test build because full local
+code generation was resource-killed. Removing the production fix makes the
+new regression fail on quote restoration, then restoring it passes. Native
+demo pixels confirm X/Esc remove the strip and preserve the draft. Full CI
+is blocked before test execution by repeated cache HTTP504, not marked pass.
+No README scope changes, merge, release or deployment.
+
+
+PR256 integration follow-up: full applicable CI passed at 343f39a. Both posted
+review findings were marked resolved. Main then advanced to 1021909 with the
+reply-cancellation and DOS-device-name fixes; the resulting conflict was only
+in the changelog and this planning log. Preserve both entries and all upstream
+code with a branch-only merge from main. No feature behavior changed in this
+resolution. Fresh integrated CI/review pending; no merge to main or release.

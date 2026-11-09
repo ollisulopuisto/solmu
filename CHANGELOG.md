@@ -11,6 +11,8 @@ version in Cargo.toml is bumped.
 
 - Follow-up text bubbles use each sender/source's recent cadence instead of a fixed calendar-minute boundary. The last ten minutes of completed gaps set a 1.5x average allowance, bounded to 2-5 minutes. A long pause starts a new burst; replies, metadata and other existing boundaries still stay separate.
 
+- Cancelling a reply with X or Esc in a linked chat keeps the quote cleared, preserves the draft, and sends the next message without the cancelled quote.
+
 - Keep macOS package-signing and notarization passwords out of process arguments and error output during release builds.
 
 ## v0.24.7
