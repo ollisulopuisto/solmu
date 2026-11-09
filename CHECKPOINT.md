@@ -2,7 +2,7 @@
 
 ## Command palette polish - November 9, 2026
 
-Branch `feat/palette-polish`, based on main, version 0.24.11 (0.24.9 and 0.24.10 are open PRs #259 and #260, so expect a version/CHANGELOG conflict in whichever merges later). From the unsung article on command palettes: rows show their key, Jump to open chat (Ctrl+K) is listed, and a filter row keeps the palette open. Ctrl+K stays the chat switcher, so the palette stays on Ctrl+P. Three tests in src/ui/palette.rs; not run locally (no Rust toolchain in this checkout), CI is the check. No merge by the author.
+Branch `feat/palette-polish`, based on main, version 0.24.11 (0.24.9 and 0.24.10 are open PRs #259 and #260, so expect a version/CHANGELOG conflict in whichever merges later). From the unsung article on command palettes: rows show their key, Jump to open chat (Ctrl+K) is listed, and a filter row keeps the palette open. Ctrl+K stays the chat switcher, so the palette stays on Ctrl+P. Devin round: dialog-opening commands no longer queue CloseDialog (it ran second and closed the new dialog), filters re-open the palette after Open(Chats) when not already on the list, Search chats shows Ctrl+Shift+F. Action-dispatch tests in src/ui/palette.rs assert app.dialog after the queue runs, from Chats and Settings; not run locally (no Rust toolchain in this checkout), CI is the check. No merge by the author.
 
 ## v0.24.7 release preparation - November 8, 2026
 

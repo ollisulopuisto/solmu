@@ -8297,6 +8297,12 @@ impl App {
         }
     }
 
+    /// Runs the queued actions; for tests in other modules.
+    #[cfg(test)]
+    pub(crate) fn apply_queued_for_test(&mut self, ctx: &egui::Context) {
+        self.apply_actions(ctx);
+    }
+
     fn apply_actions(&mut self, ctx: &egui::Context) {
         let deferred = std::mem::take(&mut self.deferred_account_actions);
         for (id, action) in deferred {
