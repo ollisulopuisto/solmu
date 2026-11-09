@@ -197,7 +197,7 @@ pub fn call_link(value: &str) -> Option<(String, bool)> {
 /// Only common document/media formats go to their desktop application.
 /// Unknown files, scripts, installers and application bundles can be revealed
 /// in their folder instead. Sender-provided MIME types cannot grant permission.
-fn is_reserved_dos_name(name: &str) -> bool {
+pub(crate) fn is_reserved_dos_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     matches!(lower.as_str(), "con" | "prn" | "aux" | "nul")
         || (lower.starts_with("com") || lower.starts_with("lpt"))
