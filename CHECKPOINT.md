@@ -9,6 +9,15 @@ now join a run in any position; own Sent/Delivered/Read rows stack. Cadence limi
 Pending and Failed remain boundaries. Messages bubble style still draws no stacks.
 Not compiled locally (no Rust toolchain); CI is the check. Author does not merge.
 
+## Linked reply arrow focuses the composer - November 9, 2026
+
+Branch `fix/linked-reply-arrow-focus`, based on main ba51fa1, version 0.24.9. In a linked-person
+view the bubble reply arrow, double-click and Reply to latest match started the quote but left the
+composer unfocused; Cmd-R focused it. All of these now share one helper that also requests composer
+focus. Test added in src/ui/merged.rs; not run locally (no Rust toolchain in this checkout), CI is the
+check. Context-menu and other non-linked Reply entry points already set focus through Action::Reply.
+No merge by the author.
+
 ## v0.24.7 release preparation - November 8, 2026
 
 Separate version/changelog PR rebased on merged main 0ff5f22 (includes #248 and #249). Move the existing Unreleased notes into v0.24.7 and
