@@ -664,5 +664,9 @@ Two synthetic cadence regressions and the existing metadata boundary table are
 updated. Native test checking and clippy pass. Native before/after pixels verified: the 18:40/18:41 fixture joins and hides
 the intermediate clock. Added rendered-footer regression after visual checking
 caught the clock seam. Draft PR256; full runtime CI is pending (cache HTTP504
-blocked its quality job before compilation). No full-suite pass claimed. Separate
+blocked its quality job before compilation). Focused native runtime tests pass for burst grouping, source/bounds/zero
+gaps and the rendered minute-clock seam, in a local build omitting unrelated
+tests to fit memory. Removing the seam fix makes its rendered regression fail
+(31.5pt intermediate clock), restoring it passes. Both ordinary and linked
+native before/after pixels inspected. No full-suite pass claimed. Separate
 from reply cancellation PR255. No merge, release or README changes.

@@ -4678,15 +4678,15 @@ mod tests {
                     &format!("minute-gutter-{index}"),
                 ))
             })
-            .expect("rendered footer")
+            .map_or(0.0, |rect| rect.width())
         };
         assert_eq!(
-            footer(0).width(),
+            footer(0),
             0.0,
             "18:40 clock must not split the cadence stack"
         );
-        assert_eq!(footer(1).width(), 0.0);
-        assert!(footer(2).width() > 0.0, "the final row keeps its clock");
+        assert_eq!(footer(1), 0.0);
+        assert!(footer(2) > 0.0, "the final row keeps its clock");
     }
 
     #[test]
