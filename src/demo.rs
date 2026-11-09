@@ -4012,6 +4012,33 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     rgba,
                 });
             }
+            "linked-media" | "linked-voice" => {
+                linked_sample(app);
+                if let Some(person) = app.settings.beeper.people.last_mut() {
+                    person.primary = person.members.get(1).cloned();
+                }
+                if part == "linked-voice" {
+                    app.recording = Some(crate::audio::Recorder::rehearsal());
+                } else {
+                    app.composer = "Synthetic GIF and sticker for the default source".into();
+                    let path = std::env::temp_dir().join("solmu-demo-linked-sticker.webp");
+                    let picture = image::RgbaImage::from_fn(64, 64, |x, y| {
+                        if (x / 8 + y / 8) % 2 == 0 {
+                            image::Rgba([65, 155, 180, 255])
+                        } else {
+                            image::Rgba([185, 220, 160, 255])
+                        }
+                    });
+                    if picture.save(&path).is_ok() {
+                        let id = app.stage(crate::app::Pending::Document(path));
+                        app.attachment_kinds
+                            .insert(id, crate::backend::MediaKind::Sticker);
+                    }
+                    let id = app.stage(crate::app::Pending::Document("Synthetic GIF.mp4".into()));
+                    app.attachment_kinds
+                        .insert(id, crate::backend::MediaKind::Gif);
+                }
+            }
             "linked-attachment-picker" => {
                 SHOT_ATTACHMENT_PICKER.store(true, std::sync::atomic::Ordering::Relaxed)
             }

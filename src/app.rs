@@ -593,9 +593,11 @@ pub struct App {
     /// Returned attachments must not silently retry through another source.
     pub(crate) attachment_retry_sources:
         std::collections::HashMap<AttachmentId, crate::merged::Member>,
-    /// Whether the single staged photo will be sent as view-once media.
+    /// Preserve native GIF/sticker semantics through staging and recovery.
+    pub(crate) attachment_kinds: std::collections::HashMap<AttachmentId, crate::backend::MediaKind>,
     pub(crate) attachment_retry_quotes:
         std::collections::HashMap<AttachmentId, crate::model::ReplyTarget>,
+    /// Whether the single staged photo will be sent as view-once media.
     pub(crate) pending_view_once: bool,
     /// The next identity to give a staged attachment.
     next_pending_id: AttachmentId,
@@ -629,6 +631,8 @@ pub struct App {
     /// A voice message the worker refused, kept with its chat so it can be
     /// sent again from that chat or discarded.
     pub(crate) unsent_voice: Option<(ChatId, Vec<f32>)>,
+    pub(crate) unsent_voice_source: Option<crate::merged::Member>,
+    pub(crate) unsent_voice_quote: Option<crate::model::ReplyTarget>,
     /// Keeps other apps' music paused while recording or playing audio.
     media_hold: Option<crate::media_pause::Hold>,
     /// Only the real app pauses other apps' media, never tests or demos.
@@ -1469,6 +1473,8 @@ impl App {
             reply_to: None,
             editing: None,
             unsent_voice: None,
+            unsent_voice_source: None,
+            unsent_voice_quote: None,
             composing: false,
             last_keystroke: None,
             chat_search_open: false,
@@ -1536,6 +1542,7 @@ impl App {
             pending: Vec::new(),
             attachment_retry_sources: Default::default(),
             attachment_retry_quotes: Default::default(),
+            attachment_kinds: Default::default(),
             pending_view_once: false,
             next_pending_id: 0,
             composer_tools_open: false,
@@ -5423,6 +5430,59 @@ impl App {
                     self.group_saving.remove(&chat);
                 }
             }
+            Event::PreparedMedia {
+                owner,
+                kind,
+                result,
+            } => match result {
+                Ok(path) => {
+                    let before = self.next_pending_id;
+                    let source = self.open_chat.clone();
+                    let owner =
+                        self.restore_attachments(&owner, [Pending::Document(path)], None, false);
+                    // Preparation is not a failed send. Source selection remains
+                    // live until Send, while the owning draft stays fixed.
+                    let ids: Vec<_> = self
+                        .pending
+                        .iter()
+                        .chain(self.attachment_drafts.values().flat_map(|d| &d.pending))
+                        .filter(|item| item.id >= before)
+                        .map(|item| item.id)
+                        .collect();
+                    for id in ids {
+                        self.attachment_kinds.insert(id, kind);
+                        self.attachment_retry_sources.remove(&id);
+                    }
+                    if source.as_deref() == Some(owner.as_str()) {
+                        self.focus_composer = true;
+                    }
+                }
+                Err(error) => self.toast_error(error),
+            },
+            Event::TypedMediaUncertain {
+                chat,
+                path,
+                kind,
+                caption,
+                quoting,
+                message,
+            } => {
+                let before = self.next_pending_id;
+                let owner =
+                    self.restore_attachments(&chat, [Pending::Document(path)], quoting, false);
+                let ids: Vec<_> = self
+                    .pending
+                    .iter()
+                    .chain(self.attachment_drafts.values().flat_map(|d| &d.pending))
+                    .filter(|item| item.id >= before)
+                    .map(|item| item.id)
+                    .collect();
+                for id in ids {
+                    self.attachment_kinds.insert(id, kind);
+                }
+                let recovery = caption.and_then(|text| self.restore_beeper_text(&owner, text));
+                self.toast_error(recovery.map_or(message.clone(), |r| format!("{message}\n{r}")));
+            }
             Event::BeeperFilesUncertain {
                 chat,
                 paths,
@@ -6348,8 +6408,11 @@ impl App {
                 }
             }
             Unsent::Voice(samples) => {
-                self.unsent_voice = Some((chat, samples));
-                self.focus_composer = open;
+                self.unsent_voice_source = self.chat(&chat).and_then(crate::merged::Member::of);
+                self.unsent_voice_quote = quoting;
+                self.unsent_voice = Some((chat.clone(), samples));
+                self.focus_composer = !self.events_hidden
+                    && self.open_chat.as_deref() == Some(self.linked_draft_owner(&chat).as_str());
             }
             Unsent::Files {
                 paths,
@@ -6487,7 +6550,7 @@ impl App {
 
     /// Use the same reachable draft key as open_chat, including late failures
     /// after the user has moved to another conversation.
-    fn linked_draft_owner(&self, chat: &str) -> ChatId {
+    pub(crate) fn linked_draft_owner(&self, chat: &str) -> ChatId {
         self.settings
             .beeper
             .people
@@ -7717,6 +7780,15 @@ impl App {
         }
         let view_once = self.pending_view_once;
         self.pending_view_once = false;
+        if !selected.is_empty()
+            && self
+                .pending
+                .iter()
+                .any(|item| self.attachment_kinds.contains_key(&item.id))
+        {
+            self.toast_error("GIF and sticker captions cannot carry selected mentions. Remove the mentions or send them separately; media kept.");
+            return;
+        }
         self.drafts.remove(&owner);
         self.draft_mentions.remove(&owner);
         self.store_draft(&owner, "");
@@ -7733,6 +7805,34 @@ impl App {
         // Files go in runs of one kind, in the order they were staged.
         let mut runs: Vec<(bool, Vec<PathBuf>)> = Vec::new();
         for staged in std::mem::take(&mut self.pending) {
+            if self.attachment_kinds.contains_key(&staged.id)
+                || matches!(&staged.item, Pending::Picture { .. })
+            {
+                for (documents, paths) in runs.drain(..) {
+                    self.backend.send(Command::SendFiles {
+                        chat: chat.clone(),
+                        paths,
+                        documents,
+                        view_once,
+                        caption: caption.take(),
+                        mentions: std::mem::take(&mut mentions),
+                        quoting: quoting.take(),
+                    });
+                }
+            }
+            if let Some(kind) = self.attachment_kinds.remove(&staged.id)
+                && let Pending::File(path) | Pending::Document(path) = &staged.item
+            {
+                self.backend.send(Command::SendTypedMedia {
+                    chat: chat.clone(),
+                    path: path.clone(),
+                    kind,
+                    caption: caption.take(),
+                    quoting: quoting.take(),
+                });
+                continue;
+            }
+
             let (documents, path) = match staged.item {
                 Pending::Picture {
                     width,
@@ -8209,33 +8309,33 @@ impl App {
             }
             return;
         }
-        if self.open_chat.as_deref().is_some_and(|open| {
-            self.settings.beeper.people.iter().any(|p| {
-                p.members
-                    .iter()
-                    .any(|m| m.chat == open && self.chat(open).is_some_and(|c| m.matches(c)))
-            })
-        }) && matches!(&action, Action::StartRecording | Action::SendRecording)
-        {
-            self.toast("Voice recording is not available in linked chats. Open a source chat to record; nothing was sent.");
-            return;
-        }
         if matches!(
             &action,
-            Action::Attach { .. } | Action::SendFiles(_) | Action::PasteImage { .. }
+            Action::Attach { .. }
+                | Action::SendFiles(_)
+                | Action::PasteImage { .. }
+                | Action::StartRecording
+                | Action::SendRecording
+                | Action::SendGif(_)
+                | Action::SendSticker(_)
+                | Action::MakeSticker { send: true }
         ) && let Err(error) = crate::ui::merged::attachment_destination(self, ctx)
         {
             self.toast_error(error.into_owned());
             return;
         }
+        let media_destination = crate::ui::merged::attachment_destination(self, ctx)
+            .ok()
+            .flatten();
         let reply_send = match &action {
             Action::SendText { chat, quoting, .. } | Action::SendLocation { chat, quoting, .. } => {
                 Some((chat.as_str(), quoting.as_ref()))
             }
             Action::SendPending { chat, .. } => Some((chat.as_str(), self.reply_to.as_ref())),
             Action::SendGif(_) | Action::SendSticker(_) | Action::MakeSticker { send: true } => {
-                self.open_chat
+                media_destination
                     .as_deref()
+                    .or(self.open_chat.as_deref())
                     .map(|chat| (chat, self.reply_to.as_ref()))
             }
             _ => None,
@@ -8968,6 +9068,7 @@ impl App {
                 }
             }
             Action::CancelReply => {
+                self.unsent_voice_quote = None;
                 for item in &self.pending {
                     self.attachment_retry_quotes.remove(&item.id);
                 }
@@ -9498,10 +9599,20 @@ impl App {
                 self.refocus_composer(ctx);
             }
             Action::SendRecording => {
-                self.send_recording();
+                let destination = crate::ui::merged::attachment_destination(self, ctx)
+                    .ok()
+                    .flatten();
+                self.send_recording_to(destination);
+                if self.recording.is_none() && self.unsent_voice.is_none() {
+                    crate::ui::merged::cancel_reply(self, ctx);
+                }
                 self.refocus_composer(ctx);
             }
-            Action::DiscardUnsentVoice => self.unsent_voice = None,
+            Action::DiscardUnsentVoice => {
+                self.unsent_voice = None;
+                self.unsent_voice_source = None;
+                self.unsent_voice_quote = None;
+            }
             Action::SetMuted(chat, until) => {
                 let beeper = self
                     .chat(&chat)
@@ -9742,16 +9853,32 @@ impl App {
             }
             Action::MakeSticker { send } => {
                 if let Some(draft) = self.sticker_draft.take() {
-                    let chat = if send { self.open_chat.clone() } else { None };
+                    let chat = if send {
+                        media_destination.clone().or_else(|| self.open_chat.clone())
+                    } else {
+                        None
+                    };
                     let quoting = chat.as_ref().and(self.reply_to.clone());
-                    self.backend.send(Command::MakeSticker {
-                        source: draft.source,
-                        crop: draft.crop,
-                        transparent: draft.transparent && draft.keep_transparent,
-                        emojis: crate::sticker_meta::clean_emojis(&draft.emojis),
-                        chat,
-                        quoting,
-                    });
+                    if media_destination.is_some() && send {
+                        // Keep the crop draft if preparation fails. A late
+                        // result must not erase a newer sticker draft.
+                        self.sticker_draft = Some(draft.clone());
+                        self.backend.send(Command::PrepareSticker {
+                            owner: self.open_chat.clone().unwrap(),
+                            source: draft.source,
+                            crop: draft.crop,
+                            transparent: draft.transparent && draft.keep_transparent,
+                        });
+                    } else {
+                        self.backend.send(Command::MakeSticker {
+                            source: draft.source,
+                            crop: draft.crop,
+                            transparent: draft.transparent && draft.keep_transparent,
+                            emojis: crate::sticker_meta::clean_emojis(&draft.emojis),
+                            chat,
+                            quoting,
+                        });
+                    }
                 }
                 self.dialog = None;
             }
@@ -9787,15 +9914,23 @@ impl App {
                 });
             }
             Action::SendSticker(path) => {
-                if let Some(chat) = self.open_chat.clone() {
-                    let quoting = self.reply_to.take();
-                    self.backend.send(Command::SendSticker {
-                        chat,
-                        path,
-                        quoting,
-                    });
+                if media_destination.is_none() {
+                    if let Some(chat) = self.open_chat.clone() {
+                        let quoting = self.reply_to.take();
+                        self.backend.send(Command::SendSticker {
+                            chat,
+                            path,
+                            quoting,
+                        });
+                        self.picker = None;
+                        self.follow_outgoing();
+                        self.refocus_composer(ctx);
+                    }
+                } else if self.open_chat.is_some() {
+                    let id = self.stage(Pending::Document(path));
+                    self.attachment_kinds
+                        .insert(id, crate::backend::MediaKind::Sticker);
                     self.picker = None;
-                    self.follow_outgoing();
                     self.refocus_composer(ctx);
                 }
             }
@@ -9809,12 +9944,17 @@ impl App {
                 });
             }
             Action::SendGif(gif) => {
-                if let Some(chat) = self.open_chat.clone() {
-                    self.toast("Sending GIF…");
-                    let quoting = self.reply_to.take();
-                    self.backend.send(Command::SendGif { chat, gif, quoting });
+                if media_destination.is_none() {
+                    if let Some(chat) = self.open_chat.clone() {
+                        let quoting = self.reply_to.take();
+                        self.backend.send(Command::SendGif { chat, gif, quoting });
+                        self.picker = None;
+                        self.follow_outgoing();
+                        self.refocus_composer(ctx);
+                    }
+                } else if let Some(owner) = self.open_chat.clone() {
+                    self.backend.send(Command::PrepareGif { owner, gif });
                     self.picker = None;
-                    self.follow_outgoing();
                     self.refocus_composer(ctx);
                 }
             }
@@ -9916,7 +10056,12 @@ impl App {
                 quoting,
                 replaces,
             } => {
-                if !self.pending.is_empty() {
+                if !self.pending.is_empty()
+                    || self.recording.is_some()
+                    || self.unsent_voice.as_ref().is_some_and(|(source, _)| {
+                        self.open_chat.as_deref() == Some(self.linked_draft_owner(source).as_str())
+                    })
+                {
                     self.toast_error(crate::i18n::gettext(self.locale, "Send Later cannot include attachments. Remove the staged files before scheduling text.").into_owned());
                     return;
                 }
@@ -10045,7 +10190,14 @@ impl App {
                 }
             }
             Action::ShowDialog(dialog) => {
-                if dialog == Dialog::SendLater && !self.pending.is_empty() {
+                if dialog == Dialog::SendLater
+                    && (!self.pending.is_empty()
+                        || self.recording.is_some()
+                        || self.unsent_voice.as_ref().is_some_and(|(source, _)| {
+                            self.open_chat.as_deref()
+                                == Some(self.linked_draft_owner(source).as_str())
+                        }))
+                {
                     self.toast_error(crate::i18n::gettext(self.locale, "Send Later cannot include attachments. Remove the staged files before scheduling text.").into_owned());
                     return;
                 }
@@ -12143,14 +12295,37 @@ impl App {
     /// it quotes whatever the reply banner shows now, so a reply the worker
     /// refused for its missing original is only sent unquoted after the
     /// user cancels the reply.
-    fn send_recording(&mut self) {
+    fn send_recording_to(&mut self, destination: Option<ChatId>) {
         let Some(recorder) = self.recording.take() else {
-            if let Some(chat) = self.open_chat.clone()
+            if let Some(owner) = self.open_chat.clone()
                 && self
                     .unsent_voice
                     .as_ref()
-                    .is_some_and(|(unsent, _)| *unsent == chat)
+                    .is_some_and(|(unsent, _)| self.linked_draft_owner(unsent) == owner)
             {
+                let linked = destination.is_some();
+                let chat = destination.unwrap_or_else(|| owner.clone());
+                if self
+                    .unsent_voice
+                    .as_ref()
+                    .is_some_and(|(original, _)| original != &chat)
+                {
+                    self.toast_error(crate::i18n::gettext(self.locale, "The returned voice message belongs to another source. Choose a destination explicitly before retrying.").into_owned());
+                    return;
+                }
+                if self
+                    .unsent_voice_source
+                    .as_ref()
+                    .is_some_and(|source| self.chat(&chat).is_none_or(|c| !source.matches(c)))
+                    || linked
+                        && self
+                            .unsent_voice_quote
+                            .as_ref()
+                            .is_some_and(|quote| self.reply_to.as_ref() != Some(quote))
+                {
+                    self.toast_error(crate::i18n::gettext(self.locale, "The returned recording source or reply changed. Choose a source or cancel the reply before retrying.").into_owned());
+                    return;
+                }
                 if self
                     .reply_to
                     .as_ref()
@@ -12168,6 +12343,8 @@ impl App {
                     return;
                 };
                 let quoting = self.reply_to.take();
+                self.unsent_voice_source = None;
+                self.unsent_voice_quote = None;
                 self.backend.send(Command::SendVoice {
                     chat,
                     samples,
@@ -12177,7 +12354,7 @@ impl App {
             }
             return;
         };
-        let Some(chat) = self.open_chat.clone() else {
+        let Some(chat) = destination.or_else(|| self.open_chat.clone()) else {
             return;
         };
         match recorder.finish() {
@@ -29319,6 +29496,146 @@ mod linked_attachment_tests {
         assert!(std::iter::from_fn(|| picked.try_recv().ok()).any(
             |c| matches!(c, Command::SendFiles { chat, documents: true, .. } if chat == "default")
         ));
+        assert!(commands.try_recv().is_err());
+    }
+    fn send_staged(app: &mut App, ctx: &egui::Context, destination: &str) {
+        app.apply(
+            Action::SendPending {
+                account: app.account().id.clone(),
+                chat: destination.into(),
+                caption: "Media caption".into(),
+                mentions: vec![],
+            },
+            ctx,
+        );
+    }
+
+    #[test]
+    fn linked_stickers_stage_then_send_to_default_with_native_type() {
+        let (_root, mut app, ctx, mut commands) = fixture();
+        app.apply(Action::SendSticker("duck.webp".into()), &ctx);
+        assert!(commands.try_recv().is_err(), "picking never sends");
+        assert_eq!(
+            app.attachment_kinds[&app.pending[0].id],
+            crate::backend::MediaKind::Sticker
+        );
+        send_staged(&mut app, &ctx, "default");
+        assert!(
+            std::iter::from_fn(|| commands.try_recv().ok()).any(|c| matches!(c, Command::SendTypedMedia { chat, kind: crate::backend::MediaKind::Sticker, caption: Some(caption), .. } if chat == "default" && caption == "Media caption"))
+        );
+        assert!(app.pending.is_empty());
+        assert!(app.attachment_kinds.is_empty());
+    }
+
+    #[test]
+    fn linked_prepared_gif_stays_with_owner_and_uses_send_time_choice() {
+        let (_root, mut app, ctx, mut commands) = fixture();
+        app.open_chat = Some("other".into());
+        app.apply_backend_event(
+            Event::PreparedMedia {
+                owner: "visible".into(),
+                kind: crate::backend::MediaKind::Gif,
+                result: Ok("dance.mp4".into()),
+            },
+            true,
+        );
+        assert!(app.pending.is_empty());
+        assert_eq!(app.attachment_drafts["visible"].pending.len(), 1);
+        app.open_chat("visible".into());
+        app.settings.beeper.people[0].primary =
+            Some(app.settings.beeper.people[0].members[0].clone());
+        send_staged(&mut app, &ctx, "visible");
+        assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(|c| matches!(c, Command::SendTypedMedia { chat, kind: crate::backend::MediaKind::Gif, .. } if chat == "visible")));
+    }
+
+    #[test]
+    fn linked_voice_uses_default_and_never_sends_on_a_missing_route() {
+        let (_root, mut app, ctx, mut commands) = fixture();
+        app.recording = Some(crate::audio::Recorder::simulated(app.waker.clone()));
+        std::thread::sleep(Duration::from_millis(700));
+        app.apply(Action::SendRecording, &ctx);
+        assert!(
+            matches!(commands.try_recv(), Ok(Command::SendVoice { chat, samples, .. }) if chat == "default" && !samples.is_empty())
+        );
+        app.recording = Some(crate::audio::Recorder::rehearsal());
+        app.settings.beeper.people[0].primary = None;
+        app.apply(Action::SendRecording, &ctx);
+        assert!(commands.try_recv().is_err());
+        assert!(app.recording.is_some(), "route refusal keeps the recording");
+        app.apply(Action::SendSticker("duck.webp".into()), &ctx);
+        assert!(app.pending.is_empty());
+    }
+
+    #[test]
+    fn linked_uncertain_media_keeps_type_caption_and_original_source() {
+        for kind in [
+            crate::backend::MediaKind::Gif,
+            crate::backend::MediaKind::Sticker,
+        ] {
+            let (_root, mut app, ctx, mut commands) = fixture();
+            app.apply_backend_event(
+                Event::TypedMediaUncertain {
+                    chat: "default".into(),
+                    path: "retained.media".into(),
+                    kind,
+                    caption: Some("Retained caption".into()),
+                    quoting: None,
+                    message: "Unknown outcome".into(),
+                },
+                true,
+            );
+            assert_eq!(app.composer, "Retained caption");
+            assert_eq!(app.attachment_kinds[&app.pending[0].id], kind);
+            app.settings.beeper.people[0].primary =
+                Some(app.settings.beeper.people[0].members[0].clone());
+            send_staged(&mut app, &ctx, "visible");
+            assert_eq!(app.pending.len(), 1);
+            assert!(
+                !std::iter::from_fn(|| commands.try_recv().ok())
+                    .any(|c| matches!(c, Command::SendTypedMedia { .. }))
+            );
+            app.settings.beeper.people[0].primary =
+                Some(app.settings.beeper.people[0].members[1].clone());
+            send_staged(&mut app, &ctx, "default");
+            assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(|c| matches!(c, Command::SendTypedMedia { chat, kind: k, .. } if chat == "default" && k == kind)));
+        }
+    }
+
+    #[test]
+    fn linked_returned_voice_keeps_source_and_samples_until_correct_retry() {
+        let (_root, mut app, ctx, mut commands) = fixture();
+        let samples = vec![0.1; 16000];
+        app.restore_unsent("default".into(), None, Unsent::Voice(samples.clone()));
+        app.settings.beeper.people[0].primary =
+            Some(app.settings.beeper.people[0].members[0].clone());
+        app.apply(Action::SendRecording, &ctx);
+        assert!(commands.try_recv().is_err());
+        assert!(app.unsent_voice.is_some());
+        app.settings.beeper.people[0].primary =
+            Some(app.settings.beeper.people[0].members[1].clone());
+        app.apply(Action::SendRecording, &ctx);
+        assert!(
+            matches!(commands.try_recv(), Ok(Command::SendVoice { chat, samples: s, .. }) if chat == "default" && s == samples)
+        );
+    }
+    #[test]
+    fn linked_sticker_creation_prepares_for_owner_without_sending() {
+        let (_root, mut app, ctx, mut commands) = fixture();
+        let draft = crate::model::StickerDraft {
+            source: "source.png".into(),
+            width: 4,
+            height: 3,
+            transparent: true,
+            crop: crate::model::StickerCrop::centered(4, 3),
+            keep_transparent: true,
+            emojis: "duck".into(),
+        };
+        app.sticker_draft = Some(draft.clone());
+        app.apply(Action::MakeSticker { send: true }, &ctx);
+        assert!(
+            matches!(commands.try_recv(), Ok(Command::PrepareSticker { owner, .. }) if owner == "visible")
+        );
+        assert_eq!(app.sticker_draft, Some(draft));
         assert!(commands.try_recv().is_err());
     }
 }

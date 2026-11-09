@@ -17,6 +17,7 @@ pub(crate) mod picture_edit;
 
 // Re-exported so the picker can detect pasted Signal pack links.
 pub mod beeper;
+mod linked_media;
 pub mod local_ai;
 mod local_files;
 pub(crate) mod sticker_import;
@@ -765,6 +766,26 @@ pub enum Command {
         to_phone: bool,
         registered: Result<bool, String>,
     },
+    /// Prepare a sticker locally before it joins the owning linked draft.
+    PrepareSticker {
+        owner: ChatId,
+        source: PathBuf,
+        crop: crate::model::StickerCrop,
+        transparent: bool,
+    },
+    /// Retrieve a public GIF without using the authenticated Beeper client.
+    PrepareGif {
+        owner: ChatId,
+        gif: Gif,
+    },
+    /// Send a staged native GIF or sticker with its exact source/reply.
+    SendTypedMedia {
+        chat: ChatId,
+        path: PathBuf,
+        kind: MediaKind,
+        caption: Option<String>,
+        quoting: Option<crate::model::ReplyTarget>,
+    },
     /// Downloads and sends a GIF as a short looping video.
     SendGif {
         chat: ChatId,
@@ -1243,6 +1264,19 @@ pub enum Event {
         chat: ChatId,
         through: i64,
     },
+    PreparedMedia {
+        owner: ChatId,
+        kind: MediaKind,
+        result: Result<PathBuf, String>,
+    },
+    TypedMediaUncertain {
+        chat: ChatId,
+        path: PathBuf,
+        kind: MediaKind,
+        caption: Option<String>,
+        quoting: Option<crate::model::ReplyTarget>,
+        message: String,
+    },
     /// GIF search results or failure.
     Gifs {
         query: String,
@@ -1583,6 +1617,12 @@ pub enum Refusal {
     QuoteUnavailable,
     /// View-once sends must be one photo, not a document or batch.
     UnsupportedViewOnce,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaKind {
+    Gif,
+    Sticker,
 }
 
 /// The content of a refused send.

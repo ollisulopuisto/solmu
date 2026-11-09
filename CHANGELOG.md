@@ -11,6 +11,8 @@ version in Cargo.toml is bumped.
 
 ## v0.24.8
 
+- Voice notes, GIFs and stickers in linked chats use the same default or chosen source. GIFs and stickers stage before Send, keep their native media types, and return to the owning draft after an uncertain upload. The source picker remains available while recording.
+
 - Keep returned linked attachments and captions in a reachable draft, preserve their original reply/source on retry, and refuse Send Later while media is staged.
 - Paste, drop, or pick pictures and files in linked chats. They send through the saved default source, or the source you choose from the network/account picker. Missing or unavailable defaults require a choice; attachments never fall back to the visible member chat.
 

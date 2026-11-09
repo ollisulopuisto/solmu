@@ -115,20 +115,6 @@ fn tabs(app: &mut App, ui: &mut egui::Ui, palette: &Palette, current: PickerTab)
             (PickerTab::Gifs, Icon::Gif, gif.as_ref()),
             (PickerTab::Stickers, Icon::Sticker, stickers.as_ref()),
         ];
-        let text_only = app.open_chat.as_deref().is_some_and(|id| {
-            app.chat(id).is_some_and(|chat| {
-                app.settings
-                    .beeper
-                    .people
-                    .iter()
-                    .any(|person| person.members.iter().any(|member| member.matches(chat)))
-            })
-        });
-        let entries = if text_only {
-            &entries[..1]
-        } else {
-            &entries[..]
-        };
         let spacing = ui.spacing().item_spacing.x;
         let total = entries
             .iter()
@@ -136,7 +122,7 @@ fn tabs(app: &mut App, ui: &mut egui::Ui, palette: &Palette, current: PickerTab)
             .sum::<f32>()
             + spacing * (entries.len() as f32 - 1.0);
         ui.add_space((ui.available_width() - total).max(0.0) / 2.0);
-        for &(tab, icon, label) in entries {
+        for (tab, icon, label) in entries {
             if theme::soft_button(ui, palette, Some(icon), label, tab == current).clicked()
                 && tab != current
             {

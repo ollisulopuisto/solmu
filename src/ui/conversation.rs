@@ -1545,7 +1545,7 @@ pub(crate) fn composer_with_capabilities(
             let unsent_voice = app
                 .unsent_voice
                 .as_ref()
-                .filter(|(unsent, _)| *unsent == chat.id)
+                .filter(|(unsent, _)| app.linked_draft_owner(unsent) == app.open_chat.as_deref().unwrap_or(&chat.id))
                 .map(|(_, samples)| samples.len());
             if let Some(samples) = unsent_voice
                 && app.editing.is_none()
@@ -1609,7 +1609,7 @@ pub(crate) fn composer_with_capabilities(
             }
             if app.recording.is_some() {
                 widgets::raised(ui, &palette, composer_pill(&palette), |ui| {
-                    recording_strip(app, ui)
+                    recording_strip(app, ui, send_extras.as_mut())
                 });
                 return;
             }
@@ -1746,7 +1746,7 @@ pub(crate) fn composer_with_capabilities(
                             palette.secondary
                         },
                         palette.text,
-                        if attachments && send_extras.is_none() { "Emoji, GIFs, and stickers" } else { "Emoji (text only)" },
+                        if attachments { "Emoji, GIFs, and stickers" } else { "Emoji (text only)" },
                     )).tab_stop(Stop::Emoji);
                     app.picker_anchor = Some(smile.rect);
                     if smile.clicked() {
@@ -1985,7 +1985,7 @@ pub(crate) fn composer_with_capabilities(
                 } else {
                     (palette.surface, palette.surface_hover, palette.dim)
                 };
-                last_line(ui, line, |ui| if !ready && app.editing.is_none() && attachments && send_extras.is_none() {
+                last_line(ui, line, |ui| if !ready && app.editing.is_none() && attachments {
                     // An empty composer changes the send button to record.
                     if theme::circle_button(
                         ui,
@@ -11035,7 +11035,11 @@ fn voice_transcript(
 }
 
 /// Voice-recording controls and live waveform.
-fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
+fn recording_strip(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    mut send_extras: Option<&mut ComposerExtras<'_>>,
+) {
     let palette = app.conversation_palette();
     let (elapsed, levels, listening) = match app.recording.as_ref() {
         Some(recorder) => (recorder.elapsed(), recorder.levels(), recorder.listening()),
@@ -11090,7 +11094,10 @@ fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
             );
             // Recent audio levels, newest on the right against send.
             let spacing = ui.spacing().item_spacing.x;
-            let wave_width = (ui.available_width() - button - spacing).max(0.0);
+            let extras_width = send_extras
+                .as_ref()
+                .map_or(0.0, |extras| extras.width + spacing);
+            let wave_width = (ui.available_width() - button - spacing - extras_width).max(0.0);
             let (rect, _) = ui.allocate_exact_size(vec2(wave_width, 28.0), Sense::hover());
             ui.ctx()
                 .data_mut(|data| data.insert_temp(recording_wave_id(), rect));
@@ -11105,6 +11112,9 @@ fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
                     1.0,
                     palette.accent,
                 );
+            }
+            if let Some(extras) = send_extras.as_mut() {
+                (extras.render)(app, ui);
             }
             if theme::circle_button(
                 ui,
@@ -13344,7 +13354,11 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
                             .paint_at(ui, inner);
                     }
                     crate::app::Pending::File(path) | crate::app::Pending::Document(path) => {
-                        if !document && crate::app::Pending::is_picture_file(path) {
+                        if (!document
+                            || app.attachment_kinds.get(&item.id)
+                                == Some(&crate::backend::MediaKind::Sticker))
+                            && crate::app::Pending::is_picture_file(path)
+                        {
                             widgets::file_image(ui, path)
                                 .fit_to_exact_size(Vec2::splat(tile - 8.0))
                                 .corner_radius(6.0)
@@ -13355,10 +13369,18 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
                                 Vec2::splat(24.0),
                             );
                             theme::paint_icon(ui, Icon::FileText, icon, 22.0, palette.secondary);
-                            let name = path
-                                .file_name()
-                                .map(|name| name.to_string_lossy().into_owned())
-                                .unwrap_or_default();
+                            let name = match app.attachment_kinds.get(&item.id) {
+                                Some(crate::backend::MediaKind::Gif) => Some("GIF".to_owned()),
+                                Some(crate::backend::MediaKind::Sticker) => {
+                                    Some("Sticker".to_owned())
+                                }
+                                None => None,
+                            }
+                            .unwrap_or_else(|| {
+                                path.file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_default()
+                            });
                             let line = widgets::line(
                                 ui,
                                 &name,

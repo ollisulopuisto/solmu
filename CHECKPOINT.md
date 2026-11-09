@@ -735,8 +735,8 @@ Keep destination-chat drafts untouched, and keep account/owner guards. Returned
 attachments cannot silently retry on a changed source; choosing a destination
 explicitly allows moving an unquoted returned draft. Quoted returns stay tied to
 their source until Cancel reply. Both kinds restore to the reachable person draft,
-including delayed Beeper upload failures after navigating away. Voice recording remains outside
-this slice; the linked picker stays emoji-only. No real attachments sent.
+including delayed Beeper upload failures after navigating away. Expanded below to include
+voice, GIFs and stickers under the owner's correction. No real attachments sent.
 
 Version 0.24.8, What's New/changelog updated. Native all-feature clippy passes;
 five focused native regressions pass in a reduced-test validation build, including refusal recovery and changed-source retry protection.
@@ -762,3 +762,27 @@ scheduling regressions fail. Restored fixed production code, all nine pass.
 
 Dependency advisory CI fails on unchanged libsqlite3-sys0.38.2, RUSTSEC-2026-0459.
 A separate dependency PR is assigned; do not fold it into attachment scope.
+
+
+PR257 media scope correction (2026-11-09): voice, GIFs and stickers are included.
+Linked voice sends resolve the exact default/chosen source; returned recordings
+keep their source identity, samples and reply until an explicit safe retry.
+The destination picker remains available on the recording bar. GIFs and stickers
+join the owning staged draft and use native API `gif`/`sticker` attachment hints,
+not document disguises. A bounded separate worker keeps typed upload failures
+with their original source, reply, media type and caption. Accepted IDs enter the
+existing pending-message reconciliation path. GIF search uses the user's GIPHY
+key and bounded HTTPS media retrieval without Beeper credentials or redirects.
+Linked sticker creation prepares cropped WebP locally before staging. Picker
+favorites include locally saved/cached WebP; remote sticker-pack import remains
+its existing separate workflow. No real message/media calls used for tests.
+
+Local validation: all-target/all-feature clippy with warnings denied passes.
+21 focused reduced-build regressions pass, including native HTTP fixture payloads,
+source routing, asynchronous ownership, retained media type/caption, voice route
+refusal, URL boundaries and sticker preparation. Actual native dark/light GIF/sticker staging, voice recording, voice source-picker
+and restored media tabs were inspected. The updated public evidence page was
+checked at 320/390/1280px, with all images loaded and its viewer opened/closed.
+A wider 475-test reduced-harness run hit the execution timeout before completion;
+no full-suite pass is claimed. Current-head CI follows the commit. No merge;
+DMG remains held.

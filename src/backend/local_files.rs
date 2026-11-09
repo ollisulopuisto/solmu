@@ -7,13 +7,22 @@ use super::{Command, Event};
 pub(super) fn handles(command: &Command) -> bool {
     matches!(
         command,
-        Command::PrepareClipboardImage(_)
+        Command::PrepareSticker { .. }
+            | Command::PrepareGif { .. }
+            | Command::SearchGifs { .. }
+            | Command::PrepareClipboardImage(_)
             | Command::SaveAttachmentAs { .. }
             | Command::SaveAttachments { .. }
     )
 }
 
 pub(super) fn run(command: Command) -> Option<Event> {
+    if matches!(
+        &command,
+        Command::PrepareSticker { .. } | Command::PrepareGif { .. } | Command::SearchGifs { .. }
+    ) {
+        return super::linked_media::run(command);
+    }
     run_with_dialogs(
         command,
         |name| {

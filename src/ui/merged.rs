@@ -578,6 +578,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             );
         }
     }
+    if state.reply.is_none()
+        && let Some(source) = app.unsent_voice_source.as_ref()
+        && let Some(quote) = app.unsent_voice_quote.as_ref()
+        && valid.contains(source)
+    {
+        state.reply = Some((source.clone(), quote.id.clone()));
+        state.destination = Some(source.clone());
+    }
     // Seed a recovered quote only on its exact original source. Each staged
     // item retains its quote independently; a newer reply cannot replace it.
     if state.reply.is_none()
@@ -1303,6 +1311,16 @@ fn destination_entries(
         {
             state.explicit = true;
             state.destination = Some(member.clone());
+            let returned_here = app.unsent_voice.as_ref().is_some_and(|(source, _)| {
+                app.open_chat.as_deref() == Some(app.linked_draft_owner(source).as_str())
+            });
+            if returned_here
+                && app.unsent_voice_quote.is_none()
+                && let Some((source, _)) = &mut app.unsent_voice
+            {
+                *source = member.chat.clone();
+                app.unsent_voice_source = Some(member.clone());
+            }
             // Choosing a route is explicit approval to move a returned draft.
             for staged in &app.pending {
                 if !app.attachment_retry_quotes.contains_key(&staged.id) {
@@ -1379,8 +1397,11 @@ fn destination_extras(
         .and_then(|member| app.chat(&member.chat))
         .map(|chat| format!("{}{}", network_label(chat), account_name(app, chat)))
         .unwrap_or_else(|| chosen.to_owned());
-    let schedulable =
-        app.editing.is_none() && (!app.composer.trim().is_empty() || !app.pending.is_empty());
+    let schedulable = app.editing.is_none()
+        && !app.composer.trim().is_empty()
+        && app.pending.is_empty()
+        && app.recording.is_none()
+        && app.unsent_voice.is_none();
     let clock = ui
         .add_enabled_ui(schedulable, |ui| {
             crate::theme::icon_button(
