@@ -11423,10 +11423,19 @@ mod tests {
             row
         };
         let (before, after) = (text_at(12 * 3600 - 30), text_at(12 * 3600 + 30));
-        assert!(!stacks_with_limit(&video(true), &after, 120), "note then text");
-        assert!(!stacks_with_limit(&before, &video(true), 120), "text then note");
+        assert!(
+            !stacks_with_limit(&video(true), &after, 120),
+            "note then text"
+        );
+        assert!(
+            !stacks_with_limit(&before, &video(true), 120),
+            "text then note"
+        );
         assert!(stacks_with_limit(&video(false), &after, 120), "video head");
-        assert!(stacks_with_limit(&before, &video(false), 120), "video follower");
+        assert!(
+            stacks_with_limit(&before, &video(false), 120),
+            "video follower"
+        );
     }
 
     #[test]
