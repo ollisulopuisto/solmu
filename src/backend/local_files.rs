@@ -124,14 +124,17 @@ fn safe_name(name: &str) -> String {
     // Strip both Unix (/) and Windows (\) path separators to prevent cross-platform directory traversal
     let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let trimmed = leaf.trim();
-    if trimmed.is_empty()
-        || trimmed == "."
-        || trimmed == ".."
-        || trimmed.chars().any(char::is_control)
+    let sanitized = trimmed.trim_end_matches([' ', '.']);
+    let stem = sanitized.split('.').next().unwrap_or(sanitized);
+    if sanitized.is_empty()
+        || sanitized == "."
+        || sanitized == ".."
+        || sanitized.chars().any(char::is_control)
+        || crate::safety::is_reserved_dos_name(stem)
     {
         "attachment".to_owned()
     } else {
-        trimmed.to_owned()
+        sanitized.to_owned()
     }
 }
 
@@ -375,5 +378,33 @@ mod tests {
             Some(Event::Error(_))
         ));
         assert!(!handles(&Command::Shutdown));
+    }
+
+    #[test]
+    fn safe_name_neutralizes_dos_devices_and_trailing_characters() {
+        for name in [
+            "CON",
+            "con.txt",
+            "PRN.pdf",
+            "aux.png",
+            "NUL.docx",
+            "com1.jpg",
+            "COM9.csv",
+            "lpt1.txt",
+            "LPT9.log",
+            r"folder\CON.txt",
+            "../PRN.png",
+            "...",
+            "   ",
+            "photo.png.",
+            "photo.png   ",
+        ] {
+            if name.starts_with("photo.png") {
+                assert_eq!(safe_name(name), "photo.png", "{name}");
+            } else {
+                assert_eq!(safe_name(name), "attachment", "{name}");
+            }
+        }
+        assert_eq!(safe_name("normal_document.pdf"), "normal_document.pdf");
     }
 }
