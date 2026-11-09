@@ -5321,6 +5321,8 @@ fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
             && !row.edited
             && !matches!(row.status, Delivery::Pending | Delivery::Failed)
             && album_id(row).is_none()
+            // Round video notes draw without a bubble: nothing to join.
+            && !matches!(row.content, Content::Video { note: true, .. })
             && matches!(
                 row.content,
                 Content::Text { .. } | Content::Image { .. } | Content::Video { .. }
@@ -11368,8 +11370,14 @@ mod tests {
         quoted.id = "quoted-later".into();
         quoted.timestamp += 30;
         quoted.quoted = head.quoted.clone();
-        assert!(stacks_with_limit(&last, &quoted, 120), "quote joins mid-run");
-        assert!(stacks_with_limit(&quoted, &last, 120), "text follows a quote");
+        assert!(
+            stacks_with_limit(&last, &quoted, 120),
+            "quote joins mid-run"
+        );
+        assert!(
+            stacks_with_limit(&quoted, &last, 120),
+            "text follows a quote"
+        );
         let mut late = last.clone();
         late.timestamp = head.timestamp + 3600;
         assert!(
