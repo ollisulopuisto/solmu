@@ -4558,6 +4558,8 @@ mod tests {
             "mp4"
         );
         assert_eq!(media_extension(None, None, None, &mp4), "mp4");
+        let iphone = *b"\0\0\0\x14ftypqt  \0\0\0\0";
+        assert_eq!(media_extension(None, None, None, &iphone), "mov");
         assert_eq!(
             media_extension(None, Some("noext"), None, b"\x1A\x45\xDF\xA3...."),
             "webm"
