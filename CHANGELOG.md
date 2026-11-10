@@ -9,6 +9,10 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.10
+
+- Quoted replies, pictures, GIFs and videos now join a run of plain messages anywhere in it, not only at its start, and Sent, Delivered and Read receipts of your own messages no longer split a run. The time-gap rules are unchanged.
+
 ## v0.24.9
 
 - Clicking a message's reply arrow, double-clicking a message, or using Reply to latest match in a linked chat now puts the cursor in the message field, the same as Cmd-R.
