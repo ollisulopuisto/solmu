@@ -151,6 +151,10 @@ struct BeeperUser {
     full_name: Option<String>,
     #[serde(default)]
     username: Option<String>,
+    #[serde(default)]
+    phone_number: Option<String>,
+    #[serde(default)]
+    is_self: Option<bool>,
 }
 
 type PreviewFallbacks =
@@ -2224,6 +2228,28 @@ fn map_chat(c: &BeeperChat, network_label: &dyn Fn(&BeeperChat) -> String) -> Ch
                     .map(|name| (u.id.clone(), name))
             })
             .collect();
+    }
+    if chat.kind == ChatKind::Direct
+        && let Some(participants) = &c.participants
+    {
+        // Only the other person's handles: ours would be in every chat.
+        let mut handles: Vec<String> = participants
+            .items
+            .iter()
+            .filter(|u| u.is_self != Some(true))
+            .flat_map(|u| {
+                [
+                    u.phone_number.clone(),
+                    u.username.clone(),
+                    Some(u.id.clone()),
+                ]
+            })
+            .flatten()
+            .filter_map(|h| crate::suggest::normalized_handle(&h))
+            .collect();
+        handles.sort();
+        handles.dedup();
+        chat.handles = handles;
     }
     chat.network = Some(network_label(c));
     chat.backend_account = Some(c.account_id.clone());
@@ -4441,6 +4467,19 @@ mod tests {
     //! They pin the demo's contract: multiple accounts on one network stay
     //! distinguishable, background startup/polling causes NO mutating HTTP
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
+
+    #[test]
+    fn direct_chats_keep_only_the_other_persons_handles() {
+        let wire: BeeperChat = serde_json::from_str(
+            r#"{"id":"c1","accountID":"a","network":"Signal","title":"Anna Example","type":"single",
+            "participants":{"items":[
+              {"id":"@me:beeper.local","fullName":"Me","phoneNumber":"+358401111111","isSelf":true},
+              {"id":"@anna:beeper.local","fullName":"Anna Example","phoneNumber":"+358 40 222 2222","username":"anna_x"}]}}"#,
+        )
+        .unwrap();
+        let chat = map_chat(&wire, &|c| c.network.clone());
+        assert_eq!(chat.handles, ["+358402222222", "anna_x"]);
+    }
 
     use super::*;
 

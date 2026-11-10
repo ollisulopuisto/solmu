@@ -5,6 +5,8 @@ published release. Mac-only release target; native Mac build/runtime not verifie
 
 - Manual same-person links open one combined timeline with exact account/source
   labels, explicit primary chat and source reply override. No remote merge call.
+- Link suggestions (exact name or handle, other networks) are local, suggest
+  only, and need a click; see docs/link-suggestions.md.
 - Loaded-history search and source filter do not change the sending destination.
 - Linked outgoing text only. Attachments and typing remain blocked in linked view;
   incoming media uses the ordinary renderer. ID-only edit/selection/translation

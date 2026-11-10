@@ -66,3 +66,4 @@ pub mod wallpaper;
 pub mod whatsnew;
 
 pub mod merged;
+pub mod suggest;

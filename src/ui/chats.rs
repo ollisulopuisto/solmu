@@ -381,6 +381,40 @@ fn scope_row(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             }
+            let suggestions = app.link_suggestions();
+            if !suggestions.is_empty() {
+                ui.separator();
+                let title = format!(
+                    "{} ({})",
+                    crate::i18n::gettext(locale, "Link suggestions"),
+                    suggestions.len()
+                );
+                egui::CollapsingHeader::new(title)
+                    .id_salt("link-suggestions")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        for suggestion in suggestions.iter().take(20) {
+                            let name = |member: &crate::merged::Member| {
+                                app.chat(&member.chat).map_or_else(String::new, |chat| {
+                                    format!(
+                                        "{} ({})",
+                                        chat.name,
+                                        chat.backend_network.clone().unwrap_or_default()
+                                    )
+                                })
+                            };
+                            ui.label(format!("{} = {}", name(&suggestion.a), name(&suggestion.b)));
+                            ui.horizontal(|ui| {
+                                if ui.small_button("Link").clicked() {
+                                    app.accept_link_suggestion(suggestion);
+                                }
+                                if ui.small_button("Not the same person").clicked() {
+                                    app.dismiss_link_suggestion(suggestion);
+                                }
+                            });
+                        }
+                    });
+            }
             ui.separator();
             if !super::narrow(ui.ctx())
                 && ui

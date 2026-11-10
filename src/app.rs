@@ -151,6 +151,8 @@ impl ScrollRoute {
 const COMPOSING_TIMEOUT: Duration = Duration::from_secs(4);
 /// How long an info toast stays, including its fade.
 pub const INFO_TOAST_LIFETIME: Duration = Duration::from_millis(3200);
+/// An Undo toast stays long enough to read and reach.
+pub const UNDO_TOAST_LIFETIME: Duration = Duration::from_secs(8);
 /// Error toasts kept on screen at once; older ones give way to newer ones.
 const MAX_ERROR_TOASTS: usize = 3;
 /// Typing-state timeout when no stop event arrives.
@@ -739,6 +741,9 @@ pub struct App {
     /// Chats opened from the Unread list, kept there until the filter changes.
     unread_kept: HashSet<ChatId>,
     pub toasts: Vec<Toast>,
+    /// Link suggestions for the current chats, people and dismissals, kept
+    /// until one of them changes.
+    link_suggestions_cache: Option<(u64, Vec<crate::suggest::Suggestion>)>,
     pub actions: Vec<Action>,
     /// Invalidates editor history when a composer closes and reopens before
     /// another frame, including a new session reusing the same account id.
@@ -1618,6 +1623,7 @@ impl App {
             label_filter: None,
             unread_kept: HashSet::new(),
             toasts: Vec::new(),
+            link_suggestions_cache: None,
             actions: Vec::new(),
             composer_undo_epoch: 0,
             prefilled: None,
@@ -6884,6 +6890,67 @@ impl App {
         self.mark_settings_dirty();
     }
 
+    fn refresh_linked_scopes(&mut self) {
+        let ids: Vec<_> = self.conversations.keys().cloned().collect();
+        for id in ids {
+            self.reconcile_linked_read_scope(&id);
+        }
+    }
+
+    /// Pairs of chats on different networks that look like one person. Local
+    /// only: names and handles already loaded, never a request.
+    pub fn link_suggestions(&mut self) -> Vec<crate::suggest::Suggestion> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for chat in &self.chats {
+            (&chat.id, &chat.name, &chat.handles, &chat.backend_network).hash(&mut hasher);
+            (chat.kind == crate::model::ChatKind::Direct, chat.locked).hash(&mut hasher);
+            (&chat.backend_origin, &chat.backend_account).hash(&mut hasher);
+        }
+        self.settings.beeper.people.hash(&mut hasher);
+        self.settings.beeper.dismissed_links.hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some((known, found)) = &self.link_suggestions_cache
+            && *known == key
+        {
+            return found.clone();
+        }
+        let found = crate::suggest::suggestions(
+            &self.chats,
+            &self.settings.beeper.people,
+            &self.settings.beeper.dismissed_links,
+        );
+        self.link_suggestions_cache = Some((key, found.clone()));
+        found
+    }
+
+    /// Links the suggested pair, with an Undo toast that restores the list.
+    pub fn accept_link_suggestion(&mut self, suggestion: &crate::suggest::Suggestion) {
+        let before = self.settings.beeper.people.clone();
+        let name = self
+            .chat(&suggestion.a.chat)
+            .map(|chat| chat.name.clone())
+            .unwrap_or_default();
+        self.settings.beeper.people =
+            crate::suggest::accepted(before.clone(), suggestion, name.trim());
+        self.refresh_linked_scopes();
+        self.mark_settings_dirty();
+        let message = crate::i18n::gettext(self.locale, "Linked as one person").into_owned();
+        self.toast(message);
+        if let Some(toast) = self.toasts.last_mut() {
+            toast.kind = ToastKind::Undo(before);
+        }
+    }
+
+    /// Remembers that this pair is not the same person.
+    pub fn dismiss_link_suggestion(&mut self, suggestion: &crate::suggest::Suggestion) {
+        let pair = suggestion.pair();
+        if !self.settings.beeper.dismissed_links.contains(&pair) {
+            self.settings.beeper.dismissed_links.push(pair);
+            self.mark_settings_dirty();
+        }
+    }
+
     pub(crate) fn person_history_error(&self, chat: &str) -> Option<String> {
         self.beeper_history_errors.get(chat).cloned().or_else(|| {
             self.conversations
@@ -7980,8 +8047,10 @@ impl App {
             typers.retain(|(_, since)| now.duration_since(*since) < TYPING_TIMEOUT);
         }
         self.typing.retain(|_, typers| !typers.is_empty());
-        self.toasts.retain(|toast| {
-            toast.kind == ToastKind::Error || toast.created.elapsed() < INFO_TOAST_LIFETIME
+        self.toasts.retain(|toast| match toast.kind {
+            ToastKind::Error => true,
+            ToastKind::Undo(_) => toast.created.elapsed() < UNDO_TOAST_LIFETIME,
+            ToastKind::Info => toast.created.elapsed() < INFO_TOAST_LIFETIME,
         });
         if self.settings.check_for_updates
             && !self.backend.is_offline()
@@ -9066,6 +9135,14 @@ impl App {
             }
             Action::CopyImage(path) => {
                 self.backend.send(Command::PrepareClipboardImage(path));
+            }
+            Action::UndoLinks(before) => {
+                self.settings.beeper.people = before;
+                self.toasts
+                    .retain(|toast| !matches!(toast.kind, ToastKind::Undo(_)));
+                self.refresh_linked_scopes();
+                self.mark_settings_dirty();
+                self.toast("Link undone");
             }
             Action::DismissToast(index) => {
                 if index < self.toasts.len() {
