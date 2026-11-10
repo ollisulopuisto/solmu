@@ -24,6 +24,16 @@ data, and send nothing anywhere. Choosing a category replaces the queue the
 way a label does, so it combines with network, account, favorites and search.
 Clear it with Any or Reset view. It is not remembered across restarts.
 
+## Colour in search
+
+While a search is active, a chat's name is tinted by tier, in the chat rows and
+in message search results: Quiet people amber, Long quiet periwinkle blue.
+People and Notifications keep the normal text colour, and the default list
+(no search) is untouched. Colours are fixed per theme brightness
+(`quiet_tint` in `src/ui/chats.rs`), at least 4.5:1 against the panel, window,
+surface and selected-row colours of the built-in dark theme, and the panel and
+window of the light theme. A test checks the panel contrast.
+
 ## Moving a chat
 
 A one-to-one chat's menu has **Move to…** with the four categories and

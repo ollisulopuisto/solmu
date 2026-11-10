@@ -2124,8 +2124,13 @@ fn hit_row(app: &mut App, ui: &mut egui::Ui, hit: &Message) {
             0.0
         };
         let name_width = (right - stamp_width - 8.0 - left).max(0.0);
-        let name = widgets::line(ui, &title, theme::medium(14.5), palette.text, name_width, 1);
-        name.paint(ui, pos2(left, name_top), palette.text);
+        let name_color = app
+            .chat(&hit.chat)
+            .cloned()
+            .and_then(|chat| quiet_tint(app.chat_category(&chat), palette.dark))
+            .unwrap_or(palette.text);
+        let name = widgets::line(ui, &title, theme::medium(14.5), name_color, name_width, 1);
+        name.paint(ui, pos2(left, name_top), name_color);
         // Show the sender for group messages.
         let line_y = rect.top()
             + if app.settings.beeper.compact_list {
@@ -2287,6 +2292,24 @@ fn person_row(
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// The tint a chat's name takes while the list is a search result, by quiet
+/// tier. People keep the normal text colour. Fixed colours, picked per theme
+/// brightness to keep text contrast above 4.5:1 on the panel.
+fn quiet_tint(
+    category: Option<crate::categories::AutoCategory>,
+    dark: bool,
+) -> Option<egui::Color32> {
+    use crate::categories::AutoCategory;
+    let (r, g, b) = match (category?, dark) {
+        (AutoCategory::Quiet, true) => (0xE6, 0xB4, 0x50),
+        (AutoCategory::Quiet, false) => (0x7A, 0x4E, 0x00),
+        (AutoCategory::LongQuiet, true) => (0xA9, 0xB4, 0xF0),
+        (AutoCategory::LongQuiet, false) => (0x4A, 0x55, 0xA8),
+        _ => return None,
+    };
+    Some(egui::Color32::from_rgb(r, g, b))
+}
+
 fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
     let palette = app.palette;
     let title = app.chat_title(chat);
@@ -2374,8 +2397,14 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
         } else {
             theme::medium(14.5)
         };
-        let name = widgets::line(ui, &title, name_font, palette.text, name_width, 1);
-        name.paint(ui, pos2(left, name_top), palette.text);
+        // While searching, the name carries its quiet tier's tint.
+        let name_color = if app.search.trim().is_empty() {
+            palette.text
+        } else {
+            quiet_tint(app.chat_category(chat), palette.dark).unwrap_or(palette.text)
+        };
+        let name = widgets::line(ui, &title, name_font, name_color, name_width, 1);
+        name.paint(ui, pos2(left, name_top), name_color);
 
         // Leave room for badges beside the latest-message preview.
         let mut badge_right = right;
@@ -3332,6 +3361,29 @@ fn advance_after_ticks(delivery: crate::model::Delivery) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quiet_tiers_have_distinct_readable_tints_and_people_stay_plain() {
+        use crate::categories::AutoCategory;
+        for palette in [Palette::dark(), Palette::light()] {
+            let quiet = quiet_tint(Some(AutoCategory::Quiet), palette.dark).unwrap();
+            let long = quiet_tint(Some(AutoCategory::LongQuiet), palette.dark).unwrap();
+            assert_ne!(quiet, long);
+            for tint in [quiet, long] {
+                assert!(
+                    theme::contrast(tint, palette.panel) >= 4.5,
+                    "dark={} {tint:?}",
+                    palette.dark
+                );
+            }
+            assert_eq!(quiet_tint(Some(AutoCategory::People), palette.dark), None);
+            assert_eq!(
+                quiet_tint(Some(AutoCategory::Notifications), palette.dark),
+                None
+            );
+            assert_eq!(quiet_tint(None, palette.dark), None);
+        }
+    }
 
     #[test]
     fn the_read_by_some_plus_gets_its_own_width_in_the_row() {

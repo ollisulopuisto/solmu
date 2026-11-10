@@ -11,7 +11,7 @@ version in Cargo.toml is bumped.
 
 ## v0.24.13
 
-- Automatic chat categories, first slice. Filters now has an Automatic category choice: People (one-to-one chats active in the last 7 days), Quiet people (idle 7 to 30 days), Long quiet (idle 30 days or more) and Notifications (channels and read-only chats). Groups stay in Groups. A chat's menu has Move to… to put a one-to-one chat in a category for good; the rules never re-sort it, and Sort automatically hands it back. The categories are opt-in filters: the default list, its order and its counts are unchanged, nothing is marked read, and nothing leaves this computer. Your labels remain the tags. See docs/chat-categories.md.
+- Automatic chat categories, first slice. Filters now has an Automatic category choice: People (one-to-one chats active in the last 7 days), Quiet people (idle 7 to 30 days), Long quiet (idle 30 days or more) and Notifications (channels and read-only chats). Groups stay in Groups. A chat's menu has Move to… to put a one-to-one chat in a category for good; the rules never re-sort it, and Sort automatically hands it back. The categories are opt-in filters: the default list, its order and its counts are unchanged, nothing is marked read, and nothing leaves this computer. While you search, the names of Quiet people chats show amber and Long quiet chats blue, in the chat rows and the message results. Your labels remain the tags. See docs/chat-categories.md.
 
 ## v0.24.12
 
