@@ -254,16 +254,27 @@ pub fn added_by(people: &[Person], suggestion: &Suggestion) -> Vec<Member> {
 }
 
 /// The people list with `added` taken back out, and nothing else changed. A
-/// person left with fewer than two chats is no longer a link and goes too.
+/// person that lost a chat and is left with fewer than two is no longer a link
+/// and goes too; people this undo did not touch are kept as they are.
 pub fn undone(mut people: Vec<Person>, added: &[Member]) -> Vec<Person> {
-    for person in &mut people {
+    let mut touched = vec![false; people.len()];
+    for (person, touched) in people.iter_mut().zip(&mut touched) {
+        let before = person.members.len();
         person.members.retain(|m| !added.contains(m));
+        *touched = person.members.len() != before;
         if person.primary.as_ref().is_some_and(|m| added.contains(m)) {
             person.primary = None;
         }
     }
-    people.retain(|p| p.members.len() >= 2);
+    let mut touched = touched.into_iter();
+    people.retain(|p| !touched.next().unwrap_or(false) || p.members.len() >= 2);
     people
+}
+
+/// Whether an Undo for `added` depends on `person`: it took chats into that
+/// person, so a later join onto the same person builds on it.
+pub fn depends_on(person: &Person, added: &[Member]) -> bool {
+    added.iter().any(|m| person.members.contains(m))
 }
 
 #[cfg(test)]
@@ -455,5 +466,43 @@ mod tests {
         let after = undone(people, &added);
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].members.len(), 2);
+    }
+
+    fn member(chat: &str) -> Member {
+        Member {
+            origin: "http://local".into(),
+            account: "acct".into(),
+            chat: chat.into(),
+        }
+    }
+
+    #[test]
+    fn undo_leaves_unrelated_one_chat_people_alone() {
+        let people = vec![
+            Person {
+                name: "Solo".into(),
+                members: vec![member("solo")],
+                primary: None,
+            },
+            Person {
+                name: "Pair".into(),
+                members: vec![member("a"), member("b")],
+                primary: None,
+            },
+        ];
+        let after = undone(people, &[member("a"), member("b")]);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].name, "Solo");
+    }
+
+    #[test]
+    fn a_join_depends_on_the_person_it_extends() {
+        let person = Person {
+            name: "P".into(),
+            members: vec![member("a"), member("b")],
+            primary: None,
+        };
+        assert!(depends_on(&person, &[member("a"), member("b")]));
+        assert!(!depends_on(&person, &[member("z")]));
     }
 }

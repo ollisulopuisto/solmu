@@ -6932,6 +6932,19 @@ impl App {
             .chat(&suggestion.a.chat)
             .map(|chat| chat.name.clone())
             .unwrap_or_default();
+        // Joining a person that earlier links built makes those links
+        // foundations of this one. Their Undo would take this join with it
+        // while this toast still offers it, so only the newest Undo stays.
+        let extended = before
+            .iter()
+            .find(|p| p.members.contains(&suggestion.a) || p.members.contains(&suggestion.b))
+            .cloned();
+        if let Some(person) = extended {
+            self.toasts.retain(|toast| match &toast.kind {
+                ToastKind::Undo(earlier) => !crate::suggest::depends_on(&person, earlier),
+                _ => true,
+            });
+        }
         self.settings.beeper.people = crate::suggest::accepted(before, suggestion, name.trim());
         self.refresh_linked_scopes();
         self.mark_settings_dirty();

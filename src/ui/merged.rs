@@ -2107,6 +2107,41 @@ mod tests {
     }
 
     #[test]
+    fn joining_a_linked_person_retires_the_earlier_undo() {
+        let mut chats = same_name_pair();
+        let mut signal = member_chat("ada-sg@signal", "signal");
+        signal.name = "Ada Lovelace".into();
+        signal.backend_network = Some("Signal".into());
+        chats.push(signal);
+        let (_directory, mut app, ctx) = linked_app(chats, Vec::new());
+        let first = app.link_suggestions()[0].clone();
+        app.accept_link_suggestion(&first);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert_eq!(app.settings.beeper.people[0].members.len(), 2);
+        let second = app.link_suggestions()[0].clone();
+        app.accept_link_suggestion(&second);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert_eq!(app.settings.beeper.people[0].members.len(), 3);
+        let undos: Vec<_> = app
+            .toasts
+            .iter()
+            .filter_map(|t| match &t.kind {
+                crate::model::ToastKind::Undo(added) => Some(added.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(undos.len(), 1, "only the newest Undo survives");
+        assert_eq!(undos[0].len(), 1, "it takes back just the third chat");
+        app.apply(crate::model::Action::UndoLinks(undos[0].clone()), &ctx);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert_eq!(
+            app.settings.beeper.people[0].members.len(),
+            2,
+            "the first link is still there"
+        );
+    }
+
+    #[test]
     fn a_dismissed_suggestion_is_saved_and_not_offered_again() {
         let (_directory, mut app, _ctx) = linked_app(same_name_pair(), Vec::new());
         let found = app.link_suggestions();

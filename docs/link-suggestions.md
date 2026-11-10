@@ -27,7 +27,10 @@ most 8 chats.
 - Nothing appears on chat rows.
 
 **Link** creates the person (or adds the chat to the person one of them
-already belongs to) and shows an Undo toast for 8 seconds. **Not the same
+already belongs to) and shows an Undo toast for 8 seconds. Undo takes back only
+the chats that link added. When a later link joins a person an earlier link
+built, the earlier Undo toast goes away, so no Undo can remove a join it did
+not make. **Not the same
 person** is remembered per pair in `beeper.dismissed_links` and never comes
 back.
 
