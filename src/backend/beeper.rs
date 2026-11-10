@@ -668,6 +668,13 @@ fn encode_pasted_image(width: u32, height: u32, rgba: &[u8]) -> Result<std::path
 /// Removes an app-created temporary file - a voice recording or a pasted
 /// image - once its message was accepted. Other attachments are the user's
 /// own files and are never deleted.
+/// Caption and reply quote ride on a batch's first file only. Once any file
+/// was accepted they are already sent, so the unsent suffix a failed upload
+/// returns must not repeat them; an untouched batch gets both back.
+fn first_unsent<T: Clone>(value: &Option<T>, index: usize) -> Option<T> {
+    if index == 0 { value.clone() } else { None }
+}
+
 fn discard_sent_recording(temporary: bool, path: &std::path::Path) {
     if temporary {
         let _ = std::fs::remove_file(path);
@@ -2646,8 +2653,8 @@ pub fn run(
                                 chat: chat.clone(),
                                 paths: paths[index..].to_vec(),
                                 documents,
-                                caption: if index == 0 { caption.clone() } else { None },
-                                quoting: quoting.clone(),
+                                caption: first_unsent(&caption, index),
+                                quoting: first_unsent(&quoting, index),
                                 message: format!(
                                     "{error}. Remaining files kept; check history before retrying."
                                 ),
@@ -5450,6 +5457,17 @@ mod tests {
             request.contains(r#""replyToMessageID":"msg-42""#),
             "{request}"
         );
+    }
+
+    #[test]
+    fn a_partial_upload_does_not_requote_the_unsent_suffix() {
+        let quote = Some(crate::model::ReplyTarget {
+            id: "source".into(),
+            chat: None,
+        });
+        assert_eq!(first_unsent(&quote, 0), quote);
+        assert_eq!(first_unsent(&quote, 1), None);
+        assert_eq!(first_unsent(&None::<crate::model::ReplyTarget>, 0), None);
     }
 
     #[test]
