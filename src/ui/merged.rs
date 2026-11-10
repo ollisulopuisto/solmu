@@ -1248,16 +1248,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     }
     ui.ctx().data_mut(|data| data.insert_temp(rows_key, cache));
     if let Some((member, id)) = selected_reply {
-        state.reply = Some((member.clone(), id.clone()));
-        // Each reply routes home by default: the source's own network and
-        // account. Picking another destination afterwards is the explicit
-        // cross-over, and the warning says the reply reference does not travel.
-        state.explicit = false;
-        state.destination = Some(member.clone());
-        app.reply_to = state
-            .destination
-            .as_ref()
-            .and_then(|destination| crate::merged::reply_route(&member, destination, &id));
+        apply_selected_reply(app, &mut state, member, id);
     }
     if refused_action {
         app.toast(
@@ -1268,6 +1259,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     app.actions.extend(actions);
     ui.ctx().data_mut(|d| d.insert_temp(key, state));
     true
+}
+
+/// Starts the reply a bubble's arrow, a double-click or "Reply to latest match"
+/// picked, and hands the composer focus like the Cmd-R path does.
+fn apply_selected_reply(app: &mut App, state: &mut State, member: Member, id: String) {
+    state.reply = Some((member.clone(), id.clone()));
+    // Each reply routes home by default: the source's own network and
+    // account. Picking another destination afterwards is the explicit
+    // cross-over, and the warning says the reply reference does not travel.
+    state.explicit = false;
+    state.destination = Some(member.clone());
+    app.reply_to = state
+        .destination
+        .as_ref()
+        .and_then(|destination| crate::merged::reply_route(&member, destination, &id));
+    app.focus_composer = true;
 }
 
 /// The saved default destination for new messages, kept per linked person
@@ -2390,6 +2397,23 @@ mod tests {
     }
 
     #[test]
+    fn clicking_a_reply_arrow_focuses_the_composer_like_command_r() {
+        let (wa, tg, person) = ada_pair();
+        let valid = person.members.clone();
+        let (_dir, mut app, _ctx) = linked_app(vec![wa, tg], vec![person]);
+        let mut state = State::default();
+        assert!(!app.focus_composer);
+        apply_selected_reply(&mut app, &mut state, valid[0].clone(), "same-id".into());
+        assert!(app.focus_composer);
+        assert_eq!(state.reply, Some((valid[0].clone(), "same-id".into())));
+        assert_eq!(state.destination, Some(valid[0].clone()));
+        assert_eq!(
+            app.reply_to,
+            crate::merged::reply_route(&valid[0], &valid[0], "same-id")
+        );
+    }
+
+    #[test]
     fn incoming_reply_stays_within_valid_exact_accounts_and_orders_ties() {
         let first = member_chat("ada-personal", "wa-personal");
         let second = member_chat("ada-work", "wa-work");
@@ -2462,6 +2486,46 @@ mod tests {
                 assert_eq!(state.destination, person.primary);
             }
         }
+    }
+
+    #[test]
+    fn the_filtered_reply_shortcut_focuses_the_composer_after_the_view_draws() {
+        let (wa, tg, mut person) = ada_pair();
+        person.primary = Member::of(&wa);
+        let (_dir, mut app, ctx) = linked_app(vec![wa.clone(), tg], vec![person.clone()]);
+        let mut message = sample_message(&wa.id, "meeting", 10);
+        message.content = crate::model::Content::text("meeting");
+        app.conversations.insert(
+            wa.id.clone(),
+            crate::app::Conversation {
+                messages: vec![message],
+                complete: true,
+                ..Default::default()
+            },
+        );
+        assert!(!app.focus_composer);
+        // The same selection path as the reply arrow and a double-click: the
+        // view picks a message, then draws.
+        reply_key(&mut app, &ctx, &wa, latest_reply_shortcut().modifiers);
+        assert!(app.reply_to.is_some(), "the shortcut starts a reply");
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                show(&mut app, ui, &wa);
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            Some(egui::Id::new("composer-text")),
+            "the reply starts with the composer focused"
+        );
     }
 
     #[test]
