@@ -9,26 +9,37 @@ use crate::model::{Chat, ChatKind};
 use serde::{Deserialize, Serialize};
 
 /// A direct chat with no activity for this long counts as quiet.
-pub const QUIET_AFTER_SECS: i64 = 60 * 24 * 60 * 60;
+pub const QUIET_AFTER_SECS: i64 = 7 * 24 * 60 * 60;
+
+/// A direct chat with no activity for this long counts as long quiet.
+pub const LONG_QUIET_AFTER_SECS: i64 = 30 * 24 * 60 * 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AutoCategory {
     /// One-to-one chats you are in touch with.
     People,
-    /// One-to-one chats with nothing new for a long time.
+    /// One-to-one chats with nothing new for 7 days or more, up to 30.
     Quiet,
+    /// One-to-one chats with nothing new for 30 days or more.
+    LongQuiet,
     /// Channels and read-only chats: senders that only write to you.
     Notifications,
 }
 
 impl AutoCategory {
-    pub const EVERY: [Self; 3] = [Self::People, Self::Quiet, Self::Notifications];
+    pub const EVERY: [Self; 4] = [
+        Self::People,
+        Self::Quiet,
+        Self::LongQuiet,
+        Self::Notifications,
+    ];
 
     pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
         use crate::i18n::gettext;
         match self {
             Self::People => gettext(locale, "People"),
             Self::Quiet => gettext(locale, "Quiet people"),
+            Self::LongQuiet => gettext(locale, "Long quiet"),
             Self::Notifications => gettext(locale, "Notifications"),
         }
     }
@@ -43,8 +54,14 @@ pub fn automatic(chat: &Chat, now: i64) -> Option<AutoCategory> {
     if chat.kind == ChatKind::Broadcast || chat.is_channel() || chat.read_only {
         return Some(AutoCategory::Notifications);
     }
-    if chat.last_activity > 0 && now.saturating_sub(chat.last_activity) >= QUIET_AFTER_SECS {
-        return Some(AutoCategory::Quiet);
+    if chat.last_activity > 0 {
+        let idle = now.saturating_sub(chat.last_activity);
+        if idle >= LONG_QUIET_AFTER_SECS {
+            return Some(AutoCategory::LongQuiet);
+        }
+        if idle >= QUIET_AFTER_SECS {
+            return Some(AutoCategory::Quiet);
+        }
     }
     Some(AutoCategory::People)
 }
@@ -77,12 +94,19 @@ mod tests {
     }
 
     #[test]
-    fn quiet_starts_exactly_at_the_threshold() {
+    fn quiet_tiers_start_exactly_at_seven_and_thirty_days() {
         let mut edge = chat("a@s.whatsapp.net");
-        edge.last_activity = NOW - QUIET_AFTER_SECS + 1;
-        assert_eq!(automatic(&edge, NOW), Some(AutoCategory::People));
-        edge.last_activity = NOW - QUIET_AFTER_SECS;
-        assert_eq!(automatic(&edge, NOW), Some(AutoCategory::Quiet));
+        for (idle, expected) in [
+            (QUIET_AFTER_SECS - 1, AutoCategory::People),
+            (QUIET_AFTER_SECS, AutoCategory::Quiet),
+            (LONG_QUIET_AFTER_SECS - 1, AutoCategory::Quiet),
+            (LONG_QUIET_AFTER_SECS, AutoCategory::LongQuiet),
+        ] {
+            edge.last_activity = NOW - idle;
+            assert_eq!(automatic(&edge, NOW), Some(expected), "idle {idle}s");
+        }
+        assert_eq!(QUIET_AFTER_SECS, 7 * 86_400);
+        assert_eq!(LONG_QUIET_AFTER_SECS, 30 * 86_400);
     }
 
     #[test]

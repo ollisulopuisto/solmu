@@ -8,9 +8,12 @@ slice adds the automatic categories and the per-chat override.
 
 Filters > Automatic category shows one of:
 
-- **People**: one-to-one chats that are not quiet and not notifications.
-- **Quiet people**: one-to-one chats whose last activity is 60 days old or
-  more (`QUIET_AFTER_SECS` in `src/categories.rs`).
+- **People**: one-to-one chats active in the last 7 days.
+- **Quiet people**: one-to-one chats idle 7 days or more, up to 30
+  (`QUIET_AFTER_SECS`).
+- **Long quiet**: one-to-one chats idle 30 days or more
+  (`LONG_QUIET_AFTER_SECS`). The maintainer suggested "7/30 days"; I read it
+  as two tiers. Both limits are constants and easy to change.
 - **Notifications**: channels, broadcasts and read-only chats.
 
 Groups have no category; they stay under the Groups chip. A chat with no
@@ -23,7 +26,7 @@ Clear it with Any or Reset view. It is not remembered across restarts.
 
 ## Moving a chat
 
-A one-to-one chat's menu has **Move to…** with the three categories and
+A one-to-one chat's menu has **Move to…** with the four categories and
 **Sort automatically**. A move is stored in settings (`beeper.category_overrides`,
 keyed like the Reply later marks), is this chat's alone, and the rules never
 override it. Groups cannot be moved.

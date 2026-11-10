@@ -74,14 +74,16 @@ fn category_app(ctx: &egui::Context) -> App {
     let mut recent = Chat::new("recent@s.whatsapp.net".into(), "Recent".into());
     recent.last_activity = now - 3600;
     let mut quiet = Chat::new("quiet@s.whatsapp.net".into(), "Quiet".into());
-    quiet.last_activity = now - 200 * 24 * 3600;
+    quiet.last_activity = now - 10 * 24 * 3600;
+    let mut long_quiet = Chat::new("long@s.whatsapp.net".into(), "Long".into());
+    long_quiet.last_activity = now - 200 * 24 * 3600;
     let mut channel = Chat::new("news@newsletter".into(), "News".into());
     channel.kind = ChatKind::Broadcast;
     channel.last_activity = now - 3600;
     let mut group = Chat::new("group@g.us".into(), "Group".into());
     group.kind = ChatKind::Group;
     group.last_activity = now - 3600;
-    app.chats = vec![recent, quiet, channel, group];
+    app.chats = vec![recent, quiet, long_quiet, channel, group];
     app
 }
 
@@ -101,10 +103,14 @@ fn automatic_category_filter_lists_only_that_category() {
     let ctx = egui::Context::default();
     let mut app = category_app(&ctx);
     // The All list leaves channels out, as the official apps do.
-    assert_eq!(visible_names(&app), vec!["Group", "Quiet", "Recent"]);
+    assert_eq!(
+        visible_names(&app),
+        vec!["Group", "Long", "Quiet", "Recent"]
+    );
     for (category, expected) in [
         (AutoCategory::People, vec!["Recent"]),
         (AutoCategory::Quiet, vec!["Quiet"]),
+        (AutoCategory::LongQuiet, vec!["Long"]),
         (AutoCategory::Notifications, vec!["News"]),
     ] {
         app.actions.push(Action::SelectAutoCategory(Some(category)));
@@ -113,7 +119,10 @@ fn automatic_category_filter_lists_only_that_category() {
     }
     app.actions.push(Action::SelectAutoCategory(None));
     frame(&mut app, &ctx);
-    assert_eq!(visible_names(&app), vec!["Group", "Quiet", "Recent"]);
+    assert_eq!(
+        visible_names(&app),
+        vec!["Group", "Long", "Quiet", "Recent"]
+    );
 }
 
 #[test]
