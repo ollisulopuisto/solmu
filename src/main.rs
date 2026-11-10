@@ -194,6 +194,11 @@ fn main() -> eframe::Result<()> {
     if let Err(error) = &result {
         startup_failure_dialog(error);
     }
+    if let Err(error) = &result {
+        log::error!("exit: the event loop ended with an error: {error}");
+    } else {
+        log::info!("exit: the event loop ended normally");
+    }
     result
 }
 
@@ -760,6 +765,7 @@ impl eframe::App for Shell {
 
     /// Saves essential state before the window closes.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        log::info!("exit: window closing, saving state");
         self.app.save_state();
     }
 }

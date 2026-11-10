@@ -9,7 +9,31 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
-- Partial SQLite dependency update under review: rusqlite 0.41.1 and libsqlite3-sys 0.39.1. This is blocked, not a security fix: the selected bundled SQLCipher source still embeds affected SQLite 3.53.4 until its upstream source pin is updated.
+## v0.24.12
+
+- Reply with attachments on Beeper: a reply quote now goes with a sent file, document or pasted picture instead of the send being refused. The quote belongs to the first file, as the guide already describes. Mentions and view-once stays refused with attachments.
+- Reject URLs and preview links with deeply nested percent-encoded control characters: decoding now fails closed at the layer bound instead of letting a 17+ layer encoded control through.
+- Upgrade rusqlite to 0.41.1 (libsqlite3-sys 0.39.1). This turns the RUSTSEC-2026-0459 advisory check green, but the bundled SQLCipher path still builds SQLite 3.53.4 via sqlcipher-src 419.0.6 and stays affected (fixed upstream in SQLite 3.54.0); the archive remains exposed until sqlcipher-src and libsqlite3-sys adopt a patched SQLite. Exploitation needs a locally crafted database and -wal pair.
+
+## v0.24.11
+
+- The command palette (Ctrl+P) shows the key next to each command, lists Jump to open chat (Ctrl+K), and stays open after you pick a filter so you can try several in a row. Commands that open a dialog (New chat, Shortcuts, What's New, Send Later queue, Schedule this message) now really open it; before, the palette closed it again.
+## v0.24.10
+
+- Quoted replies, pictures, GIFs and videos now join a run of plain messages anywhere in it, not only at its start, and Sent, Delivered and Read receipts of your own messages no longer split a run. The time-gap rules are unchanged.
+
+## v0.24.9
+
+- Clicking a message's reply arrow, double-clicking a message, or using Reply to latest match in a linked chat now puts the cursor in the message field, the same as Cmd-R.
+
+## v0.24.8
+
+- Reclaim discarded linked-media downloads and old GIF thumbnails, keep native media types with each draft, and allow Send Later when a failed voice note belongs to another conversation. GIF search coalesces edits instead of starting a request thread for every keystroke.
+
+- Voice notes, GIFs and stickers in linked chats use the same default or chosen source. GIFs and stickers stage before Send, keep their native media types, and return to the owning draft after an uncertain upload. The source picker remains available while recording.
+
+- Keep returned linked attachments and captions in a reachable draft, preserve their original reply/source on retry, and refuse Send Later while media is staged.
+- Paste, drop, or pick pictures and files in linked chats. They send through the saved default source, or the source you choose from the network/account picker. Missing or unavailable defaults require a choice; attachments never fall back to the visible member chat.
 
 - Follow-up text bubbles use each sender/source's recent cadence instead of a fixed calendar-minute boundary. The last ten minutes of completed gaps set a 1.5x average allowance, bounded to 2-5 minutes. A long pause starts a new burst; replies, metadata and other existing boundaries still stay separate.
 

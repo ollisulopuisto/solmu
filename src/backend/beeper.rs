@@ -512,8 +512,8 @@ fn refuse_unsupported_payload(command: Command) -> Result<Command, Box<Event>> {
     use super::{Refusal, Unsent};
     let (chat, quoting, unsent) = match command {
         // A pasted image takes the upload pipeline like a picked file.
-        // What that pipeline cannot carry - a quote, mentions or view-once -
-        // is refused here, exactly as picked files are.
+        // What that pipeline cannot carry - mentions or view-once - is
+        // refused here, exactly as picked files are. A quote rides along.
         Command::SendImage {
             chat,
             width,
@@ -524,7 +524,7 @@ fn refuse_unsupported_payload(command: Command) -> Result<Command, Box<Event>> {
             mentions,
             quoting,
             ..
-        } if view_once || !mentions.is_empty() || quoting.is_some() => (
+        } if view_once || !mentions.is_empty() => (
             chat,
             quoting,
             Unsent::Image {
@@ -565,6 +565,8 @@ enum Attachment {
     Auto,
     Document,
     Voice(u32),
+    Gif,
+    Sticker,
 }
 
 struct StopUploads(std::sync::Arc<std::sync::atomic::AtomicBool>);
@@ -591,7 +593,7 @@ fn encode_png(image: &image::DynamicImage) -> Result<Vec<u8>, String> {
 static TEMP_UPLOADS: std::sync::Mutex<Option<std::collections::HashSet<std::path::PathBuf>>> =
     std::sync::Mutex::new(None);
 
-fn register_temp_upload(path: &std::path::Path) {
+pub(crate) fn register_temp_upload(path: &std::path::Path) {
     TEMP_UPLOADS
         .lock()
         .unwrap()
@@ -599,7 +601,51 @@ fn register_temp_upload(path: &std::path::Path) {
         .insert(path.to_path_buf());
 }
 
-/// Claims a temporary file for deletion: true at most once per file.
+// A single deletion worker keeps filesystem stalls off the UI thread.
+enum TempCleanup {
+    Remove(std::path::PathBuf),
+    Flush(std::sync::mpsc::Sender<()>),
+}
+fn temp_cleanup() -> &'static std::sync::mpsc::Sender<TempCleanup> {
+    static WORKER: std::sync::OnceLock<std::sync::mpsc::Sender<TempCleanup>> =
+        std::sync::OnceLock::new();
+    WORKER.get_or_init(|| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("solmu-media-cleanup".into())
+            .spawn(move || {
+                for job in receiver {
+                    match job {
+                        TempCleanup::Remove(path) => {
+                            let _ = std::fs::remove_file(path);
+                        }
+                        TempCleanup::Flush(done) => {
+                            let _ = done.send(());
+                        }
+                    }
+                }
+            })
+            .expect("media cleanup worker");
+        sender
+    })
+}
+
+/// Claims a temporary file at most once; never deletes user originals.
+/// Only the worker touches the filesystem.
+pub(crate) fn discard_temp_upload(path: &std::path::Path) {
+    if take_temp_upload(path) {
+        let _ = temp_cleanup().send(TempCleanup::Remove(path.to_path_buf()));
+    }
+}
+
+/// Used at process shutdown, after producers stop, and by deterministic tests.
+pub(crate) fn flush_temp_cleanup() {
+    let (done, finished) = std::sync::mpsc::channel();
+    if temp_cleanup().send(TempCleanup::Flush(done)).is_ok() {
+        let _ = finished.recv();
+    }
+}
+
 fn take_temp_upload(path: &std::path::Path) -> bool {
     TEMP_UPLOADS
         .lock()
@@ -622,6 +668,13 @@ fn encode_pasted_image(width: u32, height: u32, rgba: &[u8]) -> Result<std::path
 /// Removes an app-created temporary file - a voice recording or a pasted
 /// image - once its message was accepted. Other attachments are the user's
 /// own files and are never deleted.
+/// Caption and reply quote ride on a batch's first file only. Once any file
+/// was accepted they are already sent, so the unsent suffix a failed upload
+/// returns must not repeat them; an untouched batch gets both back.
+fn first_unsent<T: Clone>(value: &Option<T>, index: usize) -> Option<T> {
+    if index == 0 { value.clone() } else { None }
+}
+
 fn discard_sent_recording(temporary: bool, path: &std::path::Path) {
     if temporary {
         let _ = std::fs::remove_file(path);
@@ -1469,6 +1522,8 @@ impl Api {
         match kind {
             Attachment::Auto => {}
             Attachment::Document => attachment["type"] = "file".into(),
+            Attachment::Gif => attachment["type"] = "gif".into(),
+            Attachment::Sticker => attachment["type"] = "sticker".into(),
             Attachment::Voice(seconds) => {
                 attachment["type"] = "voice-note".into();
                 attachment["duration"] = seconds.into();
@@ -2394,6 +2449,26 @@ fn history_cursor(
     Ok(next.or(previous).map(str::to_owned))
 }
 
+/// Received cache entries must not be relabeled as saved favorites.
+fn local_sticker_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .take(512)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("webp"))
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files.dedup();
+    files
+}
+
 pub fn run(
     mut cfg: BeeperConfig,
     dirs: AccountDirs,
@@ -2495,19 +2570,25 @@ pub fn run(
         bool,
         Option<String>,
         Option<(u32, Option<crate::model::ReplyTarget>, Vec<f32>)>,
+        // A picked-file or pasted-image batch's reply quote. Sent on the
+        // first file only; a voice note carries its own inside its tuple.
+        Option<crate::model::ReplyTarget>,
         // App-created temporary file (voice recording, pasted image):
         // deleted once its message is accepted, never the user's own files.
         bool,
     );
     let (upload_tx, upload_rx) = std::sync::mpsc::sync_channel::<UploadBatch>(2);
     let (accepted_tx, accepted_rx) = std::sync::mpsc::channel::<(ChatId, String)>();
+    let typed_accepted_tx = accepted_tx.clone();
     let upload_api = api.clone();
     let upload_events = events.clone();
     let upload_waker = waker.clone();
     std::thread::Builder::new()
         .name("beeper-upload".into())
         .spawn(move || {
-            while let Ok((chat, paths, documents, caption, voice, temporary)) = upload_rx.recv() {
+            while let Ok((chat, paths, documents, caption, voice, quoting, temporary)) =
+                upload_rx.recv()
+            {
                 for (index, path) in paths.iter().enumerate() {
                     if upload_stopped(Some(&upload_cancel)) {
                         return;
@@ -2517,10 +2598,15 @@ pub fn run(
                         (None, true) => Attachment::Document,
                         (None, false) => Attachment::Auto,
                     };
-                    let reply = voice
-                        .as_ref()
-                        .and_then(|(_, quoting, _)| quoting.as_ref())
-                        .map(|quoting| quoting.id.as_str());
+                    let reply = if index == 0 {
+                        voice
+                            .as_ref()
+                            .and_then(|(_, quoting, _)| quoting.as_ref())
+                            .or(quoting.as_ref())
+                            .map(|quoting| quoting.id.as_str())
+                    } else {
+                        None
+                    };
                     match upload_api.send_attachment(
                         &chat,
                         path,
@@ -2567,7 +2653,8 @@ pub fn run(
                                 chat: chat.clone(),
                                 paths: paths[index..].to_vec(),
                                 documents,
-                                caption: if index == 0 { caption.clone() } else { None },
+                                caption: first_unsent(&caption, index),
+                                quoting: first_unsent(&quoting, index),
                                 message: format!(
                                     "{error}. Remaining files kept; check history before retrying."
                                 ),
@@ -2580,6 +2667,78 @@ pub fn run(
             }
         })
         .expect("Beeper upload worker");
+
+    // Typed media uses a bounded upload worker too. No public GIF request uses
+    // the authenticated Beeper client, and accepted media retains its type.
+    let (typed_tx, typed_rx) = std::sync::mpsc::sync_channel::<(
+        ChatId,
+        std::path::PathBuf,
+        super::MediaKind,
+        Option<String>,
+        Option<crate::model::ReplyTarget>,
+    )>(2);
+    let typed_api = api.clone();
+    let typed_events = events.clone();
+    let typed_waker = waker.clone();
+    let typed_cancel = _stop_uploads.0.clone();
+    std::thread::Builder::new()
+        .name("beeper-typed-upload".into())
+        .spawn(move || {
+            while let Ok((chat, path, kind, caption, quoting)) = typed_rx.recv() {
+                if upload_stopped(Some(&typed_cancel)) {
+                    return;
+                }
+                let attachment = match kind {
+                    super::MediaKind::Gif => Attachment::Gif,
+                    super::MediaKind::Sticker => Attachment::Sticker,
+                };
+                let result = if quoting
+                    .as_ref()
+                    .is_some_and(|q| q.source_chat(&chat) != chat)
+                {
+                    Err("The reply belongs to another source; media kept".into())
+                } else {
+                    typed_api.send_attachment(
+                        &chat,
+                        &path,
+                        attachment,
+                        caption.as_deref(),
+                        quoting.as_ref().map(|q| q.id.as_str()),
+                        Some(&typed_cancel),
+                    )
+                };
+                match result {
+                    Ok(accepted) => {
+                        discard_sent_recording(take_temp_upload(&path), &path);
+                        let target = if accepted.chat.is_empty() {
+                            chat
+                        } else {
+                            accepted.chat
+                        };
+                        if typed_accepted_tx
+                            .send((target, accepted.pending_id))
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        if let Err(error) = typed_events.send(Event::TypedMediaUncertain {
+                            chat,
+                            path,
+                            kind,
+                            caption,
+                            quoting,
+                            message: format!("{error}. Media kept; check history before retrying."),
+                        }) {
+                            error.0.discard_owned_media();
+                        }
+                    }
+                }
+                typed_waker.wake();
+            }
+        })
+        .expect("Beeper typed upload worker");
 
     let mut accounts = loop {
         match api.accounts() {
@@ -2597,9 +2756,10 @@ pub fn run(
                     Ok(Command::EditText { chat, id, text, .. }) => emit(Event::BeeperEditUncertain {
                         chat, id, text, message: "Beeper is not connected yet. Edit retained; nothing was changed.".into(),
                     }),
-                    Ok(Command::SendFiles { chat, paths, documents, caption, .. }) => emit(Event::BeeperFilesUncertain {
-                        chat, paths, documents, caption, message: "Beeper is not connected yet. Files retained; nothing was sent or queued for automatic retry.".into(),
+                    Ok(Command::SendFiles { chat, paths, documents, caption, quoting, .. }) => emit(Event::BeeperFilesUncertain {
+                        chat, paths, documents, caption, quoting, message: "Beeper is not connected yet. Files retained; nothing was sent or queued for automatic retry.".into(),
                     }),
+                    Ok(Command::SendTypedMedia { chat, path, kind, caption, quoting }) => emit(Event::TypedMediaUncertain { chat, path, kind, caption, quoting, message: "Beeper is not connected. Media kept; nothing sent.".into() }),
                     Ok(Command::SendVoice { chat, samples, quoting }) => emit(Event::SendRefused {
                         chat, quoting, unsent: crate::backend::Unsent::Voice(samples), reason: crate::backend::Refusal::Offline,
                     }),
@@ -2694,6 +2854,9 @@ pub fn run(
     let mut last_receipt_refresh = Instant::now();
     let mut pending_sends: Vec<(ChatId, String, Instant)> = Vec::new();
     let mut pending_storage: Option<(u64, bool)> = None;
+    // Set by Command::Resumed: after a wake every poll timer is due at once,
+    // so a link the server dropped during sleep is noticed on the next tick.
+    let mut refresh_after_wake = false;
 
     loop {
         loop {
@@ -3506,14 +3669,31 @@ pub fn run(
                     mentions,
                     quoting,
                 } => {
-                    if view_once || !mentions.is_empty() || quoting.is_some() {
-                        emit(Event::BeeperFilesUncertain { chat, paths, documents, caption, message: "Beeper attachment replies, mentions and view-once are not supported; files kept".into() });
+                    if quoting
+                        .as_ref()
+                        .is_some_and(|q| q.source_chat(&chat) != chat)
+                    {
+                        emit(Event::SendRefused {
+                            chat,
+                            quoting,
+                            unsent: crate::backend::Unsent::Files {
+                                paths,
+                                documents,
+                                view_once,
+                                caption,
+                            },
+                            reason: crate::backend::Refusal::QuoteUnavailable,
+                        });
+                        continue;
+                    }
+                    if view_once || !mentions.is_empty() {
+                        emit(Event::BeeperFilesUncertain { chat, paths, documents, caption, quoting, message: "Beeper mentions and view-once are not supported with attachments; files kept".into() });
                         continue;
                     }
                     if let Err(error) =
-                        upload_tx.try_send((chat, paths, documents, caption, None, false))
+                        upload_tx.try_send((chat, paths, documents, caption, None, quoting, false))
                     {
-                        let (chat, paths, documents, caption, ..) = match error {
+                        let (chat, paths, documents, caption, _, quoting, _) = match error {
                             std::sync::mpsc::TrySendError::Full(batch)
                             | std::sync::mpsc::TrySendError::Disconnected(batch) => batch,
                         };
@@ -3522,6 +3702,7 @@ pub fn run(
                             paths,
                             documents,
                             caption,
+                            quoting,
                             message: "Upload queue is busy; files kept without sending".into(),
                         });
                     }
@@ -3536,10 +3717,28 @@ pub fn run(
                     quoting,
                     ..
                 } => {
+                    if quoting
+                        .as_ref()
+                        .is_some_and(|q| q.source_chat(&chat) != chat)
+                    {
+                        emit(Event::SendRefused {
+                            chat,
+                            quoting,
+                            unsent: crate::backend::Unsent::Image {
+                                width,
+                                height,
+                                rgba,
+                                view_once,
+                                caption,
+                            },
+                            reason: crate::backend::Refusal::QuoteUnavailable,
+                        });
+                        continue;
+                    }
                     // A pasted image encodes to a temporary JPEG and takes the
                     // same upload pipeline as a picked file. The unsupported
-                    // gate has already returned quotes, mentions and
-                    // view-once, so this arm only sees a plain image.
+                    // gate has already returned mentions and view-once; a
+                    // quote rides along to the first (and only) file.
                     let encoded = encode_pasted_image(width, height, &rgba);
                     match encoded {
                         Ok(path) => {
@@ -3549,6 +3748,7 @@ pub fn run(
                                 false,
                                 caption.clone(),
                                 None,
+                                quoting.clone(),
                                 true,
                             )) {
                                 let batch = match error {
@@ -3560,6 +3760,7 @@ pub fn run(
                                     paths: batch.1,
                                     documents: false,
                                     caption: batch.3,
+                                    quoting: batch.5,
                                     message: "Upload queue is busy; image kept without sending"
                                         .into(),
                                 });
@@ -3577,6 +3778,37 @@ pub fn run(
                             },
                             reason: crate::backend::Refusal::UnsupportedBackend,
                         }),
+                    }
+                }
+                Command::RecentStickers => {
+                    emit(Event::Stickers {
+                        favorites: local_sticker_files(&dirs.saved_sticker_dir()),
+                        packs: Vec::new(),
+                        recent: Vec::new(),
+                        received: local_sticker_files(&dirs.sticker_cache_dir()),
+                        emojis: Default::default(),
+                    });
+                }
+                Command::SendTypedMedia {
+                    chat,
+                    path,
+                    kind,
+                    caption,
+                    quoting,
+                } => {
+                    if let Err(error) = typed_tx.try_send((chat, path, kind, caption, quoting)) {
+                        let (chat, path, kind, caption, quoting) = match error {
+                            std::sync::mpsc::TrySendError::Full(item)
+                            | std::sync::mpsc::TrySendError::Disconnected(item) => item,
+                        };
+                        emit(Event::TypedMediaUncertain {
+                            chat,
+                            path,
+                            kind,
+                            caption,
+                            quoting,
+                            message: "Upload queue is busy. Media kept; nothing sent.".into(),
+                        });
                     }
                 }
                 Command::SendVoice {
@@ -3611,7 +3843,7 @@ pub fn run(
                     match file {
                         Ok(path) => {
                             let voice = Some((seconds, quoting.clone(), samples.clone()));
-                            let batch = (chat.clone(), vec![path], false, None, voice, true);
+                            let batch = (chat.clone(), vec![path], false, None, voice, None, true);
                             if upload_tx.try_send(batch).is_err() {
                                 emit(Event::SendRefused {
                                     chat,
@@ -3674,8 +3906,21 @@ pub fn run(
                 | Command::RefreshPoll { .. } => {
                     emit(Event::Info("This action is not supported by the Beeper client. Nothing was sent or changed.".into()));
                 }
+                Command::Resumed => {
+                    log::info!("woke from sleep: refreshing chats and messages now");
+                    refresh_after_wake = true;
+                }
                 _ => {}
             }
+        }
+
+        if refresh_after_wake {
+            refresh_after_wake = false;
+            force_polls_due(
+                &mut last_chat_refresh,
+                &mut last_msg_poll,
+                &mut last_receipt_refresh,
+            );
         }
 
         if let Some((token, clear)) = pending_storage
@@ -4177,6 +4422,19 @@ fn poll_newer(
     false
 }
 
+/// `Command::Resumed`: after a wake every poll is due at once. A link open
+/// across sleep can look established while nothing arrives, so the next tick
+/// re-reads everything instead of waiting the timers out.
+fn force_polls_due(
+    last_chat_refresh: &mut Instant,
+    last_msg_poll: &mut Instant,
+    last_receipt_refresh: &mut Instant,
+) {
+    *last_chat_refresh = Instant::now() - CHAT_REFRESH;
+    *last_msg_poll = Instant::now() - MSG_POLL;
+    *last_receipt_refresh = Instant::now() - RECEIPT_REFRESH;
+}
+
 #[cfg(test)]
 mod tests {
     //! Integration tests against a stub Beeper Client API (std TCP, no deps).
@@ -4185,6 +4443,17 @@ mod tests {
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
 
     use super::*;
+
+    #[test]
+    fn a_wake_makes_every_poll_due_at_once() {
+        let mut chat = Instant::now();
+        let mut messages = Instant::now();
+        let mut receipts = Instant::now();
+        force_polls_due(&mut chat, &mut messages, &mut receipts);
+        assert!(chat.elapsed() >= CHAT_REFRESH);
+        assert!(messages.elapsed() >= MSG_POLL);
+        assert!(receipts.elapsed() >= RECEIPT_REFRESH);
+    }
     use crate::paths::AppDirs;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -4689,6 +4958,31 @@ mod tests {
     }
 
     #[test]
+    fn quoted_image_send_passes_the_unsupported_gate() {
+        let command = Command::SendImage {
+            chat: "work".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![1, 2, 3, 255],
+            view_once: false,
+            caption: None,
+            mentions: vec![],
+            quoting: Some(crate::model::ReplyTarget {
+                id: "source".into(),
+                chat: None,
+            }),
+        };
+        let command = refuse_unsupported_payload(command).expect("quoted image passes");
+        assert!(matches!(
+            command,
+            Command::SendImage {
+                quoting: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn unsupported_image_send_retains_pixels_caption_and_reply() {
         let reply = crate::model::ReplyTarget {
             id: "source".into(),
@@ -5044,6 +5338,13 @@ mod tests {
     }
 
     fn capture_voice_send(reply: Option<&str>) -> (Result<SendAccepted, String>, String) {
+        capture_typed_send(reply, Attachment::Voice(7))
+    }
+
+    fn capture_typed_send(
+        reply: Option<&str>,
+        kind: Attachment,
+    ) -> (Result<SendAccepted, String>, String) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
         let worker = std::thread::spawn(move || {
@@ -5094,9 +5395,22 @@ mod tests {
         .unwrap();
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(file.path(), b"ogg").unwrap();
-        let result =
-            api.send_attachment("chat", file.path(), Attachment::Voice(7), None, reply, None);
+        let result = api.send_attachment("chat", file.path(), kind, None, reply, None);
         (result, worker.join().unwrap())
+    }
+
+    #[test]
+    fn linked_typed_media_uses_native_type_and_retains_reply() {
+        for (kind, expected) in [(Attachment::Gif, "gif"), (Attachment::Sticker, "sticker")] {
+            let (result, request) = capture_typed_send(Some("source-message"), kind);
+            assert_eq!(result.unwrap().chat, "chat");
+            assert!(request.starts_with("POST /v1/chats/chat/messages "));
+            let value: serde_json::Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(value["attachment"]["type"], expected);
+            assert_eq!(value["replyToMessageID"], "source-message");
+            assert!(value.get("text").is_none());
+        }
     }
 
     #[test]
@@ -5189,6 +5503,28 @@ mod tests {
             request.contains(r#""replyToMessageID":"msg-42""#),
             "{request}"
         );
+    }
+
+    #[test]
+    fn a_partial_upload_does_not_requote_the_unsent_suffix() {
+        let quote = Some(crate::model::ReplyTarget {
+            id: "source".into(),
+            chat: None,
+        });
+        assert_eq!(first_unsent(&quote, 0), quote);
+        assert_eq!(first_unsent(&quote, 1), None);
+        assert_eq!(first_unsent(&None::<crate::model::ReplyTarget>, 0), None);
+    }
+
+    #[test]
+    fn a_quoted_attachment_carries_the_file_and_the_reply_together() {
+        let (result, request) = capture_typed_send(Some("msg-42"), Attachment::Document);
+        assert!(result.is_ok());
+        let value: serde_json::Value =
+            serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(value["attachment"]["type"], "file");
+        assert_eq!(value["attachment"]["uploadID"], "up1");
+        assert_eq!(value["replyToMessageID"], "msg-42");
     }
 
     #[test]

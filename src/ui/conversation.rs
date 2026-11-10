@@ -1545,7 +1545,7 @@ pub(crate) fn composer_with_capabilities(
             let unsent_voice = app
                 .unsent_voice
                 .as_ref()
-                .filter(|(unsent, _)| *unsent == chat.id)
+                .filter(|(unsent, _)| app.linked_draft_owner(unsent) == app.open_chat.as_deref().unwrap_or(&chat.id))
                 .map(|(_, samples)| samples.len());
             if let Some(samples) = unsent_voice
                 && app.editing.is_none()
@@ -1609,7 +1609,7 @@ pub(crate) fn composer_with_capabilities(
             }
             if app.recording.is_some() {
                 widgets::raised(ui, &palette, composer_pill(&palette), |ui| {
-                    recording_strip(app, ui)
+                    recording_strip(app, ui, send_extras.as_mut())
                 });
                 return;
             }
@@ -5312,15 +5312,29 @@ pub(crate) fn cadence_limits(messages: &[&Message]) -> Vec<i64> {
         .collect()
 }
 
-/// Plain adjacent text can stack within the sender's current cadence.
-/// Controls, metadata, quotes and failure states remain hard boundaries.
+/// Adjacent rows stack within the sender's current cadence: plain text,
+/// quoted replies, pictures and videos all join a run, in any order. Controls,
+/// metadata, album members and failure states remain hard boundaries.
 fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
-    let plain = |row: &Message| {
-        matches!(row.content, Content::Text { .. })
-            && row.quoted.is_none()
-            && !row.forwarded
+    let joins = |row: &Message| {
+        !row.forwarded
             && !row.edited
             && !matches!(row.status, Delivery::Pending | Delivery::Failed)
+            && album_id(row).is_none()
+            // Round video notes draw without a bubble: nothing to join.
+            && !matches!(row.content, Content::Video { note: true, .. })
+            && matches!(
+                row.content,
+                Content::Text { .. } | Content::Image { .. } | Content::Video { .. }
+            )
+    };
+    // Receipts of one run collapse onto its last row, so Sent, Delivered and
+    // Read rows still stack; anything else must match exactly.
+    let receipt = |status: Delivery| {
+        matches!(
+            status,
+            Delivery::Sent | Delivery::Delivered | Delivery::ReadBySome | Delivery::Read
+        )
     };
     let gap = next.timestamp.saturating_sub(previous.timestamp);
     previous.chat == next.chat
@@ -5329,9 +5343,10 @@ fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
         && crate::util::day_key(previous.timestamp) == crate::util::day_key(next.timestamp)
         && (0..=limit).contains(&gap)
         && previous.reactions.is_empty()
-        && previous.status == next.status
-        && plain(previous)
-        && plain(next)
+        && (previous.status == next.status
+            || (previous.from_me && receipt(previous.status) && receipt(next.status)))
+        && joins(previous)
+        && joins(next)
 }
 
 #[cfg(test)]
@@ -11035,7 +11050,11 @@ fn voice_transcript(
 }
 
 /// Voice-recording controls and live waveform.
-fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
+fn recording_strip(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    mut send_extras: Option<&mut ComposerExtras<'_>>,
+) {
     let palette = app.conversation_palette();
     let (elapsed, levels, listening) = match app.recording.as_ref() {
         Some(recorder) => (recorder.elapsed(), recorder.levels(), recorder.listening()),
@@ -11090,7 +11109,10 @@ fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
             );
             // Recent audio levels, newest on the right against send.
             let spacing = ui.spacing().item_spacing.x;
-            let wave_width = (ui.available_width() - button - spacing).max(0.0);
+            let extras_width = send_extras
+                .as_ref()
+                .map_or(0.0, |extras| extras.width + spacing);
+            let wave_width = (ui.available_width() - button - spacing - extras_width).max(0.0);
             let (rect, _) = ui.allocate_exact_size(vec2(wave_width, 28.0), Sense::hover());
             ui.ctx()
                 .data_mut(|data| data.insert_temp(recording_wave_id(), rect));
@@ -11105,6 +11127,9 @@ fn recording_strip(app: &mut App, ui: &mut egui::Ui) {
                     1.0,
                     palette.accent,
                 );
+            }
+            if let Some(extras) = send_extras.as_mut() {
+                (extras.render)(app, ui);
             }
             if theme::circle_button(
                 ui,
@@ -11308,6 +11333,109 @@ mod tests {
                 0.0
             );
         });
+    }
+
+    #[test]
+    fn quoted_replies_join_a_run_anywhere_and_receipts_do_not_split_it() {
+        let mut head = message(Content::text("mitä"));
+        head.from_me = true;
+        head.sender = "me".into();
+        head.timestamp = 22 * 3600 + 15 * 60;
+        head.status = Delivery::Read;
+        head.quoted = Some(crate::model::Quoted {
+            chat: None,
+            id: "quoted".into(),
+            sender: "tea".into(),
+            sender_name: None,
+            summary: "GIF".into(),
+            labelled: None,
+            mentions: vec![],
+        });
+        let mut middle = head.clone();
+        middle.id = "middle".into();
+        middle.quoted = None;
+        middle.timestamp += 30;
+        middle.status = Delivery::Delivered;
+        let mut last = middle.clone();
+        last.id = "last".into();
+        last.timestamp += 30;
+        last.status = Delivery::Sent;
+        assert!(stacks_with_limit(&head, &middle, 120), "quoted head");
+        assert!(
+            stacks_with_limit(&middle, &last, 120),
+            "Delivered then Sent"
+        );
+        // A quote can also join a run mid-way.
+        let mut quoted = last.clone();
+        quoted.id = "quoted-later".into();
+        quoted.timestamp += 30;
+        quoted.quoted = head.quoted.clone();
+        assert!(
+            stacks_with_limit(&last, &quoted, 120),
+            "quote joins mid-run"
+        );
+        let mut after_quote = last.clone();
+        after_quote.id = "after-quote".into();
+        after_quote.timestamp = quoted.timestamp + 30;
+        assert!(
+            stacks_with_limit(&quoted, &after_quote, 120),
+            "text follows a quote"
+        );
+        assert!(
+            !stacks_with_limit(&quoted, &last, 120),
+            "reverse chronology still breaks the run"
+        );
+        let mut late = last.clone();
+        late.timestamp = head.timestamp + 3600;
+        assert!(
+            !stacks_with_limit(&middle, &late, 120),
+            "the cadence limit stays"
+        );
+        last.status = Delivery::Pending;
+        assert!(!stacks_with_limit(&middle, &last, 120));
+    }
+
+    #[test]
+    fn round_video_notes_never_stack_but_ordinary_videos_do() {
+        let video = |note: bool| {
+            let mut row = message(Content::Video {
+                caption: None,
+                media: crate::model::Media {
+                    mime: "video/mp4".into(),
+                    size: 1,
+                    width: None,
+                    height: None,
+                    album: None,
+                    path: None,
+                    state: Default::default(),
+                },
+                seconds: None,
+                gif: false,
+                note,
+            });
+            row.timestamp = 12 * 3600;
+            row.id = format!("video-{note}");
+            row
+        };
+        let text_at = |timestamp: i64| {
+            let mut row = message(Content::text("text"));
+            row.timestamp = timestamp;
+            row
+        };
+        let (before, after) = (text_at(12 * 3600 - 30), text_at(12 * 3600 + 30));
+        assert!(
+            !stacks_with_limit(&video(true), &after, 120),
+            "note then text"
+        );
+        assert!(
+            !stacks_with_limit(&before, &video(true), 120),
+            "text then note"
+        );
+        assert!(stacks_with_limit(&video(false), &after, 120), "video head");
+        assert!(
+            stacks_with_limit(&before, &video(false), 120),
+            "video follower"
+        );
     }
 
     #[test]
@@ -13344,7 +13472,11 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
                             .paint_at(ui, inner);
                     }
                     crate::app::Pending::File(path) | crate::app::Pending::Document(path) => {
-                        if !document && crate::app::Pending::is_picture_file(path) {
+                        if (!document
+                            || app.attachment_kinds.get(&item.id)
+                                == Some(&crate::backend::MediaKind::Sticker))
+                            && crate::app::Pending::is_picture_file(path)
+                        {
                             widgets::file_image(ui, path)
                                 .fit_to_exact_size(Vec2::splat(tile - 8.0))
                                 .corner_radius(6.0)
@@ -13355,10 +13487,20 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
                                 Vec2::splat(24.0),
                             );
                             theme::paint_icon(ui, Icon::FileText, icon, 22.0, palette.secondary);
-                            let name = path
-                                .file_name()
-                                .map(|name| name.to_string_lossy().into_owned())
-                                .unwrap_or_default();
+                            let name = match app.attachment_kinds.get(&item.id) {
+                                Some(crate::backend::MediaKind::Gif) => {
+                                    Some(crate::i18n::gettext(app.locale, "GIF").into_owned())
+                                }
+                                Some(crate::backend::MediaKind::Sticker) => {
+                                    Some(crate::i18n::gettext(app.locale, "Sticker").into_owned())
+                                }
+                                None => None,
+                            }
+                            .unwrap_or_else(|| {
+                                path.file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_default()
+                            });
                             let line = widgets::line(
                                 ui,
                                 &name,
