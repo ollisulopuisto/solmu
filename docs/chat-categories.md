@@ -24,15 +24,16 @@ data, and send nothing anywhere. Choosing a category replaces the queue the
 way a label does, so it combines with network, account, favorites and search.
 Clear it with Any or Reset view. It is not remembered across restarts.
 
-## Colour in search
+## Fading in search
 
-While a search is active, a chat's name is tinted by tier, in the chat rows and
-in message search results: Quiet people amber, Long quiet periwinkle blue.
-People and Notifications keep the normal text colour, and the default list
-(no search) is untouched. Colours are fixed per theme brightness
-(`quiet_tint` in `src/ui/chats.rs`), at least 4.5:1 against the panel, window,
-surface and selected-row colours of the built-in dark theme, and the panel and
-window of the light theme. A test checks the panel contrast.
+While a search is active, a chat's name fades by quiet tier, in the chat rows
+and in message search results: Quiet people at 25% toward the background,
+Long quiet at 45%. The hue stays the theme's text colour. People and
+Notifications keep the normal colour, the selected row stays plain, and the
+default list (no search) is untouched. The fade never drops below 4.5:1
+against the panel or a hovered row (`quiet_tint` in `src/ui/chats.rs`), so on
+light themes the two steps sit closer together. Tests check the ordering and
+the floor on both built-in themes and on a custom palette.
 
 ## Moving a chat
 
