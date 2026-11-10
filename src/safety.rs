@@ -38,11 +38,13 @@ fn has_encoded_control(value: &str) -> bool {
             i += 1;
         }
         if !changed {
-            break;
+            return false;
         }
         current = next;
     }
-    false
+    // Decoding was still progressing at the layer bound: a deeper-nested
+    // control could survive, so reject rather than pass it through.
+    true
 }
 
 /// Preview metadata may supply a bare host, but never a desktop URI scheme.
@@ -390,6 +392,23 @@ mod tests {
         ] {
             assert_eq!(preview_url(bad), None, "{bad}");
             assert_eq!(external_url(bad), None, "{bad}");
+        }
+
+        // Decode-cap boundary: nested(l) applies l extra percent-encoding layers
+        // around %00. The loop checks 16 layers, so l=15 is still caught inside
+        // the budget and l=16/17 must be rejected by failing closed at the bound
+        // rather than passing a deeper-nested control through.
+        fn nested(layers: u32) -> String {
+            let mut s = "%00".to_string();
+            for _ in 0..layers {
+                s = s.replace('%', "%25");
+            }
+            s
+        }
+        for layers in [15u32, 16, 17, 40] {
+            let bad = format!("https://example.com/{}", nested(layers));
+            assert_eq!(preview_url(&bad), None, "{bad}");
+            assert_eq!(external_url(&bad), None, "{bad}");
         }
         assert_eq!(
             external_url("https://example.com/hello%20world"),
