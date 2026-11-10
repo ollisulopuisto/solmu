@@ -276,7 +276,10 @@ items with the same protocol album identity, sender and local calendar date
 are grouped. **Download all** downloads every item that is not on this
 computer yet, whatever its size, as clicking each one would, and shows
 individual failures; **Save all…** copies downloaded files to a folder
-without replacing existing files. Open an item to view it individually, and
+without replacing existing files. Saved names are made safe: folders, trailing
+spaces and dots are dropped, and a name that Windows reserves for a device
+(such as CON or NUL) becomes `attachment` with its extension kept, so
+`CON.pdf` is saved as `attachment.pdf`. Open an item to view it individually, and
 right-click it to reply to, react to, forward or delete that item alone. A
 download that fails marks only its own item; click it to retry.
 
