@@ -314,6 +314,28 @@ fn scope_row(app: &mut App, ui: &mut egui::Ui) {
                 &mut app.beeper_unreplied,
                 crate::i18n::gettext(locale, "Unreplied only"),
             );
+            ui.separator();
+            ui.label(crate::i18n::gettext(locale, "Automatic category"));
+            if ui
+                .radio(
+                    app.auto_category_filter.is_none(),
+                    crate::i18n::gettext(locale, "Any"),
+                )
+                .clicked()
+            {
+                app.actions.push(Action::SelectAutoCategory(None));
+            }
+            for category in crate::categories::AutoCategory::EVERY {
+                if ui
+                    .radio(
+                        app.auto_category_filter == Some(category),
+                        category.label(locale),
+                    )
+                    .clicked()
+                {
+                    app.actions.push(Action::SelectAutoCategory(Some(category)));
+                }
+            }
             if changed {
                 app.actions.push(Action::SetChatFilter(app.chat_filter));
             }
@@ -422,6 +444,9 @@ fn scope_row(app: &mut App, ui: &mut egui::Ui) {
         }
         if let Some(label) = app.label_filter.as_ref().and_then(|id| app.label(id)) {
             parts.push(label.name.clone());
+        }
+        if let Some(category) = app.auto_category_filter {
+            parts.push(category.label(locale).into_owned());
         }
         ui.add(
             egui::Label::new(egui::RichText::new(parts.join(" · ")).color(palette.secondary))
@@ -2944,6 +2969,32 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
         if widgets::menu_item(ui, palette, Some(Icon::ListChecks), read_label.as_ref()) {
             app.actions.push(Action::ToggleReadLater(chat.id.clone()));
         }
+    }
+    // Move a one-to-one chat out of its automatic category for good. The
+    // move is local, and the rules never re-sort a chat placed this way.
+    if !chat.is_group() {
+        let current = app.chat_category(chat);
+        ui.menu_button(crate::i18n::gettext(locale, "Move to…"), |ui| {
+            for category in crate::categories::AutoCategory::EVERY {
+                if ui
+                    .selectable_label(current == Some(category), category.label(locale))
+                    .clicked()
+                {
+                    app.actions
+                        .push(Action::SetChatCategory(chat.id.clone(), Some(category)));
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui
+                .button(crate::i18n::gettext(locale, "Sort automatically"))
+                .clicked()
+            {
+                app.actions
+                    .push(Action::SetChatCategory(chat.id.clone(), None));
+                ui.close();
+            }
+        });
     }
     // Channels cannot be favorites, as on the phone. A Beeper chat's mark
     // lives here only: no phone knows its network's chats to sync it to.

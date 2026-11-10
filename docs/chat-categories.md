@@ -1,0 +1,45 @@
+# Automatic chat categories
+
+Chosen design: option 4 of the grouping sketches, hybrid of automatic
+categories and tags. The labels Solmu already has are the tags. This first
+slice adds the automatic categories and the per-chat override.
+
+## What it does
+
+Filters > Automatic category shows one of:
+
+- **People**: one-to-one chats that are not quiet and not notifications.
+- **Quiet people**: one-to-one chats whose last activity is 60 days old or
+  more (`QUIET_AFTER_SECS` in `src/categories.rs`).
+- **Notifications**: channels, broadcasts and read-only chats.
+
+Groups have no category; they stay under the Groups chip. A chat with no
+recorded activity is never called quiet.
+
+The rules are deterministic, run on this computer from the chat list's own
+data, and send nothing anywhere. Choosing a category replaces the queue the
+way a label does, so it combines with network, account, favorites and search.
+Clear it with Any or Reset view. It is not remembered across restarts.
+
+## Moving a chat
+
+A one-to-one chat's menu has **Move to…** with the three categories and
+**Sort automatically**. A move is stored in settings (`beeper.category_overrides`,
+keyed like the Reply later marks), is this chat's alone, and the rules never
+override it. Groups cannot be moved.
+
+## Not in this slice
+
+- Quiet and Notifications use only the chat list's fields: last activity, kind,
+  read-only. Detecting one-way senders such as bots and business numbers needs
+  message history (who writes, who answers) and is not done yet.
+- The categories are not segments of the All / Unread / Reply later / Read
+  later toggle and have no counts. They are an opt-in filter first, so the
+  default list does not change.
+- No sound or badge defaults for Notifications; nothing is muted.
+- Categories attach to the chat, not the linked person, like the later marks.
+- No palette commands or shortcuts yet.
+
+## Roll back
+
+Revert the change. Saved overrides in settings are ignored by older versions.
