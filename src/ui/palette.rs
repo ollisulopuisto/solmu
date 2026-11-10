@@ -4,7 +4,7 @@
 
 use egui::{Key, Modifiers, Sense, vec2};
 
-use super::{theme, widgets};
+use super::{keys, theme, widgets};
 use crate::app::App;
 use crate::model::{Action, ChatFilter, ChatId, Dialog, Page};
 
@@ -24,6 +24,7 @@ pub enum PaletteRow {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaletteCommand {
     SearchChats,
+    JumpToChat,
     NewChat,
     Unreplied,
     ReplyLater,
@@ -35,8 +36,9 @@ pub enum PaletteCommand {
 }
 
 impl PaletteCommand {
-    const EVERY: [Self; 9] = [
+    const EVERY: [Self; 10] = [
         Self::SearchChats,
+        Self::JumpToChat,
         Self::NewChat,
         Self::Unreplied,
         Self::ReplyLater,
@@ -51,6 +53,7 @@ impl PaletteCommand {
         use crate::i18n::gettext;
         match self {
             Self::SearchChats => gettext(locale, "Search chats"),
+            Self::JumpToChat => gettext(locale, "Jump to open chat"),
             Self::NewChat => gettext(locale, "New chat"),
             Self::Unreplied => gettext(locale, "Show unreplied chats"),
             Self::ReplyLater => gettext(locale, "Show reply-later queue"),
@@ -61,13 +64,55 @@ impl PaletteCommand {
             Self::SendLater => gettext(locale, "Schedule this message"),
         }
     }
+
+    /// Commands whose action is `ShowDialog`, which replaces the palette.
+    fn opens_dialog(self) -> bool {
+        matches!(
+            self,
+            Self::JumpToChat
+                | Self::NewChat
+                | Self::Shortcuts
+                | Self::WhatsNew
+                | Self::ScheduledQueue
+                | Self::SendLater
+        )
+    }
+
+    /// The registry id of the key that does the same thing, so the row can
+    /// show it. Commands with no key of their own show none.
+    fn shortcut_id(self) -> Option<&'static str> {
+        match self {
+            Self::SearchChats => Some("search-chats"),
+            Self::JumpToChat => Some("jump-to-chat"),
+            Self::NewChat => Some("new-chat"),
+            Self::Settings => Some("settings"),
+            Self::Shortcuts => Some("shortcuts"),
+            _ => None,
+        }
+    }
 }
 
 /// A rendered row: what it says and what it does.
 pub struct PaletteEntry {
     pub title: String,
     pub detail: String,
+    /// The key that does the same thing, in the platform's own notation.
+    pub keys: Option<String>,
     pub row: PaletteRow,
+}
+
+impl PaletteRow {
+    /// Whether picking this row queues `CloseDialog`. Filters keep the palette
+    /// open so several can be tried in a row. A command that opens another
+    /// dialog replaces the palette by itself: a `CloseDialog` queued after it
+    /// would run second and close that dialog again.
+    fn queues_close(&self) -> bool {
+        match self {
+            Self::Chat(_) => true,
+            Self::Filter(_) => false,
+            Self::Command(command) => !command.opens_dialog(),
+        }
+    }
 }
 
 /// Computes the palette rows for a query. Pure over app state, so the
@@ -88,6 +133,7 @@ pub fn entries(app: &App, query: &str) -> Vec<PaletteEntry> {
         out.push(PaletteEntry {
             title,
             detail,
+            keys: None,
             row: PaletteRow::Chat(chat.id.clone()),
         });
         if out.len() >= 8 {
@@ -102,6 +148,7 @@ pub fn entries(app: &App, query: &str) -> Vec<PaletteEntry> {
         out.push(PaletteEntry {
             detail: crate::i18n::gettext(app.locale, "Filter").into_owned(),
             title,
+            keys: None,
             row: PaletteRow::Filter(filter),
         });
     }
@@ -121,6 +168,10 @@ pub fn entries(app: &App, query: &str) -> Vec<PaletteEntry> {
         out.push(PaletteEntry {
             detail: crate::i18n::gettext(app.locale, "Action").into_owned(),
             title,
+            keys: command
+                .shortcut_id()
+                .and_then(|id| keys::shortcut(id).label)
+                .map(keys::label),
             row: PaletteRow::Command(command),
         });
     }
@@ -136,10 +187,16 @@ fn execute(app: &mut App, row: &PaletteRow) {
         PaletteRow::Filter(filter) => {
             app.beeper_unreplied = false;
             app.actions.push(Action::SetChatFilter(*filter));
-            app.actions.push(Action::Open(Page::Chats));
+            if app.page != Page::Chats {
+                // Opening a page clears the dialog, so bring the palette back.
+                app.actions.push(Action::Open(Page::Chats));
+                app.palette_restore = true;
+                app.actions.push(Action::ShowDialog(Dialog::Palette));
+            }
         }
         PaletteRow::Command(command) => match command {
             PaletteCommand::SearchChats => app.actions.push(Action::FocusSearch),
+            PaletteCommand::JumpToChat => app.actions.push(Action::ShowDialog(Dialog::JumpToChat)),
             PaletteCommand::NewChat => app.actions.push(Action::ShowDialog(Dialog::NewChat)),
             PaletteCommand::Unreplied => {
                 app.beeper_unreplied = true;
@@ -161,7 +218,9 @@ fn execute(app: &mut App, row: &PaletteRow) {
             PaletteCommand::SendLater => app.actions.push(Action::ShowDialog(Dialog::SendLater)),
         },
     }
-    app.actions.push(Action::CloseDialog);
+    if row.queues_close() {
+        app.actions.push(Action::CloseDialog);
+    }
 }
 
 /// Renders the palette dialog.
@@ -246,12 +305,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     theme::regular(11.0),
                     palette.secondary,
                 );
-                if index == app.palette_selected {
+                let hint_x = if index == app.palette_selected {
                     ui.painter().text(
                         rect.right_center() + vec2(-10.0, 0.0),
                         egui::Align2::RIGHT_CENTER,
                         "⏎",
                         theme::regular(13.0),
+                        palette.secondary,
+                    );
+                    -34.0
+                } else {
+                    -10.0
+                };
+                if let Some(hint) = &entry.keys {
+                    ui.painter().text(
+                        rect.right_center() + vec2(hint_x, 0.0),
+                        egui::Align2::RIGHT_CENTER,
+                        hint,
+                        theme::regular(12.0),
                         palette.secondary,
                     );
                 }
@@ -322,6 +393,120 @@ mod tests {
                 .iter()
                 .all(|e| !matches!(e.row, PaletteRow::Chat(_)))
         );
+    }
+
+    #[test]
+    fn commands_show_their_keys_and_chats_do_not() {
+        let (_root, app) = app();
+        let rows = entries(&app, "");
+        let keys_of = |wanted: PaletteCommand| {
+            rows.iter()
+                .find(|e| e.row == PaletteRow::Command(wanted))
+                .and_then(|e| e.keys.clone())
+        };
+        assert_eq!(
+            keys_of(PaletteCommand::JumpToChat),
+            Some(keys::label("Ctrl+K"))
+        );
+        assert_eq!(
+            keys_of(PaletteCommand::Settings),
+            Some(keys::label("Ctrl+,"))
+        );
+        assert_eq!(keys_of(PaletteCommand::WhatsNew), None);
+    }
+
+    /// Picks a row the way the palette does, then runs the queued actions.
+    fn pick(app: &mut App, row: &PaletteRow) {
+        let ctx = egui::Context::default();
+        app.actions.push(Action::ShowDialog(Dialog::Palette));
+        app.apply_queued_for_test(&ctx);
+        execute(app, row);
+        app.apply_queued_for_test(&ctx);
+    }
+
+    #[test]
+    fn jump_to_chat_is_listed_by_name() {
+        let (_root, app) = app();
+        assert!(
+            entries(&app, "jump")
+                .iter()
+                .any(|e| e.row == PaletteRow::Command(PaletteCommand::JumpToChat))
+        );
+    }
+
+    #[test]
+    fn a_filter_keeps_the_palette_open_from_any_page() {
+        for page in [Page::Chats, Page::Settings] {
+            let (_root, mut app) = app();
+            app.page = page.clone();
+            pick(&mut app, &PaletteRow::Filter(ChatFilter::Unread));
+            assert_eq!(app.dialog, Some(Dialog::Palette), "from {page:?}");
+            assert_eq!(app.page, Page::Chats);
+            assert_eq!(app.chat_filter, ChatFilter::Unread);
+        }
+    }
+
+    #[test]
+    fn a_filter_picked_from_another_page_keeps_the_typed_query() {
+        let (_root, mut app) = app();
+        app.page = Page::Settings;
+        let ctx = egui::Context::default();
+        app.actions.push(Action::ShowDialog(Dialog::Palette));
+        app.apply_queued_for_test(&ctx);
+        app.palette_query = "unread".into();
+        app.palette_selected = 1;
+        execute(&mut app, &PaletteRow::Filter(ChatFilter::Unread));
+        app.apply_queued_for_test(&ctx);
+        assert_eq!(app.dialog, Some(Dialog::Palette));
+        assert_eq!(app.page, Page::Chats);
+        assert_eq!(app.palette_query, "unread");
+        assert_eq!(app.palette_selected, 1);
+        assert!(!app.palette_restore, "the restore flag is used up");
+        // A genuinely new opening still starts empty.
+        app.actions.push(Action::CloseDialog);
+        app.actions.push(Action::ShowDialog(Dialog::Palette));
+        app.apply_queued_for_test(&ctx);
+        assert_eq!(app.palette_query, "");
+        assert_eq!(app.palette_selected, 0);
+    }
+
+    #[test]
+    fn commands_that_open_a_dialog_leave_that_dialog_open() {
+        let cases = [
+            (PaletteCommand::JumpToChat, Dialog::JumpToChat),
+            (PaletteCommand::NewChat, Dialog::NewChat),
+            (PaletteCommand::Shortcuts, Dialog::Shortcuts),
+            (PaletteCommand::WhatsNew, Dialog::WhatsNew),
+            (PaletteCommand::ScheduledQueue, Dialog::ScheduledList),
+        ];
+        for (command, dialog) in cases {
+            let (_root, mut app) = app();
+            pick(&mut app, &PaletteRow::Command(command));
+            assert_eq!(app.dialog, Some(dialog), "{command:?}");
+        }
+    }
+
+    #[test]
+    fn opening_a_chat_or_settings_closes_the_palette() {
+        let (_root, mut app) = app();
+        app.chats
+            .push(crate::model::Chat::new("1@example".into(), "Ada".into()));
+        pick(&mut app, &PaletteRow::Chat("1@example".into()));
+        assert_eq!(app.dialog, None);
+        pick(&mut app, &PaletteRow::Command(PaletteCommand::Settings));
+        assert_eq!(app.dialog, None);
+        assert_eq!(app.page, Page::Settings);
+    }
+
+    #[test]
+    fn search_chats_shows_the_key_that_focuses_the_search() {
+        let (_root, app) = app();
+        let rows = entries(&app, "");
+        let row = rows
+            .iter()
+            .find(|e| e.row == PaletteRow::Command(PaletteCommand::SearchChats))
+            .unwrap();
+        assert_eq!(row.keys, Some(keys::label("Ctrl+Shift+F")));
     }
 
     #[test]
