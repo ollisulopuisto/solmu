@@ -1156,9 +1156,18 @@ fn brazilian_phone(digits: &str) -> Option<String> {
 /// one digit, except the `8` service numbers, which lead with three like the
 /// overseas ones; these are libphonenumber's international formats.
 fn french_phone(digits: &str) -> Option<String> {
-    let (country, national) = ["33", "262", "590", "594", "596"]
-        .into_iter()
-        .find_map(|code| Some((code, digits.strip_prefix(code)?)))?;
+    let (country, national) = if let Some(rest) = digits.strip_prefix("33") {
+        ("33", rest)
+    } else if let Some(rest) = digits.strip_prefix("262") {
+        ("262", rest)
+    } else if let Some(rest) = digits.strip_prefix("590") {
+        ("590", rest)
+    } else if let Some(rest) = digits.strip_prefix("594") {
+        ("594", rest)
+    } else {
+        let rest = digits.strip_prefix("596")?;
+        ("596", rest)
+    };
     if national.len() != 9 {
         return None;
     }

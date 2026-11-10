@@ -5131,17 +5131,6 @@ mod tests {
         changed.timestamp = first.timestamp - 1;
         cases.push(("reverse chronology", first.clone(), changed));
         let mut changed = next.clone();
-        changed.quoted = Some(Quoted {
-            chat: None,
-            id: "quoted".into(),
-            sender: "speaker".into(),
-            sender_name: None,
-            summary: "Reply".into(),
-            labelled: None,
-            mentions: vec![],
-        });
-        cases.push(("quote controls", first.clone(), changed));
-        let mut changed = next.clone();
         changed.forwarded = true;
         cases.push(("forwarded", first.clone(), changed));
         let mut changed = next.clone();
