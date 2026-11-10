@@ -13,6 +13,7 @@ version in Cargo.toml is bumped.
 
 - Reply with attachments on Beeper: a reply quote now goes with a sent file, document or pasted picture instead of the send being refused. The quote belongs to the first file, as the guide already describes. Mentions and view-once stays refused with attachments.
 - Reject URLs and preview links with deeply nested percent-encoded control characters: decoding now fails closed at the layer bound instead of letting a 17+ layer encoded control through.
+- Upgrade rusqlite to 0.41.1 (libsqlite3-sys 0.39.1, bundled SQLCipher 4.19.0 / SQLite 3.53.4) to fix RUSTSEC-2026-0459.
 
 ## v0.24.11
 
