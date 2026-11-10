@@ -393,36 +393,69 @@ fn scope_row(app: &mut App, ui: &mut egui::Ui) {
                     .id_salt("link-suggestions")
                     .default_open(false)
                     .show(ui, |ui| {
-                        // Every pending pair is reachable: the list scrolls
-                        // instead of cutting off at a fixed count.
-                        egui::ScrollArea::vertical()
-                            .max_height(320.0)
-                            .show(ui, |ui| {
-                                for suggestion in suggestions.iter() {
+                        // Index names once per open menu, not once per pair. Own
+                        // the labels so clicking a row can mutate the app safely.
+                        let names: std::collections::HashMap<_, _> = app
+                            .chats
+                            .iter()
+                            .map(|chat| {
+                                (
+                                    chat.id.clone(),
+                                    format!(
+                                        "{} ({})",
+                                        chat.name,
+                                        chat.backend_network.as_deref().unwrap_or_default()
+                                    ),
+                                )
+                            })
+                            .collect();
+                        let row_height = ui.text_style_height(&egui::TextStyle::Body)
+                            + ui.spacing().item_spacing.y
+                            + ui.spacing().interact_size.y;
+                        egui::ScrollArea::vertical().max_height(320.0).show_rows(
+                            ui,
+                            row_height,
+                            suggestions.len(),
+                            |ui, range| {
+                                for suggestion in &suggestions[range] {
                                     let name = |member: &crate::merged::Member| {
-                                        app.chat(&member.chat).map_or_else(String::new, |chat| {
-                                            format!(
-                                                "{} ({})",
-                                                chat.name,
-                                                chat.backend_network.clone().unwrap_or_default()
-                                            )
-                                        })
+                                        names.get(&member.chat).map_or("", String::as_str)
                                     };
-                                    ui.label(format!(
+                                    let title = format!(
                                         "{} = {}",
                                         name(&suggestion.a),
                                         name(&suggestion.b)
-                                    ));
-                                    ui.horizontal(|ui| {
-                                        if ui.small_button("Link").clicked() {
-                                            app.accept_link_suggestion(suggestion);
-                                        }
-                                        if ui.small_button("Not the same person").clicked() {
-                                            app.dismiss_link_suggestion(suggestion);
-                                        }
+                                    );
+                                    ui.push_id((&suggestion.a.chat, &suggestion.b.chat), |ui| {
+                                        ui.allocate_ui_with_layout(
+                                            vec2(ui.available_width(), row_height),
+                                            Layout::top_down(Align::Min),
+                                            |ui| {
+                                                // One line keeps row offsets stable. The full
+                                                // pair stays available on hover, not wrapping.
+                                                let one_line = title.replace(
+                                                    ['\n', '\r', '\u{2028}', '\u{2029}'],
+                                                    " ",
+                                                );
+                                                ui.add(egui::Label::new(one_line).truncate())
+                                                    .on_hover_text(&title);
+                                                ui.horizontal(|ui| {
+                                                    if ui.small_button("Link").clicked() {
+                                                        app.accept_link_suggestion(suggestion);
+                                                    }
+                                                    if ui
+                                                        .small_button("Not the same person")
+                                                        .clicked()
+                                                    {
+                                                        app.dismiss_link_suggestion(suggestion);
+                                                    }
+                                                });
+                                            },
+                                        );
                                     });
                                 }
-                            });
+                            },
+                        );
                     });
             }
             ui.separator();
