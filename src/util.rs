@@ -1028,15 +1028,28 @@ pub fn call_duration(seconds: u64) -> String {
 
 /// Formats a phone number with a plus sign and country-appropriate grouping.
 pub fn phone(digits: &str) -> String {
-    let digits: String = digits.chars().filter(char::is_ascii_digit).collect();
-    if digits.is_empty() {
-        return String::new();
-    }
+    use std::borrow::Cow;
+    // Fast-path: borrow directly when `digits` is already purely ASCII digits
+    // (the common case from JIDs and normalized contacts), avoiding a heap
+    // allocation of an intermediate String.
+    let digits: Cow<'_, str> = if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        Cow::Borrowed(digits)
+    } else {
+        let filtered: String = digits.chars().filter(char::is_ascii_digit).collect();
+        if filtered.is_empty() {
+            return String::new();
+        }
+        Cow::Owned(filtered)
+    };
     if let Some(formatted) = brazilian_phone(&digits).or_else(|| french_phone(&digits)) {
         return formatted;
     }
     let (country, national) = digits.split_at(country_code_len(&digits).min(digits.len()));
-    let mut out = format!("+{country}");
+    // Pre-allocate capacity for "+{country} " + grouped chunks with spaces.
+    let estimated_capacity = 1 + country.len() + 1 + national.len() + national.len() / 3;
+    let mut out = String::with_capacity(estimated_capacity);
+    out.push('+');
+    out.push_str(country);
     // Approximate national grouping: threes, with the last four together
     // rather than leaving a lone digit.
     let mut start = 0;
@@ -1154,7 +1167,12 @@ fn french_phone(digits: &str) -> Option<String> {
     } else {
         3
     };
-    let mut out = format!("+{country} {}", &national[..lead]);
+    // Pre-allocate capacity: "+{country} " + national digits with spaces.
+    let mut out = String::with_capacity(1 + country.len() + 1 + national.len() + 5);
+    out.push('+');
+    out.push_str(country);
+    out.push(' ');
+    out.push_str(&national[..lead]);
     for start in (lead..national.len()).step_by(2) {
         out.push(' ');
         out.push_str(&national[start..start + 2]);
