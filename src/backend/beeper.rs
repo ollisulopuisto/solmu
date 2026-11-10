@@ -512,8 +512,8 @@ fn refuse_unsupported_payload(command: Command) -> Result<Command, Box<Event>> {
     use super::{Refusal, Unsent};
     let (chat, quoting, unsent) = match command {
         // A pasted image takes the upload pipeline like a picked file.
-        // What that pipeline cannot carry - a quote, mentions or view-once -
-        // is refused here, exactly as picked files are.
+        // What that pipeline cannot carry - mentions or view-once - is
+        // refused here, exactly as picked files are. A quote rides along.
         Command::SendImage {
             chat,
             width,
@@ -524,7 +524,7 @@ fn refuse_unsupported_payload(command: Command) -> Result<Command, Box<Event>> {
             mentions,
             quoting,
             ..
-        } if view_once || !mentions.is_empty() || quoting.is_some() => (
+        } if view_once || !mentions.is_empty() => (
             chat,
             quoting,
             Unsent::Image {
@@ -2563,6 +2563,9 @@ pub fn run(
         bool,
         Option<String>,
         Option<(u32, Option<crate::model::ReplyTarget>, Vec<f32>)>,
+        // A picked-file or pasted-image batch's reply quote. Sent on the
+        // first file only; a voice note carries its own inside its tuple.
+        Option<crate::model::ReplyTarget>,
         // App-created temporary file (voice recording, pasted image):
         // deleted once its message is accepted, never the user's own files.
         bool,
@@ -2576,7 +2579,9 @@ pub fn run(
     std::thread::Builder::new()
         .name("beeper-upload".into())
         .spawn(move || {
-            while let Ok((chat, paths, documents, caption, voice, temporary)) = upload_rx.recv() {
+            while let Ok((chat, paths, documents, caption, voice, quoting, temporary)) =
+                upload_rx.recv()
+            {
                 for (index, path) in paths.iter().enumerate() {
                     if upload_stopped(Some(&upload_cancel)) {
                         return;
@@ -2586,10 +2591,15 @@ pub fn run(
                         (None, true) => Attachment::Document,
                         (None, false) => Attachment::Auto,
                     };
-                    let reply = voice
-                        .as_ref()
-                        .and_then(|(_, quoting, _)| quoting.as_ref())
-                        .map(|quoting| quoting.id.as_str());
+                    let reply = if index == 0 {
+                        voice
+                            .as_ref()
+                            .and_then(|(_, quoting, _)| quoting.as_ref())
+                            .or(quoting.as_ref())
+                            .map(|quoting| quoting.id.as_str())
+                    } else {
+                        None
+                    };
                     match upload_api.send_attachment(
                         &chat,
                         path,
@@ -2637,6 +2647,7 @@ pub fn run(
                                 paths: paths[index..].to_vec(),
                                 documents,
                                 caption: if index == 0 { caption.clone() } else { None },
+                                quoting: quoting.clone(),
                                 message: format!(
                                     "{error}. Remaining files kept; check history before retrying."
                                 ),
@@ -2738,8 +2749,8 @@ pub fn run(
                     Ok(Command::EditText { chat, id, text, .. }) => emit(Event::BeeperEditUncertain {
                         chat, id, text, message: "Beeper is not connected yet. Edit retained; nothing was changed.".into(),
                     }),
-                    Ok(Command::SendFiles { chat, paths, documents, caption, .. }) => emit(Event::BeeperFilesUncertain {
-                        chat, paths, documents, caption, message: "Beeper is not connected yet. Files retained; nothing was sent or queued for automatic retry.".into(),
+                    Ok(Command::SendFiles { chat, paths, documents, caption, quoting, .. }) => emit(Event::BeeperFilesUncertain {
+                        chat, paths, documents, caption, quoting, message: "Beeper is not connected yet. Files retained; nothing was sent or queued for automatic retry.".into(),
                     }),
                     Ok(Command::SendTypedMedia { chat, path, kind, caption, quoting }) => emit(Event::TypedMediaUncertain { chat, path, kind, caption, quoting, message: "Beeper is not connected. Media kept; nothing sent.".into() }),
                     Ok(Command::SendVoice { chat, samples, quoting }) => emit(Event::SendRefused {
@@ -3648,14 +3659,31 @@ pub fn run(
                     mentions,
                     quoting,
                 } => {
-                    if view_once || !mentions.is_empty() || quoting.is_some() {
-                        emit(Event::BeeperFilesUncertain { chat, paths, documents, caption, message: "Beeper attachment replies, mentions and view-once are not supported; files kept".into() });
+                    if quoting
+                        .as_ref()
+                        .is_some_and(|q| q.source_chat(&chat) != chat)
+                    {
+                        emit(Event::SendRefused {
+                            chat,
+                            quoting,
+                            unsent: crate::backend::Unsent::Files {
+                                paths,
+                                documents,
+                                view_once,
+                                caption,
+                            },
+                            reason: crate::backend::Refusal::QuoteUnavailable,
+                        });
+                        continue;
+                    }
+                    if view_once || !mentions.is_empty() {
+                        emit(Event::BeeperFilesUncertain { chat, paths, documents, caption, quoting, message: "Beeper mentions and view-once are not supported with attachments; files kept".into() });
                         continue;
                     }
                     if let Err(error) =
-                        upload_tx.try_send((chat, paths, documents, caption, None, false))
+                        upload_tx.try_send((chat, paths, documents, caption, None, quoting, false))
                     {
-                        let (chat, paths, documents, caption, ..) = match error {
+                        let (chat, paths, documents, caption, _, quoting, _) = match error {
                             std::sync::mpsc::TrySendError::Full(batch)
                             | std::sync::mpsc::TrySendError::Disconnected(batch) => batch,
                         };
@@ -3664,6 +3692,7 @@ pub fn run(
                             paths,
                             documents,
                             caption,
+                            quoting,
                             message: "Upload queue is busy; files kept without sending".into(),
                         });
                     }
@@ -3678,10 +3707,28 @@ pub fn run(
                     quoting,
                     ..
                 } => {
+                    if quoting
+                        .as_ref()
+                        .is_some_and(|q| q.source_chat(&chat) != chat)
+                    {
+                        emit(Event::SendRefused {
+                            chat,
+                            quoting,
+                            unsent: crate::backend::Unsent::Image {
+                                width,
+                                height,
+                                rgba,
+                                view_once,
+                                caption,
+                            },
+                            reason: crate::backend::Refusal::QuoteUnavailable,
+                        });
+                        continue;
+                    }
                     // A pasted image encodes to a temporary JPEG and takes the
                     // same upload pipeline as a picked file. The unsupported
-                    // gate has already returned quotes, mentions and
-                    // view-once, so this arm only sees a plain image.
+                    // gate has already returned mentions and view-once; a
+                    // quote rides along to the first (and only) file.
                     let encoded = encode_pasted_image(width, height, &rgba);
                     match encoded {
                         Ok(path) => {
@@ -3691,6 +3738,7 @@ pub fn run(
                                 false,
                                 caption.clone(),
                                 None,
+                                quoting.clone(),
                                 true,
                             )) {
                                 let batch = match error {
@@ -3702,6 +3750,7 @@ pub fn run(
                                     paths: batch.1,
                                     documents: false,
                                     caption: batch.3,
+                                    quoting: batch.5,
                                     message: "Upload queue is busy; image kept without sending"
                                         .into(),
                                 });
@@ -3784,7 +3833,7 @@ pub fn run(
                     match file {
                         Ok(path) => {
                             let voice = Some((seconds, quoting.clone(), samples.clone()));
-                            let batch = (chat.clone(), vec![path], false, None, voice, true);
+                            let batch = (chat.clone(), vec![path], false, None, voice, None, true);
                             if upload_tx.try_send(batch).is_err() {
                                 emit(Event::SendRefused {
                                     chat,
@@ -4862,6 +4911,25 @@ mod tests {
     }
 
     #[test]
+    fn quoted_image_send_passes_the_unsupported_gate() {
+        let command = Command::SendImage {
+            chat: "work".into(),
+            width: 1,
+            height: 1,
+            rgba: vec![1, 2, 3, 255],
+            view_once: false,
+            caption: None,
+            mentions: vec![],
+            quoting: Some(crate::model::ReplyTarget {
+                id: "source".into(),
+                chat: None,
+            }),
+        };
+        let command = refuse_unsupported_payload(command).expect("quoted image passes");
+        assert!(matches!(command, Command::SendImage { quoting: Some(_), .. }));
+    }
+
+    #[test]
     fn unsupported_image_send_retains_pixels_caption_and_reply() {
         let reply = crate::model::ReplyTarget {
             id: "source".into(),
@@ -5382,6 +5450,17 @@ mod tests {
             request.contains(r#""replyToMessageID":"msg-42""#),
             "{request}"
         );
+    }
+
+    #[test]
+    fn a_quoted_attachment_carries_the_file_and_the_reply_together() {
+        let (result, request) = capture_typed_send(Some("msg-42"), Attachment::Document);
+        assert!(result.is_ok());
+        let value: serde_json::Value =
+            serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(value["attachment"]["type"], "file");
+        assert_eq!(value["attachment"]["uploadID"], "up1");
+        assert_eq!(value["replyToMessageID"], "msg-42");
     }
 
     #[test]

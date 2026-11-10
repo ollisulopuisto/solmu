@@ -1,5 +1,9 @@
 # Fast-beeper coordination and development checkpoint
 
+## Beeper attachment replies - November 10, 2026
+
+Branch `feat/beeper-attachment-replies`, based on main 0486c64, version 0.24.12 (open PRs #264 and #265 are on 0.24.11 without bumps, so no version conflict expected). The Beeper backend refused or kept any file, document or pasted picture sent as a reply: SendFiles and the pasted-image gate treated a quote like the genuinely unsupported mentions and view-once. The Beeper message API takes an attachment and replyToMessageID in one body (voice notes already send that way), so the upload batch now carries the quote, the worker sets it on the first file only, and a failed upload returns the quote to the composer with the kept files, like a failed voice note does. The kept-files toast now names only mentions and view-once. Tests: a quoted pasted image passes the unsupported gate, and a quoted document's request body carries the attachment and replyToMessageID together. Not run locally (no Rust toolchain in this checkout), CI is the check. Unverified: a live bridge accepting reply plus attachment on every network. No merge by the author.
+
 ## Encoded-control decode cap fails closed - November 10, 2026
 
 Branch `sentinel-fix-nested-encoded-control-13799924842503889086`, rebased on main (version 0.24.11). Sentinel's 16-layer nested percent-decode in has_encoded_control returned false when decoding was still changing at the bound, so a 17+ layer encoded control (e.g. 17x nested %00) passed external_url/preview_url validation. The loop now returns true when it exhausts its layer budget mid-decode; a boundary test builds a 17-layer nested control and a 16-layer control that must still be caught. Merged main in; the branch's older duplicate of #259's merged.rs change disappears against main. Not run locally (no Rust toolchain in this checkout), CI is the check. No merge by the author.

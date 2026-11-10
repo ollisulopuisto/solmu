@@ -5550,6 +5550,7 @@ impl App {
                 paths,
                 documents,
                 caption,
+                quoting,
                 message,
             } => {
                 let pending = paths.into_iter().map(|path| {
@@ -5559,7 +5560,7 @@ impl App {
                         Pending::File(path)
                     }
                 });
-                let owner = self.restore_attachments(&chat, pending, None, false);
+                let owner = self.restore_attachments(&chat, pending, quoting, false);
                 let recovery = caption.and_then(|text| self.restore_beeper_text(&owner, text));
                 self.toast_error(if let Some(recovery) = recovery {
                     format!("{message}\n{recovery}")
@@ -29530,6 +29531,7 @@ mod linked_attachment_tests {
                     paths: vec!["returned.pdf".into()],
                     documents: true,
                     caption: Some("Caption".into()),
+                    quoting: None,
                     message: "Upload unconfirmed".into(),
                 })
                 .unwrap();

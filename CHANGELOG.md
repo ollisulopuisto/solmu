@@ -9,6 +9,9 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.12
+
+- Reply with attachments on Beeper: a reply quote now goes with a sent file, document or pasted picture instead of the send being refused. The quote belongs to the first file, as the guide already describes. Mentions and view-once stays refused with attachments.
 - Reject URLs and preview links with deeply nested percent-encoded control characters: decoding now fails closed at the layer bound instead of letting a 17+ layer encoded control through.
 
 ## v0.24.11
