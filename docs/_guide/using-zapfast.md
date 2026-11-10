@@ -212,6 +212,12 @@ The sticker is a 512 × 512 WebP under WhatsApp's 100 KB limit.
 
 ## Attachments
 
+When saving an attachment, Solmu replaces colons with underscores, so
+`photo.png:stream` becomes `photo.png_stream` rather than a hidden NTFS alternate
+data stream. Reserved Windows device stems, including `CONIN$` and `CONOUT$`,
+become `attachment` while retaining their extension: `CONIN$.txt` becomes
+`attachment.txt`.
+
 Paste a picture or copied files, drop files on the window, or select them with
 the paperclip.
 A pasted or dropped attachment is ready at once, so the send key sends it even
