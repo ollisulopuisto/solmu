@@ -4933,7 +4933,13 @@ mod tests {
             }),
         };
         let command = refuse_unsupported_payload(command).expect("quoted image passes");
-        assert!(matches!(command, Command::SendImage { quoting: Some(_), .. }));
+        assert!(matches!(
+            command,
+            Command::SendImage {
+                quoting: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]
