@@ -9,6 +9,9 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.11
+
+- The command palette (Ctrl+P) shows the key next to each command, lists Jump to open chat (Ctrl+K), and stays open after you pick a filter so you can try several in a row. Commands that open a dialog (New chat, Shortcuts, What's New, Send Later queue, Schedule this message) now really open it; before, the palette closed it again.
 ## v0.24.10
 
 - Quoted replies, pictures, GIFs and videos now join a run of plain messages anywhere in it, not only at its start, and Sent, Delivered and Read receipts of your own messages no longer split a run. The time-gap rules are unchanged.
