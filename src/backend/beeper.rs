@@ -516,7 +516,7 @@ fn media_extension(
         } else {
             head.len()
         };
-        let compatible = head.get(16..end).unwrap_or(&[]).chunks_exact(4);
+        let compatible = (16..end).step_by(4).filter_map(|at| head.get(at..at + 4));
         return std::iter::once(&head[8..12])
             .chain(compatible)
             .find_map(iso_brand_extension)
