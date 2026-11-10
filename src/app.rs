@@ -11686,14 +11686,22 @@ impl App {
     fn handle_power(&mut self) {
         for event in self.power.events() {
             match event {
-                fastframe_power::Event::Suspending(ack)
-                | fastframe_power::Event::EndingSession(ack) => {
+                fastframe_power::Event::Suspending(ack) => {
+                    log::info!("sleep: saving state and acknowledging the suspend");
+                    self.save_state();
+                    // Within the time the system waits for the app.
+                    self.files.flush(Duration::from_millis(1500));
+                    ack.done();
+                }
+                fastframe_power::Event::EndingSession(ack) => {
+                    log::info!("session ending: saving state and acknowledging");
                     self.save_state();
                     // Within the time the system waits for the app.
                     self.files.flush(Duration::from_millis(1500));
                     ack.done();
                 }
                 fastframe_power::Event::Resumed => {
+                    log::info!("wake: resumed from sleep");
                     for account in &self.accounts {
                         account.backend.send(Command::Resumed);
                     }

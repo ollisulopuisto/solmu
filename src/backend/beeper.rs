@@ -2836,6 +2836,9 @@ pub fn run(
     let mut last_receipt_refresh = Instant::now();
     let mut pending_sends: Vec<(ChatId, String, Instant)> = Vec::new();
     let mut pending_storage: Option<(u64, bool)> = None;
+    // Set by Command::Resumed: after a wake every poll timer is due at once,
+    // so a link the server dropped during sleep is noticed on the next tick.
+    let mut refresh_after_wake = false;
 
     loop {
         loop {
@@ -3847,8 +3850,19 @@ pub fn run(
                 | Command::RefreshPoll { .. } => {
                     emit(Event::Info("This action is not supported by the Beeper client. Nothing was sent or changed.".into()));
                 }
+                Command::Resumed => {
+                    log::info!("woke from sleep: refreshing chats and messages now");
+                    refresh_after_wake = true;
+                }
                 _ => {}
             }
+        }
+
+        if refresh_after_wake {
+            refresh_after_wake = false;
+            last_chat_refresh = Instant::now() - CHAT_REFRESH;
+            last_msg_poll = Instant::now() - MSG_POLL;
+            last_receipt_refresh = Instant::now() - RECEIPT_REFRESH;
         }
 
         if let Some((token, clear)) = pending_storage
