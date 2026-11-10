@@ -2460,18 +2460,16 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
             if last.from_me {
                 let tick_rect =
                     Rect::from_center_size(pos2(x + 8.0, line_y + 8.0), Vec2::splat(16.0));
-                widgets::ticks(
-                    ui,
-                    &palette,
-                    tick_rect,
-                    super::conversation::display_delivery(
-                        last.status,
-                        last.from_me,
-                        chat.kind,
-                        app.account_receipts_off,
-                    ),
+                let delivery = super::conversation::display_delivery(
+                    last.status,
+                    last.from_me,
+                    chat.kind,
+                    app.account_receipts_off,
                 );
-                x += 20.0;
+                widgets::ticks(ui, &palette, tick_rect, delivery);
+                // ReadBySome paints a "+" after the ticks (widgets::ticks_in):
+                // reserve its width too, or it overlaps the preview text.
+                x += if delivery == crate::model::Delivery::ReadBySome { 30.0 } else { 20.0 };
             } else if chat.is_group() {
                 let sender = app.display_name_or(&last.sender, last.sender_name.as_deref());
                 let first = app.short_name(&last.sender, &sender);
