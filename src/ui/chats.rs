@@ -2127,7 +2127,7 @@ fn hit_row(app: &mut App, ui: &mut egui::Ui, hit: &Message) {
         let name_color = app
             .chat(&hit.chat)
             .cloned()
-            .and_then(|chat| quiet_tint(app.chat_category(&chat), palette.dark))
+            .and_then(|chat| quiet_tint(app.chat_category(&chat), &palette))
             .unwrap_or(palette.text);
         let name = widgets::line(ui, &title, theme::medium(14.5), name_color, name_width, 1);
         name.paint(ui, pos2(left, name_top), name_color);
@@ -2293,21 +2293,27 @@ fn person_row(
 }
 
 /// The tint a chat's name takes while the list is a search result, by quiet
-/// tier. People keep the normal text colour. Fixed colours, picked per theme
-/// brightness to keep text contrast above 4.5:1 on the panel.
+/// tier. People keep the normal text colour. Fixed colours per theme
+/// brightness, then blended toward the palette's text colour only as far as
+/// needed to keep 4.5:1 on the panel, so a custom palette cannot hide a name.
 fn quiet_tint(
     category: Option<crate::categories::AutoCategory>,
-    dark: bool,
+    palette: &Palette,
 ) -> Option<egui::Color32> {
     use crate::categories::AutoCategory;
-    let (r, g, b) = match (category?, dark) {
+    let (r, g, b) = match (category?, palette.dark) {
         (AutoCategory::Quiet, true) => (0xE6, 0xB4, 0x50),
         (AutoCategory::Quiet, false) => (0x7A, 0x4E, 0x00),
         (AutoCategory::LongQuiet, true) => (0xA9, 0xB4, 0xF0),
         (AutoCategory::LongQuiet, false) => (0x4A, 0x55, 0xA8),
         _ => return None,
     };
-    Some(egui::Color32::from_rgb(r, g, b))
+    Some(theme::readable_on(
+        palette.panel,
+        egui::Color32::from_rgb(r, g, b),
+        palette.text,
+        4.5,
+    ))
 }
 
 fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
@@ -2401,7 +2407,7 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
         let name_color = if app.search.trim().is_empty() {
             palette.text
         } else {
-            quiet_tint(app.chat_category(chat), palette.dark).unwrap_or(palette.text)
+            quiet_tint(app.chat_category(chat), &palette).unwrap_or(palette.text)
         };
         let name = widgets::line(ui, &title, name_font, name_color, name_width, 1);
         name.paint(ui, pos2(left, name_top), name_color);
@@ -3366,8 +3372,8 @@ mod tests {
     fn quiet_tiers_have_distinct_readable_tints_and_people_stay_plain() {
         use crate::categories::AutoCategory;
         for palette in [Palette::dark(), Palette::light()] {
-            let quiet = quiet_tint(Some(AutoCategory::Quiet), palette.dark).unwrap();
-            let long = quiet_tint(Some(AutoCategory::LongQuiet), palette.dark).unwrap();
+            let quiet = quiet_tint(Some(AutoCategory::Quiet), &palette).unwrap();
+            let long = quiet_tint(Some(AutoCategory::LongQuiet), &palette).unwrap();
             assert_ne!(quiet, long);
             for tint in [quiet, long] {
                 assert!(
@@ -3376,12 +3382,25 @@ mod tests {
                     palette.dark
                 );
             }
-            assert_eq!(quiet_tint(Some(AutoCategory::People), palette.dark), None);
+            assert_eq!(quiet_tint(Some(AutoCategory::People), &palette), None);
             assert_eq!(
-                quiet_tint(Some(AutoCategory::Notifications), palette.dark),
+                quiet_tint(Some(AutoCategory::Notifications), &palette),
                 None
             );
-            assert_eq!(quiet_tint(None, palette.dark), None);
+            assert_eq!(quiet_tint(None, &palette), None);
+        }
+    }
+
+    #[test]
+    fn a_custom_palette_cannot_hide_a_tiered_name() {
+        use crate::categories::AutoCategory;
+        // A light palette whose panel is exactly the Long quiet blue.
+        let mut palette = Palette::light();
+        palette.panel = egui::Color32::from_rgb(0x4A, 0x55, 0xA8);
+        palette.text = egui::Color32::WHITE;
+        for category in [AutoCategory::Quiet, AutoCategory::LongQuiet] {
+            let tint = quiet_tint(Some(category), &palette).unwrap();
+            assert!(theme::contrast(tint, palette.panel) >= 4.5, "{category:?}");
         }
     }
 
