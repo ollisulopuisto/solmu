@@ -436,6 +436,125 @@ fn cache_files(
     Ok(files)
 }
 
+/// File extension for one ISO base media `ftyp` brand, if it is known.
+fn iso_brand_extension(brand: &[u8]) -> Option<&'static str> {
+    Some(match brand {
+        b"qt  " => "mov",
+        b"M4A " | b"M4B " => "m4a",
+        b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1" | b"msf1" => "heic",
+        b"avif" | b"avis" => "avif",
+        [b'3', b'g', ..] => "3gp",
+        b"isom" | b"iso2" | b"iso3" | b"iso4" | b"iso5" | b"iso6" | b"iso7" | b"iso8" | b"iso9"
+        | b"mp41" | b"mp42" | b"avc1" | b"dash" | b"M4V " | b"M4VH" | b"M4VP" | b"f4v " => "mp4",
+        _ => return None,
+    })
+}
+
+/// File extension for a downloaded attachment: the message type first, then
+/// the original file name, then the server's content type, then the bytes.
+fn media_extension(
+    mime: Option<&str>,
+    file_name: Option<&str>,
+    content_type: Option<&str>,
+    head: &[u8],
+) -> &'static str {
+    fn from_mime(mime: &str) -> Option<&'static str> {
+        let base = mime
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        Some(match base.as_str() {
+            "image/png" => "png",
+            "image/jpeg" => "jpg",
+            "image/webp" => "webp",
+            "image/gif" => "gif",
+            "video/mp4" => "mp4",
+            "video/webm" => "webm",
+            "video/quicktime" => "mov",
+            "audio/ogg" => "ogg",
+            "audio/mpeg" => "mp3",
+            "audio/mp4" | "audio/x-m4a" => "m4a",
+            "application/pdf" => "pdf",
+            _ => return None,
+        })
+    }
+    if let Some(ext) = mime.and_then(from_mime) {
+        return ext;
+    }
+    if let Some(ext) = file_name
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .and_then(|ext| match ext.as_str() {
+            "png" => Some("png"),
+            "jpg" | "jpeg" => Some("jpg"),
+            "webp" => Some("webp"),
+            "gif" => Some("gif"),
+            "mp4" | "m4v" => Some("mp4"),
+            "mov" => Some("mov"),
+            "webm" => Some("webm"),
+            "ogg" => Some("ogg"),
+            "mp3" => Some("mp3"),
+            "m4a" => Some("m4a"),
+            "pdf" => Some("pdf"),
+            _ => None,
+        })
+    {
+        return ext;
+    }
+    if let Some(ext) = content_type.and_then(from_mime) {
+        return ext;
+    }
+    if head.len() >= 12 && &head[4..8] == b"ftyp" {
+        // The major brand says what the ISO media file is; ftyp alone also
+        // covers audio, HEIC and AVIF. When the major brand is unknown (for
+        // example iso8), the compatible brands that follow it decide.
+        let size = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
+        let end = if size >= 16 {
+            size.min(head.len())
+        } else {
+            head.len()
+        };
+        let compatible = (16..end).step_by(4).filter_map(|at| head.get(at..at + 4));
+        return std::iter::once(&head[8..12])
+            .chain(compatible)
+            .find_map(iso_brand_extension)
+            .unwrap_or("bin");
+    }
+    if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        // EBML is Matroska and WebM alike; the DocType sits in the header.
+        let window = &head[..head.len().min(64)];
+        let has = |needle: &[u8]| window.windows(needle.len()).any(|w| w == needle);
+        return if has(b"webm") {
+            "webm"
+        } else if has(b"matroska") {
+            "mkv"
+        } else {
+            "bin"
+        };
+    }
+    if head.starts_with(b"\x89PNG") {
+        return "png";
+    }
+    if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return "jpg";
+    }
+    if head.starts_with(b"GIF8") {
+        return "gif";
+    }
+    if head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP" {
+        return "webp";
+    }
+    if head.starts_with(b"OggS") {
+        return "ogg";
+    }
+    if head.starts_with(b"%PDF") {
+        return "pdf";
+    }
+    "bin"
+}
+
 pub fn cache_budget(dirs: &AccountDirs) -> u64 {
     std::fs::read_to_string(dirs.state.join("beeper-cache-limit-mib"))
         .ok()
@@ -1327,18 +1446,32 @@ impl Api {
         }
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         (chat, message, source).hash(&mut hasher);
-        let ext = match attachment.mime_type.as_deref().unwrap_or("") {
-            "image/png" => "png",
-            "image/jpeg" => "jpg",
-            "image/webp" => "webp",
-            "image/gif" => "gif",
-            "video/mp4" => "mp4",
-            "video/webm" => "webm",
-            "audio/ogg" => "ogg",
-            "audio/mpeg" => "mp3",
-            "application/pdf" => "pdf",
-            _ => "bin",
-        };
+        let mut head = Vec::with_capacity(64);
+        let mut ext = media_extension(
+            attachment.mime_type.as_deref(),
+            attachment.file_name.as_deref(),
+            None,
+            &[],
+        );
+        if ext == "bin" {
+            // Telegram often sends no usable type. Read the content type and the
+            // first bytes before choosing the name so the file opens normally.
+            let header = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            (&mut response)
+                .take(64)
+                .read_to_end(&mut head)
+                .map_err(|_| "Media transfer failed")?;
+            ext = media_extension(
+                attachment.mime_type.as_deref(),
+                attachment.file_name.as_deref(),
+                header.as_deref(),
+                &head,
+            );
+        }
         let directory = dirs.media_cache_dir();
         std::fs::create_dir_all(&directory).map_err(|_| "Could not create media cache")?;
         let path = directory.join(format!("beeper-{:016x}.{ext}", hasher.finish()));
@@ -1372,7 +1505,12 @@ impl Api {
             let mut output = options
                 .open(&temporary)
                 .map_err(|_| "Could not create media file")?;
-            let copied = std::io::copy(&mut (&mut response).take(limit), &mut output)
+            output.write_all(&head).map_err(|_| "Media write failed")?;
+            let copied = head.len() as u64
+                + std::io::copy(
+                    &mut (&mut response).take(limit.saturating_sub(head.len() as u64)),
+                    &mut output,
+                )
                 .map_err(|_| "Media transfer failed")?;
             let mut excess = [0u8; 1];
             if copied == limit
@@ -4441,6 +4579,59 @@ mod tests {
     //! They pin the demo's contract: multiple accounts on one network stay
     //! distinguishable, background startup/polling causes NO mutating HTTP
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
+
+    #[test]
+    fn downloads_without_a_message_type_get_an_extension_from_name_header_or_bytes() {
+        let mp4 = *b"\0\0\0\x18ftypisom\0\0\0\0";
+        assert_eq!(media_extension(Some("video/mp4"), None, None, &[]), "mp4");
+        assert_eq!(media_extension(None, Some("IMG_1.MOV"), None, &[]), "mov");
+        assert_eq!(
+            media_extension(Some(""), None, Some("video/mp4; x=1"), &[]),
+            "mp4"
+        );
+        assert_eq!(media_extension(None, None, None, &mp4), "mp4");
+        let iphone = *b"\0\0\0\x14ftypqt  \0\0\0\0";
+        assert_eq!(media_extension(None, None, None, &iphone), "mov");
+        let ebml = |doc: &[u8]| {
+            let mut head = vec![0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x82, 0x84];
+            head.extend_from_slice(doc);
+            head
+        };
+        assert_eq!(
+            media_extension(None, Some("noext"), None, &ebml(b"webm")),
+            "webm"
+        );
+        assert_eq!(media_extension(None, None, None, &ebml(b"matroska")), "mkv");
+        assert_eq!(media_extension(None, None, None, &ebml(b"????")), "bin");
+        // A major brand the table does not know falls back to the compatible brands.
+        let mut iso8 = b"\0\0\0\x18ftypiso8\0\0\0\0".to_vec();
+        iso8.extend_from_slice(b"iso8mp41");
+        assert_eq!(media_extension(None, None, None, &iso8), "mp4");
+        let mut m4a8 = b"\0\0\0\x18ftypzzzz\0\0\0\0".to_vec();
+        m4a8.extend_from_slice(b"M4A zzzz");
+        assert_eq!(media_extension(None, None, None, &m4a8), "m4a");
+        for (brand, ext) in [
+            (b"M4A ", "m4a"),
+            (b"heic", "heic"),
+            (b"avif", "avif"),
+            (b"3gp4", "3gp"),
+            (b"mp42", "mp4"),
+            (b"zzzz", "bin"),
+        ] {
+            let mut head = b"\0\0\0\x18ftyp".to_vec();
+            head.extend_from_slice(brand);
+            head.extend_from_slice(&[0; 8]);
+            assert_eq!(
+                media_extension(None, None, None, &head),
+                ext,
+                "brand {brand:?}"
+            );
+        }
+        assert_eq!(
+            media_extension(None, None, Some("application/octet-stream"), b"junk"),
+            "bin"
+        );
+    }
 
     use super::*;
 
