@@ -436,6 +436,93 @@ fn cache_files(
     Ok(files)
 }
 
+/// File extension for a downloaded attachment: the message type first, then
+/// the original file name, then the server's content type, then the bytes.
+fn media_extension(
+    mime: Option<&str>,
+    file_name: Option<&str>,
+    content_type: Option<&str>,
+    head: &[u8],
+) -> &'static str {
+    fn from_mime(mime: &str) -> Option<&'static str> {
+        let base = mime
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        Some(match base.as_str() {
+            "image/png" => "png",
+            "image/jpeg" => "jpg",
+            "image/webp" => "webp",
+            "image/gif" => "gif",
+            "video/mp4" => "mp4",
+            "video/webm" => "webm",
+            "video/quicktime" => "mov",
+            "audio/ogg" => "ogg",
+            "audio/mpeg" => "mp3",
+            "audio/mp4" | "audio/x-m4a" => "m4a",
+            "application/pdf" => "pdf",
+            _ => return None,
+        })
+    }
+    if let Some(ext) = mime.and_then(from_mime) {
+        return ext;
+    }
+    if let Some(ext) = file_name
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .and_then(|ext| match ext.as_str() {
+            "png" => Some("png"),
+            "jpg" | "jpeg" => Some("jpg"),
+            "webp" => Some("webp"),
+            "gif" => Some("gif"),
+            "mp4" | "m4v" => Some("mp4"),
+            "mov" => Some("mov"),
+            "webm" => Some("webm"),
+            "ogg" => Some("ogg"),
+            "mp3" => Some("mp3"),
+            "m4a" => Some("m4a"),
+            "pdf" => Some("pdf"),
+            _ => None,
+        })
+    {
+        return ext;
+    }
+    if let Some(ext) = content_type.and_then(from_mime) {
+        return ext;
+    }
+    if head.len() >= 12 && &head[4..8] == b"ftyp" {
+        return if &head[8..12] == b"qt  " {
+            "mov"
+        } else {
+            "mp4"
+        };
+    }
+    if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        return "webm";
+    }
+    if head.starts_with(b"\x89PNG") {
+        return "png";
+    }
+    if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return "jpg";
+    }
+    if head.starts_with(b"GIF8") {
+        return "gif";
+    }
+    if head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP" {
+        return "webp";
+    }
+    if head.starts_with(b"OggS") {
+        return "ogg";
+    }
+    if head.starts_with(b"%PDF") {
+        return "pdf";
+    }
+    "bin"
+}
+
 pub fn cache_budget(dirs: &AccountDirs) -> u64 {
     std::fs::read_to_string(dirs.state.join("beeper-cache-limit-mib"))
         .ok()
@@ -1327,18 +1414,32 @@ impl Api {
         }
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         (chat, message, source).hash(&mut hasher);
-        let ext = match attachment.mime_type.as_deref().unwrap_or("") {
-            "image/png" => "png",
-            "image/jpeg" => "jpg",
-            "image/webp" => "webp",
-            "image/gif" => "gif",
-            "video/mp4" => "mp4",
-            "video/webm" => "webm",
-            "audio/ogg" => "ogg",
-            "audio/mpeg" => "mp3",
-            "application/pdf" => "pdf",
-            _ => "bin",
-        };
+        let mut head = Vec::with_capacity(16);
+        let mut ext = media_extension(
+            attachment.mime_type.as_deref(),
+            attachment.file_name.as_deref(),
+            None,
+            &[],
+        );
+        if ext == "bin" {
+            // Telegram often sends no usable type. Read the content type and the
+            // first bytes before choosing the name so the file opens normally.
+            let header = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            (&mut response)
+                .take(16)
+                .read_to_end(&mut head)
+                .map_err(|_| "Media transfer failed")?;
+            ext = media_extension(
+                attachment.mime_type.as_deref(),
+                attachment.file_name.as_deref(),
+                header.as_deref(),
+                &head,
+            );
+        }
         let directory = dirs.media_cache_dir();
         std::fs::create_dir_all(&directory).map_err(|_| "Could not create media cache")?;
         let path = directory.join(format!("beeper-{:016x}.{ext}", hasher.finish()));
@@ -1372,7 +1473,12 @@ impl Api {
             let mut output = options
                 .open(&temporary)
                 .map_err(|_| "Could not create media file")?;
-            let copied = std::io::copy(&mut (&mut response).take(limit), &mut output)
+            output.write_all(&head).map_err(|_| "Media write failed")?;
+            let copied = head.len() as u64
+                + std::io::copy(
+                    &mut (&mut response).take(limit.saturating_sub(head.len() as u64)),
+                    &mut output,
+                )
                 .map_err(|_| "Media transfer failed")?;
             let mut excess = [0u8; 1];
             if copied == limit
@@ -4441,6 +4547,26 @@ mod tests {
     //! They pin the demo's contract: multiple accounts on one network stay
     //! distinguishable, background startup/polling causes NO mutating HTTP
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
+
+    #[test]
+    fn downloads_without_a_message_type_get_an_extension_from_name_header_or_bytes() {
+        let mp4 = *b"\0\0\0\x18ftypisom\0\0\0\0";
+        assert_eq!(media_extension(Some("video/mp4"), None, None, &[]), "mp4");
+        assert_eq!(media_extension(None, Some("IMG_1.MOV"), None, &[]), "mov");
+        assert_eq!(
+            media_extension(Some(""), None, Some("video/mp4; x=1"), &[]),
+            "mp4"
+        );
+        assert_eq!(media_extension(None, None, None, &mp4), "mp4");
+        assert_eq!(
+            media_extension(None, Some("noext"), None, b"\x1A\x45\xDF\xA3...."),
+            "webm"
+        );
+        assert_eq!(
+            media_extension(None, None, Some("application/octet-stream"), b"junk"),
+            "bin"
+        );
+    }
 
     use super::*;
 

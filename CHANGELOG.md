@@ -9,6 +9,10 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+## v0.24.14
+
+- Telegram and other videos that Beeper sends without a file type no longer save as `.bin`. Solmu now takes the type from the file name, the server's content type or the file's first bytes, so they open in the player and your system viewer.
+
 ## v0.24.12
 
 - Reply with attachments on Beeper: a reply quote now goes with a sent file, document or pasted picture instead of the send being refused. The quote belongs to the first file, as the guide already describes. Mentions and view-once stays refused with attachments.
