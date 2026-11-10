@@ -3,6 +3,14 @@
 ## Command palette polish - November 9, 2026
 
 Branch `feat/palette-polish`, based on main, version 0.24.11 (0.24.9 and 0.24.10 are open PRs #259 and #260, so expect a version/CHANGELOG conflict in whichever merges later). From the unsung article on command palettes: rows show their key, Jump to open chat (Ctrl+K) is listed, and a filter row keeps the palette open. Ctrl+K stays the chat switcher, so the palette stays on Ctrl+P. Devin round: dialog-opening commands no longer queue CloseDialog (it ran second and closed the new dialog), filters re-open the palette after Open(Chats) when not already on the list, Search chats shows Ctrl+Shift+F. Action-dispatch tests in src/ui/palette.rs assert app.dialog after the queue runs, from Chats and Settings; not run locally (no Rust toolchain in this checkout), CI is the check. No merge by the author.
+## Quoted and media heads, receipts in a run - November 9, 2026
+
+Branch `fix/reply-bubble-stacking`, based on main ba51fa1, version 0.24.10 (0.24.9 is PR #259). stacks_with_limit let only plain
+text stack and required identical delivery status, so a reply, picture, GIF or video head and a run whose
+receipts differed (Read, Delivered, Sent) each broke the stack. Plain text, quoted replies, pictures and videos
+now join a run in any position; own Sent/Delivered/Read rows stack. Cadence limits, album members, Unknown,
+Pending and Failed remain boundaries. Messages bubble style still draws no stacks.
+Not compiled locally (no Rust toolchain); CI is the check. Author does not merge.
 
 ## Linked reply arrow focuses the composer - November 9, 2026
 
