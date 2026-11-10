@@ -9,17 +9,6 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
-## v0.24.11
-
-- The command palette (Ctrl+P) shows the key next to each command, lists Jump to open chat (Ctrl+K), and stays open after you pick a filter so you can try several in a row. Commands that open a dialog (New chat, Shortcuts, What's New, Send Later queue, Schedule this message) now really open it; before, the palette closed it again.
-## v0.24.10
-
-- Quoted replies, pictures, GIFs and videos now join a run of plain messages anywhere in it, not only at its start, and Sent, Delivered and Read receipts of your own messages no longer split a run. The time-gap rules are unchanged.
-
-## v0.24.9
-
-- Clicking a message's reply arrow, double-clicking a message, or using Reply to latest match in a linked chat now puts the cursor in the message field, the same as Cmd-R.
-
 ## v0.24.8
 
 - Reclaim discarded linked-media downloads and old GIF thumbnails, keep native media types with each draft, and allow Send Later when a failed voice note belongs to another conversation. GIF search coalesces edits instead of starting a request thread for every keystroke.
