@@ -138,9 +138,16 @@ fn safe_name(name: &str) -> String {
         || sanitized == "."
         || sanitized == ".."
         || sanitized.chars().any(char::is_control)
-        || crate::safety::is_reserved_dos_name(stem)
     {
         "attachment".to_owned()
+    } else if crate::safety::is_reserved_dos_name(stem) {
+        // Windows treats CON.pdf as the CON device whatever the extension, so
+        // the stem is replaced; the extension stays so the file keeps opening
+        // with its usual application.
+        match sanitized.split_once('.') {
+            Some((_, extension)) if !extension.is_empty() => format!("attachment.{extension}"),
+            _ => "attachment".to_owned(),
+        }
     } else {
         sanitized.to_owned()
     }
@@ -390,28 +397,26 @@ mod tests {
 
     #[test]
     fn safe_name_neutralizes_dos_devices_and_trailing_characters() {
-        for name in [
-            "CON",
-            "con.txt",
-            "PRN.pdf",
-            "aux.png",
-            "NUL.docx",
-            "com1.jpg",
-            "COM9.csv",
-            "lpt1.txt",
-            "LPT9.log",
-            r"folder\CON.txt",
-            "../PRN.png",
-            "...",
-            "   ",
-            "photo.png.",
-            "photo.png   ",
+        for (name, expected) in [
+            ("CON", "attachment"),
+            ("con.txt", "attachment.txt"),
+            ("PRN.pdf", "attachment.pdf"),
+            ("aux.png", "attachment.png"),
+            ("NUL.docx", "attachment.docx"),
+            ("com1.jpg", "attachment.jpg"),
+            ("COM9.csv", "attachment.csv"),
+            ("lpt1.txt", "attachment.txt"),
+            ("LPT9.log", "attachment.log"),
+            ("CON.tar.gz", "attachment.tar.gz"),
+            (r"folder\CON.txt", "attachment.txt"),
+            ("../PRN.png", "attachment.png"),
+            ("CON.pdf.", "attachment.pdf"),
+            ("...", "attachment"),
+            ("   ", "attachment"),
+            ("photo.png.", "photo.png"),
+            ("photo.png   ", "photo.png"),
         ] {
-            if name.starts_with("photo.png") {
-                assert_eq!(safe_name(name), "photo.png", "{name}");
-            } else {
-                assert_eq!(safe_name(name), "attachment", "{name}");
-            }
+            assert_eq!(safe_name(name), expected, "{name}");
         }
         assert_eq!(safe_name("normal_document.pdf"), "normal_document.pdf");
     }

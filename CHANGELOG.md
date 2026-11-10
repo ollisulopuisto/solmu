@@ -9,6 +9,8 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Saving an attachment whose name Windows reserves for a device (CON, NUL, COM1, ...) now keeps its extension: `CON.pdf` is saved as `attachment.pdf`, not `attachment`.
+
 ## v0.24.17
 
 - Link person: in Contact info, Link selected is now the filled green button and looks inactive only while no chat is ticked. Link person... and Add chats to this person... are plain outlined buttons. Before, Link selected looked like a disabled toggle, so pressing it seemed to do nothing even though it linked.
