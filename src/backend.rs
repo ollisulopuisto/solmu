@@ -1513,6 +1513,8 @@ pub enum Event {
         paths: Vec<PathBuf>,
         documents: bool,
         caption: Option<String>,
+        /// The reply quote the files carried, so it comes back with them.
+        quoting: Option<crate::model::ReplyTarget>,
         message: String,
     },
     /// A voice note's upload or send failed or ended uncertain. The recording
