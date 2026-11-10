@@ -9,9 +9,13 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
-## v0.24.13
+## v0.24.18
 
 - Automatic chat categories, first slice. Filters now has an Automatic category choice: People (one-to-one chats active in the last 7 days), Quiet people (idle 7 to 30 days), Long quiet (idle 30 days or more) and Notifications (channels and read-only chats). Groups stay in Groups. A chat's menu has Move to… to put a one-to-one chat in a category for good; the rules never re-sort it, and Sort automatically hands it back. The categories are opt-in filters: the default list, its order and its counts are unchanged, nothing is marked read, and nothing leaves this computer. While you search, the names of Quiet people chats fade a little and Long quiet chats fade more, in the chat rows and the message results, never below readable contrast. Your labels remain the tags. See docs/chat-categories.md.
+
+## v0.24.17
+
+- Link person: in Contact info, Link selected is now the filled green button and looks inactive only while no chat is ticked. Link person... and Add chats to this person... are plain outlined buttons. Before, Link selected looked like a disabled toggle, so pressing it seemed to do nothing even though it linked.
 
 ## v0.24.12
 

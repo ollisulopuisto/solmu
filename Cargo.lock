@@ -5564,7 +5564,7 @@ dependencies = [
 
 [[package]]
 name = "solmu"
-version = "0.24.13"
+version = "0.24.18"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
