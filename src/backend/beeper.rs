@@ -436,6 +436,20 @@ fn cache_files(
     Ok(files)
 }
 
+/// File extension for one ISO base media `ftyp` brand, if it is known.
+fn iso_brand_extension(brand: &[u8]) -> Option<&'static str> {
+    Some(match brand {
+        b"qt  " => "mov",
+        b"M4A " | b"M4B " => "m4a",
+        b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1" | b"msf1" => "heic",
+        b"avif" | b"avis" => "avif",
+        [b'3', b'g', ..] => "3gp",
+        b"isom" | b"iso2" | b"iso3" | b"iso4" | b"iso5" | b"iso6" | b"iso7" | b"iso8" | b"iso9"
+        | b"mp41" | b"mp42" | b"avc1" | b"dash" | b"M4V " | b"M4VH" | b"M4VP" | b"f4v " => "mp4",
+        _ => return None,
+    })
+}
+
 /// File extension for a downloaded attachment: the message type first, then
 /// the original file name, then the server's content type, then the bytes.
 fn media_extension(
@@ -494,17 +508,19 @@ fn media_extension(
     }
     if head.len() >= 12 && &head[4..8] == b"ftyp" {
         // The major brand says what the ISO media file is; ftyp alone also
-        // covers audio, HEIC and AVIF. An unknown brand stays unnamed.
-        return match &head[8..12] {
-            b"qt  " => "mov",
-            b"M4A " | b"M4B " => "m4a",
-            b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1" | b"msf1" => "heic",
-            b"avif" | b"avis" => "avif",
-            [b'3', b'g', ..] => "3gp",
-            b"isom" | b"iso2" | b"iso3" | b"iso4" | b"iso5" | b"iso6" | b"mp41" | b"mp42"
-            | b"avc1" | b"dash" | b"M4V " | b"M4VH" | b"M4VP" | b"f4v " => "mp4",
-            _ => "bin",
+        // covers audio, HEIC and AVIF. When the major brand is unknown (for
+        // example iso8), the compatible brands that follow it decide.
+        let size = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
+        let end = if size >= 16 {
+            size.min(head.len())
+        } else {
+            head.len()
         };
+        let compatible = head.get(16..end).unwrap_or(&[]).chunks_exact(4);
+        return std::iter::once(&head[8..12])
+            .chain(compatible)
+            .find_map(iso_brand_extension)
+            .unwrap_or("bin");
     }
     if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
         // EBML is Matroska and WebM alike; the DocType sits in the header.
@@ -4587,6 +4603,13 @@ mod tests {
         );
         assert_eq!(media_extension(None, None, None, &ebml(b"matroska")), "mkv");
         assert_eq!(media_extension(None, None, None, &ebml(b"????")), "bin");
+        // A major brand the table does not know falls back to the compatible brands.
+        let mut iso8 = b"\0\0\0\x18ftypiso8\0\0\0\0".to_vec();
+        iso8.extend_from_slice(b"iso8mp41");
+        assert_eq!(media_extension(None, None, None, &iso8), "mp4");
+        let mut m4a8 = b"\0\0\0\x18ftypzzzz\0\0\0\0".to_vec();
+        m4a8.extend_from_slice(b"M4A zzzz");
+        assert_eq!(media_extension(None, None, None, &m4a8), "m4a");
         for (brand, ext) in [
             (b"M4A ", "m4a"),
             (b"heic", "heic"),
