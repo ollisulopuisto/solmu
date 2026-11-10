@@ -137,6 +137,7 @@ fn safe_name(name: &str) -> String {
     if sanitized.is_empty()
         || sanitized == "."
         || sanitized == ".."
+        || sanitized.contains(':')
         || sanitized.chars().any(char::is_control)
         || crate::safety::is_reserved_dos_name(stem)
     {
@@ -404,14 +405,17 @@ mod tests {
             "../PRN.png",
             "...",
             "   ",
-            "photo.png.",
-            "photo.png   ",
+            "file.txt:stream",
+            "photo.png:$DATA",
+            "COM0.txt",
+            "LPT0.csv",
+            "CONIN$.txt",
+            "conout$.png",
         ] {
-            if name.starts_with("photo.png") {
-                assert_eq!(safe_name(name), "photo.png", "{name}");
-            } else {
-                assert_eq!(safe_name(name), "attachment", "{name}");
-            }
+            assert_eq!(safe_name(name), "attachment", "{name}");
+        }
+        for name in ["photo.png.", "photo.png   "] {
+            assert_eq!(safe_name(name), "photo.png", "{name}");
         }
         assert_eq!(safe_name("normal_document.pdf"), "normal_document.pdf");
     }
