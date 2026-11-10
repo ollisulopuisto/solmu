@@ -756,7 +756,7 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
                             ui.ctx().data_mut(|data| {
                                 data.insert_temp(toast_close_id(index).with("text"), rect);
                             });
-                            if let ToastKind::Undo(before) = &toast.kind {
+                            if let ToastKind::Undo(added) = &toast.kind {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
@@ -764,7 +764,7 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
                                             .button(crate::i18n::gettext(app.locale, "Undo"))
                                             .clicked()
                                         {
-                                            actions.push(Action::UndoLinks(before.clone()));
+                                            actions.push(Action::UndoLinks(added.clone()));
                                         }
                                     },
                                 );

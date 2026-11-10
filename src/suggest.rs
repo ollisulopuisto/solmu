@@ -108,22 +108,31 @@ pub fn normalized_name(name: &str) -> Option<String> {
     Some(words.join(" "))
 }
 
-/// A phone number as `+digits`, or a username without its `@`, lower case.
-/// `None` when too short to identify anyone or an opaque server identifier.
-pub fn normalized_handle(raw: &str) -> Option<String> {
+/// A phone number as `+digits`. `None` unless it starts with `+` and has 7
+/// to 15 digits.
+pub fn normalized_phone(raw: &str) -> Option<String> {
     let text = raw.trim();
     let digits: String = text.chars().filter(char::is_ascii_digit).collect();
     let phone_like = text
         .chars()
         .all(|c| c.is_ascii_digit() || matches!(c, '+' | ' ' | '-' | '(' | ')'));
-    if phone_like && text.starts_with('+') && (7..=15).contains(&digits.len()) {
-        return Some(format!("+{digits}"));
-    }
-    let user = text.trim_start_matches('@').to_lowercase();
+    (phone_like && text.starts_with('+') && (7..=15).contains(&digits.len()))
+        .then(|| format!("+{digits}"))
+}
+
+/// A username without its `@`, lower case. `None` when too short to identify
+/// anyone, not plain letters, digits, `.`, `_` or `-`, or phone-like.
+pub fn normalized_username(raw: &str) -> Option<String> {
+    let user = raw.trim().trim_start_matches('@').to_lowercase();
     let plain = user
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-    (plain && user.len() >= 4 && !phone_like).then_some(user)
+    (plain && user.len() >= 4 && user.chars().any(|c| !c.is_ascii_digit())).then_some(user)
+}
+
+/// Either kind, for handles already stored on a chat.
+pub fn normalized_handle(raw: &str) -> Option<String> {
+    normalized_phone(raw).or_else(|| normalized_username(raw))
 }
 
 fn eligible(chat: &Chat) -> bool {
@@ -231,6 +240,29 @@ pub fn accepted(mut people: Vec<Person>, suggestion: &Suggestion, name: &str) ->
             primary: None,
         }),
     }
+    people
+}
+
+/// The chats an accepted suggestion put into the people list: the ones that
+/// were in no person before.
+pub fn added_by(people: &[Person], suggestion: &Suggestion) -> Vec<Member> {
+    [&suggestion.a, &suggestion.b]
+        .into_iter()
+        .filter(|m| !people.iter().any(|p| p.members.contains(m)))
+        .cloned()
+        .collect()
+}
+
+/// The people list with `added` taken back out, and nothing else changed. A
+/// person left with fewer than two chats is no longer a link and goes too.
+pub fn undone(mut people: Vec<Person>, added: &[Member]) -> Vec<Person> {
+    for person in &mut people {
+        person.members.retain(|m| !added.contains(m));
+        if person.primary.as_ref().is_some_and(|m| added.contains(m)) {
+            person.primary = None;
+        }
+    }
+    people.retain(|p| p.members.len() >= 2);
     people
 }
 
@@ -379,5 +411,49 @@ mod tests {
             Some("+15550109999")
         );
         assert_eq!(normalized_handle("@Kati_K").as_deref(), Some("kati_k"));
+    }
+
+    #[test]
+    fn undoing_one_link_leaves_the_others() {
+        let chats = [
+            chat("a-wa", "Alice Aalto", "WhatsApp", &[]),
+            chat("a-tg", "Alice Aalto", "Telegram", &[]),
+            chat("b-wa", "Bob Berg", "WhatsApp", &[]),
+            chat("b-tg", "Bob Berg", "Telegram", &[]),
+        ];
+        let found = suggestions(&chats, &[], &[]);
+        let alice = found.iter().find(|s| s.a.chat.starts_with("a-")).unwrap();
+        let bob = found.iter().find(|s| s.a.chat.starts_with("b-")).unwrap();
+        let mut people = Vec::new();
+        let alice_added = added_by(&people, alice);
+        people = accepted(people, alice, "Alice Aalto");
+        let bob_added = added_by(&people, bob);
+        people = accepted(people, bob, "Bob Berg");
+        assert_eq!(people.len(), 2);
+        let after = undone(people.clone(), &alice_added);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].name, "Bob Berg");
+        let after = undone(people, &bob_added);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].name, "Alice Aalto");
+    }
+
+    #[test]
+    fn undoing_a_join_removes_only_the_joined_chat() {
+        let chats = [
+            chat("wa", "Ada Lovelace", "WhatsApp", &[]),
+            chat("tg", "Ada Lovelace", "Telegram", &[]),
+            chat("sg", "Ada Lovelace", "Signal", &[]),
+        ];
+        let first = suggestions(&chats, &[], &[]);
+        let mut people = accepted(Vec::new(), &first[0], "Ada");
+        let rest = suggestions(&chats, &people, &[]);
+        let added = added_by(&people, &rest[0]);
+        assert_eq!(added.len(), 1);
+        people = accepted(people, &rest[0], "Ada");
+        assert_eq!(people[0].members.len(), 3);
+        let after = undone(people, &added);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].members.len(), 2);
     }
 }

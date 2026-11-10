@@ -6924,21 +6924,21 @@ impl App {
         found
     }
 
-    /// Links the suggested pair, with an Undo toast that restores the list.
+    /// Links the suggested pair, with an Undo toast that takes back only this link.
     pub fn accept_link_suggestion(&mut self, suggestion: &crate::suggest::Suggestion) {
         let before = self.settings.beeper.people.clone();
+        let added = crate::suggest::added_by(&before, suggestion);
         let name = self
             .chat(&suggestion.a.chat)
             .map(|chat| chat.name.clone())
             .unwrap_or_default();
-        self.settings.beeper.people =
-            crate::suggest::accepted(before.clone(), suggestion, name.trim());
+        self.settings.beeper.people = crate::suggest::accepted(before, suggestion, name.trim());
         self.refresh_linked_scopes();
         self.mark_settings_dirty();
         let message = crate::i18n::gettext(self.locale, "Linked as one person").into_owned();
         self.toast(message);
         if let Some(toast) = self.toasts.last_mut() {
-            toast.kind = ToastKind::Undo(before);
+            toast.kind = ToastKind::Undo(added);
         }
     }
 
@@ -9136,10 +9136,11 @@ impl App {
             Action::CopyImage(path) => {
                 self.backend.send(Command::PrepareClipboardImage(path));
             }
-            Action::UndoLinks(before) => {
-                self.settings.beeper.people = before;
+            Action::UndoLinks(added) => {
+                let people = std::mem::take(&mut self.settings.beeper.people);
+                self.settings.beeper.people = crate::suggest::undone(people, &added);
                 self.toasts
-                    .retain(|toast| !matches!(toast.kind, ToastKind::Undo(_)));
+                    .retain(|toast| toast.kind != ToastKind::Undo(added.clone()));
                 self.refresh_linked_scopes();
                 self.mark_settings_dirty();
                 self.toast("Link undone");

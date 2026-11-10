@@ -1065,7 +1065,12 @@ impl Api {
                 }
             }
         }
-        let mut chat = map_chat(wire, label);
+        let own = self
+            .own_ids
+            .lock()
+            .ok()
+            .and_then(|ids| ids.get(&wire.account_id).cloned());
+        let mut chat = map_chat_for(wire, label, own.as_deref());
         chat.backend_origin = Some(self.base_url.clone());
         if chat.last.is_none()
             && let Some(preview) = wire.preview.as_ref().filter(|p| is_empty_preview(p))
@@ -2180,6 +2185,16 @@ fn map_message(m: &BeeperMessage, fallback_chat: &str) -> Message {
 }
 
 fn map_chat(c: &BeeperChat, network_label: &dyn Fn(&BeeperChat) -> String) -> Chat {
+    map_chat_for(c, network_label, None)
+}
+
+/// `own` is the account's own user id when known: that participant's handles
+/// are never the other person's, even if the server leaves `isSelf` out.
+fn map_chat_for(
+    c: &BeeperChat,
+    network_label: &dyn Fn(&BeeperChat) -> String,
+    own: Option<&str>,
+) -> Chat {
     let title = if c.title.trim().is_empty() || opaque_identity(&c.title) {
         c.participants
             .as_ref()
@@ -2232,20 +2247,25 @@ fn map_chat(c: &BeeperChat, network_label: &dyn Fn(&BeeperChat) -> String) -> Ch
     if chat.kind == ChatKind::Direct
         && let Some(participants) = &c.participants
     {
-        // Only the other person's handles: ours would be in every chat.
+        // Only the other person's handles: ours would be in every chat. A
+        // participant id counts only when it is a phone number; opaque ids
+        // such as "contact42" never identify anyone across networks.
         let mut handles: Vec<String> = participants
             .items
             .iter()
-            .filter(|u| u.is_self != Some(true))
+            .filter(|u| u.is_self != Some(true) && own != Some(u.id.as_str()))
             .flat_map(|u| {
                 [
-                    u.phone_number.clone(),
-                    u.username.clone(),
-                    Some(u.id.clone()),
+                    u.phone_number
+                        .as_deref()
+                        .and_then(crate::suggest::normalized_phone),
+                    crate::suggest::normalized_phone(&u.id),
+                    u.username
+                        .as_deref()
+                        .and_then(crate::suggest::normalized_username),
                 ]
             })
             .flatten()
-            .filter_map(|h| crate::suggest::normalized_handle(&h))
             .collect();
         handles.sort();
         handles.dedup();
@@ -4467,6 +4487,20 @@ mod tests {
     //! They pin the demo's contract: multiple accounts on one network stay
     //! distinguishable, background startup/polling causes NO mutating HTTP
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
+
+    #[test]
+    fn own_user_and_opaque_ids_never_become_handles() {
+        let wire: BeeperChat = serde_json::from_str(
+            r#"{"id":"c2","accountID":"a","network":"Signal","title":"Anna Example","type":"single",
+            "participants":{"items":[
+              {"id":"@me:beeper.local","username":"my_name","phoneNumber":"+358401111111"},
+              {"id":"contact42","fullName":"Anna Example"},
+              {"id":"+358 40 222 2222"}]}}"#,
+        )
+        .unwrap();
+        let chat = map_chat_for(&wire, &|c| c.network.clone(), Some("@me:beeper.local"));
+        assert_eq!(chat.handles, ["+358402222222"]);
+    }
 
     #[test]
     fn direct_chats_keep_only_the_other_persons_handles() {

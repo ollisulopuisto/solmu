@@ -2049,12 +2049,61 @@ mod tests {
         assert_eq!(app.settings.beeper.people[0].members.len(), 2);
         assert!(app.link_suggestions().is_empty());
         let before = match &app.toasts.last().expect("an Undo toast").kind {
-            crate::model::ToastKind::Undo(before) => before.clone(),
+            crate::model::ToastKind::Undo(added) => added.clone(),
             other => panic!("expected an Undo toast, got {other:?}"),
         };
         app.apply(crate::model::Action::UndoLinks(before), &ctx);
         assert!(app.settings.beeper.people.is_empty());
         assert_eq!(app.link_suggestions().len(), 1);
+    }
+
+    #[test]
+    fn undo_takes_back_only_its_own_link() {
+        let mut chats = same_name_pair();
+        for (id, account, network) in [
+            ("bob-wa@s.whatsapp.net", "whatsapp", "WhatsApp"),
+            ("bob-tg@telegram", "telegram", "Telegram"),
+        ] {
+            let mut chat = member_chat(id, account);
+            chat.name = "Bob Berg".into();
+            chat.backend_network = Some(network.into());
+            chats.push(chat);
+        }
+        let (_directory, mut app, ctx) = linked_app(chats, Vec::new());
+        let found = app.link_suggestions();
+        assert_eq!(found.len(), 2);
+        let alice = found
+            .iter()
+            .find(|s| s.a.chat.starts_with("ada"))
+            .unwrap()
+            .clone();
+        let bob = found
+            .iter()
+            .find(|s| s.a.chat.starts_with("bob"))
+            .unwrap()
+            .clone();
+        app.accept_link_suggestion(&alice);
+        app.accept_link_suggestion(&bob);
+        assert_eq!(app.settings.beeper.people.len(), 2);
+        let first = app
+            .toasts
+            .iter()
+            .find_map(|t| match &t.kind {
+                crate::model::ToastKind::Undo(added) if added.contains(&alice.a) => {
+                    Some(added.clone())
+                }
+                _ => None,
+            })
+            .expect("Alice's Undo toast");
+        app.apply(crate::model::Action::UndoLinks(first), &ctx);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert!(app.settings.beeper.people[0].members.contains(&bob.a));
+        assert!(
+            app.toasts
+                .iter()
+                .any(|t| matches!(&t.kind, crate::model::ToastKind::Undo(a) if a.contains(&bob.a))),
+            "Bob's Undo toast stays"
+        );
     }
 
     #[test]

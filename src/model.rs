@@ -2507,8 +2507,9 @@ pub struct InviteInfo {
 pub enum ToastKind {
     Info,
     Error,
-    /// An info toast with an Undo button; holds the people list to restore.
-    Undo(Vec<crate::merged::Person>),
+    /// An info toast with an Undo button; holds the chats that link added,
+    /// so undoing it leaves every other link alone.
+    Undo(Vec<crate::merged::Member>),
 }
 
 /// Info toasts fade after a few seconds; errors stay until dismissed so they
@@ -2813,8 +2814,8 @@ pub enum Action {
     /// Closes the toast at this index. Only errors wait to be dismissed.
     DismissToast(usize),
     /// Puts the people list back as it was before a link suggestion was
-    /// accepted, from the Undo toast.
-    UndoLinks(Vec<crate::merged::Person>),
+    /// accepted, from the Undo toast: takes only those chats back out.
+    UndoLinks(Vec<crate::merged::Member>),
     /// Starts a reply to a message in the open chat.
     Reply(String),
     /// Opens the group sender's direct chat with this message quoted.
