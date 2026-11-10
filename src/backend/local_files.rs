@@ -131,7 +131,10 @@ fn save_batch(folder: &Path, files: Vec<(PathBuf, String)>) -> Result<(), String
 fn safe_name(name: &str) -> String {
     // Strip both Unix (/) and Windows (\) path separators to prevent cross-platform directory traversal
     let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    let trimmed = leaf.trim();
+    // A colon in any component selects an NTFS alternate data stream, even
+    // after a reserved stem is replaced. Normalize it before preserving suffixes.
+    let stream_safe = leaf.replace(':', "_");
+    let trimmed = stream_safe.trim();
     let sanitized = trimmed.trim_end_matches([' ', '.']);
     let stem = sanitized.split('.').next().unwrap_or(sanitized);
     if sanitized.is_empty()
@@ -411,6 +414,10 @@ mod tests {
             (r"folder\CON.txt", "attachment.txt"),
             ("../PRN.png", "attachment.png"),
             ("CON.pdf.", "attachment.pdf"),
+            ("CON.pdf:payload", "attachment.pdf_payload"),
+            ("report.txt:payload", "report.txt_payload"),
+            ("CON:payload", "CON_payload"),
+            ("report.txt::$DATA", "report.txt__$DATA"),
             ("...", "attachment"),
             ("   ", "attachment"),
             ("photo.png.", "photo.png"),
