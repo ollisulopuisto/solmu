@@ -2184,6 +2184,7 @@ fn map_message(m: &BeeperMessage, fallback_chat: &str) -> Message {
     }
 }
 
+#[cfg(test)]
 fn map_chat(c: &BeeperChat, network_label: &dyn Fn(&BeeperChat) -> String) -> Chat {
     map_chat_for(c, network_label, None)
 }

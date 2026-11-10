@@ -725,10 +725,9 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
                             palette.text,
                             (ctx.content_rect().width() - 150.0).clamp(80.0, 360.0),
                         );
-                        let buttons = if error {
+                        // An error carries two buttons, an Undo toast one wide one.
+                        let buttons = if error || undo {
                             2.0 * 26.0 + 12.0
-                        } else if undo {
-                            64.0
                         } else {
                             0.0
                         };
