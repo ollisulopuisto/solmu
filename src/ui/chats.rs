@@ -3271,7 +3271,11 @@ fn voice_speed_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &
 /// text. `ReadBySome` also paints a "+" after the ticks (widgets::ticks_in),
 /// so it needs the plus's width too, or the plus overlaps the preview.
 fn advance_after_ticks(delivery: crate::model::Delivery) -> f32 {
-    if delivery == crate::model::Delivery::ReadBySome { 30.0 } else { 20.0 }
+    if delivery == crate::model::Delivery::ReadBySome {
+        30.0
+    } else {
+        20.0
+    }
 }
 
 #[cfg(test)]
