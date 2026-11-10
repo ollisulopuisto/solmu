@@ -9,9 +9,13 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
-## v0.24.15
+## v0.24.20
 
 - Link suggestions: when two one-to-one chats on different networks have the same full name or the same phone number or username, Contact info shows a "Same person?" card with Link and Not the same person, and Filters lists them under "Link suggestions". Linking can be undone for a few seconds, and a dismissed pair is not suggested again. Nothing is linked automatically and nothing leaves your computer.
+
+## v0.24.17
+
+- Link person: in Contact info, Link selected is now the filled green button and looks inactive only while no chat is ticked. Link person... and Add chats to this person... are plain outlined buttons. Before, Link selected looked like a disabled toggle, so pressing it seemed to do nothing even though it linked.
 
 ## v0.24.12
 
