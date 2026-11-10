@@ -9,6 +9,8 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Reject URLs and preview links with deeply nested percent-encoded control characters: decoding now fails closed at the layer bound instead of letting a 17+ layer encoded control through.
+
 ## v0.24.11
 
 - The command palette (Ctrl+P) shows the key next to each command, lists Jump to open chat (Ctrl+K), and stays open after you pick a filter so you can try several in a row. Commands that open a dialog (New chat, Shortcuts, What's New, Send Later queue, Schedule this message) now really open it; before, the palette closed it again.
