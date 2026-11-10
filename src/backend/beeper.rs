@@ -2836,6 +2836,9 @@ pub fn run(
     let mut last_receipt_refresh = Instant::now();
     let mut pending_sends: Vec<(ChatId, String, Instant)> = Vec::new();
     let mut pending_storage: Option<(u64, bool)> = None;
+    // Set by Command::Resumed: after a wake every poll timer is due at once,
+    // so a link the server dropped during sleep is noticed on the next tick.
+    let mut refresh_after_wake = false;
 
     loop {
         loop {
@@ -3847,8 +3850,21 @@ pub fn run(
                 | Command::RefreshPoll { .. } => {
                     emit(Event::Info("This action is not supported by the Beeper client. Nothing was sent or changed.".into()));
                 }
+                Command::Resumed => {
+                    log::info!("woke from sleep: refreshing chats and messages now");
+                    refresh_after_wake = true;
+                }
                 _ => {}
             }
+        }
+
+        if refresh_after_wake {
+            refresh_after_wake = false;
+            force_polls_due(
+                &mut last_chat_refresh,
+                &mut last_msg_poll,
+                &mut last_receipt_refresh,
+            );
         }
 
         if let Some((token, clear)) = pending_storage
@@ -4350,6 +4366,19 @@ fn poll_newer(
     false
 }
 
+/// `Command::Resumed`: after a wake every poll is due at once. A link open
+/// across sleep can look established while nothing arrives, so the next tick
+/// re-reads everything instead of waiting the timers out.
+fn force_polls_due(
+    last_chat_refresh: &mut Instant,
+    last_msg_poll: &mut Instant,
+    last_receipt_refresh: &mut Instant,
+) {
+    *last_chat_refresh = Instant::now() - CHAT_REFRESH;
+    *last_msg_poll = Instant::now() - MSG_POLL;
+    *last_receipt_refresh = Instant::now() - RECEIPT_REFRESH;
+}
+
 #[cfg(test)]
 mod tests {
     //! Integration tests against a stub Beeper Client API (std TCP, no deps).
@@ -4358,6 +4387,17 @@ mod tests {
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
 
     use super::*;
+
+    #[test]
+    fn a_wake_makes_every_poll_due_at_once() {
+        let mut chat = Instant::now();
+        let mut messages = Instant::now();
+        let mut receipts = Instant::now();
+        force_polls_due(&mut chat, &mut messages, &mut receipts);
+        assert!(chat.elapsed() >= CHAT_REFRESH);
+        assert!(messages.elapsed() >= MSG_POLL);
+        assert!(receipts.elapsed() >= RECEIPT_REFRESH);
+    }
     use crate::paths::AppDirs;
     use std::io::{Read, Write};
     use std::net::TcpListener;

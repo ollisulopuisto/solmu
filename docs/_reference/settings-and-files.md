@@ -321,6 +321,12 @@ reporting an issue. **Settings > Files > Log > Open** shows it. The run before
 is kept beside it as `solmu.previous.log`: if Solmu froze and you had to
 restart it, that file holds what happened.
 
+Sleep and wake show here too: going to sleep, the session ending, waking up,
+the window closing and the event loop's end each write a line, so a run that
+vanished shows which of them it saw last. On a wake the chats and messages
+refresh at once instead of on their usual timers, so the first seconds after
+opening the lid make a few more requests than usual.
+
 During a call the log also records the call's numbers every few seconds: the
 video rate, loss and keyframes in each direction, and the audio devices'
 health. They are counts and sizes only.
