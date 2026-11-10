@@ -3523,7 +3523,8 @@ impl App {
                         || self.label_filter.is_some()
                         || self.auto_category_filter.is_some()))
                 || (queue == ChatFilter::Unread
-                    && self.category_filter == Some(ChatFilter::Channels)
+                    && (self.category_filter == Some(ChatFilter::Channels)
+                        || (self.auto_category_filter.is_some() && chat.is_channel()))
                     && chat.looks_unread())
                 || self.filter_matches(queue, chat)
                 || (queue == ChatFilter::Unread && self.unread_kept.contains(&chat.id)))

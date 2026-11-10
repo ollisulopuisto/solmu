@@ -169,3 +169,25 @@ fn groups_cannot_be_moved_into_a_category_and_reset_clears_the_category() {
     assert_eq!(app.auto_category_filter, None);
     assert!(!app.search_scope_active());
 }
+
+#[test]
+fn unread_queue_with_a_category_keeps_unread_channels() {
+    use solmu::categories::AutoCategory;
+    let ctx = egui::Context::default();
+    let mut app = category_app(&ctx);
+    for chat in &mut app.chats {
+        if chat.id == "news@newsletter" || chat.id == "recent@s.whatsapp.net" {
+            chat.unread = 2;
+        }
+    }
+    app.actions.push(Action::SetChatFilter(ChatFilter::Unread));
+    app.actions.push(Action::SelectAutoCategory(Some(
+        AutoCategory::Notifications,
+    )));
+    frame(&mut app, &ctx);
+    assert_eq!(visible_names(&app), vec!["News"]);
+    app.actions
+        .push(Action::SelectAutoCategory(Some(AutoCategory::People)));
+    frame(&mut app, &ctx);
+    assert_eq!(visible_names(&app), vec!["Recent"]);
+}
