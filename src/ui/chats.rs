@@ -2467,9 +2467,7 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
                     app.account_receipts_off,
                 );
                 widgets::ticks(ui, &palette, tick_rect, delivery);
-                // ReadBySome paints a "+" after the ticks (widgets::ticks_in):
-                // reserve its width too, or it overlaps the preview text.
-                x += if delivery == crate::model::Delivery::ReadBySome { 30.0 } else { 20.0 };
+                x += advance_after_ticks(delivery);
             } else if chat.is_group() {
                 let sender = app.display_name_or(&last.sender, last.sender_name.as_deref());
                 let first = app.short_name(&last.sender, &sender);
@@ -3269,9 +3267,36 @@ fn voice_speed_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &
     );
 }
 
+/// The chat-list row's advance past the delivery ticks before the preview
+/// text. `ReadBySome` also paints a "+" after the ticks (widgets::ticks_in),
+/// so it needs the plus's width too, or the plus overlaps the preview.
+fn advance_after_ticks(delivery: crate::model::Delivery) -> f32 {
+    if delivery == crate::model::Delivery::ReadBySome { 30.0 } else { 20.0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_read_by_some_plus_gets_its_own_width_in_the_row() {
+        let plus = advance_after_ticks(crate::model::Delivery::ReadBySome);
+        for delivery in [
+            crate::model::Delivery::None,
+            crate::model::Delivery::Unknown,
+            crate::model::Delivery::Pending,
+            crate::model::Delivery::Sent,
+            crate::model::Delivery::Delivered,
+            crate::model::Delivery::Read,
+            crate::model::Delivery::Played,
+            crate::model::Delivery::Failed,
+        ] {
+            assert!(
+                advance_after_ticks(delivery) < plus,
+                "{delivery:?} must not reserve the plus's width"
+            );
+        }
+    }
 
     #[test]
     fn queues_share_a_row_below_search_even_while_typing() {
