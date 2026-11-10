@@ -212,11 +212,11 @@ The sticker is a 512 × 512 WebP under WhatsApp's 100 KB limit.
 
 ## Attachments
 
-When saving an attachment, Solmu uses `attachment` in place of a filename
-containing a colon, such as `photo.png:stream`. This keeps Windows from
-interpreting the name as a hidden NTFS alternate data stream. Reserved
-Windows device names, including `CONIN$` and `CONOUT$`, also use this fallback.
-
+When saving an attachment, Solmu replaces colons with underscores, so
+`photo.png:stream` becomes `photo.png_stream` rather than a hidden NTFS alternate
+data stream. Reserved Windows device stems, including `CONIN$` and `CONOUT$`,
+become `attachment` while retaining their extension: `CONIN$.txt` becomes
+`attachment.txt`.
 
 Paste a picture or copied files, drop files on the window, or select them with
 the paperclip.
@@ -282,7 +282,10 @@ items with the same protocol album identity, sender and local calendar date
 are grouped. **Download all** downloads every item that is not on this
 computer yet, whatever its size, as clicking each one would, and shows
 individual failures; **Save all…** copies downloaded files to a folder
-without replacing existing files. Open an item to view it individually, and
+without replacing existing files. Saved names are made safe: folders, trailing
+spaces and dots are dropped, and a name that Windows reserves for a device
+(such as CON or NUL) becomes `attachment` with its extension kept, so
+`CON.pdf` is saved as `attachment.pdf`. Open an item to view it individually, and
 right-click it to reply to, react to, forward or delete that item alone. A
 download that fails marks only its own item; click it to retry.
 

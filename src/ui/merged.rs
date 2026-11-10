@@ -1612,11 +1612,14 @@ fn picker(
             format!("A linked person supports up to 8 chats; {room} left."),
         );
     }
+    // The main action of an open picker: filled accent, faded only while
+    // nothing is ticked.
+    let palette = app.palette;
     if ui
-        .add_enabled(
-            !state.selected.is_empty() && !over,
-            egui::Button::new("Link selected"),
-        )
+        .add_enabled_ui(!state.selected.is_empty() && !over, |ui| {
+            crate::theme::pill_button(ui, &palette, "Link selected", true)
+        })
+        .inner
         .clicked()
     {
         return state
@@ -1874,10 +1877,7 @@ pub(crate) fn sidebar(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         }
         let base = person.name.clone();
         let already = person.members.len();
-        if ui
-            .selectable_label(state.open, "Add chats to this person…")
-            .clicked()
-        {
+        if crate::theme::pill_button(ui, &palette, "Add chats to this person…", false).clicked() {
             state.open = !state.open;
         }
         if state.open {
@@ -1903,7 +1903,7 @@ pub(crate) fn sidebar(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             "Local link only: combine this chat with the same person's other chats on this Beeper server.",
             true,
         );
-        if ui.selectable_label(state.open, "Link person…").clicked() {
+        if crate::theme::pill_button(ui, &palette, "Link person…", false).clicked() {
             state.open = !state.open;
         }
         if state.open {

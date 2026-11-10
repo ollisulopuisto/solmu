@@ -9,6 +9,17 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Exported attachment names cannot select NTFS alternate data streams through a colon in the original filename.
+
+- Saving an attachment whose name Windows reserves for a device (CON, NUL, COM1, ...) now keeps its extension: `CON.pdf` is saved as `attachment.pdf`, not `attachment`.
+## v0.24.19
+
+- Telegram and other videos that Beeper sends without a file type no longer save as `.bin`. Solmu now takes the type from the file name, the server's content type or the file's first bytes, so they open in the player and your system viewer.
+
+## v0.24.17
+
+- Link person: in Contact info, Link selected is now the filled green button and looks inactive only while no chat is ticked. Link person... and Add chats to this person... are plain outlined buttons. Before, Link selected looked like a disabled toggle, so pressing it seemed to do nothing even though it linked.
+
 ## v0.24.12
 
 - Reply with attachments on Beeper: a reply quote now goes with a sent file, document or pasted picture instead of the send being refused. The quote belongs to the first file, as the guide already describes. Mentions and view-once stays refused with attachments.

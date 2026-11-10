@@ -131,17 +131,26 @@ fn save_batch(folder: &Path, files: Vec<(PathBuf, String)>) -> Result<(), String
 fn safe_name(name: &str) -> String {
     // Strip both Unix (/) and Windows (\) path separators to prevent cross-platform directory traversal
     let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
-    let trimmed = leaf.trim();
+    // A colon in any component selects an NTFS alternate data stream, even
+    // after a reserved stem is replaced. Normalize it before preserving suffixes.
+    let stream_safe = leaf.replace(':', "_");
+    let trimmed = stream_safe.trim();
     let sanitized = trimmed.trim_end_matches([' ', '.']);
     let stem = sanitized.split('.').next().unwrap_or(sanitized);
     if sanitized.is_empty()
         || sanitized == "."
         || sanitized == ".."
-        || sanitized.contains(':')
         || sanitized.chars().any(char::is_control)
-        || crate::safety::is_reserved_dos_name(stem)
     {
         "attachment".to_owned()
+    } else if crate::safety::is_reserved_dos_name(stem) {
+        // Windows treats CON.pdf as the CON device whatever the extension, so
+        // the stem is replaced; the extension stays so the file keeps opening
+        // with its usual application.
+        match sanitized.split_once('.') {
+            Some((_, extension)) if !extension.is_empty() => format!("attachment.{extension}"),
+            _ => "attachment".to_owned(),
+        }
     } else {
         sanitized.to_owned()
     }
@@ -391,31 +400,34 @@ mod tests {
 
     #[test]
     fn safe_name_neutralizes_dos_devices_and_trailing_characters() {
-        for name in [
-            "CON",
-            "con.txt",
-            "PRN.pdf",
-            "aux.png",
-            "NUL.docx",
-            "com1.jpg",
-            "COM9.csv",
-            "lpt1.txt",
-            "LPT9.log",
-            r"folder\CON.txt",
-            "../PRN.png",
-            "...",
-            "   ",
-            "file.txt:stream",
-            "photo.png:$DATA",
-            "COM0.txt",
-            "LPT0.csv",
-            "CONIN$.txt",
-            "conout$.png",
+        for (name, expected) in [
+            ("CON", "attachment"),
+            ("con.txt", "attachment.txt"),
+            ("PRN.pdf", "attachment.pdf"),
+            ("aux.png", "attachment.png"),
+            ("NUL.docx", "attachment.docx"),
+            ("com1.jpg", "attachment.jpg"),
+            ("COM9.csv", "attachment.csv"),
+            ("lpt1.txt", "attachment.txt"),
+            ("LPT9.log", "attachment.log"),
+            ("CON.tar.gz", "attachment.tar.gz"),
+            ("CONIN$.txt", "attachment.txt"),
+            ("conout$.png", "attachment.png"),
+            ("COM0.txt", "attachment.txt"),
+            ("LPT0.csv", "attachment.csv"),
+            (r"folder\CON.txt", "attachment.txt"),
+            ("../PRN.png", "attachment.png"),
+            ("CON.pdf.", "attachment.pdf"),
+            ("CON.pdf:payload", "attachment.pdf_payload"),
+            ("report.txt:payload", "report.txt_payload"),
+            ("CON:payload", "CON_payload"),
+            ("report.txt::$DATA", "report.txt__$DATA"),
+            ("...", "attachment"),
+            ("   ", "attachment"),
+            ("photo.png.", "photo.png"),
+            ("photo.png   ", "photo.png"),
         ] {
-            assert_eq!(safe_name(name), "attachment", "{name}");
-        }
-        for name in ["photo.png.", "photo.png   "] {
-            assert_eq!(safe_name(name), "photo.png", "{name}");
+            assert_eq!(safe_name(name), expected, "{name}");
         }
         assert_eq!(safe_name("normal_document.pdf"), "normal_document.pdf");
     }
