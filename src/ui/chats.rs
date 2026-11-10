@@ -393,26 +393,36 @@ fn scope_row(app: &mut App, ui: &mut egui::Ui) {
                     .id_salt("link-suggestions")
                     .default_open(false)
                     .show(ui, |ui| {
-                        for suggestion in suggestions.iter().take(20) {
-                            let name = |member: &crate::merged::Member| {
-                                app.chat(&member.chat).map_or_else(String::new, |chat| {
-                                    format!(
-                                        "{} ({})",
-                                        chat.name,
-                                        chat.backend_network.clone().unwrap_or_default()
-                                    )
-                                })
-                            };
-                            ui.label(format!("{} = {}", name(&suggestion.a), name(&suggestion.b)));
-                            ui.horizontal(|ui| {
-                                if ui.small_button("Link").clicked() {
-                                    app.accept_link_suggestion(suggestion);
-                                }
-                                if ui.small_button("Not the same person").clicked() {
-                                    app.dismiss_link_suggestion(suggestion);
+                        // Every pending pair is reachable: the list scrolls
+                        // instead of cutting off at a fixed count.
+                        egui::ScrollArea::vertical()
+                            .max_height(320.0)
+                            .show(ui, |ui| {
+                                for suggestion in suggestions.iter() {
+                                    let name = |member: &crate::merged::Member| {
+                                        app.chat(&member.chat).map_or_else(String::new, |chat| {
+                                            format!(
+                                                "{} ({})",
+                                                chat.name,
+                                                chat.backend_network.clone().unwrap_or_default()
+                                            )
+                                        })
+                                    };
+                                    ui.label(format!(
+                                        "{} = {}",
+                                        name(&suggestion.a),
+                                        name(&suggestion.b)
+                                    ));
+                                    ui.horizontal(|ui| {
+                                        if ui.small_button("Link").clicked() {
+                                            app.accept_link_suggestion(suggestion);
+                                        }
+                                        if ui.small_button("Not the same person").clicked() {
+                                            app.dismiss_link_suggestion(suggestion);
+                                        }
+                                    });
                                 }
                             });
-                        }
                     });
             }
             ui.separator();
