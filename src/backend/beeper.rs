@@ -493,14 +493,30 @@ fn media_extension(
         return ext;
     }
     if head.len() >= 12 && &head[4..8] == b"ftyp" {
-        return if &head[8..12] == b"qt  " {
-            "mov"
-        } else {
-            "mp4"
+        // The major brand says what the ISO media file is; ftyp alone also
+        // covers audio, HEIC and AVIF. An unknown brand stays unnamed.
+        return match &head[8..12] {
+            b"qt  " => "mov",
+            b"M4A " | b"M4B " => "m4a",
+            b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1" | b"msf1" => "heic",
+            b"avif" | b"avis" => "avif",
+            [b'3', b'g', ..] => "3gp",
+            b"isom" | b"iso2" | b"iso3" | b"iso4" | b"iso5" | b"iso6" | b"mp41" | b"mp42"
+            | b"avc1" | b"dash" | b"M4V " | b"M4VH" | b"M4VP" | b"f4v " => "mp4",
+            _ => "bin",
         };
     }
     if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
-        return "webm";
+        // EBML is Matroska and WebM alike; the DocType sits in the header.
+        let window = &head[..head.len().min(64)];
+        let has = |needle: &[u8]| window.windows(needle.len()).any(|w| w == needle);
+        return if has(b"webm") {
+            "webm"
+        } else if has(b"matroska") {
+            "mkv"
+        } else {
+            "bin"
+        };
     }
     if head.starts_with(b"\x89PNG") {
         return "png";
@@ -1414,7 +1430,7 @@ impl Api {
         }
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         (chat, message, source).hash(&mut hasher);
-        let mut head = Vec::with_capacity(16);
+        let mut head = Vec::with_capacity(64);
         let mut ext = media_extension(
             attachment.mime_type.as_deref(),
             attachment.file_name.as_deref(),
@@ -1430,7 +1446,7 @@ impl Api {
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned);
             (&mut response)
-                .take(16)
+                .take(64)
                 .read_to_end(&mut head)
                 .map_err(|_| "Media transfer failed")?;
             ext = media_extension(
@@ -4560,10 +4576,34 @@ mod tests {
         assert_eq!(media_extension(None, None, None, &mp4), "mp4");
         let iphone = *b"\0\0\0\x14ftypqt  \0\0\0\0";
         assert_eq!(media_extension(None, None, None, &iphone), "mov");
+        let ebml = |doc: &[u8]| {
+            let mut head = vec![0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x82, 0x84];
+            head.extend_from_slice(doc);
+            head
+        };
         assert_eq!(
-            media_extension(None, Some("noext"), None, b"\x1A\x45\xDF\xA3...."),
+            media_extension(None, Some("noext"), None, &ebml(b"webm")),
             "webm"
         );
+        assert_eq!(media_extension(None, None, None, &ebml(b"matroska")), "mkv");
+        assert_eq!(media_extension(None, None, None, &ebml(b"????")), "bin");
+        for (brand, ext) in [
+            (b"M4A ", "m4a"),
+            (b"heic", "heic"),
+            (b"avif", "avif"),
+            (b"3gp4", "3gp"),
+            (b"mp42", "mp4"),
+            (b"zzzz", "bin"),
+        ] {
+            let mut head = b"\0\0\0\x18ftyp".to_vec();
+            head.extend_from_slice(brand);
+            head.extend_from_slice(&[0; 8]);
+            assert_eq!(
+                media_extension(None, None, None, &head),
+                ext,
+                "brand {brand:?}"
+            );
+        }
         assert_eq!(
             media_extension(None, None, Some("application/octet-stream"), b"junk"),
             "bin"
