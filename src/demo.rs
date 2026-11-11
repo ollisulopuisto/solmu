@@ -2358,8 +2358,8 @@ fn card_widths_sample(app: &mut App) {
         Content::text("Thanks!"),
     ));
     for (id, text) in [
-        ("text-medium", "The final notes are ready."),
-        ("text-medium-two", "The final notes are ready!"),
+        ("text-medium", "The final notes are ready!!!"),
+        ("text-medium-two", "The final notes are ready."),
         (
             "text-long",
             "The revised document is ready for review today.",
@@ -23633,19 +23633,72 @@ mod card_width_tests {
                     );
                 }
                 if width > 1000.0 {
-                    assert!((rect("card-plain").width() - 100.0).abs() < 1.0);
-                    assert!((rect("text-medium").width() - 260.0).abs() < 1.0);
-                    assert!((rect("text-medium-two").width() - 260.0).abs() < 1.0);
-                    assert!((rect("text-long").width() - 420.0).abs() < 1.0);
+                    // Own text bubbles settle at their natural content width
+                    // and near-equal neighbours join the larger one; only the
+                    // incoming rows keep the stepped grid.
+                    assert!(
+                        rect("card-plain").width() < 100.0,
+                        "short own text takes its natural width, not the80pt step: {:?}",
+                        rect("card-plain")
+                    );
+                    // The join, not a coincidence: the two texts measure a
+                    // few points apart naturally (guarded below), yet the
+                    // rendered bubbles take exactly one width, the frozen
+                    // larger one.
+                    let mut narrower = 0.0;
+                    let mut wider = 0.0;
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        let font = crate::theme::regular(crate::ui::widgets::MESSAGE_TEXT_SIZE);
+                        let painter = ui.painter();
+                        narrower = painter
+                            .layout_no_wrap(
+                                "The final notes are ready.".to_owned(),
+                                font.clone(),
+                                egui::Color32::BLACK,
+                            )
+                            .size()
+                            .x;
+                        wider = painter
+                            .layout_no_wrap(
+                                "The final notes are ready!!!".to_owned(),
+                                font,
+                                egui::Color32::BLACK,
+                            )
+                            .size()
+                            .x;
+                    });
+                    output.textures_delta.clear();
+                    assert!(
+                        wider - narrower >= 3.0 && wider - narrower <= 16.0,
+                        "the fixture's natural widths differ measurably but stay within the join tolerance: {narrower} vs {wider}"
+                    );
+                    // The wider text leads the run; the narrower arrival
+                    // joins its frozen width, so both render exactly equal.
+                    assert_eq!(
+                        rect("text-medium").width(),
+                        rect("text-medium-two").width(),
+                        "a near-equal later neighbour joins the frozen wider width"
+                    );
+                    assert!(
+                        rect("text-long").width() > rect("text-medium").width() + 10.0,
+                        "a much longer text keeps its own width: {:?} vs {:?}",
+                        rect("text-long"),
+                        rect("text-medium")
+                    );
+                    assert!(
+                        rect("text-long").width() < 420.0,
+                        "natural width stays under the old400pt step: {:?}",
+                        rect("text-long")
+                    );
                     assert!((default - 340.0).abs() < 1.0, "320pt content plus margins");
                     assert!(
                         (rect("card-wider").width() - 420.0).abs() < 1.0,
-                        "long reply uses the400pt content step: {:?}",
+                        "incoming long reply keeps the400pt content step: {:?}",
                         rect("card-wider")
                     );
                     assert!(
                         (rect("card-wider-preview").width() - 420.0).abs() < 1.0,
-                        "different body lengths share the400pt step: {:?}",
+                        "incoming previews keep the400pt step: {:?}",
                         rect("card-wider-preview")
                     );
                 } else {
