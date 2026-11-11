@@ -263,6 +263,9 @@ jobs:
           # Transcription settings: the local-service fields and the
           # delete control, found by the settings search.
           shot settings-transcription-960x780 960x780 settings-search=Transcription,transcript
+          # The messages run page: the two-emoji message draws free, without
+          # a balloon, between its bubbled neighbours.
+          shot chat-bubbles-1180x780 1180x780 bubbles,messages
           # Solmu's own title bar (GNOME): the header clears the buttons.
           shot chat-titlebar-700x600 700x600 chat --demo-titlebar
           # A short window scrolls the rail instead of losing its foot.
