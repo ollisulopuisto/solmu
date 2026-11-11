@@ -5346,7 +5346,14 @@ impl App {
                     });
                 }
             }
-            Event::Info(message) => self.toast(message),
+            Event::Info(message) => {
+                let message = match message.as_str() {
+                    "Beeper has not confirmed this send after 60 seconds; check history before retrying" => crate::i18n::gettext(self.locale,
+                        "Beeper has not confirmed this send after 60 seconds; check history before retrying").into_owned(),
+                    _ => message,
+                };
+                self.toast(message);
+            }
             Event::QuoteResolved {
                 chat,
                 message,

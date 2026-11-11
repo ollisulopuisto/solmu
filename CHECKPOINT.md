@@ -856,6 +856,31 @@ cache preservation, full-size/thumbnail agreement and request order. Native GUI
 and real Mac/connected-network avatar behavior remain unverified locally.
 Custom contact pictures are a separate requested feature awaiting UI approval.
 No merge, main push or release build.
+## Final-ID send confirmation - November 11, 2026
+
+Owner Instinct, branch `fix/final-id-send-confirmation`, based on main c1ff292.
+Read-only investigation of the 60-second toast found that pending-message GET
+may return the final ID per Beeper's current retrieve/send API docs, but the
+poller required returned ID == pending ID. Accept that resolution while keeping
+exact chat, outgoing-sender and explicit SUCCESS/delivery evidence. Timeout copy
+now says not confirmed, since missing/unknown status is not necessarily PENDING.
+No retry, resend, send payload or routing changes. Text/media share this poller.
+
+Regression first failed against unchanged production code for final-ID SUCCESS;
+then passed with the repair. Fixture also covers foreign chat, incoming SUCCESS,
+pending and absent status. The current-source portable suite runs locally. No
+live message was sent or private message data retrieved. This proves a possible
+false warning, not which bridge/status caused the owner's particular toast.
+Source behavior predates Nov 9; #274 changes inbound download queuing, not send
+confirmation. Real network send confirmations remain unverified. No merge/build.
+
+API references:
+https://developers.beeper.com/desktop-api-reference/resources/messages/methods/retrieve
+https://developers.beeper.com/desktop-api-reference/resources/messages/methods/send
+
+Review follow-up: route the new static confirmation-timeout key through gettext
+at the Event::Info UI boundary. Other dynamic Info messages are unchanged. No
+translation catalogs regenerated; the maintainer owns that step.
 
 ## Media download queue backpressure - November 11, 2026
 
