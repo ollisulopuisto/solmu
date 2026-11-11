@@ -2442,7 +2442,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "link-menu" => link_menu_sample(app),
             "supplied-preview" => {
                 phone_menu_sample(app);
-                let mapped = crate::backend::beeper::supplied_preview_demo();
+                let mapped = crate::backend::beeper::supplied_preview_demo(SAMPLES[0].id);
                 let row = app
                     .conversations
                     .get_mut(SAMPLES[0].id)

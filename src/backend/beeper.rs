@@ -2481,14 +2481,14 @@ fn delivery_of(m: &BeeperMessage) -> Delivery {
 
 /// Synthetic wire fixture exercises the real mapper for offline review captures.
 #[cfg(any(test, feature = "demo"))]
-pub(crate) fn supplied_preview_demo() -> Message {
+pub(crate) fn supplied_preview_demo(chat: &str) -> Message {
     let wire: BeeperMessage = serde_json::from_value(serde_json::json!({
-        "id":"ada-link", "chatID": crate::demo::sample_ids()[0],
-        "senderID": crate::demo::sample_ids()[0],
+        "id":"ada-link", "chatID": chat,
+        "senderID": chat,
         "text":"Summer plans (https://example.com/trips?utm_source=chat#july)",
         "links":[{"title":"Summer plans", "summary":"A few ideas for the long summer evenings.", "url":"https://example.com/trips", "originalURL":"https://example.com/trips?utm_source=chat#july", "img":"https://example.com/not-fetched.jpg"}]
     })).expect("synthetic preview wire fixture");
-    map_message(&wire, crate::demo::sample_ids()[0])
+    map_message(&wire, chat)
 }
 
 /// Associate supplied metadata only with a link actually present in the body.
