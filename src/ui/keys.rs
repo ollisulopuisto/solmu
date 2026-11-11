@@ -2494,7 +2494,8 @@ mod tests {
             latest_incoming_action(&app).is_none(),
             "linked view owns its unavailable state"
         );
-        app.chats.push(app.chats[0].clone());
+        let duplicate = app.chats[0].clone();
+        app.chats.push(duplicate);
         assert_eq!(
             latest_incoming_action(&app),
             Some(Action::Reply("incoming".into()))
