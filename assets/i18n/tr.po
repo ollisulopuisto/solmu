@@ -3847,3 +3847,19 @@ msgstr "Enter ile gönder"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Evvelsi gün"
+
+#: src/backend/beeper.rs
+msgid "Media history is busy; try the arrow again"
+msgstr "Medya geçmişi meşgul; oku tekrar deneyin"
+
+#: src/backend/beeper/gallery.rs
+msgid "Media history reached its 20000-item safety limit"
+msgstr "Medya geçmişi 20000 öğelik güvenlik sınırına ulaştı"
+
+#: src/backend/beeper/gallery.rs
+msgid "Media history cursor repeated; earlier items are kept"
+msgstr "Medya geçmişi imleci tekrarlandı; önceki öğeler korunuyor"
+
+#: src/backend/beeper/gallery.rs
+msgid "Media history did not match the requested chat"
+msgstr "Medya geçmişi istenen sohbetle eşleşmedi"

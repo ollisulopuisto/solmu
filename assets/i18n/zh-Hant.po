@@ -3749,3 +3749,19 @@ msgstr "以 Enter 送出"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "前天"
+
+#: src/backend/beeper.rs
+msgid "Media history is busy; try the arrow again"
+msgstr "媒體歷史正忙；請重試箭頭"
+
+#: src/backend/beeper/gallery.rs
+msgid "Media history reached its 20000-item safety limit"
+msgstr "媒體歷史已達到 20000 個項目的安全上限"
+
+#: src/backend/beeper/gallery.rs
+msgid "Media history cursor repeated; earlier items are kept"
+msgstr "媒體歷史游標重複；保留較早的項目"
+
+#: src/backend/beeper/gallery.rs
+msgid "Media history did not match the requested chat"
+msgstr "媒體歷史與要求的聊天不符"

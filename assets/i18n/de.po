@@ -3870,3 +3870,19 @@ msgstr "Enter sendet"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Vorgestern"
+
+#: src/backend/beeper.rs
+msgid "Media history is busy; try the arrow again"
+msgstr "Medienverlauf ist beschäftigt; versuche den Pfeil erneut"
+
+#: src/backend/beeper/gallery.rs
+msgid "Media history reached its 20000-item safety limit"
+msgstr "Der Medienverlauf hat die Sicherheitsgrenze von 20000 Einträgen erreicht"
+
+#: src/backend/beeper/gallery.rs
+msgid "Media history cursor repeated; earlier items are kept"
+msgstr "Der Medienverlauf-Cursor wurde wiederholt; frühere Einträge bleiben erhalten"
+
+#: src/backend/beeper/gallery.rs
+msgid "Media history did not match the requested chat"
+msgstr "Der Medienverlauf passt nicht zum angeforderten Chat"
