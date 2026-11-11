@@ -4297,6 +4297,7 @@ impl App {
                     let delivery = match &state {
                         crate::pending_media::State::NotSubmitted(_) => Delivery::Failed,
                         crate::pending_media::State::Unknown(_) => Delivery::Unknown,
+                        crate::pending_media::State::Confirmed => Delivery::Sent,
                         _ => Delivery::Pending,
                     };
                     record.state = state;
@@ -4325,7 +4326,7 @@ impl App {
                     let visible = record.visible.clone();
                     let resolved_id = message.id.clone();
                     let has_attachment = message.content.media().is_some();
-                    let complete = complete && has_attachment;
+                    let release_preview = complete && has_attachment;
                     if let Some(conversation) = self.conversations.get_mut(&member.chat) {
                         // Replace identity/content in the same slot. Do not add another row.
                         conversation
@@ -4348,7 +4349,7 @@ impl App {
                         }
                         conversation.rows.remove(&visible);
                     }
-                    if complete {
+                    if release_preview {
                         if let Some(record) = self.pending_media.remove(&local)
                             && record.job.temporary
                             && let crate::pending_media::Payload::File { path, .. } =
@@ -4358,6 +4359,9 @@ impl App {
                         }
                     } else if let Some(record) = self.pending_media.get_mut(&local) {
                         record.visible = resolved_id;
+                        if complete {
+                            record.state = crate::pending_media::State::Confirmed;
+                        }
                     }
                 }
             }
@@ -14541,7 +14545,11 @@ mod tests {
                 .content,
             Content::Document { .. }
         ));
-        assert!(app.pending_media.contains_key(&local));
+        assert_eq!(
+            app.pending_media[&local].state,
+            crate::pending_media::State::Confirmed
+        );
+        assert!(!app.pending_media[&local].retryable());
         let real = app.conversations["pending-target"]
             .message("final")
             .unwrap()

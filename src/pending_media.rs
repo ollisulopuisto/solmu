@@ -19,7 +19,11 @@ pub enum Payload {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum State {
     Sending,
-    Accepted { pending: String },
+    /// Delivery confirmed; retained only to keep a sparse echo's local preview.
+    Confirmed,
+    Accepted {
+        pending: String,
+    },
     NotSubmitted(String),
     Unknown(String),
 }

@@ -4759,13 +4759,11 @@ fn poll_media_send(
         && wire.is_sender == Some(true)
     {
         let message = api.map_message(&wire, &member.chat);
-        // A sparse echo can confirm delivery without carrying the attachment
-        // yet. Keep polling so the local preview is not discarded prematurely.
-        let complete = message.content.media().is_some()
-            && wire.send_status.as_ref().is_some_and(|s| {
-                s.status == "SUCCESS"
-                    || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
-            });
+        // Delivery evidence is independent of attachment metadata availability.
+        let complete = wire.send_status.as_ref().is_some_and(|s| {
+            s.status == "SUCCESS"
+                || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
+        });
         emit(Event::BeeperMediaResolved {
             local: local.to_owned(),
             member: member.clone(),
@@ -5369,6 +5367,36 @@ mod tests {
             );
             server.join().unwrap();
         }
+    }
+
+    #[test]
+    fn pending_media_sparse_success_is_confirmed_not_unknown_at_timeout() {
+        let (api, server) = pending_media_fixture(vec![("GET /v1/chats/target/messages/pending ", 200,
+            r#"{"id":"final","chatID":"target","accountID":"signal","isSender":true,"sendStatus":{"status":"SUCCESS"}}"#.into())]);
+        let member = pending_media_job(&api.base_url, std::path::Path::new("unused")).member;
+        let events = Mutex::new(Vec::new());
+        assert!(!poll_media_send(
+            &api,
+            "local",
+            &member,
+            "pending",
+            Duration::from_secs(61),
+            &|e| events.lock().unwrap().push(e)
+        ));
+        let events = events.into_inner().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::BeeperMediaResolved { complete: true, .. }))
+        );
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::BeeperMediaProgress {
+                state: crate::pending_media::State::Unknown(_),
+                ..
+            }
+        )));
+        server.join().unwrap();
     }
 
     #[test]

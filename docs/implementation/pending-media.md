@@ -50,3 +50,11 @@ marker is removed and passes when restored.
 Synthetic UI captures validate readable Sending, Not submitted/Retry and Check
 history states. They do not test real bridge sends, macOS interactions or native
 audio. Real networks still need manual verification.
+
+Review follow-up: unresolved media conversations are kept across cache rotation
+and trimming, refused options retain view-once, and sparse echoes bind identity
+without erasing staged content. Explicit delivery evidence completes submission
+even when attachment metadata is sparse. In that case a non-retryable Confirmed
+record retains the local preview, without a sending/unknown annotation, until
+full metadata arrives or the app closes. Confirmation and metadata availability
+are separate facts. This retained preview is still in-memory only.

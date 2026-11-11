@@ -5543,6 +5543,7 @@ fn bubble_frame(
         if let Some(record) = pending {
             use crate::pending_media::State;
             let label = match &record.state {
+                State::Confirmed => String::new(),
                 State::Sending => crate::i18n::gettext(view.locale, "Sending...").into_owned(),
                 State::Accepted { .. } => {
                     crate::i18n::gettext(view.locale, "Queued by Beeper. Not yet confirmed.")
@@ -5557,7 +5558,9 @@ fn bubble_frame(
                     crate::i18n::gettext(view.locale, "Check history")
                 ),
             };
-            ui.label(label);
+            if !label.is_empty() {
+                ui.label(label);
+            }
             if record.retryable()
                 && ui
                     .button(crate::i18n::gettext(view.locale, "Retry"))
