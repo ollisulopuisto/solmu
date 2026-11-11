@@ -852,3 +852,10 @@ older accepted work. A full backlog may still reject work explicitly; a dead
 worker reports failures. No unbounded queue or automatic resend is introduced.
 Portable production-source regressions run locally; real Telegram/WhatsApp
 media downloads and native GUI remain unverified. No merge or release build.
+
+Review scope clarification: the current UI disables controls for items already
+marked Downloading, including waiting automatic requests. They cannot be clicked
+to promote them. Priority applies to new explicit requests reaching the backend;
+manual upgrades are a backend safeguard, not a new user-visible promotion flow.
+The PR description/changelog now make this limitation explicit. A waiting versus
+active UI model is outside this queue-full repair.
