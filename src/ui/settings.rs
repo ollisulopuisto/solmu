@@ -807,7 +807,7 @@ fn sections(app: &App) -> Vec<Section> {
         translated(locale, "Off by default. Removes known tracking keys, keeps recognized signed URLs, and never changes messages. Some links may still need their original parameters."),
         |settings| &mut settings.remove_link_tracking,
     );
-    privacy.row(translated(locale, "Cached link previews"), translated(locale, "Kept in memory on this device only, until Solmu closes. Clearing also cancels pending requests."), |ui, app| {
+    privacy.row(translated(locale, "Cached link previews"), translated(locale, "Kept in memory on this device only, until Solmu closes. Clearing also cancels pending requests."), move |ui, app| {
         if ui.button(crate::i18n::gettext(locale, "Clear cached previews")).clicked() {
             app.actions.push(Action::ClearLinkPreviews);
         }

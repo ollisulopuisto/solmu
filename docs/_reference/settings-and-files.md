@@ -214,6 +214,17 @@ name or description, in the interface language or in English.
   as on the phone. Group receipts and voice-message played receipts are
   unaffected.
 - **Show when you are typing**: send typing and recording state.
+- **Automatically fetch link previews**: off by default. Visible HTTPS links in
+  the unlocked focused conversation can be fetched directly from their websites.
+  Websites receive your IP address and requested URL, including its query.
+  With this off, **Fetch preview** requests only that selected link and does not
+  change the automatic setting. Supplied Beeper cards are not fetched again.
+  HTTP URLs, private/local destinations and configured proxies are not fetched.
+- **Cached link previews**: memory-only on this device, not saved when Solmu
+  closes. **Clear cached previews** removes local cards and thumbnails and
+  cancels pending requests. Locking, changing accounts/chats or disabling the
+  feature also cancels outstanding work; a request already sent cannot be undone.
+  Requests and cache sizes are bounded, and unavailable links can be retried.
 - **Remove tracking parameters when opening, copying and fetching links**: off
   by default. Removes known tracking query keys at explicit Open URL, Copy URL
   and hyperlink Copy link actions. Original messages and general Copy text stay
