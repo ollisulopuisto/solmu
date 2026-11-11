@@ -2439,6 +2439,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "mentions" => mentions_sample(app),
             "chat" | "" => {}
             "phone-menu" => phone_menu_sample(app),
+            "link-menu" => link_menu_sample(app),
             "short-chat" => short_chat_sample(app),
             "chat-menu" => app.open_chat_menu = Some(app.chats[0].id.clone()),
             // Reply later / Read later: flagged rows carry the clock and
@@ -4275,6 +4276,19 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             }
         }
     }
+}
+
+/// Synthetic link fixture for screenshots and pointer regression tests.
+fn link_menu_sample(app: &mut App) {
+    phone_menu_sample(app);
+    app.conversations
+        .get_mut(SAMPLES[0].id)
+        .unwrap()
+        .message_mut("ada-link")
+        .unwrap()
+        .content = Content::text(
+        "Summer plans (https://example.com/trips?from=chat&view=full#july)\nhttps://example.org/details?mode=exact#map",
+    );
 }
 
 const PHONE_MENU_SAMPLE: &str = "Call +1 (555) 010-2040 to arrange the pickup.";
@@ -13982,6 +13996,277 @@ mod tests {
         assert_eq!(app.composer, "@Mira ");
         assert!(app.mention_start.is_none());
         assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("composer-text"))));
+    }
+
+    fn link_popup_labels(app: &mut App, ctx: &egui::Context, id: egui::Id) -> Vec<String> {
+        render(app, ctx);
+        let menu = ctx
+            .data(|data| data.get_temp::<egui::Rect>(id.with("menu-rect")))
+            .unwrap();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1180.0, 780.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.frame_ui(ui),
+        );
+        output.textures_delta.clear();
+        output
+            .platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .into_iter()
+            .filter_map(|(_, node)| {
+                let bounds = node.bounds()?;
+                let scale = ctx.pixels_per_point() as f64;
+                let center = egui::pos2(
+                    ((bounds.x0 + bounds.x1) / (2.0 * scale)) as f32,
+                    ((bounds.y0 + bounds.y1) / (2.0 * scale)) as f32,
+                );
+                menu.contains(center)
+                    .then(|| node.label().or_else(|| node.value()).map(str::to_owned))
+                    .flatten()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn album_caption_and_carousel_links_use_the_owning_popup() {
+        for carousel in [false, true] {
+            let mut app = app();
+            let expected = "https://example.org/exact?q=second#caption";
+            let message = if carousel {
+                carousel_sample(&mut app, 2);
+                let row = &mut app.conversations.get_mut(SAMPLES[0].id).unwrap().messages[0];
+                let Content::Interactive {
+                    card: Some(card), ..
+                } = &mut row.content
+                else {
+                    panic!()
+                };
+                card.body = "Parent body https://example.com/parent".into();
+                card.carousel[0].body = format!("First child ({expected})");
+                card.carousel[1].body = format!("Second child ({expected})");
+                "interactive-card"
+            } else {
+                media_album_sample(&mut app, true);
+                let rows = &mut app.conversations.get_mut(SAMPLES[0].id).unwrap().messages;
+                for (index, row) in rows.iter_mut().enumerate() {
+                    if let Content::Image { caption, .. } = &mut row.content {
+                        *caption = Some(if index == 1 {
+                            format!("Second caption ({expected})")
+                        } else {
+                            format!("Photo {index}")
+                        });
+                    }
+                }
+                "album-0"
+            };
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            render(&mut app, &ctx);
+            let owner = crate::ui::conversation::bubble_id(SAMPLES[0].id, message);
+            let hits = ctx
+                .data(|data| {
+                    data.get_temp::<Vec<(egui::Rect, String)>>(owner.with("web-link-hits"))
+                })
+                .unwrap_or_default();
+            let links: Vec<_> = hits.iter().filter(|(_, url)| url == expected).collect();
+            assert!(
+                !links.is_empty(),
+                "child link hits must reach the parent popup, carousel={carousel}"
+            );
+            if carousel {
+                assert!(links.len() >= 2, "each visible child contributes hits");
+            }
+            for (rect, _) in links {
+                let pos = rect.center();
+                let button = |pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![egui::Event::PointerMoved(pos), button(true)],
+                );
+                frame_with(&mut app, &ctx, vec![button(false)]);
+                assert!(egui::Popup::is_id_open(&ctx, owner.with("popup")));
+                assert_eq!(
+                    ctx.data(|data| data.get_temp::<String>(owner.with("link-menu-target")))
+                        .as_deref(),
+                    Some(expected)
+                );
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hyperlink_secondary_click_is_scoped_and_keeps_exact_destination() {
+        use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
+        let mut app = app();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        app.attach(&ctx);
+        let chat = sample_ids()[0].to_owned();
+        let id = crate::ui::conversation::bubble_id(&chat, "ada-link");
+        let first = "https://example.com/trips?from=chat&view=full#july";
+        let second = "https://example.org/details?mode=exact#map";
+        let cases = [
+            format!("Summer plans ({first})\n{second}"),
+            format!("{first} {second}"),
+            format!(
+                "{} ({first})\n{second}",
+                "A long named hyperlink that wraps across the bubble ".repeat(8)
+            ),
+        ];
+        for (case, text) in cases.into_iter().enumerate() {
+            app.conversations
+                .get_mut(&chat)
+                .unwrap()
+                .message_mut("ada-link")
+                .unwrap()
+                .content = Content::text(text);
+            render(&mut app, &ctx);
+            let hits = ctx
+                .data(|data| data.get_temp::<Vec<(Rect, String)>>(id.with("web-link-hits")))
+                .unwrap();
+            assert!(hits.iter().any(|(_, url)| url == second));
+            if case == 2 {
+                assert!(hits.iter().filter(|(_, url)| url == first).count() > 1);
+            }
+            // Every visual row of each link owns its target, including a wrapped title.
+            for (rect, expected) in &hits {
+                let pos = rect.center();
+                let button = |pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Secondary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                frame_with(&mut app, &ctx, vec![Event::PointerMoved(pos), button(true)]);
+                frame_with(&mut app, &ctx, vec![button(false)]);
+                assert!(egui::Popup::is_id_open(&ctx, id.with("popup")));
+                assert_eq!(
+                    ctx.data(|data| data.get_temp::<String>(id.with("link-menu-target")))
+                        .as_ref(),
+                    Some(expected)
+                );
+                let labels = link_popup_labels(&mut app, &ctx, id);
+                assert!(
+                    labels.iter().any(|label| label == "Open link"),
+                    "{labels:?}"
+                );
+                assert!(labels.iter().any(|label| label == "Copy link"));
+                assert!(
+                    !labels
+                        .iter()
+                        .any(|label| ["Forward", "Delete", "Copy URL to clipboard"]
+                            .contains(&label.as_str())),
+                    "{labels:?}"
+                );
+                // Moving over a different link while open must not retarget the actions.
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![Event::PointerMoved(Pos2::new(500.0, 300.0))],
+                );
+                assert_eq!(
+                    ctx.data(|data| data.get_temp::<String>(id.with("link-menu-target")))
+                        .as_ref(),
+                    Some(expected)
+                );
+                // Find and click the real accessible Copy link control.
+                let mut copy = None;
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(1180.0, 780.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.frame_ui(ui),
+                );
+                if let Some(tree) = output.platform_output.accesskit_update.take() {
+                    for (_, node) in tree.nodes {
+                        if node.label() == Some("Copy link")
+                            && let Some(bounds) = node.bounds()
+                        {
+                            let scale = ctx.pixels_per_point() as f64;
+                            copy = Some(Pos2::new(
+                                ((bounds.x0 + bounds.x1) / (2.0 * scale)) as f32,
+                                ((bounds.y0 + bounds.y1) / (2.0 * scale)) as f32,
+                            ));
+                        }
+                    }
+                }
+                output.textures_delta.clear();
+                let pos = copy.expect("Copy link accessible bounds");
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                );
+                let copied = copied_text(
+                    &mut app,
+                    &ctx,
+                    Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Modifiers::NONE,
+                    },
+                );
+                assert_eq!(copied.as_slice(), std::slice::from_ref(expected));
+                assert!(!egui::Popup::is_id_open(&ctx, id.with("popup")));
+                render(&mut app, &ctx);
+            }
+            // A blank point on the same row must get the ordinary message menu.
+            let rect = ctx.read_response(id).unwrap().rect;
+            let pos = egui::pos2(rect.right() + 10.0, rect.center().y);
+            let button = |pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Secondary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            frame_with(&mut app, &ctx, vec![Event::PointerMoved(pos), button(true)]);
+            frame_with(&mut app, &ctx, vec![button(false)]);
+            assert!(egui::Popup::is_id_open(&ctx, id.with("popup")));
+            assert!(
+                ctx.data(|data| data.get_temp::<String>(id.with("link-menu-target")))
+                    .is_none()
+            );
+            let labels = link_popup_labels(&mut app, &ctx, id);
+            assert!(labels.iter().any(|label| label == "Reply"), "{labels:?}");
+            assert!(!labels.iter().any(|label| label == "Open link"));
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![key(egui::Key::Escape, Modifiers::NONE)],
+            );
+            assert!(!egui::Popup::is_id_open(&ctx, id.with("popup")));
+        }
     }
 
     #[test]
