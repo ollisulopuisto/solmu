@@ -4100,12 +4100,49 @@ impl App {
         self.avatars.insert(id.to_owned(), Some(path));
     }
 
+    /// Resolve a linked person's picture without changing its representative
+    /// chat, destination, or source caches. Recompute on every lookup so a
+    /// changed default or an asynchronously loaded picture takes effect.
+    fn linked_avatar_ids(&self, id: &str) -> Option<Vec<String>> {
+        let chat = self.chat(id)?;
+        let person = self
+            .settings
+            .beeper
+            .people
+            .iter()
+            .find(|person| person.members.iter().any(|member| member.matches(chat)))?;
+        Some(
+            person
+                .avatar_members(&self.chats, chat)
+                .into_iter()
+                .map(|member| member.chat.clone())
+                .collect(),
+        )
+    }
+
     pub fn avatar(&mut self, id: &str) -> Option<PathBuf> {
+        if let Some(ids) = self.linked_avatar_ids(id) {
+            return ids
+                .into_iter()
+                .find_map(|id| self.account_mut().avatar(&id));
+        }
         self.account_mut().avatar(id)
     }
 
-    /// Returns or requests a full-size profile picture.
+    /// Full-size and thumbnail use the same primary-first order. A primary
+    /// thumbnail beats another network's full-size picture while it loads.
     pub fn avatar_full(&mut self, id: &str) -> Option<PathBuf> {
+        if let Some(ids) = self.linked_avatar_ids(id) {
+            return ids.into_iter().find_map(|id| {
+                self.source_avatar_full(&id)
+                    .or_else(|| self.account_mut().avatar(&id))
+            });
+        }
+        self.source_avatar_full(id)
+    }
+
+    /// Returns or requests one source's full-size profile picture.
+    fn source_avatar_full(&mut self, id: &str) -> Option<PathBuf> {
         if let Some(known) = self.avatars_full.get(id) {
             return known.clone();
         }
@@ -5354,7 +5391,14 @@ impl App {
                     });
                 }
             }
-            Event::Info(message) => self.toast(message),
+            Event::Info(message) => {
+                let message = match message.as_str() {
+                    "Beeper has not confirmed this send after 60 seconds; check history before retrying" => crate::i18n::gettext(self.locale,
+                        "Beeper has not confirmed this send after 60 seconds; check history before retrying").into_owned(),
+                    _ => message,
+                };
+                self.toast(message);
+            }
             Event::QuoteResolved {
                 chat,
                 message,
@@ -27792,6 +27836,81 @@ mod person_tests {
             Member::of(&tg).unwrap(),
         ]));
         app
+    }
+
+    #[test]
+    fn linked_avatar_follows_primary_falls_back_and_recovers_without_cache_poisoning() {
+        let mut app = linked_unread_app();
+        app.settings.beeper.people[0].primary = Some(Member::of(&app.chats[1]).unwrap());
+        let root = app.account().dirs.media_cache_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        let wa = root.join("synthetic-wa-avatar.png");
+        let tg = root.join("synthetic-tg-avatar.png");
+        std::fs::write(&wa, b"synthetic fixture").unwrap();
+        std::fs::write(&tg, b"synthetic fixture").unwrap();
+        app.adopt_avatar("ada-wa", wa.clone());
+        app.avatars.insert("ada-tg".into(), None);
+        assert_eq!(
+            app.avatar("ada-wa"),
+            Some(wa.clone()),
+            "missing primary falls back"
+        );
+        app.adopt_avatar("ada-tg", tg.clone());
+        assert_eq!(
+            app.avatar("ada-wa"),
+            Some(tg.clone()),
+            "primary arriving asynchronously wins"
+        );
+        assert_eq!(app.avatar("ada-tg"), Some(tg.clone()));
+        app.avatars_full.insert("ada-wa".into(), Some(wa.clone()));
+        assert_eq!(
+            app.avatar_full("ada-wa"),
+            Some(tg),
+            "primary thumbnail beats fallback full size"
+        );
+        app.settings.beeper.people[0].primary = Some(Member::of(&app.chats[0]).unwrap());
+        assert_eq!(
+            app.avatar("ada-tg"),
+            Some(wa.clone()),
+            "new default applies immediately"
+        );
+        assert_eq!(
+            app.avatars.get("ada-wa"),
+            Some(&Some(wa)),
+            "source cache is not overwritten"
+        );
+        app.avatars.insert("ada-wa".into(), None);
+        app.avatars.insert("ada-tg".into(), None);
+        assert_eq!(
+            app.avatar("ada-wa"),
+            None,
+            "initials only when none has a picture"
+        );
+    }
+
+    #[test]
+    fn linked_avatar_requests_primary_first_and_ordinary_avatar_stays_unchanged() {
+        let mut app = linked_unread_app();
+        app.settings.beeper.people[0].primary = Some(Member::of(&app.chats[1]).unwrap());
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        assert_eq!(app.avatar("ada-wa"), None);
+        let requests: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok())
+            .filter_map(|command| {
+                if let Command::FetchAvatar { id, full: false } = command {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(requests, ["ada-tg", "ada-wa"]);
+        app.settings.beeper.people.clear();
+        let source = PathBuf::from("ordinary-avatar");
+        // No Beeper chat inventory for this ordinary non-Beeper fixture.
+        app.chats.clear();
+        app.adopt_avatar("ordinary", source.clone());
+        assert_eq!(app.avatar("ordinary"), Some(source));
     }
 
     #[test]
