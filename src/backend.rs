@@ -179,6 +179,13 @@ pub enum Command {
     /// Forwards archived messages to each chat in `to_chats`, oldest first.
     /// The whole batch is refused when it names more chats than
     /// [`forward_limit`](crate::model::forward_limit) allows for these messages.
+    /// Resume identity-only confirmation reads; never submits messages.
+    BeeperResumeForwards(Vec<crate::composed_forward::ForwardedMessage>),
+    BeeperForward {
+        generation: u64,
+        prepared: bool,
+        items: Vec<(usize, crate::composed_forward::Item)>,
+    },
     Forward {
         from_chat: ChatId,
         messages: Vec<String>,
@@ -264,6 +271,8 @@ pub enum Command {
     LoadChatMedia {
         chat: ChatId,
         around: Option<String>,
+        /// True for an open/live refresh; false continues the older edge.
+        fresh: bool,
     },
     Download {
         /// Asked for by the reader: no size limit, a deadline that grows
@@ -1104,6 +1113,29 @@ pub struct BeeperAccountInfo {
 
 #[derive(Debug)]
 pub enum Event {
+    BeeperForwardPrepared {
+        generation: u64,
+        items: Vec<crate::composed_forward::Item>,
+    },
+    BeeperForwardMarked {
+        origin: String,
+        account: String,
+        chat: ChatId,
+        message: String,
+    },
+    BeeperForwardProgress {
+        generation: u64,
+        index: usize,
+        state: crate::composed_forward::State,
+    },
+    BeeperForwardResolved {
+        origin: String,
+        account: String,
+        chat: ChatId,
+        pending: String,
+        final_id: String,
+    },
+
     BeeperAccounts {
         origin: String,
         accounts: Vec<BeeperAccountInfo>,
@@ -1189,6 +1221,12 @@ pub enum Event {
         chat: ChatId,
         around: Option<String>,
         items: Vec<crate::model::MediaItem>,
+    },
+    /// Beeper album page, cumulative within its exact source chat.
+    BeeperViewerMedia {
+        chat: ChatId,
+        around: Option<String>,
+        result: Result<(Vec<crate::model::MediaItem>, bool), String>,
     },
     ChatUpdated(Box<Chat>),
     /// Active pins of one chat, for the line under its header.

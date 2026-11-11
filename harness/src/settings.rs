@@ -97,6 +97,7 @@ fn default_true() -> bool {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub beeper: BeeperPreferences,
     pub send_read_receipts: bool,
     pub send_typing: bool,
     pub auto_download: bool,
@@ -139,4 +140,9 @@ impl AccountSettings {
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct BeeperPreferences {
+    pub forwarded_messages: Vec<crate::composed_forward::ForwardedMessage>,
 }
