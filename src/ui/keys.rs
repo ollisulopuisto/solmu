@@ -727,7 +727,7 @@ fn take_control_tab(input: &mut egui::InputState) -> Option<i32> {
 }
 
 /// Handles keys while the image preview is open. No chat shortcut runs, and
-/// typing and clipboard input are swallowed; Left/Right browse photos, while
+/// typing and clipboard input are swallowed; Left/Right browse photos and videos, while
 /// Tab, Enter, Space and Up/Down stay for the preview's own controls.
 fn preview_keys(app: &mut App, ctx: &egui::Context) {
     let mut actions = Vec::new();
@@ -907,8 +907,8 @@ fn editor_keys(app: &mut App, ctx: &egui::Context) {
 }
 
 /// Handles a playing clip's keys while the viewer shows it: Space plays or
-/// pauses, M mutes, S changes the speed, and the arrows jump five seconds, as
-/// they step through the album only while a picture is on the stage. Escape
+/// pauses, M mutes, S changes the speed, and Alt+arrows jump five seconds.
+/// Plain arrows step through the album for both photos and videos. Escape
 /// closes the viewer, which puts a video back in its message.
 fn video_keys(app: &mut App, ctx: &egui::Context) {
     let Some((message, path)) = app
@@ -951,10 +951,10 @@ fn video_keys(app: &mut App, ctx: &egui::Context) {
         if input.consume_key(Modifiers::NONE, Key::S) {
             actions.push(Action::CycleVideoSpeed);
         }
-        if input.consume_key(Modifiers::NONE, Key::ArrowLeft) {
+        if input.consume_key(Modifiers::ALT, Key::ArrowLeft) {
             actions.extend(jump(-5.0));
         }
-        if input.consume_key(Modifiers::NONE, Key::ArrowRight) {
+        if input.consume_key(Modifiers::ALT, Key::ArrowRight) {
             actions.extend(jump(5.0));
         }
     });
