@@ -1738,8 +1738,12 @@ pub(crate) fn composer_with_capabilities(
                     inserted
                 });
             if newline_key {
-                expand_composer_replacement(app, ui.ctx());
-                app.insert_in_composer(ui.ctx(), "\n");
+                // A selection is replaced by the line break, as native text
+                // editing does; expansion only runs at a bare cursor.
+                if !app.replace_composer_selection(ui.ctx(), "\n") {
+                    expand_composer_replacement(app, ui.ctx());
+                    app.insert_in_composer(ui.ctx(), "\n");
+                }
             }
             let mut send_click = false;
             let line_height = ui
@@ -2132,8 +2136,11 @@ pub(crate) fn composer_with_capabilities(
             {
                 // Enter reaches the composer as a key event, never a Text
                 // event, so a trigger at the cursor saw no delimiter:
-                // expand it before the text leaves.
-                expand_composer_replacement(app, ui.ctx());
+                // expand it before the text leaves. Clicking Send does not
+                // commit a trigger; pasted or unfinished text stays as is.
+                if send_key {
+                    expand_composer_replacement(app, ui.ctx());
+                }
                 let text = std::mem::take(&mut app.composer);
                 if app.pending.is_empty() {
                     app.actions.push(Action::SendText {

@@ -13146,6 +13146,31 @@ impl App {
         }
     }
 
+    /// Replaces the composer's selection with `text`; returns false when
+    /// there is no selection, leaving the cursor path to the caller.
+    pub(crate) fn replace_composer_selection(&mut self, ctx: &egui::Context, text: &str) -> bool {
+        let id = egui::Id::new("composer-text");
+        let Some(range) =
+            egui::TextEdit::load_state(ctx, id).and_then(|state| state.cursor.char_range())
+        else {
+            return false;
+        };
+        let [start, end] = range.sorted_cursors();
+        let (start, end) = (start.index.0, end.index.0);
+        if start == end {
+            return false;
+        }
+        let byte = |at: usize| {
+            self.composer
+                .char_indices()
+                .nth(at)
+                .map_or(self.composer.len(), |(byte, _)| byte)
+        };
+        self.composer.replace_range(byte(start)..byte(end), text);
+        self.set_composer_cursor(ctx, start + text.chars().count());
+        true
+    }
+
     /// Inserts text at the composer cursor or end.
     pub(crate) fn insert_in_composer(&mut self, ctx: &egui::Context, text: &str) {
         let id = egui::Id::new("composer-text");
