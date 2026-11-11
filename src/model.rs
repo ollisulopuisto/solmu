@@ -4378,3 +4378,20 @@ mod mutation_capability_tests {
         assert!(caps.delete_refusal(true, true, 0, 20).is_some());
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchItem {
+    pub chat: String,
+    pub message: Option<String>,
+    pub everyone: bool,
+    pub result: Option<Result<(), String>>,
+}
+#[derive(Default)]
+pub struct BatchState {
+    pub request: Option<u64>,
+    pub selected_chats: Vec<String>,
+    pub selected_identities: std::collections::HashMap<String, crate::merged::Member>,
+    pub owner: String,
+    pub reviewing_archive: bool,
+    pub results: Vec<BatchItem>,
+}

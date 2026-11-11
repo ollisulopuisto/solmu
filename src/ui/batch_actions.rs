@@ -2,25 +2,10 @@
 use crate::{
     app::App,
     i18n::{Locale, gettext, ngettext},
-    model::{Action, Chat, ChatId},
+    model::{Action, Chat},
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Item {
-    pub chat: ChatId,
-    pub message: Option<String>,
-    pub everyone: bool,
-    pub result: Option<Result<(), String>>,
-}
-#[derive(Default)]
-pub struct State {
-    pub request: Option<u64>,
-    pub selected_chats: Vec<ChatId>,
-    pub selected_identities: std::collections::HashMap<ChatId, crate::merged::Member>,
-    pub owner: String,
-    pub reviewing_archive: bool,
-    pub results: Vec<Item>,
-}
+pub use crate::model::{BatchItem as Item, BatchState as State};
 
 pub fn next_request() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);

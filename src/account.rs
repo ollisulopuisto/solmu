@@ -18,6 +18,8 @@ use crate::settings::AccountSettings;
 
 /// One WhatsApp account's runtime state.
 pub struct Account {
+    /// Pending mutations and outcomes stay with their owning account.
+    pub batch_ui: crate::model::BatchState,
     pub id: AccountId,
     pub dirs: AccountDirs,
     pub settings: AccountSettings,
@@ -172,6 +174,7 @@ impl Account {
         let favorites_only = settings.favorites_only || chat_filter == ChatFilter::Favorites;
         let chat_filter = settings.chat_queue.unwrap_or(chat_filter);
         Self {
+            batch_ui: Default::default(),
             id,
             dirs,
             settings,

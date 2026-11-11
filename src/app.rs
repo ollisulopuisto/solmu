@@ -731,7 +731,6 @@ pub struct App {
     #[cfg(any(test, feature = "demo"))]
     pub open_list_menu: Option<(ChatId, String)>,
     /// Name typed in the label manager.
-    pub batch_ui: crate::ui::batch_actions::State,
     pub label_name: String,
     /// Colour the manager will use for the next label.
     pub label_color: String,
@@ -1267,7 +1266,17 @@ impl std::ops::DerefMut for App {
 
 impl App {
     pub fn connect_beeper_session(&mut self, cfg: crate::backend::beeper::BeeperConfig) {
-        self.batch_ui = Default::default();
+        self.batch_ui.selected_chats.clear();
+        self.batch_ui.selected_identities.clear();
+        self.batch_ui.reviewing_archive = false;
+        for item in &mut self.batch_ui.results {
+            if item.result.is_none() {
+                item.result = Some(Err(
+                    "Connection changed before confirmation; check current state before retrying"
+                        .into(),
+                ));
+            }
+        }
         self.dialog = None;
         self.actions.retain(|action| {
             !matches!(
@@ -1628,7 +1637,6 @@ impl App {
             sidebar_visible: true,
             #[cfg(any(test, feature = "demo"))]
             open_list_menu: None,
-            batch_ui: Default::default(),
             label_name: String::new(),
             label_color: crate::archive::DEFAULT_COLOR.to_owned(),
             label_editing: None,
@@ -1868,7 +1876,9 @@ impl App {
 
     /// Drops App-owned pointers into the previous account's chats and media.
     fn clear_account_ui(&mut self) {
-        self.batch_ui = Default::default();
+        self.batch_ui.selected_chats.clear();
+        self.batch_ui.selected_identities.clear();
+        self.batch_ui.reviewing_archive = false;
         self.discard_gif_thumbnails();
         self.gif_pending = false;
         self.invalidate_composer_undo();
@@ -14230,6 +14240,45 @@ mod tests {
         app.actions.push(Action::Open(Page::Settings));
         app.apply_actions(&ctx);
         (app, events)
+    }
+
+    #[test]
+    fn pending_batch_results_survive_switch_and_complete_in_the_background() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, events) = two_accounts_on_settings(directory.path(), "same-chat");
+        let first = app.accounts[0].id.clone();
+        let second = app.accounts[1].id.clone();
+        app.switch_account(&second);
+        app.batch_ui.owner = second.0.clone();
+        app.batch_ui.request = Some(42);
+        app.batch_ui.selected_chats = vec!["same-chat".into()];
+        app.batch_ui.results = vec![crate::model::BatchItem {
+            chat: "same-chat".into(),
+            message: Some("message".into()),
+            everyone: false,
+            result: None,
+        }];
+        app.switch_account(&first);
+        assert!(app.batch_ui.results.is_empty());
+        events
+            .send(Event::MutationResult {
+                request: Some(42),
+                archived: None,
+                chat: "same-chat".into(),
+                message: Some("message".into()),
+                everyone: false,
+                result: Ok(()),
+            })
+            .unwrap();
+        app.handle_events();
+        assert!(
+            app.batch_ui.results.is_empty(),
+            "another account must not see these results"
+        );
+        app.switch_account(&second);
+        assert_eq!(app.batch_ui.request, Some(42));
+        assert_eq!(app.batch_ui.results[0].result, Some(Ok(())));
+        assert!(app.batch_ui.selected_chats.is_empty());
     }
 
     #[test]
