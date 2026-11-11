@@ -1038,6 +1038,36 @@ fn subtitle(app: &App, chat: &Chat) -> (String, Color32) {
 /// Byte position of a freshly typed standalone trigger immediately before
 /// the text cursor. Colons inside times and URLs, and `@` inside addresses,
 /// remain ordinary text.
+/// Expand a pending macOS text replacement at the composer cursor; returns
+/// true when a trigger was replaced. Used for keystrokes that reach the
+/// composer as key events, not text: the Enter that sends and the Enter
+/// combo that inserts a newline.
+fn expand_composer_replacement(app: &mut App, ctx: &egui::Context) -> bool {
+    let cursor = egui::TextEdit::load_state(ctx, egui::Id::new("composer-text"))
+        .and_then(|state| state.cursor.char_range())
+        .map(|range| range.primary.index.0)
+        .unwrap_or_else(|| app.composer.chars().count());
+    let cursor = cursor.min(app.composer.chars().count());
+    let byte = app
+        .composer
+        .char_indices()
+        .nth(cursor)
+        .map_or(app.composer.len(), |(at, _)| at);
+    let table = app
+        .text_replacements
+        .get_or_insert_with(crate::text_replace::system_replacements);
+    let expansion = crate::text_replace::expand_at(table, &app.composer, byte);
+    let Some((range, with)) = expansion else {
+        return false;
+    };
+    let cursor = crate::text_replace::cursor_after(&app.composer, byte, &range, &with);
+    app.composer.replace_range(range, &with);
+    app.set_composer_cursor(ctx, cursor);
+    app.emoji_start = None;
+    app.mention_start = None;
+    true
+}
+
 fn standalone_trigger(text: &str, cursor: usize, trigger: char) -> Option<usize> {
     let cursor = text
         .char_indices()
@@ -1595,14 +1625,26 @@ pub(crate) fn composer_with_capabilities(
             let id = egui::Id::new("composer-text");
             let has_focus = ui.memory(|memory| memory.has_focus(id));
             let enter_sends = app.settings.enter_sends;
-            let (typed_colon, typed_at) = ui.input(|input| {
+            let (typed_colon, typed_at, typed_text) = ui.input(|input| {
                 let typed = |needle: &str| {
                     input
                         .events
                         .iter()
                         .any(|event| matches!(event, egui::Event::Text(text) if text == needle))
                 };
-                (has_focus && typed(":"), has_focus && typed("@"))
+                let text: String = if has_focus {
+                    input
+                        .events
+                        .iter()
+                        .filter_map(|event| match event {
+                            egui::Event::Text(text) => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect()
+                } else {
+                    String::new()
+                };
+                (has_focus && typed(":"), has_focus && typed("@"), text)
             });
             if !app.pending.is_empty() {
                 pending_strip(app, ui);
@@ -1664,6 +1706,45 @@ pub(crate) fn composer_with_capabilities(
                     });
                     scheduled
                 });
+            // The Enter combo that inserts a newline (Shift+Enter by
+            // default, plain Enter when Enter does not send) never becomes a
+            // Text event either, so a pending trigger expands before the
+            // line break goes in.
+            let newline_key = has_focus
+                && ui.input_mut(|input| {
+                    let mut inserted = false;
+                    input.events.retain(|event| {
+                        if inserted {
+                            return true;
+                        }
+                        let is_newline = matches!(
+                            event,
+                            egui::Event::Key {
+                                key: Key::Enter,
+                                pressed: true,
+                                modifiers,
+                                ..
+                            } if !modifiers.alt
+                                && !modifiers.ctrl
+                                && (if enter_sends {
+                                    modifiers.shift && !modifiers.command
+                                } else {
+                                    !modifiers.shift && !modifiers.command
+                                })
+                        );
+                        inserted |= is_newline;
+                        !is_newline
+                    });
+                    inserted
+                });
+            if newline_key {
+                // A selection is replaced by the line break, as native text
+                // editing does; expansion only runs at a bare cursor.
+                if !app.replace_composer_selection(ui.ctx(), "\n") {
+                    expand_composer_replacement(app, ui.ctx());
+                    app.insert_in_composer(ui.ctx(), "\n");
+                }
+            }
             let mut send_click = false;
             let line_height = ui
                 .painter()
@@ -1943,6 +2024,19 @@ pub(crate) fn composer_with_capabilities(
                                         app.emoji_selected = 0;
                                     }
                                 }
+                                // macOS text replacements never reach an egui
+                                // canvas, so they are applied here: a
+                                // delimiter keystroke expands the trigger it
+                                // closes. Paste arrives as Event::Paste, not
+                                // Text, and is left alone, as the system
+                                // expander leaves it.
+                                if typed_text
+                                    .chars()
+                                    .next_back()
+                                    .is_some_and(crate::text_replace::is_delimiter)
+                                {
+                                    expand_composer_replacement(app, ui.ctx());
+                                }
                                 let cursor = output
                                     .cursor_range
                                     .map(|range| range.primary.index.0)
@@ -2040,6 +2134,13 @@ pub(crate) fn composer_with_capabilities(
             if (send_key || send_click)
                 && (!app.composer.trim().is_empty() || !app.pending.is_empty())
             {
+                // Enter reaches the composer as a key event, never a Text
+                // event, so a trigger at the cursor saw no delimiter:
+                // expand it before the text leaves. Clicking Send does not
+                // commit a trigger; pasted or unfinished text stays as is.
+                if send_key {
+                    expand_composer_replacement(app, ui.ctx());
+                }
                 let text = std::mem::take(&mut app.composer);
                 if app.pending.is_empty() {
                     app.actions.push(Action::SendText {
@@ -2483,6 +2584,10 @@ struct View<'a> {
     pending_media: Option<&'a HashMap<String, crate::pending_media::Record>>,
     /// Bubble owning link context menus, including album/carousel children.
     link_menu_owner: Option<egui::Id>,
+    preview_worker: Option<&'a crate::preview_worker::Worker>,
+    local_previews: bool,
+    auto_previews: bool,
+    clean_links: bool,
     sender_hue: Option<f32>,
     hide_grouped_status: bool,
     covered_top: Option<f32>,
@@ -2890,6 +2995,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         locale: app.locale,
         chat,
         me: app.me.as_deref(),
+        preview_worker: app.link_previews.as_ref(),
+        local_previews: !app.window_hidden,
+        auto_previews: app.settings.auto_link_previews && app.window_focused,
+        clean_links: app.settings.remove_link_tracking,
         transcriber: app.transcriber.as_ref(),
         transcription_account: &app.account().id.0,
         auto_download: app.account().settings.auto_download,
@@ -6987,6 +7096,10 @@ pub(crate) fn list_menu(
         locale: app.locale,
         chat,
         me: app.me.as_deref(),
+        preview_worker: app.link_previews.as_ref(),
+        local_previews: false,
+        auto_previews: false,
+        clean_links: app.settings.remove_link_tracking,
         transcriber: app.transcriber.as_ref(),
         transcription_account: &app.account().id.0,
         auto_download: app.settings.auto_download,
@@ -7072,6 +7185,10 @@ pub(crate) fn linked_bubble(
         locale: app.locale,
         chat,
         me: app.me.as_deref(),
+        preview_worker: app.link_previews.as_ref(),
+        local_previews: !app.window_hidden,
+        auto_previews: app.settings.auto_link_previews && app.window_focused,
+        clean_links: app.settings.remove_link_tracking,
         transcriber: app.transcriber.as_ref(),
         transcription_account: &app.account().id.0,
         auto_download: app.account().settings.auto_download,
@@ -7291,7 +7408,7 @@ fn link_context_menu(ui: &mut egui::Ui, view: &View<'_>, url: &str, actions: &mu
         Some(Icon::Copy),
         &crate::i18n::gettext(view.locale, "Copy link"),
     ) {
-        actions.push(Action::CopyText(url.to_owned()));
+        actions.push(Action::CopyLink(url.to_owned()));
     }
 }
 
@@ -7530,7 +7647,7 @@ fn context_menu(
     let copy_url = crate::i18n::gettext(view.locale, "Copy URL to clipboard");
     if urls.len() == 1 {
         if widgets::menu_item(ui, &palette, Some(Icon::Copy), &copy_url) {
-            actions.push(Action::CopyText(urls[0].clone()));
+            actions.push(Action::CopyLink(urls[0].clone()));
         }
     } else if !urls.is_empty() {
         ui.menu_button(copy_url.as_ref(), |ui| {
@@ -7539,7 +7656,7 @@ fn context_menu(
                     .replace("{number}", &(index + 1).to_string());
                 let response = ui.button(label).on_hover_text(url);
                 if response.clicked() {
-                    actions.push(Action::CopyText(url.clone()));
+                    actions.push(Action::CopyLink(url.clone()));
                     ui.close();
                 }
             }
@@ -7974,7 +8091,7 @@ fn content(
             }
             // Text and cards use the same discrete width grid. Fill the
             // settled width rather than shrinking back to the glyph bounds.
-            rich_body(
+            let inline = rich_body(
                 ui,
                 view,
                 message,
@@ -7983,7 +8100,12 @@ fn content(
                 Some(reserve),
                 Some(width),
                 actions,
-            )
+            );
+            if local_link_previews(ui, view, message, text, preview.as_ref(), width, actions) {
+                None
+            } else {
+                inline
+            }
         }
         Content::Image {
             caption,
@@ -9614,6 +9736,118 @@ fn rich_body(
             rect.right_bottom(),
         )
     })
+}
+
+/// Local cards never alter the message, outgoing content or supplied previews.
+/// Merely measuring an off-screen bubble must not grant a website request.
+fn local_link_previews(
+    ui: &mut egui::Ui,
+    view: &View<'_>,
+    message: &Message,
+    text: &str,
+    supplied: Option<&LinkPreview>,
+    width: f32,
+    actions: &mut Vec<Action>,
+) -> bool {
+    if !view.local_previews || view.selecting {
+        return false;
+    }
+    let mut drawn = false;
+    for url in markup::links(text)
+        .into_iter()
+        .filter(|url| url.starts_with("https://"))
+    {
+        if supplied.is_some_and(|card| card.covers_url(&url)) {
+            continue;
+        }
+        drawn = true;
+        let request_url = if view.clean_links {
+            crate::link_policy::without_tracking(&url)
+        } else {
+            url.clone()
+        };
+        let state = view
+            .preview_worker
+            .and_then(|worker| worker.status(view.transcription_account, &request_url));
+        let action = |automatic, retry| Action::FetchLinkPreview {
+            account: view.transcription_account.to_owned(),
+            chat: message.chat.clone(),
+            message: message.id.clone(),
+            url: url.clone(),
+            automatic,
+            retry,
+        };
+        let requested = state.is_some();
+        ui.add_space(5.0);
+        ui.push_id(("local-preview", &url), |ui| {
+            ui.set_max_width(width);
+            match state {
+                Some(crate::preview_worker::Status::Ready(preview)) => {
+                    let host = reqwest::Url::parse(&url).ok().and_then(|u| u.host_str().map(str::to_owned)).unwrap_or_default();
+                    let response = Frame::new()
+                        .fill(view.palette.window.gamma_multiply(0.35))
+                        .corner_radius(CornerRadius::same(6))
+                        .inner_margin(Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.set_width((width - 16.0).max(1.0));
+                            ui.horizontal(|ui| {
+                                if let Some(bytes) = &preview.image {
+                                    use std::hash::{Hash, Hasher};
+                                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                                    (view.transcription_account, &url, bytes).hash(&mut hash);
+                                    let uri = format!("bytes://local-link-preview/{:x}.png", hash.finish());
+                                    if ui.is_rect_visible(ui.max_rect()) {
+                                        crate::image_cache::include(ui.ctx(), &uri, bytes);
+                                    }
+                                    ui.add(egui::Image::new(uri).fit_to_exact_size(Vec2::splat(64.0)).corner_radius(4.0));
+                                }
+                                ui.vertical(|ui| {
+                                    if let Some(title) = &preview.title {
+                                        let line = widgets::line(ui, title, theme::semibold(13.5), view.palette.text, ui.available_width(), 2);
+                                        let (rect, _) = ui.allocate_exact_size(line.size(), Sense::hover());
+                                        line.paint(ui, rect.min, view.palette.text);
+                                    }
+                                    if let Some(description) = &preview.description {
+                                        let line = widgets::line(ui, description, theme::regular(12.5), view.palette.secondary, ui.available_width(), 2);
+                                        let (rect, _) = ui.allocate_exact_size(line.size(), Sense::hover());
+                                        line.paint(ui, rect.min, view.palette.secondary);
+                                    }
+                                    theme::text(ui, &host, theme::regular(12.0), view.palette.dim);
+                                });
+                            });
+                        }).response;
+                    if ui.interact(response.rect, ui.id().with("open"), Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(&url).clicked() {
+                        actions.push(Action::OpenUrl(url.clone()));
+                    }
+                }
+                Some(crate::preview_worker::Status::Loading) => {
+                    ui.horizontal(|ui| { ui.spinner(); ui.label(crate::i18n::gettext(view.locale, "Fetching preview...")); });
+                    ui.ctx().request_repaint_after(Duration::from_millis(100));
+                }
+                Some(crate::preview_worker::Status::Failed) => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(crate::i18n::gettext(view.locale, "Preview unavailable"));
+                        if ui.small_button(crate::i18n::gettext(view.locale, "Retry preview")).on_hover_text(&url).clicked() {
+                            actions.push(action(false, true));
+                        }
+                    });
+                }
+                None => {
+                    let response = ui.small_button(crate::i18n::gettext(view.locale, "Fetch preview")).on_hover_text(crate::i18n::gettext(view.locale, "Contacts this website directly, sharing your IP address and this URL:\n{url}").replace("{url}", &request_url));
+                    ui.ctx().data_mut(|data| data.insert_temp(
+                        bubble_id(&message.chat, &message.id).with(("fetch-preview", &url)), response.rect));
+                    if response.clicked() || (view.auto_previews && ui.is_rect_visible(response.rect)) {
+                        actions.push(action(!response.clicked(), false));
+                    }
+                }
+            }
+            if requested && !view.auto_previews && ui.small_button(crate::i18n::gettext(view.locale, "Automatic previews in Preferences > Privacy")).clicked() {
+                actions.push(Action::LinkPreviewPreferences);
+            }
+        });
+    }
+    drawn
 }
 
 /// Link preview with image, title, and description.
@@ -12760,6 +12994,10 @@ mod tests {
             show_timestamp: true,
             footer_right: None,
             neighbour_width: None,
+            preview_worker: None,
+            local_previews: false,
+            auto_previews: false,
+            clean_links: false,
             transcriber: None,
             transcription_account: "test",
             palette: Palette::dark(),
