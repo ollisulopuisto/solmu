@@ -1754,6 +1754,57 @@ fn rename_field(
     );
 }
 
+fn reason_text(reason: &crate::suggest::Reason) -> &'static str {
+    match reason {
+        crate::suggest::Reason::Name(_) => "has the same name",
+        crate::suggest::Reason::Handle(_) => "has the same phone number or username",
+    }
+}
+
+/// "Same person?" cards for this chat: exact name or handle matches on other
+/// networks. Nothing is linked until the user says so.
+fn suggestion_cards(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
+    let mine: Vec<_> = app
+        .link_suggestions()
+        .into_iter()
+        .filter(|s| s.involves(&chat.id))
+        .take(3)
+        .collect();
+    let palette = app.palette;
+    for suggestion in mine {
+        let other = if suggestion.a.chat == chat.id {
+            &suggestion.b
+        } else {
+            &suggestion.a
+        };
+        let Some(other) = app.chat(&other.chat).cloned() else {
+            continue;
+        };
+        ui.add_space(4.0);
+        egui::Frame::new()
+            .stroke(egui::Stroke::new(1.0, palette.outline))
+            .corner_radius(6)
+            .inner_margin(8)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Same person?").strong());
+                ui.label(format!(
+                    "{} on {} {}.",
+                    other.name,
+                    network_label(&other),
+                    reason_text(&suggestion.reason)
+                ));
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Link").clicked() {
+                        app.accept_link_suggestion(&suggestion);
+                    }
+                    if ui.button("Not the same person").clicked() {
+                        app.dismiss_link_suggestion(&suggestion);
+                    }
+                });
+            });
+    }
+}
+
 /// The Contact info section owning person links: the explanation, primary
 /// destination, unlinking, and the searchable picker. Returns false when
 /// the chat is not a linkable Beeper direct chat.
@@ -1775,6 +1826,7 @@ pub(crate) fn sidebar(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     let palette = app.palette;
     ui.add_space(4.0);
     rename_field(app, ui, chat, person.as_ref(), &palette);
+    suggestion_cards(app, ui, chat);
     ui.add_space(4.0);
     ui.label(egui::RichText::new("Linked person").strong());
     let key = egui::Id::new(("link-picker", &chat.id));
@@ -1974,6 +2026,128 @@ mod tests {
         );
         output.textures_delta.clear();
         handled
+    }
+
+    fn same_name_pair() -> Vec<Chat> {
+        let mut wa = member_chat("ada-wa@s.whatsapp.net", "whatsapp");
+        wa.name = "Ada Lovelace".into();
+        wa.backend_network = Some("WhatsApp".into());
+        let mut tg = member_chat("ada-tg@telegram", "telegram");
+        tg.name = "Ada Lovelace".into();
+        tg.backend_network = Some("Telegram".into());
+        vec![wa, tg]
+    }
+
+    #[test]
+    fn accepting_a_suggestion_links_the_pair_and_undo_restores_it() {
+        let (_directory, mut app, ctx) = linked_app(same_name_pair(), Vec::new());
+        let found = app.link_suggestions();
+        assert_eq!(found.len(), 1);
+        app.accept_link_suggestion(&found[0]);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert_eq!(app.settings.beeper.people[0].members.len(), 2);
+        assert!(app.link_suggestions().is_empty());
+        let before = match &app.toasts.last().expect("an Undo toast").kind {
+            crate::model::ToastKind::Undo(added) => added.clone(),
+            other => panic!("expected an Undo toast, got {other:?}"),
+        };
+        app.apply(crate::model::Action::UndoLinks(before), &ctx);
+        assert!(app.settings.beeper.people.is_empty());
+        assert_eq!(app.link_suggestions().len(), 1);
+    }
+
+    #[test]
+    fn undo_takes_back_only_its_own_link() {
+        let mut chats = same_name_pair();
+        for (id, account, network) in [
+            ("bob-wa@s.whatsapp.net", "whatsapp", "WhatsApp"),
+            ("bob-tg@telegram", "telegram", "Telegram"),
+        ] {
+            let mut chat = member_chat(id, account);
+            chat.name = "Bob Berg".into();
+            chat.backend_network = Some(network.into());
+            chats.push(chat);
+        }
+        let (_directory, mut app, ctx) = linked_app(chats, Vec::new());
+        let found = app.link_suggestions();
+        assert_eq!(found.len(), 2);
+        let alice = found
+            .iter()
+            .find(|s| s.a.chat.starts_with("ada"))
+            .unwrap()
+            .clone();
+        let bob = found
+            .iter()
+            .find(|s| s.a.chat.starts_with("bob"))
+            .unwrap()
+            .clone();
+        app.accept_link_suggestion(&alice);
+        app.accept_link_suggestion(&bob);
+        assert_eq!(app.settings.beeper.people.len(), 2);
+        let first = app
+            .toasts
+            .iter()
+            .find_map(|t| match &t.kind {
+                crate::model::ToastKind::Undo(added) if added.contains(&alice.a) => {
+                    Some(added.clone())
+                }
+                _ => None,
+            })
+            .expect("Alice's Undo toast");
+        app.apply(crate::model::Action::UndoLinks(first), &ctx);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert!(app.settings.beeper.people[0].members.contains(&bob.a));
+        assert!(
+            app.toasts
+                .iter()
+                .any(|t| matches!(&t.kind, crate::model::ToastKind::Undo(a) if a.contains(&bob.a))),
+            "Bob's Undo toast stays"
+        );
+    }
+
+    #[test]
+    fn joining_a_linked_person_retires_the_earlier_undo() {
+        let mut chats = same_name_pair();
+        let mut signal = member_chat("ada-sg@signal", "signal");
+        signal.name = "Ada Lovelace".into();
+        signal.backend_network = Some("Signal".into());
+        chats.push(signal);
+        let (_directory, mut app, ctx) = linked_app(chats, Vec::new());
+        let first = app.link_suggestions()[0].clone();
+        app.accept_link_suggestion(&first);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert_eq!(app.settings.beeper.people[0].members.len(), 2);
+        let second = app.link_suggestions()[0].clone();
+        app.accept_link_suggestion(&second);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert_eq!(app.settings.beeper.people[0].members.len(), 3);
+        let undos: Vec<_> = app
+            .toasts
+            .iter()
+            .filter_map(|t| match &t.kind {
+                crate::model::ToastKind::Undo(added) => Some(added.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(undos.len(), 1, "only the newest Undo survives");
+        assert_eq!(undos[0].len(), 1, "it takes back just the third chat");
+        app.apply(crate::model::Action::UndoLinks(undos[0].clone()), &ctx);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert_eq!(
+            app.settings.beeper.people[0].members.len(),
+            2,
+            "the first link is still there"
+        );
+    }
+
+    #[test]
+    fn a_dismissed_suggestion_is_saved_and_not_offered_again() {
+        let (_directory, mut app, _ctx) = linked_app(same_name_pair(), Vec::new());
+        let found = app.link_suggestions();
+        app.dismiss_link_suggestion(&found[0]);
+        assert_eq!(app.settings.beeper.dismissed_links, vec![found[0].pair()]);
+        assert!(app.link_suggestions().is_empty());
+        assert!(app.settings.beeper.people.is_empty());
     }
 
     fn ada_pair() -> (Chat, Chat, Person) {

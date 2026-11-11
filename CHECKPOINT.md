@@ -839,6 +839,10 @@ The next automatic review confirmed the previous three findings resolved and ide
 
 Native CI at b041035 passed 1959 tests and failed one old combined draft test because it injected a logout event after `App::shutdown`. Shutdown now deliberately closes event delivery to reclaim unpolled media. Split that test into shutdown saving/rejection and live-account logout clearing. Both exact production tests pass in the reduced build, alongside all 29 linked regressions; full all-target/all-feature clippy and fmt pass. No production shutdown cleanup was weakened.
 
+### Link suggestions, first slice
+
+Added `src/suggest.rs` (pure matcher with tests), `Chat.handles` filled from the other participant's phone number and username, per-pair dismissals in `beeper.dismissed_links`, a Contact info card, a collapsed Filters row and an Undo toast (`ToastKind::Undo`). The portable adapter harness passes with suggest.rs staged; the UI is first compiled in CI.
+
 ## Export alternate-stream names - November 10, 2026
 
 PR #272 follow-up: normalize colon to underscore before reserved-DOS-stem replacement so `CON.pdf:payload` becomes `attachment.pdf_payload` and ordinary filenames cannot select NTFS streams either. Four new regression cases; the old code failed on the first case, 242 other portable tests passed. Linux portable adapter tests rerun after repair; real Windows/NTFS not exercised. No merge or release build.
@@ -948,3 +952,12 @@ now browse photos and playable videos; Alt+arrows retain video seeking. Does not
 create an audio/document/GIF viewer or combine linked sources into one album.
 Portable adapter tests cover paging/cursor/source boundaries. Full native tests
 and macOS interaction remain unverified; do not describe this as a shipped fix.
+
+## 2026-11-11 - Favorites list sections, option B (Instinct, draft)
+
+Approved sketch B: small Pinned/Other chats labels, with a subtle rule only at
+the group boundary. Headers appear only when both favorite and ordinary chats
+remain visible; search/empty/Favorites-only/all-unpinned views remain ungrouped.
+Variable-height virtual rows include headers in keyboard reveal geometry.
+Native tests and actual pixels still require verification. No release build.
+
