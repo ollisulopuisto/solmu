@@ -1709,6 +1709,8 @@ mod giphy_tests {
 #[serde(default)]
 pub struct BeeperPreferences {
     pub people: Vec<crate::merged::Person>,
+    /// Pairs the user said are not the same person; never suggested again.
+    pub dismissed_links: Vec<crate::suggest::LinkPair>,
     /// Local display names for single chats, by chat id. Never sent anywhere.
     pub chat_names: std::collections::HashMap<String, String>,
     pub reply_later: Vec<crate::merged::Member>,
@@ -1736,6 +1738,7 @@ impl Default for BeeperPreferences {
     fn default() -> Self {
         Self {
             people: Vec::new(),
+            dismissed_links: Vec::new(),
             chat_names: std::collections::HashMap::new(),
             reply_later: Vec::new(),
             read_later: Vec::new(),
