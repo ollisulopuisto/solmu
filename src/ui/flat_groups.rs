@@ -390,6 +390,9 @@ mod tests {
             Chat::new("ungrouped".into(), "Ungrouped".into()),
             Chat::new("work".into(), "Work".into()),
         ];
+        for chat in &mut app.chats {
+            chat.last_activity = 100;
+        }
         let group = app.settings.flat_groups.create("Work").unwrap();
         let work = member(&app, &app.chats[1]);
         app.settings.flat_groups.add(group, work);
