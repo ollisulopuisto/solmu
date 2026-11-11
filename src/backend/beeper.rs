@@ -2491,10 +2491,18 @@ pub(crate) fn supplied_preview_demo(chat: &str) -> Message {
     map_message(&wire, chat)
 }
 
+#[cfg(test)]
+thread_local! {
+    static SUPPLIED_PREVIEW_BODY_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Associate supplied metadata only with a link actually present in the body.
 /// Keep that original destination for opening/copying: a resolved or canonical
 /// metadata URL is not permission to change where the message sends the user.
 fn supplied_link_preview(message: &BeeperMessage, body: &str) -> Option<crate::model::LinkPreview> {
+    if message.links.is_empty() {
+        return None;
+    }
     fn label(value: Option<&str>, max: usize) -> Option<String> {
         let text: String = value?
             .chars()
@@ -2504,6 +2512,8 @@ fn supplied_link_preview(message: &BeeperMessage, body: &str) -> Option<crate::m
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
         (!text.is_empty()).then_some(text)
     }
+    #[cfg(test)]
+    SUPPLIED_PREVIEW_BODY_PARSES.with(|count| count.set(count.get() + 1));
     for original in crate::markup::links(body) {
         let Some(valid) = crate::safety::preview_url(&original) else {
             continue;
@@ -2553,7 +2563,7 @@ fn map_message(m: &BeeperMessage, fallback_chat: &str) -> Message {
         from_me: m.is_sender.unwrap_or(false),
         timestamp: unix(&Some(m.timestamp.clone())),
         history_order: None,
-        content: attachment_content(m).unwrap_or(Content::Text {
+        content: attachment_content(m).unwrap_or_else(|| Content::Text {
             preview: supplied_link_preview(m, &body),
             text: body,
         }),
@@ -5195,6 +5205,47 @@ mod tests {
     //! They pin the demo's contract: multiple accounts on one network stay
     //! distinguishable, background startup/polling causes NO mutating HTTP
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
+
+    #[test]
+    fn supplied_preview_parsing_only_runs_for_text_with_metadata() {
+        for (attachment, metadata, expected_parses) in [
+            (false, false, 0),
+            (true, false, 0),
+            (true, true, 0),
+            (false, true, 1),
+        ] {
+            let mut raw = serde_json::json!({
+                "id":"parse-gate", "text":"https://example.org/story"
+            });
+            if metadata {
+                raw["links"] = serde_json::json!([{
+                    "url":"https://example.org/story", "title":"Story"
+                }]);
+            }
+            if attachment {
+                raw["attachments"] = serde_json::json!([{
+                    "type":"img", "id":"mxc://example/image", "mimeType":"image/png"
+                }]);
+            }
+            let wire: BeeperMessage = serde_json::from_value(raw).unwrap();
+            SUPPLIED_PREVIEW_BODY_PARSES.with(|count| count.set(0));
+            let message = map_message(&wire, "chat");
+            assert_eq!(
+                SUPPLIED_PREVIEW_BODY_PARSES.with(|count| count.get()),
+                expected_parses,
+                "attachment={attachment}, metadata={metadata}"
+            );
+            if attachment {
+                assert!(matches!(message.content, Content::Image { .. }));
+            } else {
+                let Content::Text { text, preview } = message.content else {
+                    panic!("text")
+                };
+                assert_eq!(text, "https://example.org/story");
+                assert_eq!(preview.is_some(), metadata);
+            }
+        }
+    }
 
     #[test]
     fn supplied_previews_are_bound_to_original_message_links_without_fetching() {
