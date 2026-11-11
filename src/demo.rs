@@ -2381,6 +2381,23 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
     };
     for part in page.split(',').map(str::trim) {
         match part {
+            "flat-groups" => {
+                let work = app.settings.flat_groups.create("Work").unwrap();
+                let friends = app.settings.flat_groups.create("Friends").unwrap();
+                let keys: Vec<_> = app
+                    .chats
+                    .iter()
+                    .take(4)
+                    .map(|chat| crate::ui::flat_groups::member(app, chat))
+                    .collect();
+                for target in &keys {
+                    app.settings.flat_groups.add(work, target.clone());
+                }
+                for target in keys.iter().take(2) {
+                    app.settings.flat_groups.add(friends, target.clone());
+                }
+                app.settings.flat_groups.grouped_view = true;
+            }
             "history-date" => history_date_sample(app),
             "card-widths" => card_widths_sample(app),
             "minute-gutter" => minute_gutter_sample(app),
@@ -2440,6 +2457,18 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "chat" | "" => {}
             "phone-menu" => phone_menu_sample(app),
             "link-menu" => link_menu_sample(app),
+            "supplied-preview" => {
+                phone_menu_sample(app);
+                let mapped = crate::backend::beeper::supplied_preview_demo(SAMPLES[0].id);
+                let row = app
+                    .conversations
+                    .get_mut(SAMPLES[0].id)
+                    .unwrap()
+                    .message_mut("ada-link")
+                    .unwrap();
+                row.content = mapped.content;
+                row.thumbnail = mapped.thumbnail;
+            }
             "local-preview" | "local-preview-ready" | "local-preview-image" => {
                 phone_menu_sample(app);
                 let row = app
@@ -3208,6 +3237,69 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 if part == "group-info-saving" {
                     app.group_saving.insert(group.to_owned());
                 }
+            }
+            "pending-media" | "pending-media-failed" | "pending-media-unknown" => {
+                let target = SAMPLES[0].id;
+                app.open_chat = Some(target.into());
+                let chat = app.chats.iter_mut().find(|chat| chat.id == target).unwrap();
+                chat.backend_origin = Some("https://synthetic.invalid".into());
+                chat.backend_account = Some("synthetic".into());
+                let member = crate::merged::Member::of(chat).unwrap();
+                let mut pixels = Vec::new();
+                for y in 0..120 {
+                    for x in 0..200 {
+                        pixels.extend_from_slice(&[40 + x as u8 / 2, 80 + y as u8, 140, 255]);
+                    }
+                }
+                app.stage(crate::app::Pending::Picture {
+                    width: 200,
+                    height: 120,
+                    rgba: std::sync::Arc::new(pixels),
+                    texture: None,
+                });
+                let staged = app.pending.pop().unwrap();
+                app.dispatch_pending_media(
+                    member,
+                    staged,
+                    Some("Synthetic attachment preview".into()),
+                    None,
+                );
+                for record in app.pending_media.values_mut() {
+                    record.state = match part {
+                        "pending-media-failed" => {
+                            crate::pending_media::State::NotSubmitted("Asset upload failed".into())
+                        }
+                        "pending-media-unknown" => {
+                            crate::pending_media::State::Unknown("Send response timed out".into())
+                        }
+                        _ => crate::pending_media::State::Sending,
+                    };
+                }
+                let local_states: Vec<_> = app
+                    .pending_media
+                    .values()
+                    .map(|r| {
+                        (
+                            r.job.member.chat.clone(),
+                            r.visible.clone(),
+                            match r.state {
+                                crate::pending_media::State::NotSubmitted(_) => Delivery::Failed,
+                                crate::pending_media::State::Unknown(_) => Delivery::Unknown,
+                                _ => Delivery::Pending,
+                            },
+                        )
+                    })
+                    .collect();
+                for (chat, id, status) in local_states {
+                    if let Some(message) = app
+                        .conversations
+                        .get_mut(&chat)
+                        .and_then(|c| c.message_mut(&id))
+                    {
+                        message.status = status;
+                    }
+                }
+                app.scroll_to_bottom = true;
             }
             "forward-progress" => {
                 apply_flags(app, Some("forward"));

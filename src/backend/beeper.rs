@@ -201,7 +201,24 @@ struct BeeperMessage {
     linked_message_id: Option<String>,
     #[serde(default)]
     reactions: Vec<BeeperReaction>,
+    #[serde(default)]
+    links: Vec<BeeperLinkPreview>,
 }
+
+/// Supplied metadata only. Image URLs are deliberately not downloaded here.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BeeperLinkPreview {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: String,
+    #[serde(rename = "originalURL", default)]
+    original_url: Option<String>,
+    #[serde(default)]
+    summary: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct BeeperReaction {
     #[serde(rename = "participantID")]
@@ -1809,6 +1826,21 @@ impl Api {
         reply: Option<&str>,
         cancel: Option<&std::sync::atomic::AtomicBool>,
     ) -> Result<SendAccepted, String> {
+        self.send_attachment_tracked(chat, path, kind, caption, reply, cancel, None, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn send_attachment_tracked(
+        &self,
+        chat: &str,
+        path: &std::path::Path,
+        kind: Attachment,
+        caption: Option<&str>,
+        reply: Option<&str>,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        post_started: Option<&std::sync::atomic::AtomicBool>,
+        expected: Option<&crate::merged::Member>,
+    ) -> Result<SendAccepted, String> {
         if upload_stopped(cancel) {
             return Err("Upload worker stopped; message was not submitted".into());
         }
@@ -1850,6 +1882,13 @@ impl Api {
                 .map_err(|e| format!("{e}; attachment message was not submitted"))?,
         )
         .map_err(|_| "Upload response invalid; attachment message was not submitted")?;
+        if upload
+            .get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| !e.is_empty())
+        {
+            return Err("Asset upload rejected; message was not submitted".into());
+        }
         let id = upload
             .get("uploadID")
             .and_then(|s| s.as_str())
@@ -1881,6 +1920,21 @@ impl Api {
         if let Some(reply) = reply {
             message["replyToMessageID"] = reply.into();
         }
+        if let Some(expected) = expected {
+            let current = self.get_chat(chat)?;
+            if current.id != expected.chat
+                || current.account_id != expected.account
+                || current.is_read_only
+            {
+                return Err("Destination changed before submission; nothing submitted".into());
+            }
+            if upload_stopped(cancel) {
+                return Err("Session closed; nothing submitted".into());
+            }
+        }
+        if let Some(started) = post_started {
+            started.store(true, std::sync::atomic::Ordering::Release);
+        }
         let response = self
             .http
             .post(format!(
@@ -1901,6 +1955,89 @@ impl Api {
             format!("{e}; attachment send outcome unknown, check history before retrying")
         })?)
         .map_err(|_| "Attachment confirmation invalid; check history before retrying".into())
+    }
+
+    fn send_pending_media(
+        &self,
+        job: &crate::pending_media::Job,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<SendAccepted, crate::pending_media::State> {
+        use crate::pending_media::{Payload, State};
+        let prepare = || -> Result<(), String> {
+            if job.member.origin != self.base_url || self.read_only || upload_stopped(Some(cancel))
+            {
+                return Err("Destination unavailable or session closed; nothing submitted".into());
+            }
+            let chat = self.get_chat(&job.member.chat)?;
+            if chat.id != job.member.chat
+                || chat.account_id != job.member.account
+                || chat.is_read_only
+            {
+                return Err(
+                    "Destination identity changed or is read-only; nothing submitted".into(),
+                );
+            }
+            if job
+                .quoting
+                .as_ref()
+                .is_some_and(|q| q.source_chat(&job.member.chat) != job.member.chat)
+            {
+                return Err("Cross-chat quote unsupported; nothing submitted".into());
+            }
+            Ok(())
+        };
+        prepare().map_err(State::NotSubmitted)?;
+        let temporary;
+        let (path, kind) = match &job.payload {
+            Payload::File { path, document } => (
+                path.as_path(),
+                if *document {
+                    Attachment::Document
+                } else {
+                    Attachment::Auto
+                },
+            ),
+            Payload::Picture {
+                width,
+                height,
+                rgba,
+            } => {
+                temporary =
+                    encode_pasted_image(*width, *height, rgba).map_err(State::NotSubmitted)?;
+                (temporary.as_path(), Attachment::Auto)
+            }
+        };
+        let started = std::sync::atomic::AtomicBool::new(false);
+        let result = self.send_attachment_tracked(
+            &job.member.chat,
+            path,
+            kind,
+            job.caption.as_deref(),
+            job.quoting.as_ref().map(|q| q.id.as_str()),
+            Some(cancel),
+            Some(&started),
+            Some(&job.member),
+        );
+        // The job retains pasted pixels for safe retry; never remove user files.
+        if matches!(job.payload, Payload::Picture { .. }) {
+            discard_temp_upload(path);
+        }
+        match result {
+            Ok(mut accepted)
+                if (accepted.chat.is_empty() || accepted.chat == job.member.chat)
+                    && !accepted.pending_id.is_empty() =>
+            {
+                accepted.chat = job.member.chat.clone();
+                Ok(accepted)
+            }
+            Ok(_) => Err(State::Unknown(
+                "Unexpected acceptance identity; check chat history".into(),
+            )),
+            Err(error) if started.load(std::sync::atomic::Ordering::Acquire) => {
+                Err(State::Unknown(error))
+            }
+            Err(error) => Err(State::NotSubmitted(error)),
+        }
     }
 
     fn mark_read(&self, chat: &str) -> Result<(), String> {
@@ -2671,6 +2808,64 @@ fn delivery_of(m: &BeeperMessage) -> Delivery {
     }
 }
 
+/// Synthetic wire fixture exercises the real mapper for offline review captures.
+#[cfg(any(test, feature = "demo"))]
+pub(crate) fn supplied_preview_demo(chat: &str) -> Message {
+    let wire: BeeperMessage = serde_json::from_value(serde_json::json!({
+        "id":"ada-link", "chatID": chat,
+        "senderID": chat,
+        "text":"Summer plans (https://example.com/trips?utm_source=chat#july)",
+        "links":[{"title":"Summer plans", "summary":"A few ideas for the long summer evenings.", "url":"https://example.com/trips", "originalURL":"https://example.com/trips?utm_source=chat#july", "img":"https://example.com/not-fetched.jpg"}]
+    })).expect("synthetic preview wire fixture");
+    map_message(&wire, chat)
+}
+
+#[cfg(test)]
+thread_local! {
+    static SUPPLIED_PREVIEW_BODY_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Associate supplied metadata only with a link actually present in the body.
+/// Keep that original destination for opening/copying: a resolved or canonical
+/// metadata URL is not permission to change where the message sends the user.
+fn supplied_link_preview(message: &BeeperMessage, body: &str) -> Option<crate::model::LinkPreview> {
+    if message.links.is_empty() {
+        return None;
+    }
+    fn label(value: Option<&str>, max: usize) -> Option<String> {
+        let text: String = value?
+            .chars()
+            .filter(|ch| !ch.is_control() || ch.is_whitespace())
+            .take(max)
+            .collect();
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!text.is_empty()).then_some(text)
+    }
+    #[cfg(test)]
+    SUPPLIED_PREVIEW_BODY_PARSES.with(|count| count.set(count.get() + 1));
+    for original in crate::markup::links(body) {
+        let Some(valid) = crate::safety::preview_url(&original) else {
+            continue;
+        };
+        let Some(preview) = message.links.iter().take(16).find(|preview| {
+            let source = preview.original_url.as_deref().unwrap_or(&preview.url);
+            crate::safety::preview_url(source).as_ref() == Some(&valid)
+        }) else {
+            continue;
+        };
+        let title = label(preview.title.as_deref(), 240);
+        let description = label(preview.summary.as_deref(), 600);
+        if title.is_some() || description.is_some() {
+            return Some(crate::model::LinkPreview {
+                url: original,
+                title,
+                description,
+            });
+        }
+    }
+    None
+}
+
 fn map_message(m: &BeeperMessage, fallback_chat: &str) -> Message {
     let (body, _labelled) = body_of(m);
     let status = delivery_of(m);
@@ -2697,9 +2892,9 @@ fn map_message(m: &BeeperMessage, fallback_chat: &str) -> Message {
         from_me: m.is_sender.unwrap_or(false),
         timestamp: unix(&Some(m.timestamp.clone())),
         history_order: None,
-        content: attachment_content(m).unwrap_or(Content::Text {
+        content: attachment_content(m).unwrap_or_else(|| Content::Text {
+            preview: supplied_link_preview(m, &body),
             text: body,
-            preview: None,
         }),
         status,
         delivered_at: None,
@@ -3178,6 +3373,40 @@ pub fn run(
     );
     let (upload_tx, upload_rx) = std::sync::mpsc::sync_channel::<UploadBatch>(2);
     let (accepted_tx, accepted_rx) = std::sync::mpsc::channel::<(ChatId, String)>();
+    let (pending_media_tx, pending_media_rx) =
+        std::sync::mpsc::sync_channel::<crate::pending_media::Job>(8);
+    let (pending_media_accepted_tx, pending_media_accepted_rx) = std::sync::mpsc::channel();
+    let pending_api = api.clone();
+    let pending_events = events.clone();
+    let pending_waker = waker.clone();
+    let pending_cancel = upload_cancel.clone();
+    std::thread::Builder::new()
+        .name("beeper-pending-media".into())
+        .spawn(move || {
+            while let Ok(job) = pending_media_rx.recv() {
+                let result = pending_api.send_pending_media(&job, &pending_cancel);
+                let state = match result {
+                    Ok(accepted) => {
+                        let _ = pending_media_accepted_tx.send((
+                            job.local.clone(),
+                            job.member.clone(),
+                            accepted.pending_id.clone(),
+                        ));
+                        crate::pending_media::State::Accepted {
+                            pending: accepted.pending_id,
+                        }
+                    }
+                    Err(state) => state,
+                };
+                let _ = pending_events.send(Event::BeeperMediaProgress {
+                    local: job.local,
+                    member: job.member,
+                    state,
+                });
+                pending_waker.wake();
+            }
+        })
+        .expect("pending media worker");
     let (forward_tx, forward_rx) =
         std::sync::mpsc::sync_channel::<(u64, bool, Vec<(usize, crate::composed_forward::Item)>)>(
             1,
@@ -3517,6 +3746,8 @@ pub fn run(
     let mut last_msg_poll = Instant::now();
     let mut last_receipt_refresh = Instant::now();
     let mut pending_sends: Vec<(ChatId, String, Instant)> = Vec::new();
+    let mut tracked_media: HashMap<(String, String), (String, crate::merged::Member)> =
+        HashMap::new();
     let mut forward_pending = HashMap::new();
     let mut pending_storage: Option<(u64, bool)> = None;
     // Set by Command::Resumed: after a wake every poll timer is due at once,
@@ -3554,6 +3785,21 @@ pub fn run(
                 cmd => (cmd, None),
             };
             match cmd {
+                Command::BeeperMedia(job) => {
+                    if let Err(error) = pending_media_tx.try_send(job) {
+                        let job = match error {
+                            std::sync::mpsc::TrySendError::Full(job)
+                            | std::sync::mpsc::TrySendError::Disconnected(job) => job,
+                        };
+                        emit(Event::BeeperMediaProgress {
+                            local: job.local,
+                            member: job.member,
+                            state: crate::pending_media::State::NotSubmitted(
+                                "Upload queue unavailable; nothing submitted".into(),
+                            ),
+                        });
+                    }
+                }
                 Command::Shutdown => return,
                 Command::SaveDraft { chat, text } => {
                     if draft_store.is_none() && !text.trim().is_empty() {
@@ -4662,6 +4908,13 @@ pub fn run(
             pending_storage = None;
         }
 
+        while let Ok((local, member, pending_id)) = pending_media_accepted_rx.try_recv() {
+            tracked_media.insert(
+                (member.chat.clone(), pending_id.clone()),
+                (local, member.clone()),
+            );
+            pending_sends.push((member.chat, pending_id, Instant::now()));
+        }
         while let Ok((chat, pending_id, account)) = forward_accepted_rx.try_recv() {
             forward_pending.insert((chat.clone(), pending_id.clone()), account);
             pending_sends.push((chat, pending_id, Instant::now()));
@@ -4685,18 +4938,36 @@ pub fn run(
                 }
             }
             pending_sends.retain(|(chat, pending_id, started)| {
-                let forward_account = forward_pending
-                    .get(&(chat.clone(), pending_id.clone()))
-                    .cloned();
-                let keep = if let Some(account) = forward_account {
-                    poll_forward_mark(&api, chat, pending_id, &account, started.elapsed(), &emit)
+                let key = (chat.clone(), pending_id.clone());
+                if let Some((local, member)) = tracked_media.get(&key).cloned() {
+                    let keep = poll_media_send(
+                        &api,
+                        &local,
+                        &member,
+                        pending_id,
+                        started.elapsed(),
+                        &emit,
+                    );
+                    if !keep {
+                        tracked_media.remove(&key);
+                    }
+                    keep
+                } else if let Some(account) = forward_pending.get(&key).cloned() {
+                    let keep = poll_forward_mark(
+                        &api,
+                        chat,
+                        pending_id,
+                        &account,
+                        started.elapsed(),
+                        &emit,
+                    );
+                    if !keep {
+                        forward_pending.remove(&key);
+                    }
+                    keep
                 } else {
                     poll_pending_send(&api, chat, pending_id, started.elapsed(), &emit)
-                };
-                if !keep {
-                    forward_pending.remove(&(chat.clone(), pending_id.clone()));
                 }
-                keep
             });
         }
         if last_chat_refresh.elapsed() >= CHAT_REFRESH {
@@ -5094,6 +5365,62 @@ fn refresh_inventory(api: &Api, accounts: &mut Vec<BeeperAccount>, emit: &dyn Fn
     }
 }
 
+fn poll_media_send(
+    api: &Api,
+    local: &str,
+    member: &crate::merged::Member,
+    pending_id: &str,
+    elapsed: Duration,
+    emit: &dyn Fn(Event),
+) -> bool {
+    let mut keep = true;
+    if let Ok(wire) = api.get_message(&member.chat, pending_id)
+        && wire.account_id == member.account
+        && wire.chat_id == member.chat
+        && wire.is_sender == Some(true)
+    {
+        let message = api.map_message(&wire, &member.chat);
+        // Delivery evidence is independent of attachment metadata availability.
+        let complete = wire.send_status.as_ref().is_some_and(|s| {
+            s.status == "SUCCESS"
+                || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
+        });
+        emit(Event::BeeperMediaResolved {
+            local: local.to_owned(),
+            member: member.clone(),
+            message: Box::new(message),
+            complete,
+        });
+        if complete {
+            keep = false;
+        } else if wire
+            .send_status
+            .as_ref()
+            .is_some_and(|s| s.status.starts_with("FAIL_"))
+        {
+            emit(Event::BeeperMediaProgress {
+                local: local.to_owned(),
+                member: member.clone(),
+                state: crate::pending_media::State::Unknown(
+                    "Bridge reports failure; check history before sending again".into(),
+                ),
+            });
+            keep = false;
+        }
+    }
+    if keep && elapsed >= Duration::from_secs(60) {
+        emit(Event::BeeperMediaProgress {
+            local: local.to_owned(),
+            member: member.clone(),
+            state: crate::pending_media::State::Unknown(
+                "Confirmation timed out; check chat history".into(),
+            ),
+        });
+        keep = false;
+    }
+    keep
+}
+
 fn poll_forward_mark(
     api: &Api,
     chat: &ChatId,
@@ -5341,6 +5668,135 @@ mod tests {
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
 
     #[test]
+    fn supplied_preview_parsing_only_runs_for_text_with_metadata() {
+        for (attachment, metadata, expected_parses) in [
+            (false, false, 0),
+            (true, false, 0),
+            (true, true, 0),
+            (false, true, 1),
+        ] {
+            let mut raw = serde_json::json!({
+                "id":"parse-gate", "text":"https://example.org/story"
+            });
+            if metadata {
+                raw["links"] = serde_json::json!([{
+                    "url":"https://example.org/story", "title":"Story"
+                }]);
+            }
+            if attachment {
+                raw["attachments"] = serde_json::json!([{
+                    "type":"img", "id":"mxc://example/image", "mimeType":"image/png"
+                }]);
+            }
+            let wire: BeeperMessage = serde_json::from_value(raw).unwrap();
+            SUPPLIED_PREVIEW_BODY_PARSES.with(|count| count.set(0));
+            let message = map_message(&wire, "chat");
+            assert_eq!(
+                SUPPLIED_PREVIEW_BODY_PARSES.with(|count| count.get()),
+                expected_parses,
+                "attachment={attachment}, metadata={metadata}"
+            );
+            if attachment {
+                assert!(matches!(message.content, Content::Image { .. }));
+            } else {
+                let Content::Text { text, preview } = message.content else {
+                    panic!("text")
+                };
+                assert_eq!(text, "https://example.org/story");
+                assert_eq!(preview.is_some(), metadata);
+            }
+        }
+    }
+
+    #[test]
+    fn supplied_previews_are_bound_to_original_message_links_without_fetching() {
+        let raw = serde_json::json!({
+            "id":"preview", "text":"A title (https://example.org/news?utm_source=chat#part)",
+            "links":[{"title":"  Article\nheadline  ", "summary":"Short description", "url":"https://redirected.example/article", "originalURL":"https://example.org/news?utm_source=chat#part", "img":"http://127.0.0.1/private", "favicon":"file:///secret"}]
+        });
+        let wire: BeeperMessage = serde_json::from_value(raw.clone()).unwrap();
+        let message = map_message(&wire, "chat");
+        let Content::Text {
+            text,
+            preview: Some(preview),
+        } = message.content
+        else {
+            panic!("supplied preview");
+        };
+        assert_eq!(
+            text,
+            "A title (https://example.org/news?utm_source=chat#part)"
+        );
+        assert_eq!(preview.url, "https://example.org/news?utm_source=chat#part");
+        assert_eq!(preview.title.as_deref(), Some("Article headline"));
+        assert_eq!(preview.description.as_deref(), Some("Short description"));
+        assert!(
+            message.thumbnail.is_none(),
+            "supplied remote image URLs must never cause a network fetch"
+        );
+        for url in [
+            "file:///secret",
+            "https://unrelated.example/",
+            "javascript:alert(1)",
+        ] {
+            let mut raw = raw.clone();
+            raw["links"][0]["originalURL"] = url.into();
+            let wire: BeeperMessage = serde_json::from_value(raw).unwrap();
+            assert!(matches!(
+                map_message(&wire, "chat").content,
+                Content::Text { preview: None, .. }
+            ));
+        }
+        let wire: BeeperMessage =
+            serde_json::from_str(r#"{"id":"plain","text":"https://example.org/"}"#).unwrap();
+        assert!(matches!(
+            map_message(&wire, "chat").content,
+            Content::Text { preview: None, .. }
+        ));
+    }
+
+    #[test]
+    fn supplied_original_url_is_authoritative_over_resolved_url() {
+        let raw = serde_json::json!({"id":"preview", "text":"https://example.org/story", "links":[{"originalURL":"https://unrelated.example/redirect", "url":"https://example.org/story", "title":"Wrong article"}]});
+        let wire: BeeperMessage = serde_json::from_value(raw.clone()).unwrap();
+        assert!(matches!(
+            map_message(&wire, "chat").content,
+            Content::Text { preview: None, .. }
+        ));
+        let mut raw = raw;
+        raw["links"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("originalURL");
+        let wire: BeeperMessage = serde_json::from_value(raw).unwrap();
+        assert!(matches!(
+            map_message(&wire, "chat").content,
+            Content::Text {
+                preview: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn supplied_preview_chooses_body_link_order_and_bounds_metadata() {
+        let wire: BeeperMessage = serde_json::from_value(serde_json::json!({"id":"multi", "text":"https://first.example/ then https://second.example/", "links":[
+            {"url":"https://second.example/", "title":"second"},
+            {"url":"https://first.example/", "title":"x".repeat(2000), "summary":"y".repeat(3000)}
+        ]})).unwrap();
+        let Content::Text {
+            preview: Some(preview),
+            ..
+        } = map_message(&wire, "chat").content
+        else {
+            panic!()
+        };
+        assert_eq!(preview.url, "https://first.example/");
+        assert_eq!(preview.title.unwrap().len(), 240);
+        assert_eq!(preview.description.unwrap().len(), 600);
+    }
+
+    #[test]
     fn own_user_and_opaque_ids_never_become_handles() {
         let wire: BeeperChat = serde_json::from_str(
             r#"{"id":"c2","accountID":"a","network":"Signal","title":"Anna Example","type":"single",
@@ -5510,6 +5966,267 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+
+    fn pending_media_fixture(
+        responses: Vec<(&'static str, u16, String)>,
+    ) -> (Api, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (expected, status, body) in responses {
+                let start = Instant::now();
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && start.elapsed() < Duration::from_secs(10) =>
+                        {
+                            std::thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(error) => panic!("waiting for {expected}: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut buf = [0; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                let header = String::from_utf8_lossy(&request[..header_end]);
+                assert!(header.starts_with(expected), "unexpected request: {header}");
+                let length: usize = header
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|n| n.trim().parse().unwrap())
+                    })
+                    .unwrap_or(0);
+                while request.len() < header_end + length {
+                    let mut buf = [0; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                }
+                requests.push(String::from_utf8(request).unwrap());
+                write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+            requests
+        });
+        (
+            Api::new(&BeeperConfig {
+                base_url,
+                token: "fixture".into(),
+            })
+            .unwrap(),
+            worker,
+        )
+    }
+    fn pending_media_job(origin: &str, path: &std::path::Path) -> crate::pending_media::Job {
+        crate::pending_media::Job {
+            local: "local-fixture".into(),
+            temporary: false,
+            member: crate::merged::Member {
+                origin: origin.into(),
+                account: "signal".into(),
+                chat: "target".into(),
+            },
+            payload: crate::pending_media::Payload::File {
+                path: path.into(),
+                document: false,
+            },
+            caption: None,
+            quoting: None,
+        }
+    }
+    #[test]
+    fn pending_media_submission_boundary_is_not_inferred_from_error_words() {
+        for (upload_status, send_status, expected_unknown) in
+            [(503, 200, false), (200, 503, true), (200, 200, false)]
+        {
+            let mut responses = vec![
+                (
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ),
+                (
+                    "POST /v1/assets/upload/base64 ",
+                    upload_status,
+                    r#"{"uploadID":"asset"}"#.into(),
+                ),
+            ];
+            if upload_status == 200 {
+                responses.push((
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ));
+                responses.push((
+                    "POST /v1/chats/target/messages ",
+                    send_status,
+                    r#"{"chatID":"target","pendingMessageID":"pending"}"#.into(),
+                ));
+            }
+            let (api, server) = pending_media_fixture(responses);
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), b"synthetic").unwrap();
+            let result = api.send_pending_media(
+                &pending_media_job(&api.base_url, file.path()),
+                &AtomicBool::new(false),
+            );
+            match result {
+                Ok(accepted) => {
+                    assert_eq!(send_status, 200);
+                    assert_eq!(upload_status, 200);
+                    assert_eq!(accepted.pending_id, "pending");
+                }
+                Err(crate::pending_media::State::NotSubmitted(_)) => assert!(!expected_unknown),
+                Err(crate::pending_media::State::Unknown(_)) => assert!(expected_unknown),
+                other => panic!("unexpected {other:?}"),
+            }
+            server.join().unwrap();
+        }
+    }
+    #[test]
+    fn pending_media_acceptance_uses_requested_chat_when_omitted() {
+        for (chat_field, pending, accepted) in [
+            ("", "pending", true),
+            (",\"chatID\":\"target\"", "pending", true),
+            (",\"chatID\":\"foreign\"", "pending", false),
+            ("", "", false),
+        ] {
+            let response = format!("{{\"pendingMessageID\":\"{pending}\"{chat_field}}}");
+            let (api, server) = pending_media_fixture(vec![
+                (
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ),
+                (
+                    "POST /v1/assets/upload/base64 ",
+                    200,
+                    r#"{"uploadID":"asset"}"#.into(),
+                ),
+                (
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ),
+                ("POST /v1/chats/target/messages ", 200, response),
+            ]);
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), b"synthetic").unwrap();
+            let result = api.send_pending_media(
+                &pending_media_job(&api.base_url, file.path()),
+                &AtomicBool::new(false),
+            );
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "chat field {chat_field:?}, pending {pending:?}"
+            );
+            if let Ok(result) = result {
+                assert_eq!(result.chat, "target");
+            }
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn pending_media_poll_requires_exact_account_and_binds_final_id() {
+        for (account, sender, expect_resolved) in [
+            ("foreign", true, false),
+            ("signal", false, false),
+            ("signal", true, true),
+        ] {
+            let body = serde_json::json!({"id":"final","chatID":"target","accountID":account,"isSender":sender,"attachments":[{"type":"audio","id":"asset","isVoiceNote":true,"duration":1}],"sendStatus":{"status":"SUCCESS"}}).to_string();
+            let (api, server) =
+                pending_media_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let member = pending_media_job(&api.base_url, std::path::Path::new("unused")).member;
+            let events = Mutex::new(Vec::new());
+            let keep = poll_media_send(
+                &api,
+                "local",
+                &member,
+                "pending",
+                Duration::from_secs(61),
+                &|event| events.lock().unwrap().push(event),
+            );
+            assert!(!keep);
+            let events = events.into_inner().unwrap();
+            assert_eq!(events.iter().any(|e| matches!(e, Event::BeeperMediaResolved { local, message, complete: true, .. } if local == "local" && message.id == "final")), expect_resolved);
+            assert_eq!(
+                events.iter().any(|e| matches!(
+                    e,
+                    Event::BeeperMediaProgress {
+                        state: crate::pending_media::State::Unknown(_),
+                        ..
+                    }
+                )),
+                !expect_resolved
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn pending_media_sparse_success_is_confirmed_not_unknown_at_timeout() {
+        let (api, server) = pending_media_fixture(vec![("GET /v1/chats/target/messages/pending ", 200,
+            r#"{"id":"final","chatID":"target","accountID":"signal","isSender":true,"sendStatus":{"status":"SUCCESS"}}"#.into())]);
+        let member = pending_media_job(&api.base_url, std::path::Path::new("unused")).member;
+        let events = Mutex::new(Vec::new());
+        assert!(!poll_media_send(
+            &api,
+            "local",
+            &member,
+            "pending",
+            Duration::from_secs(61),
+            &|e| events.lock().unwrap().push(e)
+        ));
+        let events = events.into_inner().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::BeeperMediaResolved { complete: true, .. }))
+        );
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::BeeperMediaProgress {
+                state: crate::pending_media::State::Unknown(_),
+                ..
+            }
+        )));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn pending_media_destination_mismatch_refuses_before_upload() {
+        let (api, server) = pending_media_fixture(vec![(
+            "GET /v1/chats/target ",
+            200,
+            r#"{"id":"target","accountID":"foreign"}"#.into(),
+        )]);
+        let result = api.send_pending_media(
+            &pending_media_job(&api.base_url, std::path::Path::new("not-read")),
+            &AtomicBool::new(false),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::pending_media::State::NotSubmitted(_))
+        ));
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
 
     fn forward_fixture_item(origin: &str) -> crate::composed_forward::Item {
         crate::composed_forward::Item {

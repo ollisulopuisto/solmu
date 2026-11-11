@@ -39,6 +39,7 @@ pub struct Account {
     pub favorites: Option<Vec<ChatId>>,
     pub contacts: HashMap<String, Contact>,
     pub conversations: HashMap<ChatId, Conversation>,
+    pub pending_media: HashMap<String, crate::pending_media::Record>,
     pub open_chat: Option<ChatId>,
     /// Recently opened chats, most recent last; `open_chat` is the open
     /// one and is always a member. Feeds the Cmd+K switcher; was the tab
@@ -198,6 +199,7 @@ impl Account {
             favorites: None,
             contacts: HashMap::new(),
             conversations: HashMap::new(),
+            pending_media: HashMap::new(),
             open_chat,
             open_tabs,
             prefetch_sent: None,

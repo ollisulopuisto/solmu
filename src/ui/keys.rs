@@ -13,6 +13,12 @@ fn jump_keys_reach_chat(editing_text: bool, composer_focused: bool, composer_emp
 
 /// Routes keyboard commands to actions, respecting overlays and text focus.
 pub fn handle(app: &mut App, ctx: &egui::Context) {
+    if app.flat_group_ui.assigning.is_some() {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            app.flat_group_ui.assigning = None;
+        }
+        return;
+    }
     if app.picture_edit.is_some() {
         editor_keys(app, ctx);
         return;
@@ -201,6 +207,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
         let (modifiers, key_code) = SIDEBAR.keys[0];
         key(modifiers, key_code, Action::ToggleSidebar);
+        let (modifiers, key_code) = FLAT_GROUPS.keys[0];
+        key(modifiers, key_code, Action::ToggleFlatGroups);
         let (modifiers, key_code) = SETTINGS.keys[0];
         key(modifiers, key_code, Action::ToggleSettings);
         let (modifiers, key_code) = QUIT.keys[0];
@@ -506,7 +514,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             actions.push(Action::OpenChat(next));
         }
         if step != 0 {
-            let visible = app.visible_chats();
+            let visible = super::flat_groups::navigation_chats(app);
             if !visible.is_empty() {
                 let current = app
                     .open_chat
@@ -1333,6 +1341,18 @@ const SIDEBAR: Shortcut = Shortcut {
         accelerator: "Super+KeyB",
     }),
 };
+// Approved group toggle; the info sidebar moves to Cmd-Option-I in #281.
+const FLAT_GROUPS: Shortcut = Shortcut {
+    id: "flat-groups",
+    keys: &[(Modifiers::COMMAND, Key::D)],
+    label: Some("Ctrl+D"),
+    description: Some("Switch Latest and Groups"),
+    menu: Some(MenuItem {
+        id: "flat-groups",
+        text: "Switch Latest and Groups",
+        accelerator: "Super+KeyD",
+    }),
+};
 const INFO_SIDEBAR: Shortcut = Shortcut {
     id: "info-sidebar",
     // Shared Postilaatikko/Solmu keymap: the info sidebar lives on
@@ -1559,6 +1579,7 @@ pub static REGISTRY: &[Row] = &[
     Row::Help("Ctrl+C", "Copy the selected messages"),
     Row::Binding(&SIDEBAR),
     Row::Binding(&INFO_SIDEBAR),
+    Row::Binding(&FLAT_GROUPS),
     Row::Help(
         "Ctrl+End",
         "Jump to the newest message (when the input is empty)",
@@ -1883,6 +1904,7 @@ mod tests {
             ("Ctrl+C", "Copy the selected messages"),
             ("Ctrl+B", "Collapse or expand the chat list"),
             ("Ctrl+Alt+I", "Show or hide the info sidebar"),
+            ("Ctrl+D", "Switch Latest and Groups"),
             (
                 "Ctrl+End",
                 "Jump to the newest message (when the input is empty)",
@@ -2577,17 +2599,15 @@ mod tests {
     }
 
     #[test]
-    fn command_alt_i_opens_info_and_command_d_is_free_for_groups() {
+    fn command_alt_i_opens_info_and_command_d_toggles_groups() {
         let (_root, mut app, ids) = app_with_chats(1);
         app.open_chat = Some(ids[0].clone());
         let ctx = egui::Context::default();
         // The shared keymap moves the info sidebar to Cmd+Alt+I and reserves
         // Cmd+D for the groups toggle, so Cmd+D no longer opens info.
-        assert!(press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
-        assert!(
-            app.actions.is_empty(),
-            "Cmd+D stays unbound until the groups toggle lands"
-        );
+        assert!(!press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
+        assert_eq!(app.actions, [Action::ToggleFlatGroups]);
+        app.actions.clear();
         // The extra Alt must not leak the press into plain Cmd+I (Reply
         // later): the info binding is consumed before that one.
         assert!(!press(
@@ -2610,13 +2630,15 @@ mod tests {
         );
         assert_eq!(REPLY_LATER.keys, &[(Modifiers::COMMAND, Key::I)]);
         assert_eq!(SIDEBAR.keys, &[(Modifiers::COMMAND, Key::B)]);
-        // menu_accelerator formats any chord, bound or not, so the registry
-        // itself must show Cmd+D unbound until the groups toggle claims it.
-        assert!(!REGISTRY.iter().any(|row| matches!(
+        assert!(REGISTRY.iter().any(|row| matches!(
             row,
             Row::Binding(entry)
-                if entry.keys.contains(&(Modifiers::COMMAND, Key::D))
+                if entry.id == "flat-groups" && entry.keys.contains(&(Modifiers::COMMAND, Key::D))
         )));
+        assert_eq!(
+            menu_accelerator(Modifiers::COMMAND, Key::D).as_deref(),
+            Some("Super+KeyD")
+        );
         assert_eq!(
             menu_accelerator(Modifiers::COMMAND | Modifiers::ALT, Key::I).as_deref(),
             Some("Super+Alt+KeyI")

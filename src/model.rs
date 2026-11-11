@@ -641,7 +641,7 @@ pub struct MentionRef {
     pub id: String,
 }
 
-/// Link metadata attached by WhatsApp.
+/// Link metadata supplied with a message. Rendering it does not fetch the site.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LinkPreview {
     pub url: String,
@@ -2595,6 +2595,7 @@ pub fn forward_limit(frequently_forwarded: bool) -> usize {
 /// Actions queued by views and applied after drawing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    RetryPendingMedia(String),
     TranslateLocally(String),
     Open(Page),
     /// Opens settings, or closes them when they are already showing.
@@ -3079,6 +3080,7 @@ pub enum Action {
     ShowDialog(Dialog),
     CloseDialog,
     ToggleSidebar,
+    ToggleFlatGroups,
     SetChatFilter(ChatFilter),
     /// Picks the label the chat list shows; `None` shows every chat.
     SelectLabel(Option<String>),
