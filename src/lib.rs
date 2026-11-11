@@ -38,6 +38,7 @@ pub mod new_group;
 pub mod notify;
 pub mod opener;
 pub mod paths;
+pub mod pending_media;
 pub mod privacy;
 pub mod proxy;
 pub mod read_api;

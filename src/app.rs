@@ -4232,6 +4232,75 @@ impl App {
 
     fn apply_backend_event(&mut self, event: Event, live: bool) {
         match event {
+            Event::BeeperMediaProgress {
+                local,
+                member,
+                state,
+            } => {
+                if let Some(record) = self
+                    .pending_media
+                    .get_mut(&local)
+                    .filter(|r| r.job.member == member)
+                {
+                    let visible = record.visible.clone();
+                    let delivery = match &state {
+                        crate::pending_media::State::NotSubmitted(_) => Delivery::Failed,
+                        crate::pending_media::State::Unknown(_) => Delivery::Unknown,
+                        _ => Delivery::Pending,
+                    };
+                    record.state = state;
+                    if let Some(message) = self
+                        .conversations
+                        .get_mut(&member.chat)
+                        .and_then(|c| c.message_mut(&visible))
+                    {
+                        message.status = delivery;
+                    }
+                }
+            }
+            Event::BeeperMediaResolved {
+                local,
+                member,
+                message,
+                complete,
+            } => {
+                if let Some(record) = self
+                    .pending_media
+                    .get(&local)
+                    .filter(|r| r.job.member == member)
+                    && message.chat == member.chat
+                    && message.from_me
+                {
+                    let visible = record.visible.clone();
+                    let resolved_id = message.id.clone();
+                    if let Some(conversation) = self.conversations.get_mut(&member.chat) {
+                        // Replace identity/content in the same slot. Do not add another row.
+                        conversation
+                            .messages
+                            .retain(|m| m.id == visible || m.id != message.id);
+                        if let Some(index) =
+                            conversation.messages.iter().position(|m| m.id == visible)
+                        {
+                            let mut message = *message;
+                            // Keep the dispatch position while the server's clock differs.
+                            message.timestamp = conversation.messages[index].timestamp;
+                            conversation.messages[index] = message;
+                        }
+                        conversation.rows.remove(&visible);
+                    }
+                    if complete {
+                        if let Some(record) = self.pending_media.remove(&local)
+                            && record.job.temporary
+                            && let crate::pending_media::Payload::File { path, .. } =
+                                record.job.payload
+                        {
+                            crate::backend::beeper::discard_temp_upload(&path);
+                        }
+                    } else if let Some(record) = self.pending_media.get_mut(&local) {
+                        record.visible = resolved_id;
+                    }
+                }
+            }
             Event::BeeperAccounts { origin, accounts } => {
                 self.beeper_accounts.insert(origin, accounts);
             }
@@ -5874,6 +5943,13 @@ impl App {
                 self.notifications.clear_account(&account);
                 self.chats.clear();
                 self.conversations.clear();
+                for (_, record) in self.pending_media.drain() {
+                    if record.job.temporary
+                        && let crate::pending_media::Payload::File { path, .. } = record.job.payload
+                    {
+                        crate::backend::beeper::discard_temp_upload(&path);
+                    }
+                }
                 self.contacts.clear();
                 self.avatars.clear();
                 self.starred.clear();
@@ -6073,6 +6149,11 @@ impl App {
 
     /// Rechecks source-chat authorization for every retained private quote.
     fn reply_source_visible(&self, target: &crate::model::ReplyTarget, destination: &str) -> bool {
+        if self.pending_media.values().any(|record| {
+            record.job.member.chat == target.source_chat(destination) && record.visible == target.id
+        }) {
+            return false;
+        }
         target.chat.is_none()
             || self
                 .chat(target.source_chat(destination))
@@ -7802,6 +7883,127 @@ impl App {
     }
 
     /// Sends pending files, attaching the caption to the first.
+    pub(crate) fn dispatch_pending_media(
+        &mut self,
+        member: crate::merged::Member,
+        staged: Staged,
+        caption: Option<String>,
+        quoting: Option<crate::model::ReplyTarget>,
+    ) {
+        use crate::pending_media::{Job, Payload, Record, State};
+        let local = format!("solmu-local-media-{}-{}", crate::util::now(), staged.id);
+        let temporary = self.attachment_temporary_paths.remove(&staged.id).is_some();
+        let document = matches!(&staged.item, Pending::Document(_));
+        let (payload, content) = match staged.item {
+            Pending::File(path) | Pending::Document(path) => {
+                let media = crate::model::Media {
+                    mime: "application/octet-stream".into(),
+                    size: 0,
+                    width: None,
+                    height: None,
+                    album: None,
+                    path: Some(path.clone()),
+                    state: Default::default(),
+                };
+                let image = !document
+                    && path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|ext| {
+                            ["png", "jpg", "jpeg", "webp", "bmp", "gif"]
+                                .contains(&ext.to_ascii_lowercase().as_str())
+                        });
+                let content = if image {
+                    Content::Image {
+                        caption: caption.clone(),
+                        media,
+                        motion: None,
+                    }
+                } else {
+                    Content::Document {
+                        media,
+                        file_name: path
+                            .file_name()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "Attachment".into()),
+                        caption: caption.clone(),
+                        pages: None,
+                    }
+                };
+                (Payload::File { path, document }, content)
+            }
+            Pending::Picture {
+                width,
+                height,
+                rgba,
+                ..
+            } => {
+                let media = crate::model::Media {
+                    mime: "image/png".into(),
+                    size: rgba.len() as u64,
+                    width: Some(width as u32),
+                    height: Some(height as u32),
+                    album: None,
+                    path: None,
+                    state: Default::default(),
+                };
+                (
+                    Payload::Picture {
+                        width: width as u32,
+                        height: height as u32,
+                        rgba,
+                    },
+                    Content::Image {
+                        caption: caption.clone(),
+                        media,
+                        motion: None,
+                    },
+                )
+            }
+        };
+        let job = Job {
+            temporary,
+            local: local.clone(),
+            member: member.clone(),
+            payload,
+            caption,
+            quoting,
+        };
+        let message = Message {
+            id: local.clone(),
+            chat: member.chat.clone(),
+            sender: self.me.clone().unwrap_or_default(),
+            sender_name: None,
+            from_me: true,
+            timestamp: crate::util::now(),
+            history_order: None,
+            content,
+            status: crate::model::Delivery::Pending,
+            delivered_at: None,
+            read_at: None,
+            quoted: None,
+            reactions: Vec::new(),
+            edited: false,
+            mentions: Vec::new(),
+            forwarded: false,
+            thumbnail: None,
+        };
+        self.conversations
+            .entry(member.chat.clone())
+            .or_default()
+            .messages
+            .push(message);
+        self.pending_media.insert(
+            local.clone(),
+            Record {
+                visible: local,
+                job: job.clone(),
+                state: State::Sending,
+            },
+        );
+        self.backend.send(Command::BeeperMedia(job));
+    }
+
     fn send_pending(
         &mut self,
         account: AccountId,
@@ -7896,6 +8098,29 @@ impl App {
             self.toast_error(crate::i18n::gettext(self.locale, "GIF and sticker captions cannot carry selected mentions. Remove the mentions or send them separately; media kept.").into_owned());
             return;
         }
+        let pending_member = self.chat(&chat).and_then(crate::merged::Member::of);
+        if pending_member.is_some()
+            && (self.chats.iter().filter(|known| known.id == chat).count() != 1
+                || self
+                    .chat(&chat)
+                    .is_none_or(|known| !known.can_send() || known.locked))
+        {
+            self.restore_text(&owner, caption);
+            self.toast_error("Destination unavailable, ambiguous or read-only; files kept.");
+            return;
+        }
+        if pending_member.is_some() && (view_once || !selected.is_empty()) {
+            self.restore_text(&owner, caption);
+            self.toast_error(
+                "Beeper attachments cannot carry view-once or selected mentions; files kept.",
+            );
+            return;
+        }
+        if pending_member.is_some() && self.pending_media.len() + self.pending.len() > 128 {
+            self.restore_text(&owner, caption);
+            self.toast_error("Too many pending media items; files kept.");
+            return;
+        }
         self.drafts.remove(&owner);
         self.draft_mentions.remove(&owner);
         self.store_draft(&owner, "");
@@ -7912,6 +8137,12 @@ impl App {
         // Files go in runs of one kind, in the order they were staged.
         let mut runs: Vec<(bool, Vec<PathBuf>)> = Vec::new();
         for staged in std::mem::take(&mut self.pending) {
+            if let Some(member) = pending_member.clone()
+                && !self.attachment_kinds.contains_key(&staged.id)
+            {
+                self.dispatch_pending_media(member, staged, caption.take(), quoting.take());
+                continue;
+            }
             if self.attachment_kinds.contains_key(&staged.id)
                 || matches!(&staged.item, Pending::Picture { .. })
             {
@@ -8439,6 +8670,38 @@ impl App {
             self.toast_error(error.into_owned());
             return;
         }
+        let local_media = |chat: &str, id: &str| {
+            self.pending_media
+                .values()
+                .any(|r| r.job.member.chat == chat && r.visible == id)
+        };
+        let touches_pending = match &action {
+            Action::Reply(id)
+            | Action::Edit(id)
+            | Action::SelectMessage(id)
+            | Action::ToggleSelected(id) => self
+                .open_chat
+                .as_deref()
+                .is_some_and(|chat| local_media(chat, id)),
+            Action::DeleteForMe { chat, id }
+            | Action::DeleteForEveryone { chat, id }
+            | Action::SetStar {
+                chat, message: id, ..
+            }
+            | Action::React {
+                chat, message: id, ..
+            } => local_media(chat, id),
+            Action::ShowDialog(Dialog::Forward { chat, messages }) => {
+                messages.iter().any(|id| local_media(chat, id))
+            }
+            _ => false,
+        };
+        if touches_pending {
+            self.toast_error(
+                "This media item has no confirmed message identity yet. Check its sending status.",
+            );
+            return;
+        }
         let media_destination = crate::ui::merged::attachment_destination(self, ctx)
             .ok()
             .flatten();
@@ -8478,6 +8741,31 @@ impl App {
             return;
         }
         match action {
+            Action::RetryPendingMedia(local) => {
+                let job = self
+                    .pending_media
+                    .get(&local)
+                    .filter(|r| r.retryable())
+                    .map(|r| r.job.clone());
+                if let Some(job) = job {
+                    let exact = self
+                        .chats
+                        .iter()
+                        .filter(|chat| chat.id == job.member.chat)
+                        .count()
+                        == 1
+                        && self.chat(&job.member.chat).is_some_and(|chat| {
+                            job.member.matches(chat) && !chat.locked && chat.can_send()
+                        });
+                    if !exact {
+                        self.toast_error("Original destination is unavailable; not retried.");
+                        return;
+                    }
+                    self.pending_media.get_mut(&local).unwrap().state =
+                        crate::pending_media::State::Sending;
+                    self.backend.send(Command::BeeperMedia(job));
+                }
+            }
             Action::Open(page) => {
                 let opens_chats = page == Page::Chats;
                 // Privacy can change on the phone at any time, and nothing
@@ -12887,6 +13175,15 @@ impl App {
         for account in &mut self.accounts {
             account.backend.shutdown();
         }
+        for account in &mut self.accounts {
+            for (_, record) in account.pending_media.drain() {
+                if record.job.temporary
+                    && let crate::pending_media::Payload::File { path, .. } = record.job.payload
+                {
+                    crate::backend::beeper::discard_temp_upload(&path);
+                }
+            }
+        }
         crate::backend::beeper::flush_temp_cleanup();
         self.files.flush(fastframe_file::FLUSH_TIMEOUT);
     }
@@ -13833,6 +14130,136 @@ mod tests {
     fn app() -> App {
         let root = std::env::temp_dir().join(format!("solmu-app-{}", std::process::id()));
         App::headless(AppDirs::under(&root), Settings::default()).0
+    }
+
+    fn seed_pending_media(app: &mut App) -> String {
+        let mut chat = Chat::new("pending-target".into(), "Synthetic target".into());
+        chat.backend_origin = Some("https://synthetic.invalid".into());
+        chat.backend_account = Some("signal".into());
+        let member = crate::merged::Member::of(&chat).unwrap();
+        app.chats.push(chat);
+        let id = app.next_attachment_id();
+        app.dispatch_pending_media(
+            member,
+            Staged {
+                id,
+                item: Pending::File("synthetic.pdf".into()),
+            },
+            Some("caption".into()),
+            None,
+        );
+        app.pending_media.keys().next().unwrap().clone()
+    }
+    #[test]
+    fn pending_media_staged_send_drains_into_a_visible_row_without_optimistic_delivery() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let mut chat = Chat::new("pending-target".into(), "Synthetic".into());
+        chat.backend_origin = Some("https://synthetic.invalid".into());
+        chat.backend_account = Some("signal".into());
+        app.chats.push(chat);
+        app.open_chat = Some("pending-target".into());
+        app.at_bottom = false;
+        app.scroll_to_bottom = false;
+        app.stage(Pending::File("synthetic.pdf".into()));
+        let account = app.account().id.clone();
+        app.send_pending(account, "pending-target".into(), "caption".into(), vec![]);
+        assert!(app.pending.is_empty());
+        assert_eq!(app.pending_media.len(), 1);
+        assert_eq!(app.conversations["pending-target"].messages.len(), 1);
+        assert!(
+            !app.scroll_to_bottom,
+            "sending from older history preserves the viewport"
+        );
+        let sent: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok())
+            .filter(|c| matches!(c, Command::BeeperMedia(_)))
+            .collect();
+        assert_eq!(sent.len(), 1);
+    }
+
+    #[test]
+    fn pending_media_exists_at_dispatch_and_acceptance_is_not_delivery() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let local = seed_pending_media(&mut app);
+        assert!(matches!(commands.try_recv(), Ok(Command::BeeperMedia(_))));
+        assert_eq!(app.conversations["pending-target"].messages.len(), 1);
+        assert_eq!(
+            app.conversations["pending-target"].messages[0].status,
+            Delivery::Pending
+        );
+        let member = app.pending_media[&local].job.member.clone();
+        app.apply_backend_event(
+            Event::BeeperMediaProgress {
+                local: local.clone(),
+                member,
+                state: crate::pending_media::State::Accepted {
+                    pending: "pending".into(),
+                },
+            },
+            true,
+        );
+        assert_eq!(app.conversations["pending-target"].messages[0].id, local);
+        assert!(!app.pending_media[&local].retryable());
+    }
+    #[test]
+    fn pending_media_unknown_cannot_retry_and_safe_retry_is_single_dispatch() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let local = seed_pending_media(&mut app);
+        commands.try_recv().unwrap();
+        let ctx = egui::Context::default();
+        app.pending_media.get_mut(&local).unwrap().state =
+            crate::pending_media::State::Unknown("timeout".into());
+        app.apply(Action::RetryPendingMedia(local.clone()), &ctx);
+        assert!(commands.try_recv().is_err());
+        app.pending_media.get_mut(&local).unwrap().state =
+            crate::pending_media::State::NotSubmitted("upload".into());
+        app.apply(Action::RetryPendingMedia(local.clone()), &ctx);
+        app.apply(Action::RetryPendingMedia(local), &ctx);
+        assert!(matches!(commands.try_recv(), Ok(Command::BeeperMedia(_))));
+        assert!(commands.try_recv().is_err());
+    }
+    #[test]
+    fn pending_media_replaces_exact_local_row_and_ignores_foreign_account() {
+        let mut app = app();
+        let local = seed_pending_media(&mut app);
+        let member = app.pending_media[&local].job.member.clone();
+        let mut real = app.conversations["pending-target"].messages[0].clone();
+        real.id = "final".into();
+        real.status = Delivery::Sent;
+        let mut foreign = member.clone();
+        foreign.account = "foreign".into();
+        app.apply_backend_event(
+            Event::BeeperMediaResolved {
+                local: local.clone(),
+                member: foreign,
+                message: Box::new(real.clone()),
+                complete: true,
+            },
+            true,
+        );
+        assert_eq!(app.conversations["pending-target"].messages[0].id, local);
+        app.conversations
+            .get_mut("pending-target")
+            .unwrap()
+            .messages
+            .push(real.clone());
+        app.apply_backend_event(
+            Event::BeeperMediaResolved {
+                local: local.clone(),
+                member,
+                message: Box::new(real),
+                complete: true,
+            },
+            true,
+        );
+        assert_eq!(app.conversations["pending-target"].messages.len(), 1);
+        assert_eq!(app.conversations["pending-target"].messages[0].id, "final");
+        assert!(!app.pending_media.contains_key(&local));
     }
 
     #[test]

@@ -2476,6 +2476,7 @@ pub(crate) fn reply_strip_id() -> egui::Id {
 
 /// App data needed while drawing a checked-out conversation.
 struct View<'a> {
+    pending_media: Option<&'a HashMap<String, crate::pending_media::Record>>,
     sender_hue: Option<f32>,
     hide_grouped_status: bool,
     covered_top: Option<f32>,
@@ -2868,6 +2869,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     let list_label =
         || crate::a11y::messages_list_label(app.locale, &app.chat_title(chat), chat.is_group());
     let view = View {
+        pending_media: Some(&app.pending_media),
         sender_hue: None,
         hide_grouped_status: false,
         covered_top: None,
@@ -5481,7 +5483,45 @@ fn bubble_frame(
         let settled = album
             .map(|_| CARD_WIDTH.min(cap))
             .or_else(|| settled_width(ui, view, message, cap));
-        let _slot = if let Some(messages) = album {
+        let pending = view.pending_media.and_then(|records| {
+            records
+                .values()
+                .find(|record| record.visible == message.id && record.job.member.matches(view.chat))
+        });
+        let pasted_preview = pending.and_then(|record| match &record.job.payload {
+            crate::pending_media::Payload::Picture {
+                width,
+                height,
+                rgba,
+            } => Some((*width, *height, rgba)),
+            _ => None,
+        });
+        let _slot = if let Some((width, height, rgba)) = pasted_preview {
+            let id = ui.id().with(("pending-preview", &message.id));
+            let texture = ui
+                .ctx()
+                .data_mut(|data| data.get_temp::<egui::TextureHandle>(id))
+                .unwrap_or_else(|| {
+                    let image = egui::ColorImage::from_rgba_unmultiplied(
+                        [width as usize, height as usize],
+                        rgba,
+                    );
+                    let texture = ui.ctx().load_texture(
+                        format!("pending-{}", message.id),
+                        image,
+                        Default::default(),
+                    );
+                    ui.ctx()
+                        .data_mut(|data| data.insert_temp(id, texture.clone()));
+                    texture
+                });
+            let size = fit_picture(width as f32, height as f32, cap, 240.0);
+            ui.image((texture.id(), size));
+            if let Some(caption) = &pending.unwrap().job.caption {
+                ui.label(caption);
+            }
+            None
+        } else if let Some(messages) = album {
             for member in messages {
                 if let Some(quoted) = &member.quoted {
                     quote_block(ui, view, member, quoted, settled.unwrap_or(cap), actions);
@@ -5500,6 +5540,32 @@ fn bubble_frame(
                 None => content(ui, view, message, cap, reserve, actions),
             }
         };
+        if let Some(record) = pending {
+            use crate::pending_media::State;
+            let label = match &record.state {
+                State::Sending => crate::i18n::gettext(view.locale, "Sending...").into_owned(),
+                State::Accepted { .. } => {
+                    crate::i18n::gettext(view.locale, "Queued by Beeper. Not yet confirmed.")
+                        .into_owned()
+                }
+                State::NotSubmitted(error) => format!(
+                    "{}: {error}",
+                    crate::i18n::gettext(view.locale, "Not submitted")
+                ),
+                State::Unknown(error) => format!(
+                    "{}: {error}",
+                    crate::i18n::gettext(view.locale, "Check history")
+                ),
+            };
+            ui.label(label);
+            if record.retryable()
+                && ui
+                    .button(crate::i18n::gettext(view.locale, "Retry"))
+                    .clicked()
+            {
+                actions.push(Action::RetryPendingMedia(record.job.local.clone()));
+            }
+        }
         if matches!(message.content, Content::Poll { .. }) {
             super::polls::results_button(
                 ui,
@@ -5588,7 +5654,13 @@ fn bubble_frame(
         .data_mut(|data| data.insert_temp(bubble_id.with("paint-pass"), paint_pass));
     let bubble =
         early.unwrap_or_else(|| ui.interact(exposed(inner.response.rect), bubble_id, Sense::CLICK));
-    if view.selecting {
+    if view.selecting
+        || view.pending_media.is_some_and(|records| {
+            records
+                .values()
+                .any(|record| record.visible == message.id && record.job.member.matches(view.chat))
+        })
+    {
         return bubble;
     }
     theme::reveal_focus(&bubble);
@@ -6769,6 +6841,7 @@ pub(crate) fn list_menu(
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
     let view = View {
+        pending_media: None,
         sender_hue: None,
         hide_grouped_status: false,
         covered_top: None,
@@ -6851,6 +6924,7 @@ pub(crate) fn linked_bubble(
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
     let view = View {
+        pending_media: Some(&app.pending_media),
         sender_hue: None,
         hide_grouped_status: false,
         covered_top: None,
@@ -11308,6 +11382,7 @@ mod tests {
             unknown.from_me = true;
             unknown.status = Delivery::Unknown;
             let view = View {
+                pending_media: None,
                 sender_hue: None,
                 hide_grouped_status: false,
                 covered_top: None,
@@ -12484,6 +12559,7 @@ mod tests {
         let avatars = HashMap::new();
         let keyboard_navigation = std::cell::Cell::new(false);
         let view = View {
+            pending_media: None,
             sender_hue: None,
             hide_grouped_status: false,
             covered_top: None,

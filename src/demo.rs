@@ -3177,6 +3177,69 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     app.group_saving.insert(group.to_owned());
                 }
             }
+            "pending-media" | "pending-media-failed" | "pending-media-unknown" => {
+                let target = SAMPLES[0].id;
+                app.open_chat = Some(target.into());
+                let chat = app.chats.iter_mut().find(|chat| chat.id == target).unwrap();
+                chat.backend_origin = Some("https://synthetic.invalid".into());
+                chat.backend_account = Some("synthetic".into());
+                let member = crate::merged::Member::of(chat).unwrap();
+                let mut pixels = Vec::new();
+                for y in 0..120 {
+                    for x in 0..200 {
+                        pixels.extend_from_slice(&[40 + x as u8 / 2, 80 + y as u8, 140, 255]);
+                    }
+                }
+                app.stage(crate::app::Pending::Picture {
+                    width: 200,
+                    height: 120,
+                    rgba: std::sync::Arc::new(pixels),
+                    texture: None,
+                });
+                let staged = app.pending.pop().unwrap();
+                app.dispatch_pending_media(
+                    member,
+                    staged,
+                    Some("Synthetic attachment preview".into()),
+                    None,
+                );
+                for record in app.pending_media.values_mut() {
+                    record.state = match part {
+                        "pending-media-failed" => {
+                            crate::pending_media::State::NotSubmitted("Asset upload failed".into())
+                        }
+                        "pending-media-unknown" => {
+                            crate::pending_media::State::Unknown("Send response timed out".into())
+                        }
+                        _ => crate::pending_media::State::Sending,
+                    };
+                }
+                let local_states: Vec<_> = app
+                    .pending_media
+                    .values()
+                    .map(|r| {
+                        (
+                            r.job.member.chat.clone(),
+                            r.visible.clone(),
+                            match r.state {
+                                crate::pending_media::State::NotSubmitted(_) => Delivery::Failed,
+                                crate::pending_media::State::Unknown(_) => Delivery::Unknown,
+                                _ => Delivery::Pending,
+                            },
+                        )
+                    })
+                    .collect();
+                for (chat, id, status) in local_states {
+                    if let Some(message) = app
+                        .conversations
+                        .get_mut(&chat)
+                        .and_then(|c| c.message_mut(&id))
+                    {
+                        message.status = status;
+                    }
+                }
+                app.scroll_to_bottom = true;
+            }
             "forward" | "forward-selected" | "forward-review" | "forward-full" | "forward-once" => {
                 app.dialog = app.open_chat.clone().map(|chat| Dialog::Forward {
                     chat,

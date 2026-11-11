@@ -1611,6 +1611,21 @@ impl Api {
         reply: Option<&str>,
         cancel: Option<&std::sync::atomic::AtomicBool>,
     ) -> Result<SendAccepted, String> {
+        self.send_attachment_tracked(chat, path, kind, caption, reply, cancel, None, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn send_attachment_tracked(
+        &self,
+        chat: &str,
+        path: &std::path::Path,
+        kind: Attachment,
+        caption: Option<&str>,
+        reply: Option<&str>,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        post_started: Option<&std::sync::atomic::AtomicBool>,
+        expected: Option<&crate::merged::Member>,
+    ) -> Result<SendAccepted, String> {
         if upload_stopped(cancel) {
             return Err("Upload worker stopped; message was not submitted".into());
         }
@@ -1647,6 +1662,13 @@ impl Api {
                 .map_err(|e| format!("{e}; attachment message was not submitted"))?,
         )
         .map_err(|_| "Upload response invalid; attachment message was not submitted")?;
+        if upload
+            .get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| !e.is_empty())
+        {
+            return Err("Asset upload rejected; message was not submitted".into());
+        }
         let id = upload
             .get("uploadID")
             .and_then(|s| s.as_str())
@@ -1677,6 +1699,21 @@ impl Api {
         if let Some(reply) = reply {
             message["replyToMessageID"] = reply.into();
         }
+        if let Some(expected) = expected {
+            let current = self.get_chat(chat)?;
+            if current.id != expected.chat
+                || current.account_id != expected.account
+                || current.is_read_only
+            {
+                return Err("Destination changed before submission; nothing submitted".into());
+            }
+            if upload_stopped(cancel) {
+                return Err("Session closed; nothing submitted".into());
+            }
+        }
+        if let Some(started) = post_started {
+            started.store(true, std::sync::atomic::Ordering::Release);
+        }
         let response = self
             .http
             .post(format!(
@@ -1697,6 +1734,85 @@ impl Api {
             format!("{e}; attachment send outcome unknown, check history before retrying")
         })?)
         .map_err(|_| "Attachment confirmation invalid; check history before retrying".into())
+    }
+
+    fn send_pending_media(
+        &self,
+        job: &crate::pending_media::Job,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<SendAccepted, crate::pending_media::State> {
+        use crate::pending_media::{Payload, State};
+        let prepare = || -> Result<(), String> {
+            if job.member.origin != self.base_url || self.read_only || upload_stopped(Some(cancel))
+            {
+                return Err("Destination unavailable or session closed; nothing submitted".into());
+            }
+            let chat = self.get_chat(&job.member.chat)?;
+            if chat.id != job.member.chat
+                || chat.account_id != job.member.account
+                || chat.is_read_only
+            {
+                return Err(
+                    "Destination identity changed or is read-only; nothing submitted".into(),
+                );
+            }
+            if job
+                .quoting
+                .as_ref()
+                .is_some_and(|q| q.source_chat(&job.member.chat) != job.member.chat)
+            {
+                return Err("Cross-chat quote unsupported; nothing submitted".into());
+            }
+            Ok(())
+        };
+        prepare().map_err(State::NotSubmitted)?;
+        let temporary;
+        let (path, kind) = match &job.payload {
+            Payload::File { path, document } => (
+                path.as_path(),
+                if *document {
+                    Attachment::Document
+                } else {
+                    Attachment::Auto
+                },
+            ),
+            Payload::Picture {
+                width,
+                height,
+                rgba,
+            } => {
+                temporary =
+                    encode_pasted_image(*width, *height, rgba).map_err(State::NotSubmitted)?;
+                (temporary.as_path(), Attachment::Auto)
+            }
+        };
+        let started = std::sync::atomic::AtomicBool::new(false);
+        let result = self.send_attachment_tracked(
+            &job.member.chat,
+            path,
+            kind,
+            job.caption.as_deref(),
+            job.quoting.as_ref().map(|q| q.id.as_str()),
+            Some(cancel),
+            Some(&started),
+            Some(&job.member),
+        );
+        // The job retains pasted pixels for safe retry; never remove user files.
+        if matches!(job.payload, Payload::Picture { .. }) {
+            discard_temp_upload(path);
+        }
+        match result {
+            Ok(accepted) if accepted.chat == job.member.chat && !accepted.pending_id.is_empty() => {
+                Ok(accepted)
+            }
+            Ok(_) => Err(State::Unknown(
+                "Unexpected acceptance identity; check chat history".into(),
+            )),
+            Err(error) if started.load(std::sync::atomic::Ordering::Acquire) => {
+                Err(State::Unknown(error))
+            }
+            Err(error) => Err(State::NotSubmitted(error)),
+        }
     }
 
     fn mark_read(&self, chat: &str) -> Result<(), String> {
@@ -2717,6 +2833,40 @@ pub fn run(
     );
     let (upload_tx, upload_rx) = std::sync::mpsc::sync_channel::<UploadBatch>(2);
     let (accepted_tx, accepted_rx) = std::sync::mpsc::channel::<(ChatId, String)>();
+    let (pending_media_tx, pending_media_rx) =
+        std::sync::mpsc::sync_channel::<crate::pending_media::Job>(8);
+    let (pending_media_accepted_tx, pending_media_accepted_rx) = std::sync::mpsc::channel();
+    let pending_api = api.clone();
+    let pending_events = events.clone();
+    let pending_waker = waker.clone();
+    let pending_cancel = upload_cancel.clone();
+    std::thread::Builder::new()
+        .name("beeper-pending-media".into())
+        .spawn(move || {
+            while let Ok(job) = pending_media_rx.recv() {
+                let result = pending_api.send_pending_media(&job, &pending_cancel);
+                let state = match result {
+                    Ok(accepted) => {
+                        let _ = pending_media_accepted_tx.send((
+                            job.local.clone(),
+                            job.member.clone(),
+                            accepted.pending_id.clone(),
+                        ));
+                        crate::pending_media::State::Accepted {
+                            pending: accepted.pending_id,
+                        }
+                    }
+                    Err(state) => state,
+                };
+                let _ = pending_events.send(Event::BeeperMediaProgress {
+                    local: job.local,
+                    member: job.member,
+                    state,
+                });
+                pending_waker.wake();
+            }
+        })
+        .expect("pending media worker");
     let typed_accepted_tx = accepted_tx.clone();
     let upload_api = api.clone();
     let upload_events = events.clone();
@@ -2991,6 +3141,8 @@ pub fn run(
     let mut last_msg_poll = Instant::now();
     let mut last_receipt_refresh = Instant::now();
     let mut pending_sends: Vec<(ChatId, String, Instant)> = Vec::new();
+    let mut tracked_media: HashMap<(String, String), (String, crate::merged::Member)> =
+        HashMap::new();
     let mut pending_storage: Option<(u64, bool)> = None;
     // Set by Command::Resumed: after a wake every poll timer is due at once,
     // so a link the server dropped during sleep is noticed on the next tick.
@@ -3027,6 +3179,21 @@ pub fn run(
                 cmd => (cmd, None),
             };
             match cmd {
+                Command::BeeperMedia(job) => {
+                    if let Err(error) = pending_media_tx.try_send(job) {
+                        let job = match error {
+                            std::sync::mpsc::TrySendError::Full(job)
+                            | std::sync::mpsc::TrySendError::Disconnected(job) => job,
+                        };
+                        emit(Event::BeeperMediaProgress {
+                            local: job.local,
+                            member: job.member,
+                            state: crate::pending_media::State::NotSubmitted(
+                                "Upload queue unavailable; nothing submitted".into(),
+                            ),
+                        });
+                    }
+                }
                 Command::Shutdown => return,
                 Command::SaveDraft { chat, text } => {
                     if draft_store.is_none() && !text.trim().is_empty() {
@@ -4086,6 +4253,13 @@ pub fn run(
             pending_storage = None;
         }
 
+        while let Ok((local, member, pending_id)) = pending_media_accepted_rx.try_recv() {
+            tracked_media.insert(
+                (member.chat.clone(), pending_id.clone()),
+                (local, member.clone()),
+            );
+            pending_sends.push((member.chat, pending_id, Instant::now()));
+        }
         while let Ok((chat, pending_id)) = accepted_rx.try_recv() {
             pending_sends.push((chat, pending_id, Instant::now()));
         }
@@ -4105,7 +4279,23 @@ pub fn run(
                 }
             }
             pending_sends.retain(|(chat, pending_id, started)| {
-                poll_pending_send(&api, chat, pending_id, started.elapsed(), &emit)
+                let key = (chat.clone(), pending_id.clone());
+                if let Some((local, member)) = tracked_media.get(&key).cloned() {
+                    let keep = poll_media_send(
+                        &api,
+                        &local,
+                        &member,
+                        pending_id,
+                        started.elapsed(),
+                        &emit,
+                    );
+                    if !keep {
+                        tracked_media.remove(&key);
+                    }
+                    keep
+                } else {
+                    poll_pending_send(&api, chat, pending_id, started.elapsed(), &emit)
+                }
             });
         }
         if last_chat_refresh.elapsed() >= CHAT_REFRESH {
@@ -4503,6 +4693,61 @@ fn refresh_inventory(api: &Api, accounts: &mut Vec<BeeperAccount>, emit: &dyn Fn
     }
 }
 
+fn poll_media_send(
+    api: &Api,
+    local: &str,
+    member: &crate::merged::Member,
+    pending_id: &str,
+    elapsed: Duration,
+    emit: &dyn Fn(Event),
+) -> bool {
+    let mut keep = true;
+    if let Ok(wire) = api.get_message(&member.chat, pending_id)
+        && wire.account_id == member.account
+        && wire.chat_id == member.chat
+        && wire.is_sender == Some(true)
+    {
+        let message = api.map_message(&wire, &member.chat);
+        let complete = wire.send_status.as_ref().is_some_and(|s| {
+            s.status == "SUCCESS"
+                || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
+        });
+        emit(Event::BeeperMediaResolved {
+            local: local.to_owned(),
+            member: member.clone(),
+            message: Box::new(message),
+            complete,
+        });
+        if complete {
+            keep = false;
+        } else if wire
+            .send_status
+            .as_ref()
+            .is_some_and(|s| s.status.starts_with("FAIL_"))
+        {
+            emit(Event::BeeperMediaProgress {
+                local: local.to_owned(),
+                member: member.clone(),
+                state: crate::pending_media::State::Unknown(
+                    "Bridge reports failure; check history before sending again".into(),
+                ),
+            });
+            keep = false;
+        }
+    }
+    if keep && elapsed >= Duration::from_secs(60) {
+        emit(Event::BeeperMediaProgress {
+            local: local.to_owned(),
+            member: member.clone(),
+            state: crate::pending_media::State::Unknown(
+                "Confirmation timed out; check chat history".into(),
+            ),
+        });
+        keep = false;
+    }
+    keep
+}
+
 fn poll_pending_send(
     api: &Api,
     chat: &ChatId,
@@ -4831,6 +5076,192 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+
+    fn pending_media_fixture(
+        responses: Vec<(&'static str, u16, String)>,
+    ) -> (Api, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (expected, status, body) in responses {
+                let start = Instant::now();
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && start.elapsed() < Duration::from_secs(10) =>
+                        {
+                            std::thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(error) => panic!("waiting for {expected}: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut buf = [0; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                let header = String::from_utf8_lossy(&request[..header_end]);
+                assert!(header.starts_with(expected), "unexpected request: {header}");
+                let length: usize = header
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|n| n.trim().parse().unwrap())
+                    })
+                    .unwrap_or(0);
+                while request.len() < header_end + length {
+                    let mut buf = [0; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                }
+                requests.push(String::from_utf8(request).unwrap());
+                write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+            requests
+        });
+        (
+            Api::new(&BeeperConfig {
+                base_url,
+                token: "fixture".into(),
+            })
+            .unwrap(),
+            worker,
+        )
+    }
+    fn pending_media_job(origin: &str, path: &std::path::Path) -> crate::pending_media::Job {
+        crate::pending_media::Job {
+            local: "local-fixture".into(),
+            temporary: false,
+            member: crate::merged::Member {
+                origin: origin.into(),
+                account: "signal".into(),
+                chat: "target".into(),
+            },
+            payload: crate::pending_media::Payload::File {
+                path: path.into(),
+                document: false,
+            },
+            caption: None,
+            quoting: None,
+        }
+    }
+    #[test]
+    fn pending_media_submission_boundary_is_not_inferred_from_error_words() {
+        for (upload_status, send_status, expected_unknown) in
+            [(503, 200, false), (200, 503, true), (200, 200, false)]
+        {
+            let mut responses = vec![
+                (
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ),
+                (
+                    "POST /v1/assets/upload/base64 ",
+                    upload_status,
+                    r#"{"uploadID":"asset"}"#.into(),
+                ),
+            ];
+            if upload_status == 200 {
+                responses.push((
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ));
+                responses.push((
+                    "POST /v1/chats/target/messages ",
+                    send_status,
+                    r#"{"chatID":"target","pendingMessageID":"pending"}"#.into(),
+                ));
+            }
+            let (api, server) = pending_media_fixture(responses);
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), b"synthetic").unwrap();
+            let result = api.send_pending_media(
+                &pending_media_job(&api.base_url, file.path()),
+                &AtomicBool::new(false),
+            );
+            match result {
+                Ok(accepted) => {
+                    assert_eq!(send_status, 200);
+                    assert_eq!(upload_status, 200);
+                    assert_eq!(accepted.pending_id, "pending");
+                }
+                Err(crate::pending_media::State::NotSubmitted(_)) => assert!(!expected_unknown),
+                Err(crate::pending_media::State::Unknown(_)) => assert!(expected_unknown),
+                other => panic!("unexpected {other:?}"),
+            }
+            server.join().unwrap();
+        }
+    }
+    #[test]
+    fn pending_media_poll_requires_exact_account_and_binds_final_id() {
+        for (account, sender, expect_resolved) in [
+            ("foreign", true, false),
+            ("signal", false, false),
+            ("signal", true, true),
+        ] {
+            let body = serde_json::json!({"id":"final","chatID":"target","accountID":account,"isSender":sender,"sendStatus":{"status":"SUCCESS"}}).to_string();
+            let (api, server) =
+                pending_media_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let member = pending_media_job(&api.base_url, std::path::Path::new("unused")).member;
+            let events = Mutex::new(Vec::new());
+            let keep = poll_media_send(
+                &api,
+                "local",
+                &member,
+                "pending",
+                Duration::from_secs(61),
+                &|event| events.lock().unwrap().push(event),
+            );
+            assert!(!keep);
+            let events = events.into_inner().unwrap();
+            assert_eq!(events.iter().any(|e| matches!(e, Event::BeeperMediaResolved { local, message, complete: true, .. } if local == "local" && message.id == "final")), expect_resolved);
+            assert_eq!(
+                events.iter().any(|e| matches!(
+                    e,
+                    Event::BeeperMediaProgress {
+                        state: crate::pending_media::State::Unknown(_),
+                        ..
+                    }
+                )),
+                !expect_resolved
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn pending_media_destination_mismatch_refuses_before_upload() {
+        let (api, server) = pending_media_fixture(vec![(
+            "GET /v1/chats/target ",
+            200,
+            r#"{"id":"target","accountID":"foreign"}"#.into(),
+        )]);
+        let result = api.send_pending_media(
+            &pending_media_job(&api.base_url, std::path::Path::new("not-read")),
+            &AtomicBool::new(false),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::pending_media::State::NotSubmitted(_))
+        ));
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
 
     #[test]
     fn queue_confirmation_requires_explicit_success_not_pending_failure_or_sparse_echo() {
