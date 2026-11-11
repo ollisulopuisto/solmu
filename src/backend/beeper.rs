@@ -90,6 +90,57 @@ struct Page<T> {
     newest_cursor: Option<String>,
 }
 
+fn mutation_identity_matches(
+    expected: Option<&crate::merged::Member>,
+    state: &BeeperChat,
+    origin: &str,
+) -> bool {
+    expected.is_none_or(|identity| {
+        identity.origin == origin
+            && identity.account == state.account_id
+            && identity.chat == state.id
+    })
+}
+
+#[cfg(test)]
+mod mutation_identity_tests {
+    use super::*;
+    #[test]
+    fn batch_mutation_requires_the_reviewed_endpoint_account_and_chat() {
+        let state: BeeperChat =
+            serde_json::from_value(serde_json::json!({"id":"chat", "accountID":"bridge"})).unwrap();
+        let expected = crate::merged::Member {
+            origin: "http://original".into(),
+            account: "bridge".into(),
+            chat: "chat".into(),
+        };
+        assert!(mutation_identity_matches(
+            Some(&expected),
+            &state,
+            "http://original"
+        ));
+        assert!(!mutation_identity_matches(
+            Some(&expected),
+            &state,
+            "http://replacement"
+        ));
+        let mut other = expected.clone();
+        other.account = "other-bridge".into();
+        assert!(!mutation_identity_matches(
+            Some(&other),
+            &state,
+            "http://original"
+        ));
+        other = expected.clone();
+        other.chat = "other-chat".into();
+        assert!(!mutation_identity_matches(
+            Some(&other),
+            &state,
+            "http://original"
+        ));
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BeeperChat {
@@ -3560,12 +3611,20 @@ pub fn run(
                     }
                 }
                 command @ (Command::SetArchived(..) | Command::BatchArchive { .. }) => {
-                    let (chat, value, request) = match command {
-                        Command::SetArchived(chat, value) => (chat, value, None),
-                        Command::BatchArchive { request, chat } => (chat, true, Some(request)),
+                    let (chat, value, request, expected) = match command {
+                        Command::SetArchived(chat, value) => (chat, value, None, None),
+                        Command::BatchArchive {
+                            request,
+                            chat,
+                            expected,
+                        } => (chat, true, Some(request), Some(expected)),
                         _ => unreachable!(),
                     };
                     let result = api.get_chat(&chat).and_then(|state| {
+                        if !mutation_identity_matches(expected.as_ref(), &state, &api.base_url) {
+                            return Err("Chat identity changed; nothing sent".into());
+                        }
+
                         if state.capabilities.as_ref().and_then(|caps| caps.mutations.archive) != Some(true) {
                             return Err("Archive capability unknown or unsupported; nothing sent".into());
                         }
@@ -3676,18 +3735,23 @@ pub fn run(
                 command @ (Command::Revoke { .. }
                 | Command::DeleteLocal { .. }
                 | Command::BatchDelete { .. }) => {
-                    let (chat, id, everyone, request) = match command {
-                        Command::Revoke { chat, id } => (chat, id, true, None),
-                        Command::DeleteLocal { chat, id } => (chat, id, false, None),
+                    let (chat, id, everyone, request, expected) = match command {
+                        Command::Revoke { chat, id } => (chat, id, true, None, None),
+                        Command::DeleteLocal { chat, id } => (chat, id, false, None, None),
                         Command::BatchDelete {
+                            expected,
                             request,
                             chat,
                             id,
                             everyone,
-                        } => (chat, id, everyone, Some(request)),
+                        } => (chat, id, everyone, Some(request), Some(expected)),
                         _ => unreachable!(),
                     };
                     let result = api.get_chat(&chat).and_then(|state| {
+                        if !mutation_identity_matches(expected.as_ref(), &state, &api.base_url) {
+                            return Err("Chat identity changed; nothing sent".into());
+                        }
+
                         let caps = state
                             .capabilities
                             .as_ref()

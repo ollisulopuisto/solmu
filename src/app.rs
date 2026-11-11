@@ -1267,6 +1267,14 @@ impl std::ops::DerefMut for App {
 
 impl App {
     pub fn connect_beeper_session(&mut self, cfg: crate::backend::beeper::BeeperConfig) {
+        self.batch_ui = Default::default();
+        self.dialog = None;
+        self.actions.retain(|action| {
+            !matches!(
+                action,
+                Action::BatchArchive { .. } | Action::BatchDelete { .. }
+            )
+        });
         crate::backend::beeper::BeeperConfig::set_session(&cfg);
         let waker = self.waker.clone();
         let account = &mut self.accounts[self.active];
@@ -1860,6 +1868,7 @@ impl App {
 
     /// Drops App-owned pointers into the previous account's chats and media.
     fn clear_account_ui(&mut self) {
+        self.batch_ui = Default::default();
         self.discard_gif_thumbnails();
         self.gif_pending = false;
         self.invalidate_composer_undo();
@@ -9602,16 +9611,24 @@ impl App {
                     self.set_composer_cursor(ctx, 0);
                 }
             }
-            Action::BatchArchive { request, chat } => {
-                self.backend.send(Command::BatchArchive { request, chat })
-            }
+            Action::BatchArchive {
+                request,
+                chat,
+                expected,
+            } => self.backend.send(Command::BatchArchive {
+                request,
+                chat,
+                expected,
+            }),
             Action::BatchDelete {
                 request,
+                expected,
                 chat,
                 id,
                 everyone,
             } => self.backend.send(Command::BatchDelete {
                 request,
+                expected,
                 chat,
                 id,
                 everyone,

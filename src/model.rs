@@ -2595,10 +2595,12 @@ pub fn forward_limit(frequently_forwarded: bool) -> usize {
 pub enum Action {
     BatchArchive {
         request: u64,
+        expected: crate::merged::Member,
         chat: ChatId,
     },
     BatchDelete {
         request: u64,
+        expected: crate::merged::Member,
         chat: ChatId,
         id: String,
         everyone: bool,

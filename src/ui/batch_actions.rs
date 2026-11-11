@@ -16,6 +16,7 @@ pub struct Item {
 pub struct State {
     pub request: Option<u64>,
     pub selected_chats: Vec<ChatId>,
+    pub selected_identities: std::collections::HashMap<ChatId, crate::merged::Member>,
     pub owner: String,
     pub reviewing_archive: bool,
     pub results: Vec<Item>,
@@ -44,7 +45,13 @@ pub fn toggle_chat(app: &mut App, chat: &str) {
     }
     if app.batch_ui.selected_chats.iter().any(|id| id == chat) {
         app.batch_ui.selected_chats.retain(|id| id != chat);
+        app.batch_ui.selected_identities.remove(chat);
     } else {
+        if let Some(identity) = app.chat(chat).and_then(crate::merged::Member::of) {
+            app.batch_ui
+                .selected_identities
+                .insert(chat.into(), identity);
+        }
         app.batch_ui.selected_chats.push(chat.into());
     }
 }
@@ -75,6 +82,7 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
                 .clicked()
             {
                 app.batch_ui.selected_chats.clear();
+                app.batch_ui.selected_identities.clear();
             }
         });
     }
@@ -129,6 +137,21 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
         .iter()
         .filter_map(|id| match app.chat(id) {
             None => Some(gettext(app.locale, "{id}: chat unavailable").replace("{id}", id)),
+            Some(chat)
+                if app
+                    .batch_ui
+                    .selected_identities
+                    .get(id)
+                    .is_none_or(|identity| !identity.matches(chat)) =>
+            {
+                Some(
+                    gettext(
+                        app.locale,
+                        "Chat identity changed or is unavailable; clear the selection",
+                    )
+                    .into_owned(),
+                )
+            }
             Some(chat) => archive_refusal(chat).map(|why| {
                 format!(
                     "{}: {}",
@@ -194,10 +217,12 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
                 for chat in &ids {
                     app.actions.push(Action::BatchArchive {
                         request,
+                        expected: app.batch_ui.selected_identities[chat].clone(),
                         chat: chat.clone(),
                     });
                 }
                 app.batch_ui.selected_chats.clear();
+                app.batch_ui.selected_identities.clear();
                 app.batch_ui.reviewing_archive = false;
             }
             if ui

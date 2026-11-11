@@ -2417,6 +2417,8 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     .iter_mut()
                     .take(3)
                     .map(|chat| {
+                        chat.backend_account = Some("synthetic-account".into());
+                        chat.backend_origin = Some("http://127.0.0.1:23374".into());
                         chat.mutation_capabilities.archive = Some(true);
                         if part == "archived-selection" {
                             chat.archived = true;
@@ -2425,6 +2427,14 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     })
                     .collect();
                 app.batch_ui.owner = app.account().id.0.clone();
+                app.batch_ui.selected_identities = ids
+                    .iter()
+                    .filter_map(|id| {
+                        app.chat(id)
+                            .and_then(crate::merged::Member::of)
+                            .map(|member| (id.clone(), member))
+                    })
+                    .collect();
                 app.batch_ui.selected_chats = ids;
                 app.batch_ui.reviewing_archive = part == "archive-review";
                 if part == "archived-selection" {

@@ -1566,11 +1566,13 @@ fn confirm_delete_messages(
         };
         let caps = &known.mutation_capabilities;
         ui.heading(crate::i18n::gettext(app.locale, "Delete selected messages"));
-        let supported = if for_everyone {
-            matches!(caps.delete, Some(2))
-        } else {
-            caps.delete_for_me == Some(true)
-        };
+        let identity_known = crate::merged::Member::of(&known).is_some();
+        let supported = identity_known
+            && if for_everyone {
+                matches!(caps.delete, Some(2))
+            } else {
+                caps.delete_for_me == Some(true)
+            };
         for (label, scope, allowed) in [
             (
                 crate::i18n::gettext(app.locale, "Delete for me"),
@@ -1702,6 +1704,8 @@ fn confirm_delete_messages(
                     .collect();
                 for id in ids {
                     app.actions.push(Action::BatchDelete {
+                        expected: crate::merged::Member::of(&known)
+                            .expect("Beeper identity verified"),
                         request,
                         chat: chat.into(),
                         id: id.clone(),

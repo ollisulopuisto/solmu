@@ -126,10 +126,12 @@ pub struct CreatedPoll {
 pub enum Command {
     BatchArchive {
         request: u64,
+        expected: crate::merged::Member,
         chat: ChatId,
     },
     BatchDelete {
         request: u64,
+        expected: crate::merged::Member,
         chat: ChatId,
         id: String,
         everyone: bool,
