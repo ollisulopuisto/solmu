@@ -2144,6 +2144,21 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
             app.actions
                 .push(Action::OpenUrl(env!("CARGO_PKG_REPOSITORY").to_owned()));
         }
+        // The About dialog links the protocol library only on macOS; keep
+        // the link reachable on every platform.
+        if theme::soft_button(
+            ui,
+            &palette,
+            Some(Icon::ExternalLink),
+            "whatsapp-rust",
+            false,
+        )
+        .clicked()
+        {
+            app.actions.push(Action::OpenUrl(
+                "https://github.com/oxidezap/whatsapp-rust".to_owned(),
+            ));
+        }
     });
     ui.add_space(8.0);
     theme::paragraph(
@@ -2423,7 +2438,7 @@ mod tests {
             .filter(|(_, node)| node.role() == egui::accesskit::Role::Button)
             .filter_map(|(_, node)| node.label().or_else(|| node.value()))
             .collect();
-        for expected in ["Keyboard shortcuts", "Source code"] {
+        for expected in ["Keyboard shortcuts", "Source code", "whatsapp-rust"] {
             assert!(buttons.contains(&expected), "missing chip: {expected}");
         }
         assert!(
