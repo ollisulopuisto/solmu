@@ -915,7 +915,7 @@ rail, the chat list's header, search and the chat filters, then returns to the
 input. Shift+Tab goes back; hidden controls are skipped. Single messages,
 reactions and chat rows are not stops; Alt+Up/Down switches conversations.
 
-Cmd+D (Ctrl+D elsewhere) toggles the right-hand info sidebar for the open
+Cmd+Option+I (Ctrl+Alt+I elsewhere) toggles the right-hand info sidebar for the open
 chat. Cmd+B still toggles the left chat list; Cmd+I marks Reply later.
 
 ### Numbered sidebar shortcuts
