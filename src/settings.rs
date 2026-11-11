@@ -1704,11 +1704,15 @@ mod giphy_tests {
     }
 }
 
+/// Local provenance only. Never sent as a bridge-native forwarding claim.
+pub use crate::composed_forward::ForwardedMessage;
+
 /// Local preferences for the native Beeper view. Never written to remote accounts.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BeeperPreferences {
     pub people: Vec<crate::merged::Person>,
+    pub forwarded_messages: Vec<ForwardedMessage>,
     /// Pairs the user said are not the same person; never suggested again.
     pub dismissed_links: Vec<crate::suggest::LinkPair>,
     /// Local display names for single chats, by chat id. Never sent anywhere.
@@ -1738,6 +1742,7 @@ impl Default for BeeperPreferences {
     fn default() -> Self {
         Self {
             people: Vec::new(),
+            forwarded_messages: Vec::new(),
             dismissed_links: Vec::new(),
             chat_names: std::collections::HashMap::new(),
             reply_later: Vec::new(),

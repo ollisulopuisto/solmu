@@ -5,6 +5,7 @@ pub mod app;
 pub mod app_lock;
 pub mod archive;
 pub mod backend;
+pub mod composed_forward;
 pub mod categories;
 pub mod group_admin;
 pub mod i18n;

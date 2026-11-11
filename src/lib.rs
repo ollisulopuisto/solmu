@@ -17,6 +17,7 @@ pub mod beeper_signin;
 pub mod bidi;
 pub mod biometrics;
 pub mod categories;
+pub mod composed_forward;
 #[cfg(any(test, feature = "demo"))]
 pub mod demo;
 pub mod emoji;

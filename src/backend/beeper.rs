@@ -1412,10 +1412,24 @@ impl Api {
         dirs: &AccountDirs,
         manual: bool,
     ) -> Result<std::path::PathBuf, String> {
+        self.download_media_at(chat, message, 0, dirs, manual)
+    }
+
+    fn download_media_at(
+        &self,
+        chat: &str,
+        message: &str,
+        index: usize,
+        dirs: &AccountDirs,
+        manual: bool,
+    ) -> Result<std::path::PathBuf, String> {
         let _guard = self.cache_lock.lock().map_err(|_| "Cache is busy")?;
         let budget = cache_budget(dirs);
         let m: BeeperMessage = self.get_message(chat, message)?;
-        let attachment = m.attachments.first().ok_or("Message has no attachment")?;
+        let attachment = m
+            .attachments
+            .get(index)
+            .ok_or("Message attachment is no longer available")?;
         if attachment
             .size
             .as_ref()
@@ -1540,6 +1554,179 @@ impl Api {
             let _ = std::fs::remove_file(temporary);
         }
         result.map_err(str::to_string)
+    }
+
+    fn plan_forwards(
+        &self,
+        items: Vec<crate::composed_forward::Item>,
+    ) -> Vec<crate::composed_forward::Item> {
+        use crate::composed_forward::State;
+        let mut expanded = Vec::new();
+        for mut item in items {
+            if item.origin != self.base_url {
+                item.state = State::FailedBeforeSend(
+                    "Source belongs to another server; nothing submitted".into(),
+                );
+                expanded.push(item);
+                continue;
+            }
+            if item.planned {
+                expanded.push(item);
+                continue;
+            }
+            match self.get_message(&item.source_chat, &item.source_message) {
+                Ok(message) if !message.attachments.is_empty() => {
+                    for attachment in 0..message.attachments.len() {
+                        let mut copy = item.clone();
+                        copy.attachment = Some(attachment);
+                        copy.planned = true;
+                        if attachment > 0 {
+                            copy.text = item.text.lines().next().unwrap_or("").to_owned();
+                        }
+                        expanded.push(copy);
+                    }
+                }
+                Ok(message) => {
+                    if !forwardable_text(&message) {
+                        item.state = State::FailedBeforeSend(
+                            "This source type has no supported text or attachment to forward"
+                                .into(),
+                        );
+                    }
+                    item.planned = true;
+                    expanded.push(item);
+                }
+                Err(error) => {
+                    let mut copy = item;
+                    copy.state = State::FailedBeforeSend(error);
+                    expanded.push(copy);
+                }
+            }
+        }
+        expanded
+    }
+
+    /// Only failures before the message POST are safely retryable. Once that
+    /// POST begins, even a malformed response must not invite a duplicate send.
+    fn send_forward(
+        &self,
+        item: &crate::composed_forward::Item,
+        dirs: &AccountDirs,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<SendAccepted, crate::composed_forward::State> {
+        use crate::composed_forward::State;
+        let prepare = || -> Result<serde_json::Value, String> {
+            if item.origin != self.base_url {
+                return Err("Source belongs to another server; nothing submitted".into());
+            }
+            if self.read_only || upload_stopped(Some(cancel)) {
+                return Err("Forward was not submitted: read-only or session closed".into());
+            }
+            let source = self.get_chat(&item.source_chat)?;
+            let destination = self.get_chat(&item.destination)?;
+            if source.account_id != item.source_account
+                || destination.account_id != item.destination_account
+                || destination.id != item.destination
+                || source.id != item.source_chat
+                || destination.is_read_only
+            {
+                return Err(
+                    "Source or destination identity changed; forward was not submitted".into(),
+                );
+            }
+            let message = self.get_message(&item.source_chat, &item.source_message)?;
+            if message.is_hidden
+                || message.is_deleted
+                || message.id != item.source_message
+                || message.chat_id != item.source_chat
+                || message.account_id != item.source_account
+            {
+                return Err("Source message is no longer available; nothing submitted".into());
+            }
+            if item.attachment.is_none()
+                && (!forwardable_text(&message) || item.text.lines().count() < 2)
+            {
+                return Err("This message has no supported text or attachment to forward".into());
+            }
+            let mut payload = serde_json::json!({"text": item.text});
+            if let Some(index) = item.attachment {
+                let path = self.download_media_at(
+                    &item.source_chat,
+                    &item.source_message,
+                    index,
+                    dirs,
+                    true,
+                )?;
+                use base64::Engine;
+                let bytes = read_attachment_bounded(&path, 32 * 1024 * 1024)?;
+                let filename = message
+                    .attachments
+                    .get(index)
+                    .and_then(|a| a.file_name.as_deref())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("attachment");
+                let response = self.http.post(format!("{}/v1/assets/upload/base64", self.base_url))
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(serde_json::json!({"content": base64::engine::general_purpose::STANDARD.encode(bytes), "fileName": filename}).to_string())
+                    .send().map_err(|_| "Asset upload failed; message was not submitted")?;
+                if !response.status().is_success() {
+                    return Err(format!(
+                        "Asset upload returned {}; message was not submitted",
+                        response.status()
+                    ));
+                }
+                let uploaded: serde_json::Value =
+                    serde_json::from_str(&bounded_json_body(response)?)
+                        .map_err(|_| "Asset upload response invalid; message was not submitted")?;
+                if uploaded
+                    .get("error")
+                    .and_then(|error| error.as_str())
+                    .is_some_and(|error| !error.is_empty())
+                {
+                    return Err("Asset upload was rejected; message was not submitted".into());
+                }
+                let id = uploaded
+                    .get("uploadID")
+                    .and_then(|id| id.as_str())
+                    .ok_or("Asset upload ID missing; message was not submitted")?;
+                payload["attachment"] = serde_json::json!({"uploadID": id, "fileName": filename});
+            }
+            if upload_stopped(Some(cancel)) {
+                return Err("Session closed; message was not submitted".into());
+            }
+            Ok(payload)
+        };
+        let payload = prepare().map_err(State::FailedBeforeSend)?;
+        let response = self
+            .http
+            .post(format!(
+                "{}/v1/chats/{}/messages",
+                self.base_url,
+                encode_segment(&item.destination)
+            ))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(payload.to_string())
+            .send()
+            .map_err(|_| {
+                State::Uncertain(
+                    "Send outcome unknown; check destination history before retrying".into(),
+                )
+            })?;
+        if !response.status().is_success() {
+            return Err(State::Uncertain(safe_send_error(response)));
+        }
+        let body = bounded_json_body(response).map_err(State::Uncertain)?;
+        let accepted: SendAccepted = serde_json::from_str(&body).map_err(|_| {
+            State::Uncertain(
+                "Send response unreadable; check destination history before retrying".into(),
+            )
+        })?;
+        if accepted.pending_id.is_empty() || accepted.chat != item.destination {
+            return Err(State::Uncertain(
+                "Unexpected send identity; check destination history before retrying".into(),
+            ));
+        }
+        Ok(accepted)
     }
 
     fn send_text(
@@ -2114,6 +2301,14 @@ fn newest_content_message(items: Vec<BeeperMessage>) -> Option<BeeperMessage> {
                 )
         })
         .max_by_key(|m| unix(&Some(m.timestamp.clone())))
+}
+
+fn forwardable_text(message: &BeeperMessage) -> bool {
+    matches!(message.message_type.as_deref(), None | Some("TEXT"))
+        && message
+            .text
+            .as_ref()
+            .is_some_and(|text| !text.trim().is_empty())
 }
 
 fn body_of(m: &BeeperMessage) -> (String, bool) {
@@ -2768,6 +2963,71 @@ pub fn run(
     );
     let (upload_tx, upload_rx) = std::sync::mpsc::sync_channel::<UploadBatch>(2);
     let (accepted_tx, accepted_rx) = std::sync::mpsc::channel::<(ChatId, String)>();
+    let (forward_tx, forward_rx) =
+        std::sync::mpsc::sync_channel::<(u64, bool, Vec<(usize, crate::composed_forward::Item)>)>(
+            1,
+        );
+    let (forward_accepted_tx, forward_accepted_rx) =
+        std::sync::mpsc::channel::<(String, String, String)>();
+    let forward_api = api.clone();
+    let forward_dirs = dirs.clone();
+    let forward_events = events.clone();
+    let forward_waker = waker.clone();
+    let forward_cancel = upload_cancel.clone();
+    std::thread::Builder::new()
+        .name("beeper-forward".into())
+        .spawn(move || {
+            use crate::composed_forward::State;
+            while let Ok((generation, prepared, mut items)) = forward_rx.recv() {
+                if !prepared {
+                    let expanded = forward_api
+                        .plan_forwards(items.into_iter().map(|(_, item)| item).collect());
+                    let _ = forward_events.send(Event::BeeperForwardPrepared {
+                        generation,
+                        items: expanded.clone(),
+                    });
+                    forward_waker.wake();
+                    items = expanded.into_iter().enumerate().collect();
+                }
+                for (index, item) in items {
+                    if !matches!(item.state, State::Waiting) {
+                        continue;
+                    }
+                    if upload_stopped(Some(&forward_cancel)) {
+                        return;
+                    }
+                    let send_state = |state| {
+                        let _ = forward_events.send(Event::BeeperForwardProgress {
+                            generation,
+                            index,
+                            state,
+                        });
+                        forward_waker.wake();
+                    };
+                    send_state(State::Sending);
+                    match forward_api.send_forward(&item, &forward_dirs, &forward_cancel) {
+                        Ok(accepted) => {
+                            let _ = forward_events.send(Event::BeeperForwardMarked {
+                                origin: forward_api.base_url.clone(),
+                                account: item.destination_account.clone(),
+                                chat: item.destination.clone(),
+                                message: accepted.pending_id.clone(),
+                            });
+                            let _ = forward_accepted_tx.send((
+                                item.destination.clone(),
+                                accepted.pending_id.clone(),
+                                item.destination_account.clone(),
+                            ));
+                            send_state(State::Accepted {
+                                pending_id: accepted.pending_id,
+                            });
+                        }
+                        Err(state) => send_state(state),
+                    }
+                }
+            }
+        })
+        .expect("Beeper forward worker");
     let typed_accepted_tx = accepted_tx.clone();
     let upload_api = api.clone();
     let upload_events = events.clone();
@@ -3042,6 +3302,7 @@ pub fn run(
     let mut last_msg_poll = Instant::now();
     let mut last_receipt_refresh = Instant::now();
     let mut pending_sends: Vec<(ChatId, String, Instant)> = Vec::new();
+    let mut forward_pending = HashMap::new();
     let mut pending_storage: Option<(u64, bool)> = None;
     // Set by Command::Resumed: after a wake every poll timer is due at once,
     // so a link the server dropped during sleep is noticed on the next tick.
@@ -3379,6 +3640,38 @@ pub fn run(
                             more: true,
                             silent: false,
                         });
+                    }
+                }
+                Command::BeeperResumeForwards(marks) => {
+                    for mark in crate::composed_forward::unresolved_marks(marks, &api.base_url) {
+                        let key = (mark.member.chat.clone(), mark.message.clone());
+                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                            forward_pending.entry(key)
+                        {
+                            entry.insert(mark.member.account);
+                            pending_sends.push((mark.member.chat, mark.message, Instant::now()));
+                        }
+                    }
+                }
+                Command::BeeperForward {
+                    generation,
+                    prepared,
+                    items,
+                } => {
+                    if let Err(error) = forward_tx.try_send((generation, prepared, items)) {
+                        let (generation, _, items) = match error {
+                            std::sync::mpsc::TrySendError::Full(value)
+                            | std::sync::mpsc::TrySendError::Disconnected(value) => value,
+                        };
+                        for (index, _) in items {
+                            emit(Event::BeeperForwardProgress {
+                                generation,
+                                index,
+                                state: crate::composed_forward::State::FailedBeforeSend(
+                                    "Forward queue is busy; nothing submitted for this item".into(),
+                                ),
+                            });
+                        }
                     }
                 }
                 Command::SendText {
@@ -4154,6 +4447,10 @@ pub fn run(
             pending_storage = None;
         }
 
+        while let Ok((chat, pending_id, account)) = forward_accepted_rx.try_recv() {
+            forward_pending.insert((chat.clone(), pending_id.clone()), account);
+            pending_sends.push((chat, pending_id, Instant::now()));
+        }
         while let Ok((chat, pending_id)) = accepted_rx.try_recv() {
             pending_sends.push((chat, pending_id, Instant::now()));
         }
@@ -4173,7 +4470,18 @@ pub fn run(
                 }
             }
             pending_sends.retain(|(chat, pending_id, started)| {
-                poll_pending_send(&api, chat, pending_id, started.elapsed(), &emit)
+                let forward_account = forward_pending
+                    .get(&(chat.clone(), pending_id.clone()))
+                    .cloned();
+                let keep = if let Some(account) = forward_account {
+                    poll_forward_mark(&api, chat, pending_id, &account, started.elapsed(), &emit)
+                } else {
+                    poll_pending_send(&api, chat, pending_id, started.elapsed(), &emit)
+                };
+                if !keep {
+                    forward_pending.remove(&(chat.clone(), pending_id.clone()));
+                }
+                keep
             });
         }
         if last_chat_refresh.elapsed() >= CHAT_REFRESH {
@@ -4571,6 +4879,67 @@ fn refresh_inventory(api: &Api, accounts: &mut Vec<BeeperAccount>, emit: &dyn Fn
     }
 }
 
+fn poll_forward_mark(
+    api: &Api,
+    chat: &ChatId,
+    pending: &str,
+    account: &str,
+    elapsed: Duration,
+    emit: &dyn Fn(Event),
+) -> bool {
+    if let Ok(wire) = api.get_message(chat, pending)
+        && wire.chat_id == *chat
+        && wire.account_id == account
+        && wire.is_sender == Some(true)
+    {
+        let confirmed = wire.send_status.as_ref().is_some_and(|s| {
+            s.status == "SUCCESS"
+                || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
+        });
+        let mapped = api.map_message(&wire, chat);
+        let failed = matches!(mapped.status, Delivery::Failed);
+        if confirmed {
+            emit(Event::BeeperSendConfirmed {
+                origin: api.base_url.clone(),
+                account: account.into(),
+                chat: chat.clone(),
+            });
+        }
+        if (confirmed || failed) && !wire.id.is_empty() {
+            emit(Event::BeeperForwardResolved {
+                origin: api.base_url.clone(),
+                account: account.into(),
+                chat: chat.clone(),
+                pending: pending.into(),
+                final_id: wire.id.clone(),
+            });
+        }
+        if failed {
+            emit(Event::Info(
+                "Beeper reports that a message failed to send".into(),
+            ));
+        }
+        emit(Event::Messages {
+            chat: chat.clone(),
+            messages: vec![mapped],
+            older: false,
+            complete: false,
+        });
+        if confirmed || failed {
+            return false;
+        }
+    }
+    // Timeout never prunes persisted identity: a later startup resolves it.
+    if elapsed >= Duration::from_secs(60) {
+        emit(Event::Info(
+            "Beeper forward confirmation timed out; check history before retrying".into(),
+        ));
+        false
+    } else {
+        true
+    }
+}
+
 fn poll_pending_send(
     api: &Api,
     chat: &ChatId,
@@ -4926,6 +5295,380 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+
+    fn forward_fixture_item(origin: &str) -> crate::composed_forward::Item {
+        crate::composed_forward::Item {
+            origin: origin.into(),
+            planned: true,
+            source_chat: "source".into(),
+            source_message: "message".into(),
+            source_account: "telegram".into(),
+            destination_account: "signal".into(),
+            attachment: None,
+            destination: "target".into(),
+            text: "Forwarded from Ada (Telegram), date:\nhello @somebody".into(),
+            state: crate::composed_forward::State::Waiting,
+        }
+    }
+
+    /// A finite, timeout-bounded server. Assert every network request and payload,
+    /// so a premature message POST cannot pass as a safe preparation failure.
+    fn forward_fixture(
+        responses: Vec<(&'static str, u16, String)>,
+    ) -> (Api, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (expected, status, body) in responses {
+                let start = Instant::now();
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && start.elapsed() < Duration::from_secs(10) =>
+                        {
+                            std::thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(error) => panic!("waiting for {expected}: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut buf = [0; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                let header = String::from_utf8_lossy(&request[..header_end]);
+                assert!(header.starts_with(expected), "unexpected request: {header}");
+                let length: usize = header
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|n| n.trim().parse().unwrap())
+                    })
+                    .unwrap_or(0);
+                while request.len() < header_end + length {
+                    let mut buf = [0; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                }
+                requests.push(String::from_utf8(request).unwrap());
+                write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+            requests
+        });
+        (
+            Api::new(&BeeperConfig {
+                base_url,
+                token: "fixture".into(),
+            })
+            .unwrap(),
+            worker,
+        )
+    }
+    fn forward_identity_responses() -> Vec<(&'static str, u16, String)> {
+        vec![
+            ("GET /v1/chats/source ", 200, r#"{"id":"source","accountID":"telegram"}"#.into()),
+            ("GET /v1/chats/target ", 200, r#"{"id":"target","accountID":"signal"}"#.into()),
+            ("GET /v1/chats/source/messages/message ", 200, r#"{"id":"message","chatID":"source","accountID":"telegram","text":"hello @somebody"}"#.into()),
+        ]
+    }
+    fn forward_test_dirs() -> AccountDirs {
+        AppDirs::under(
+            &std::env::temp_dir().join(format!("solmu-forward-fixture-{}", std::process::id())),
+        )
+        .account(&"1".into())
+    }
+    #[test]
+    fn composed_forward_accepts_pending_id_and_drops_source_mentions() {
+        let mut responses = forward_identity_responses();
+        responses.push((
+            "POST /v1/chats/target/messages ",
+            200,
+            r#"{"pendingMessageID":"queued","chatID":"target"}"#.into(),
+        ));
+        let (api, server) = forward_fixture(responses);
+        let item = forward_fixture_item(&api.base_url);
+        let accepted = api
+            .send_forward(&item, &forward_test_dirs(), &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(accepted.pending_id, "queued");
+        let requests = server.join().unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_str(requests.last().unwrap().split("\r\n\r\n").nth(1).unwrap())
+                .unwrap();
+        assert_eq!(payload, serde_json::json!({"text":item.text}));
+        assert!(payload.get("mentions").is_none());
+    }
+
+    #[test]
+    fn composed_forward_reuploads_only_the_selected_attachment_with_original_filename() {
+        let mut responses = forward_identity_responses();
+        let message = r#"{"id":"message","chatID":"source","accountID":"telegram","attachments":[{"id":"mxc://first","fileName":"first.txt","mimeType":"text/plain"},{"id":"mxc://second","fileName":"second.txt","mimeType":"text/plain"}]}"#;
+        responses.last_mut().unwrap().2 = message.into();
+        responses.extend([
+            (
+                "GET /v1/chats/source/messages/message ",
+                200,
+                message.into(),
+            ),
+            (
+                "GET /v1/assets/serve?url=mxc%3A%2F%2Fsecond ",
+                200,
+                "second attachment".into(),
+            ),
+            (
+                "POST /v1/assets/upload/base64 ",
+                200,
+                r#"{"uploadID":"uploaded-second"}"#.into(),
+            ),
+            (
+                "POST /v1/chats/target/messages ",
+                200,
+                r#"{"pendingMessageID":"queued","chatID":"target"}"#.into(),
+            ),
+        ]);
+        let (api, server) = forward_fixture(responses);
+        let mut item = forward_fixture_item(&api.base_url);
+        item.attachment = Some(1);
+        let accepted = api
+            .send_forward(&item, &forward_test_dirs(), &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(accepted.pending_id, "queued");
+        let requests = server.join().unwrap();
+        let json = |index: usize| {
+            serde_json::from_str::<serde_json::Value>(
+                requests[index].split("\r\n\r\n").nth(1).unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            json(5),
+            serde_json::json!({"content":"c2Vjb25kIGF0dGFjaG1lbnQ=","fileName":"second.txt"})
+        );
+        assert_eq!(
+            json(6),
+            serde_json::json!({"text":item.text,"attachment":{"uploadID":"uploaded-second","fileName":"second.txt"}})
+        );
+        let _ = std::fs::remove_dir_all(forward_test_dirs().cache);
+    }
+
+    #[test]
+    fn composed_forward_post_errors_and_sparse_acceptance_are_not_retryable() {
+        for (status, body) in [
+            (500, "{}"),
+            (200, "{}"),
+            (200, r#"{"pendingMessageID":"queued","chatID":"wrong"}"#),
+        ] {
+            let mut responses = forward_identity_responses();
+            responses.push(("POST /v1/chats/target/messages ", status, body.into()));
+            let (api, server) = forward_fixture(responses);
+            assert!(matches!(
+                api.send_forward(
+                    &forward_fixture_item(&api.base_url),
+                    &forward_test_dirs(),
+                    &AtomicBool::new(false)
+                ),
+                Err(crate::composed_forward::State::Uncertain(_))
+            ));
+            server.join().unwrap();
+        }
+    }
+    #[test]
+    fn composed_forward_source_identity_failure_never_posts() {
+        let mut responses = forward_identity_responses();
+        responses.last_mut().unwrap().2 =
+            r#"{"id":"message","chatID":"other","accountID":"telegram"}"#.into();
+        let (api, server) = forward_fixture(responses);
+        assert!(matches!(
+            api.send_forward(
+                &forward_fixture_item(&api.base_url),
+                &forward_test_dirs(),
+                &AtomicBool::new(false)
+            ),
+            Err(crate::composed_forward::State::FailedBeforeSend(_))
+        ));
+        assert_eq!(server.join().unwrap().len(), 3);
+    }
+    #[test]
+    fn composed_forward_refuses_display_placeholders_from_nontext_sources() {
+        for kind in ["LOCATION", "POLL", "CALL", "NOTICE", "IMAGE"] {
+            let body = serde_json::json!({"id":"message","chatID":"source","accountID":"telegram","type":kind}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/source/messages/message ", 200, body)]);
+            let mut item = forward_fixture_item(&api.base_url);
+            item.planned = false;
+            let planned = api.plan_forwards(vec![item]);
+            assert!(
+                matches!(
+                    planned[0].state,
+                    crate::composed_forward::State::FailedBeforeSend(_)
+                ),
+                "{kind}"
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn composed_forward_poll_preserves_confirmation_failure_and_progress_feedback() {
+        for (status, keep, confirmed, failed) in [
+            ("SUCCESS", false, true, false),
+            ("FAIL_SEND", false, false, true),
+            ("PENDING", true, false, false),
+        ] {
+            let body = serde_json::json!({"id":"final", "chatID":"target", "accountID":"signal", "isSender":true, "sendStatus":{"status":status}}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let events = Mutex::new(Vec::new());
+            assert_eq!(
+                poll_forward_mark(
+                    &api,
+                    &"target".into(),
+                    "pending",
+                    "signal",
+                    Duration::ZERO,
+                    &|e| events.lock().unwrap().push(e)
+                ),
+                keep,
+                "{status}"
+            );
+            let events = events.into_inner().unwrap();
+            assert_eq!(events.iter().any(|e| matches!(e, Event::BeeperSendConfirmed { account, chat, .. } if account == "signal" && chat == "target")), confirmed, "{status}");
+            assert!(events.iter().any(|e| matches!(e, Event::Messages { chat, messages, .. } if chat == "target" && messages.len() == 1)), "{status}: missing chat feedback");
+            assert_eq!(events.iter().any(|e| matches!(e, Event::Messages { messages, .. } if messages.iter().any(|m| matches!(m.status, Delivery::Failed)))), failed, "{status}");
+            assert_eq!(
+                events.iter().any(|e| matches!(e, Event::Info(_))),
+                failed,
+                "{status}"
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .any(|e| matches!(e, Event::BeeperForwardResolved { .. })),
+                confirmed || failed,
+                "{status}"
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn composed_forward_feedback_rejects_foreign_message_identity() {
+        for (chat, account, sender) in [
+            ("foreign", "signal", true),
+            ("target", "foreign", true),
+            ("target", "signal", false),
+        ] {
+            let body = serde_json::json!({"id":"final", "chatID":chat, "accountID":account, "isSender":sender, "sendStatus":{"status":"SUCCESS"}}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let events = Mutex::new(Vec::new());
+            assert!(poll_forward_mark(
+                &api,
+                &"target".into(),
+                "pending",
+                "signal",
+                Duration::ZERO,
+                &|e| events.lock().unwrap().push(e)
+            ));
+            assert!(events.into_inner().unwrap().is_empty());
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn composed_forward_restart_reloads_exact_pending_identity_and_resolves_final_mark() {
+        for (account, sender, expected) in [
+            ("signal", true, true),
+            ("foreign", true, false),
+            ("signal", false, false),
+        ] {
+            let body=serde_json::json!({"id":"final","chatID":"target","accountID":account,"isSender":sender,"sendStatus":{"status":"SUCCESS"}}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("settings.json");
+            let mark = crate::composed_forward::ForwardedMessage {
+                member: crate::merged::Member {
+                    origin: api.base_url.clone(),
+                    account: "signal".into(),
+                    chat: "target".into(),
+                },
+                message: "pending".into(),
+                pending: true,
+            };
+            std::fs::write(
+                &path,
+                serde_json::json!({"beeper":{"forwarded_messages":[mark]}}).to_string(),
+            )
+            .unwrap();
+            let saved: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let marks: Vec<crate::composed_forward::ForwardedMessage> =
+                serde_json::from_value(saved["beeper"]["forwarded_messages"].clone()).unwrap();
+            let restored = crate::composed_forward::unresolved_marks(marks.clone(), &api.base_url);
+            assert_eq!(restored.len(), 1);
+            assert!(crate::composed_forward::unresolved_marks(marks, "foreign-origin").is_empty());
+            let events = Mutex::new(Vec::new());
+            assert!(!poll_forward_mark(
+                &api,
+                &restored[0].member.chat,
+                &restored[0].message,
+                &restored[0].member.account,
+                Duration::from_secs(61),
+                &|e| events.lock().unwrap().push(e)
+            ));
+            assert_eq!(events.into_inner().unwrap().iter().any(|e| matches!(e,Event::BeeperForwardResolved {pending,final_id,..} if pending=="pending" && final_id=="final")),expected);
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn composed_forward_retry_replans_failed_preparation_without_losing_accepted_rows() {
+        let (api, server) = forward_fixture(vec![
+            ("GET /v1/chats/source/messages/message ", 503, "{}".into()),
+            (
+                "GET /v1/chats/source/messages/message ",
+                200,
+                r#"{"id":"message","attachments":[{"id":"mxc://one"},{"id":"mxc://two"}]}"#.into(),
+            ),
+        ]);
+        let mut item = forward_fixture_item(&api.base_url);
+        item.planned = false;
+        let mut items = api.plan_forwards(vec![item]);
+        assert!(!items[0].planned);
+        assert!(matches!(
+            items[0].state,
+            crate::composed_forward::State::FailedBeforeSend(_)
+        ));
+        let mut accepted = forward_fixture_item(&api.base_url);
+        accepted.state = crate::composed_forward::State::Accepted {
+            pending_id: "previous".into(),
+        };
+        items.insert(0, accepted.clone());
+        crate::composed_forward::retry_failed(&mut items);
+        let expanded = api.plan_forwards(items);
+        assert_eq!(expanded.len(), 3);
+        assert_eq!(expanded[0], accepted);
+        assert_eq!(expanded[1].attachment, Some(0));
+        assert_eq!(expanded[2].attachment, Some(1));
+        assert_eq!(expanded[2].text.lines().count(), 1);
+        assert!(expanded[1].planned && expanded[2].planned);
+        server.join().unwrap();
+    }
 
     #[test]
     fn queue_confirmation_requires_explicit_success_not_pending_failure_or_sparse_echo() {

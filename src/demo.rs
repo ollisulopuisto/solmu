@@ -3177,6 +3177,33 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     app.group_saving.insert(group.to_owned());
                 }
             }
+            "forward-progress" => {
+                apply_flags(app, Some("forward"));
+                let mut item = crate::composed_forward::Item {
+                    origin: "https://synthetic.invalid".into(),
+                    planned: true,
+                    source_chat: FAMILY.into(),
+                    source_message: "sample".into(),
+                    source_account: "telegram".into(),
+                    destination_account: "signal".into(),
+                    attachment: None,
+                    destination: SAMPLES[0].id.into(),
+                    text: "Forwarded from Ada (Telegram), 11.11.2026 10:00:\nSample message".into(),
+                    state: crate::composed_forward::State::Accepted {
+                        pending_id: "synthetic".into(),
+                    },
+                };
+                app.forward_items.push(item.clone());
+                item.attachment = Some(1);
+                item.state = crate::composed_forward::State::FailedBeforeSend(
+                    "Attachment download failed".into(),
+                );
+                app.forward_items.push(item.clone());
+                item.destination = SAMPLES[1].id.into();
+                item.state =
+                    crate::composed_forward::State::Uncertain("Send response timed out".into());
+                app.forward_items.push(item);
+            }
             "forward" | "forward-selected" | "forward-review" | "forward-full" | "forward-once" => {
                 app.dialog = app.open_chat.clone().map(|chat| Dialog::Forward {
                     chat,
