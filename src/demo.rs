@@ -23297,22 +23297,29 @@ mod card_width_tests {
                     // few points apart naturally (guarded below), yet the
                     // rendered bubbles take exactly one width, the frozen
                     // larger one.
-                    let natural = |text: &str| {
-                        ctx.fonts(|fonts| {
-                            fonts
-                                .layout_no_wrap(
-                                    text.to_owned(),
-                                    crate::theme::regular(crate::ui::widgets::MESSAGE_TEXT_SIZE),
-                                    egui::Color32::BLACK,
-                                )
-                                .size()
-                                .x
-                        })
-                    };
-                    let (narrower, wider) = (
-                        natural("The final notes are ready."),
-                        natural("The final notes are ready!!!"),
-                    );
+                    let mut narrower = 0.0;
+                    let mut wider = 0.0;
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        let font = crate::theme::regular(crate::ui::widgets::MESSAGE_TEXT_SIZE);
+                        let painter = ui.painter();
+                        narrower = painter
+                            .layout_no_wrap(
+                                "The final notes are ready.".to_owned(),
+                                font.clone(),
+                                egui::Color32::BLACK,
+                            )
+                            .size()
+                            .x;
+                        wider = painter
+                            .layout_no_wrap(
+                                "The final notes are ready!!!".to_owned(),
+                                font,
+                                egui::Color32::BLACK,
+                            )
+                            .size()
+                            .x;
+                    });
+                    output.textures_delta.clear();
                     assert!(
                         wider - narrower >= 3.0 && wider - narrower <= 16.0,
                         "the fixture's natural widths differ measurably but stay within the join tolerance: {narrower} vs {wider}"
