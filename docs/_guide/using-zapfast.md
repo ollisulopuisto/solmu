@@ -673,6 +673,10 @@ on the left above **Settings**, opens the archived chats in the list, and
 shows how many of them are unread. A chip with unread chats shows how many it
 has. Click the active chip again, or **All**, to see every chat. The
 filter applies only to this list: search and the archive still show everything.
+Filters also has an **Automatic category**: People, Quiet people and
+Notifications, sorted by plain rules on this computer (see
+[chat categories](../chat-categories.md)). A chat's menu has **Move to…** to
+override the rules for good.
 Solmu remembers the chip or label each account last showed and comes back
 to it at the next start.
 As on the phone, the list leaves out people you have never exchanged a

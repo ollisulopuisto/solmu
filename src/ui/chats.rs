@@ -314,6 +314,28 @@ fn scope_row(app: &mut App, ui: &mut egui::Ui) {
                 &mut app.beeper_unreplied,
                 crate::i18n::gettext(locale, "Unreplied only"),
             );
+            ui.separator();
+            ui.label(crate::i18n::gettext(locale, "Automatic category"));
+            if ui
+                .radio(
+                    app.auto_category_filter.is_none(),
+                    crate::i18n::gettext(locale, "Any"),
+                )
+                .clicked()
+            {
+                app.actions.push(Action::SelectAutoCategory(None));
+            }
+            for category in crate::categories::AutoCategory::EVERY {
+                if ui
+                    .radio(
+                        app.auto_category_filter == Some(category),
+                        category.label(locale),
+                    )
+                    .clicked()
+                {
+                    app.actions.push(Action::SelectAutoCategory(Some(category)));
+                }
+            }
             if changed {
                 app.actions.push(Action::SetChatFilter(app.chat_filter));
             }
@@ -499,6 +521,9 @@ fn scope_row(app: &mut App, ui: &mut egui::Ui) {
         }
         if let Some(label) = app.label_filter.as_ref().and_then(|id| app.label(id)) {
             parts.push(label.name.clone());
+        }
+        if let Some(category) = app.auto_category_filter {
+            parts.push(category.label(locale).into_owned());
         }
         ui.add(
             egui::Label::new(egui::RichText::new(parts.join(" · ")).color(palette.secondary))
@@ -2176,8 +2201,13 @@ fn hit_row(app: &mut App, ui: &mut egui::Ui, hit: &Message) {
             0.0
         };
         let name_width = (right - stamp_width - 8.0 - left).max(0.0);
-        let name = widgets::line(ui, &title, theme::medium(14.5), palette.text, name_width, 1);
-        name.paint(ui, pos2(left, name_top), palette.text);
+        let name_color = app
+            .chat(&hit.chat)
+            .cloned()
+            .and_then(|chat| quiet_tint(app.chat_category(&chat), &palette))
+            .unwrap_or(palette.text);
+        let name = widgets::line(ui, &title, theme::medium(14.5), name_color, name_width, 1);
+        name.paint(ui, pos2(left, name_top), name_color);
         // Show the sender for group messages.
         let line_y = rect.top()
             + if app.settings.beeper.compact_list {
@@ -2339,6 +2369,26 @@ fn person_row(
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// How far a chat's name fades toward the background while the list is a
+/// search result, by quiet tier. People and Notifications keep the normal
+/// text colour. The name keeps the text's own hue; only its opacity drops,
+/// and never below 4.5:1 on the panel or a hovered row, so a custom palette
+/// cannot hide a name either.
+fn quiet_tint(
+    category: Option<crate::categories::AutoCategory>,
+    palette: &Palette,
+) -> Option<egui::Color32> {
+    use crate::categories::AutoCategory;
+    let fade = match category? {
+        AutoCategory::Quiet => 0.25,
+        AutoCategory::LongQuiet => 0.45,
+        _ => return None,
+    };
+    let faded = theme::blend(palette.text, palette.panel, fade);
+    let faded = theme::readable_on(palette.surface_hover, faded, palette.text, 4.5);
+    Some(theme::readable_on(palette.panel, faded, palette.text, 4.5))
+}
+
 fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
     let palette = app.palette;
     let title = app.chat_title(chat);
@@ -2426,8 +2476,14 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
         } else {
             theme::medium(14.5)
         };
-        let name = widgets::line(ui, &title, name_font, palette.text, name_width, 1);
-        name.paint(ui, pos2(left, name_top), palette.text);
+        // While searching, the name fades by quiet tier; the selected row stays plain.
+        let name_color = if app.search.trim().is_empty() || selected {
+            palette.text
+        } else {
+            quiet_tint(app.chat_category(chat), &palette).unwrap_or(palette.text)
+        };
+        let name = widgets::line(ui, &title, name_font, name_color, name_width, 1);
+        name.paint(ui, pos2(left, name_top), name_color);
 
         // Leave room for badges beside the latest-message preview.
         let mut badge_right = right;
@@ -3022,6 +3078,32 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
             app.actions.push(Action::ToggleReadLater(chat.id.clone()));
         }
     }
+    // Move a one-to-one chat out of its automatic category for good. The
+    // move is local, and the rules never re-sort a chat placed this way.
+    if !chat.is_group() {
+        let current = app.chat_category(chat);
+        ui.menu_button(crate::i18n::gettext(locale, "Move to…"), |ui| {
+            for category in crate::categories::AutoCategory::EVERY {
+                if ui
+                    .selectable_label(current == Some(category), category.label(locale))
+                    .clicked()
+                {
+                    app.actions
+                        .push(Action::SetChatCategory(chat.id.clone(), Some(category)));
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui
+                .button(crate::i18n::gettext(locale, "Sort automatically"))
+                .clicked()
+            {
+                app.actions
+                    .push(Action::SetChatCategory(chat.id.clone(), None));
+                ui.close();
+            }
+        });
+    }
     // Channels cannot be favorites, as on the phone. A Beeper chat's mark
     // lives here only: no phone knows its network's chats to sync it to.
     if !chat.is_channel() {
@@ -3358,6 +3440,50 @@ fn advance_after_ticks(delivery: crate::model::Delivery) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quiet_tiers_fade_in_steps_stay_readable_and_people_stay_plain() {
+        use crate::categories::AutoCategory;
+        for palette in [Palette::dark(), Palette::light()] {
+            let quiet = quiet_tint(Some(AutoCategory::Quiet), &palette).unwrap();
+            let long = quiet_tint(Some(AutoCategory::LongQuiet), &palette).unwrap();
+            // Each step is dimmer than the last: lower contrast on the panel.
+            let on_panel = |color| theme::contrast(color, palette.panel);
+            assert!(
+                on_panel(palette.text) > on_panel(quiet),
+                "dark={}",
+                palette.dark
+            );
+            assert!(on_panel(quiet) > on_panel(long), "dark={}", palette.dark);
+            for tint in [quiet, long] {
+                assert!(on_panel(tint) >= 4.5, "dark={} {tint:?}", palette.dark);
+                assert!(
+                    theme::contrast(tint, palette.surface_hover) >= 4.5,
+                    "dark={} {tint:?}",
+                    palette.dark
+                );
+            }
+            assert_eq!(quiet_tint(Some(AutoCategory::People), &palette), None);
+            assert_eq!(
+                quiet_tint(Some(AutoCategory::Notifications), &palette),
+                None
+            );
+            assert_eq!(quiet_tint(None, &palette), None);
+        }
+    }
+
+    #[test]
+    fn a_custom_palette_cannot_hide_a_tiered_name() {
+        use crate::categories::AutoCategory;
+        // A light palette whose panel is exactly the Long quiet blue.
+        let mut palette = Palette::light();
+        palette.panel = egui::Color32::from_rgb(0x4A, 0x55, 0xA8);
+        palette.text = egui::Color32::WHITE;
+        for category in [AutoCategory::Quiet, AutoCategory::LongQuiet] {
+            let tint = quiet_tint(Some(category), &palette).unwrap();
+            assert!(theme::contrast(tint, palette.panel) >= 4.5, "{category:?}");
+        }
+    }
 
     #[test]
     fn the_read_by_some_plus_gets_its_own_width_in_the_row() {
