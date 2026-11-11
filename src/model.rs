@@ -2595,6 +2595,7 @@ pub fn forward_limit(frequently_forwarded: bool) -> usize {
 /// Actions queued by views and applied after drawing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    RetryPendingMedia(String),
     TranslateLocally(String),
     Open(Page),
     /// Opens settings, or closes them when they are already showing.

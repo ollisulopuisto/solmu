@@ -14,6 +14,7 @@ pub mod mentions;
 pub mod model;
 pub mod new_group;
 pub mod paths;
+pub mod pending_media;
 pub mod privacy;
 pub mod run_widths;
 pub mod safety;

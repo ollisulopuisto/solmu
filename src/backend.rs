@@ -124,6 +124,7 @@ pub struct CreatedPoll {
 
 #[derive(Debug)]
 pub enum Command {
+    BeeperMedia(crate::pending_media::Job),
     RefreshPoll {
         chat: ChatId,
         message: String,
@@ -1113,6 +1114,17 @@ pub struct BeeperAccountInfo {
 
 #[derive(Debug)]
 pub enum Event {
+    BeeperMediaProgress {
+        local: String,
+        member: crate::merged::Member,
+        state: crate::pending_media::State,
+    },
+    BeeperMediaResolved {
+        local: String,
+        member: crate::merged::Member,
+        message: Box<Message>,
+        complete: bool,
+    },
     BeeperForwardPrepared {
         generation: u64,
         items: Vec<crate::composed_forward::Item>,
