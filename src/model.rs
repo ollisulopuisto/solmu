@@ -3014,6 +3014,7 @@ pub enum Action {
     ShowDialog(Dialog),
     CloseDialog,
     ToggleSidebar,
+    ToggleFlatGroups,
     SetChatFilter(ChatFilter),
     /// Picks the label the chat list shows; `None` shows every chat.
     SelectLabel(Option<String>),

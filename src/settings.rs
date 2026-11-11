@@ -479,6 +479,7 @@ pub struct Settings {
     /// Beeper chats with a local Silence promise, keyed by chat id.
     #[serde(default)]
     pub silenced: BTreeMap<String, Silence>,
+    pub flat_groups: crate::flat_groups::Groups,
     pub sidebar_width: f32,
     /// Width of the search pane beside the open chat.
     pub search_pane_width: f32,
@@ -617,6 +618,7 @@ impl Default for Settings {
             system_theme_cache: None,
             zoom: 1.0,
             beeper: BeeperPreferences::default(),
+            flat_groups: Default::default(),
             sidebar_width: 300.0,
             search_pane_width: 380.0,
             info_pane_width: 380.0,
