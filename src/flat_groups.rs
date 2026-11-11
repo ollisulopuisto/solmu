@@ -61,6 +61,19 @@ impl Groups {
         true
     }
 
+    /// Preserve source assignments when an unchanged linked row is applied.
+    pub fn assign_linked(&mut self, target: &Member, sources: &[Member], selected: &[u64]) {
+        for group in &mut self.items {
+            if selected.contains(&group.id) {
+                if !group.members.iter().any(|member| sources.contains(member)) {
+                    group.members.push(target.clone());
+                }
+            } else {
+                group.members.retain(|member| !sources.contains(member));
+            }
+        }
+    }
+
     pub fn remove(&mut self, id: u64, member: &Member) {
         if let Some(group) = self.items.iter_mut().find(|g| g.id == id) {
             group.members.retain(|m| m != member);
@@ -101,6 +114,21 @@ mod tests {
         groups.delete(a);
         assert_eq!(groups.items[0].members, vec![chat]);
     }
+    #[test]
+    fn checked_linked_assignment_preserves_original_members_after_unlinking() {
+        let mut groups = Groups::default();
+        let id = groups.create("Work").unwrap();
+        let a = member("one");
+        let b = member("two");
+        groups.add(id, a.clone());
+        groups.assign_linked(&b, &[a.clone(), b.clone()], &[id]);
+        assert_eq!(groups.items[0].members, vec![a.clone()]);
+        groups.assign_linked(&b, &[a.clone(), b.clone()], &[]);
+        assert!(groups.items[0].members.is_empty());
+        groups.assign_linked(&b, &[a.clone(), b.clone()], &[id]);
+        assert_eq!(groups.items[0].members, vec![b]);
+    }
+
     #[test]
     fn identities_and_roundtrip_are_exact() {
         let mut groups = Groups::default();

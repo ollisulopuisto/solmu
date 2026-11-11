@@ -512,7 +512,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             actions.push(Action::OpenChat(next));
         }
         if step != 0 {
-            let visible = app.visible_chats();
+            let visible = super::flat_groups::navigation_chats(app);
             if !visible.is_empty() {
                 let current = app
                     .open_chat

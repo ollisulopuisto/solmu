@@ -49,6 +49,10 @@ fn belongs(group: &crate::flat_groups::Group, keys: &[Member]) -> bool {
 }
 fn draw_row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     let response = super::chats::row(app, ui, chat);
+    if app.scroll_chat_into_view.as_ref() == Some(&chat.id) && ui.is_enabled() {
+        response.scroll_to_me(Some(egui::Align::Center));
+        app.scroll_chat_into_view = None;
+    }
     if response.clicked() && !app.show_archived {
         app.actions.push(Action::KeepUnread(chat.id.clone()));
     }
@@ -82,6 +86,39 @@ pub fn toggle(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
+/// Keyboard order follows group order, then Ungrouped, deduplicating aliases.
+/// Collapsed sections are expanded by list() when their chat is requested.
+pub fn navigation_chats(app: &App) -> Vec<&Chat> {
+    let chats = app.visible_chats();
+    if !app.settings.flat_groups.grouped_view
+        || app.show_archived
+        || app.show_starred
+        || app.locked_folder_open()
+        || app.secret_code_matched()
+        || !app.search.trim().is_empty()
+    {
+        return chats;
+    }
+    let mut ordered = Vec::new();
+    for group in &app.settings.flat_groups.items {
+        for chat in &chats {
+            if belongs(group, &identities(app, chat))
+                && !ordered
+                    .iter()
+                    .any(|existing: &&Chat| existing.id == chat.id)
+            {
+                ordered.push(*chat);
+            }
+        }
+    }
+    for chat in chats {
+        if !ordered.iter().any(|existing| existing.id == chat.id) {
+            ordered.push(chat);
+        }
+    }
+    ordered
+}
+
 pub fn list(app: &mut App, ui: &mut egui::Ui) {
     let chats = app.beeper_display_chats();
     let groups = app.settings.flat_groups.items.clone();
@@ -100,10 +137,16 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
                 .filter(|(c, _)| c.looks_unread())
                 .filter_map(|(_, k)| k.first())
                 .collect();
-            ui.label(format!(
-                "{} unread chats",
-                app.settings.flat_groups.unread_total(unread)
-            ));
+            let count = app.settings.flat_groups.unread_total(unread);
+            ui.label(
+                crate::i18n::ngettext(
+                    app.locale,
+                    "{count} unread chat",
+                    "{count} unread chats",
+                    count as u32,
+                )
+                .replace("{count}", &count.to_string()),
+            );
             if let Some((id, target)) = app.flat_group_ui.undo.clone() {
                 ui.horizontal(|ui| {
                     ui.label(crate::i18n::gettext(app.locale, "Added to group"));
@@ -125,13 +168,22 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
                     .map(|(c, _)| c)
                     .collect();
                 let unread = included.iter().filter(|c| c.looks_unread()).count();
+                if app
+                    .scroll_chat_into_view
+                    .as_ref()
+                    .is_some_and(|id| included.iter().any(|chat| &chat.id == id))
+                {
+                    app.flat_group_ui.collapsed.remove(&group.id);
+                }
                 let closed = app.flat_group_ui.collapsed.contains(&group.id);
+                let counts = crate::i18n::gettext(app.locale, "{chats} chats / {unread} unread")
+                    .replace("{chats}", &included.len().to_string())
+                    .replace("{unread}", &unread.to_string());
                 let heading = format!(
-                    "{} {}   {} chats / {} unread",
+                    "{} {}   {}",
                     if closed { "+" } else { "−" },
                     group.name,
-                    included.len(),
-                    unread
+                    counts
                 );
                 let response =
                     ui.add_sized([ui.available_width(), 36.0], egui::Button::new(heading));
@@ -183,15 +235,29 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
                 .filter(|(_, key)| !groups.iter().any(|g| belongs(g, key)))
                 .map(|(c, _)| c)
                 .collect();
-            egui::CollapsingHeader::new(format!("Ungrouped · {} chats", ungrouped.len()))
-                .id_salt("flat-ungrouped")
-                .show(ui, |ui| {
-                    for chat in ungrouped {
-                        ui.push_id(("ungrouped", &chat.id), |ui| {
-                            draw_row(app, ui, chat);
-                        });
-                    }
-                });
+            egui::CollapsingHeader::new(
+                crate::i18n::ngettext(
+                    app.locale,
+                    "Ungrouped · {count} chat",
+                    "Ungrouped · {count} chats",
+                    ungrouped.len() as u32,
+                )
+                .replace("{count}", &ungrouped.len().to_string()),
+            )
+            .id_salt("flat-ungrouped")
+            .open(
+                app.scroll_chat_into_view
+                    .as_ref()
+                    .is_some_and(|id| ungrouped.iter().any(|chat| &chat.id == id))
+                    .then_some(true),
+            )
+            .show(ui, |ui| {
+                for chat in ungrouped {
+                    ui.push_id(("ungrouped", &chat.id), |ui| {
+                        draw_row(app, ui, chat);
+                    });
+                }
+            });
             ui.separator();
             ui.horizontal(|ui| {
                 ui.add(
@@ -268,12 +334,9 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
             .find(|chat| member(app, chat) == target)
             .map(|chat| identities(app, chat))
             .unwrap_or_default();
-        for group in &mut app.settings.flat_groups.items {
-            group.members.retain(|m| !targets.contains(m));
-            if selected.contains(&group.id) {
-                group.members.push(target.clone());
-            }
-        }
+        app.settings
+            .flat_groups
+            .assign_linked(&target, &targets, &selected);
         app.actions.push(Action::SettingsChanged);
     }
     app.flat_group_ui.assigning = (!(close || apply)).then_some((target, selected));
@@ -316,6 +379,43 @@ mod tests {
         assign(&mut app, &b);
         assert_eq!(app.flat_group_ui.assigning.as_ref().unwrap().1, vec![group]);
     }
+    #[test]
+    fn grouped_keyboard_order_and_reveal_expand_collapsed_rows() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        app.chats = vec![
+            Chat::new("ungrouped".into(), "Ungrouped".into()),
+            Chat::new("work".into(), "Work".into()),
+        ];
+        let group = app.settings.flat_groups.create("Work").unwrap();
+        let work = member(&app, &app.chats[1]);
+        app.settings.flat_groups.add(group, work);
+        app.settings.flat_groups.grouped_view = true;
+        app.flat_group_ui.collapsed.insert(group);
+        assert_eq!(
+            navigation_chats(&app)
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["work", "ungrouped"]
+        );
+        let ctx = egui::Context::default();
+        for target in ["work", "ungrouped"] {
+            app.scroll_chat_into_view = Some(target.into());
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| list(&mut app, ui));
+            });
+            assert!(
+                app.scroll_chat_into_view.is_none(),
+                "keyboard target must be drawn and reveal request consumed"
+            );
+        }
+        assert!(!app.flat_group_ui.collapsed.contains(&group));
+    }
+
     #[test]
     fn locked_assignment_is_exact_and_unlocked_membership_does_not_leak() {
         let root = tempfile::tempdir().unwrap();
