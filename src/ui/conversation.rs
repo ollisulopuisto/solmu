@@ -11579,6 +11579,7 @@ mod tests {
                     Some(Rect::from_min_size(pos2(10.0, 10.0), vec2(100.0, 20.0))),
                     false,
                     false,
+                    false,
                     &mut Vec::new(),
                 );
             });
@@ -12759,7 +12760,14 @@ mod tests {
                     false,
                     false,
                 );
-                own = footer_width(ui, crate::i18n::Locale::English, &from_me, false, false);
+                own = footer_width(
+                    ui,
+                    crate::i18n::Locale::English,
+                    &from_me,
+                    false,
+                    false,
+                    false,
+                );
             },
         );
         output.textures_delta.clear();
@@ -12854,7 +12862,16 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        footer(ui, view, &message, None, starred, false, &mut Vec::new());
+                        footer(
+                            ui,
+                            view,
+                            &message,
+                            None,
+                            starred,
+                            false,
+                            false,
+                            &mut Vec::new(),
+                        );
                     },
                 );
                 output.textures_delta.clear();
@@ -12887,11 +12904,12 @@ mod tests {
                             &message,
                             Some(group_footer_rect(
                                 picture,
-                                footer_width(ui, view.locale, &message, starred, pinned),
+                                footer_width(ui, view.locale, &message, starred, pinned, false),
                                 false,
                             )),
                             starred,
                             pinned,
+                            false,
                             &mut Vec::new(),
                         );
                     },
@@ -12954,6 +12972,7 @@ mod tests {
                 &message,
                 false,
                 false,
+                false,
             ));
             message.status = Delivery::Failed;
             widths.push(footer_width(
@@ -12962,11 +12981,19 @@ mod tests {
                 &message,
                 false,
                 false,
+                false,
             ));
             // Only our own messages can fail to send.
             message.from_me = false;
             widths.push(
-                footer_width(ui, crate::i18n::Locale::English, &message, false, false) + 19.0,
+                footer_width(
+                    ui,
+                    crate::i18n::Locale::English,
+                    &message,
+                    false,
+                    false,
+                    false,
+                ) + 19.0,
             );
         });
         output.textures_delta.clear();

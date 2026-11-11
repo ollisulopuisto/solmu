@@ -926,7 +926,7 @@ fastframe_icons::icons! {
         ArrowLeft => lucide "arrow-left",
         Ban => "ban",
         Bell => "bell",
-        Bookmark => lucide "bookmark",
+        Bookmark => "bookmark",
         BellOff => "bell-off",
         Calendar => "calendar",
         Check => lucide "check",
