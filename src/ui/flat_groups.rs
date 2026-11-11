@@ -406,6 +406,7 @@ mod tests {
             vec!["work", "ungrouped"]
         );
         let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
         for target in ["work", "ungrouped"] {
             app.scroll_chat_into_view = Some(target.into());
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| list(&mut app, ui));
