@@ -9,6 +9,9 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Latest/Groups list views with local-only many-to-many membership.
+- Assign groups with Apply/Cancel, additive drag with Undo, safe group deletion.
+- Cmd-D switches views; requires shared keymap #281 (info is Cmd-Option-I).
 - The info sidebar moves from Cmd-D to Cmd-Option-I under the shared Postilaatikko/Solmu keymap; Cmd-D is reserved for the upcoming groups toggle. The shortcuts dialog and the macOS menu show the new chord.
 - Hide the View once photo toggle on Beeper chats. The send API cannot carry this mode, so offering it led to a refused send. Existing attachment drafts are retained without silently changing their send mode.
 - On macOS the message field applies the system's text replacements (System Settings > Keyboard > Text Replacements): a shortcut typed before a space, return, or punctuation expands to its phrase, including when adding a line or sending. Edits in System Settings apply the next time the window gains focus.

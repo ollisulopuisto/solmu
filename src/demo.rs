@@ -2381,6 +2381,23 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
     };
     for part in page.split(',').map(str::trim) {
         match part {
+            "flat-groups" => {
+                let work = app.settings.flat_groups.create("Work").unwrap();
+                let friends = app.settings.flat_groups.create("Friends").unwrap();
+                let keys: Vec<_> = app
+                    .chats
+                    .iter()
+                    .take(4)
+                    .map(|chat| crate::ui::flat_groups::member(app, chat))
+                    .collect();
+                for target in &keys {
+                    app.settings.flat_groups.add(work, target.clone());
+                }
+                for target in keys.iter().take(2) {
+                    app.settings.flat_groups.add(friends, target.clone());
+                }
+                app.settings.flat_groups.grouped_view = true;
+            }
             "history-date" => history_date_sample(app),
             "card-widths" => card_widths_sample(app),
             "minute-gutter" => minute_gutter_sample(app),

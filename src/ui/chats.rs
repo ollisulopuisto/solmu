@@ -12,7 +12,7 @@ use super::labels;
 use super::widgets;
 
 // Roomier by default; retain the existing explicit compact-density choice.
-fn chat_row_height(compact: bool) -> f32 {
+pub(super) fn chat_row_height(compact: bool) -> f32 {
     if compact { 56.0 } else { 80.0 }
 }
 
@@ -237,6 +237,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                 super::titlebar_drag(ui, drag);
             }
             search_field(app, ui);
+            super::flat_groups::toggle(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
                 ui.set_min_height(36.0);
@@ -1838,6 +1839,10 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
         results(app, ui);
         return;
     }
+    if app.settings.flat_groups.grouped_view && !app.show_archived {
+        super::flat_groups::list(app, ui);
+        return;
+    }
     // A pin is a shortcut, not a removal: pinned chats keep their rail
     // chips AND their ordinary rows here, linked ones included.
     // One traversal keeps both the ids and the favorite flags: a per-row
@@ -2490,7 +2495,7 @@ fn quiet_tint(
     Some(theme::readable_on(palette.panel, faded, palette.text, 4.5))
 }
 
-fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
+pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
     let palette = app.palette;
     let title = app.chat_title(chat);
     // Beeper demo: tag each row with its bridge network/account when the
@@ -2514,8 +2519,9 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
             ui.available_width(),
             chat_row_height(app.settings.beeper.compact_list),
         ),
-        Sense::click(),
+        Sense::click_and_drag(),
     );
+    response.dnd_set_drag_payload(super::flat_groups::member(app, chat));
     theme::reveal_focus(&response);
     // The preview area and the whole last message, when the row cuts it short.
     let mut full_preview: Option<(Rect, String, String)> = None;
@@ -3135,6 +3141,13 @@ fn compact_badge_center(avatar: Rect) -> egui::Pos2 {
 }
 
 fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette) {
+    if ui
+        .button(crate::i18n::gettext(app.locale, "Assign groups…"))
+        .clicked()
+    {
+        super::flat_groups::assign(app, chat);
+        ui.close();
+    }
     let locale = app.locale;
     if chat.looks_unread()
         && widgets::menu_item(

@@ -22,6 +22,7 @@ pub mod composed_forward;
 pub mod demo;
 pub mod emoji;
 pub mod energy;
+pub mod flat_groups;
 pub mod geo;
 pub mod group_admin;
 pub mod i18n;

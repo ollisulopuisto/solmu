@@ -755,6 +755,7 @@ pub struct App {
     #[cfg(any(test, feature = "demo"))]
     pub open_list_menu: Option<(ChatId, String)>,
     /// Name typed in the label manager.
+    pub flat_group_ui: crate::ui::flat_groups::State,
     pub label_name: String,
     /// Colour the manager will use for the next label.
     pub label_color: String,
@@ -1653,6 +1654,7 @@ impl App {
             sidebar_visible: true,
             #[cfg(any(test, feature = "demo"))]
             open_list_menu: None,
+            flat_group_ui: Default::default(),
             label_name: String::new(),
             label_color: crate::archive::DEFAULT_COLOR.to_owned(),
             label_editing: None,
@@ -11447,6 +11449,11 @@ impl App {
                     first_name,
                     to_phone: to_phone.unwrap_or(self.account().settings.save_contacts_to_phone),
                 });
+            }
+            Action::ToggleFlatGroups => {
+                self.settings.flat_groups.grouped_view = !self.settings.flat_groups.grouped_view;
+                self.sidebar_visible = true;
+                self.mark_settings_dirty();
             }
             Action::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
             Action::SetChatFilter(filter) => {
