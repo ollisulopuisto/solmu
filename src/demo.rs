@@ -2359,7 +2359,7 @@ fn card_widths_sample(app: &mut App) {
     ));
     for (id, text) in [
         ("text-medium", "The final notes are ready."),
-        ("text-medium-two", "The final notes are ready!"),
+        ("text-medium-two", "The final notes are ready!!!"),
         (
             "text-long",
             "The revised document is ready for review today.",
@@ -23293,11 +23293,34 @@ mod card_width_tests {
                         "short own text takes its natural width, not the80pt step: {:?}",
                         rect("card-plain")
                     );
+                    // The join, not a coincidence: the two texts measure a
+                    // few points apart naturally (guarded below), yet the
+                    // rendered bubbles take exactly one width, the frozen
+                    // larger one.
+                    let natural = |text: &str| {
+                        ctx.fonts(|fonts| {
+                            fonts
+                                .layout_no_wrap(
+                                    text.to_owned(),
+                                    crate::theme::regular(crate::ui::widgets::MESSAGE_TEXT_SIZE),
+                                    egui::Color32::BLACK,
+                                )
+                                .size()
+                                .x
+                        })
+                    };
+                    let (one, two) = (
+                        natural("The final notes are ready."),
+                        natural("The final notes are ready!!!"),
+                    );
                     assert!(
-                        (rect("text-medium").width() - rect("text-medium-two").width()).abs() < 8.0,
-                        "near-equal neighbours settle within the join tolerance: {:?} vs {:?}",
-                        rect("text-medium"),
-                        rect("text-medium-two")
+                        two - one >= 3.0 && two - one <= 16.0,
+                        "the fixture's natural widths differ measurably but stay within the join tolerance: {one} vs {two}"
+                    );
+                    assert_eq!(
+                        rect("text-medium").width(),
+                        rect("text-medium-two").width(),
+                        "near-equal neighbours join at exactly one width"
                     );
                     assert!(
                         rect("text-long").width() > rect("text-medium").width() + 10.0,

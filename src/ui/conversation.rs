@@ -3214,9 +3214,12 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                     // lets a slightly wider arrival grow alone. Rule and
                     // tolerance: crate::run_widths.
                     let text_cap = own_text_cap(ui, &palette, selection.is_some());
-                    conversation
-                        .width_book
-                        .retain_fingerprint(text_cap.to_bits());
+                    // The epoch covers the cap and the fonts: reinstalled
+                    // fonts change the metrics a width was measured under.
+                    conversation.width_book.retain_fingerprint(
+                        text_cap.to_bits()
+                            ^ crate::theme::font_generation().wrapping_mul(0x9E37_79B9),
+                    );
                     // Taken out of the conversation so the immutable message
                     // walk can settle new entries; put back below.
                     let mut book = std::mem::take(&mut conversation.width_book);
