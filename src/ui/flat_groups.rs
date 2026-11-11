@@ -25,6 +25,9 @@ pub fn member(app: &App, chat: &Chat) -> Member {
 
 /// Resolve all currently unlocked source identities of a linked row.
 fn identities(app: &App, chat: &Chat) -> Vec<Member> {
+    if chat.locked {
+        return vec![member(app, chat)];
+    }
     let person = app
         .settings
         .beeper
@@ -141,7 +144,9 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
                 }
                 if let Some(target) = response.dnd_release_payload::<Member>() {
                     // A stale drag from another account must not mutate the current view.
-                    if keys.iter().flatten().any(|key| key == target.as_ref())
+                    if keys
+                        .iter()
+                        .any(|row| row.contains(target.as_ref()) && !belongs(group, row))
                         && app.settings.flat_groups.add(group.id, (*target).clone())
                     {
                         app.flat_group_ui.undo = Some((group.id, (*target).clone()));
@@ -310,5 +315,33 @@ mod tests {
         assert_eq!(app.beeper_person_preview(&b).unread, 2);
         assign(&mut app, &b);
         assert_eq!(app.flat_group_ui.assigning.as_ref().unwrap().1, vec![group]);
+    }
+    #[test]
+    fn locked_assignment_is_exact_and_unlocked_membership_does_not_leak() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        let mut a = Chat::new("locked".into(), "Private".into());
+        a.backend_origin = Some("server".into());
+        a.backend_account = Some("signal".into());
+        a.locked = true;
+        let mut b = a.clone();
+        b.id = "public".into();
+        b.locked = false;
+        app.settings.beeper.people.push(crate::merged::Person {
+            name: "Person".into(),
+            members: vec![
+                crate::merged::Member::of(&a).unwrap(),
+                crate::merged::Member::of(&b).unwrap(),
+            ],
+            primary: None,
+        });
+        app.chats = vec![a.clone(), b.clone()];
+        let private_key = member(&app, &a);
+        let public_key = member(&app, &b);
+        assert_eq!(identities(&app, &a), vec![private_key]);
+        assert_eq!(identities(&app, &b), vec![public_key]);
     }
 }
