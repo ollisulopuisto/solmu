@@ -15002,6 +15002,63 @@ mod tests {
     }
 
     #[test]
+    fn composed_forward_survives_account_switch_and_hidden_progress() {
+        let mut app = app();
+        let (second, _) =
+            Account::detached(&app.dirs, AccountId::from("second"), Default::default()).unwrap();
+        app.accounts.push(second);
+        let owner = app.account().id.clone();
+        app.forward_generation = 9;
+        app.forward_items.push(crate::composed_forward::Item {
+            origin: "local".into(),
+            planned: true,
+            source_chat: "source".into(),
+            source_message: "m".into(),
+            source_account: "a".into(),
+            destination_account: "b".into(),
+            attachment: None,
+            destination: "target".into(),
+            text: "header\nbody".into(),
+            state: crate::composed_forward::State::Sending,
+        });
+        app.switch_account(&AccountId::from("second"));
+        assert!(app.forward_items.is_empty());
+        let visible = app.active;
+        app.active = 0;
+        app.apply_backend_event(
+            Event::BeeperForwardProgress {
+                generation: 9,
+                index: 0,
+                state: crate::composed_forward::State::FailedBeforeSend("upload".into()),
+            },
+            false,
+        );
+        app.apply_backend_event(
+            Event::BeeperForwardMarked {
+                origin: "local".into(),
+                account: "b".into(),
+                chat: "target".into(),
+                message: "pending".into(),
+            },
+            false,
+        );
+        app.active = visible;
+        app.switch_account(&owner);
+        assert_eq!(app.forward_generation, 9);
+        assert!(matches!(
+            app.forward_items[0].state,
+            crate::composed_forward::State::FailedBeforeSend(_)
+        ));
+        assert!(
+            app.settings
+                .beeper
+                .forwarded_messages
+                .iter()
+                .any(|m| m.message == "pending")
+        );
+    }
+
+    #[test]
     fn composed_forward_retry_preserves_nonretryable_rows_for_stable_progress_indices() {
         let mut app = app();
         let (backend, mut commands) = Backend::recording();

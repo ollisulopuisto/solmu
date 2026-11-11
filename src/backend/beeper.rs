@@ -5406,6 +5406,26 @@ mod tests {
         assert_eq!(server.join().unwrap().len(), 3);
     }
     #[test]
+    fn composed_forward_refuses_display_placeholders_from_nontext_sources() {
+        for kind in ["LOCATION", "POLL", "CALL", "NOTICE", "IMAGE"] {
+            let body = serde_json::json!({"id":"message","chatID":"source","accountID":"telegram","type":kind}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/source/messages/message ", 200, body)]);
+            let mut item = forward_fixture_item(&api.base_url);
+            item.planned = false;
+            let planned = api.plan_forwards(vec![item]);
+            assert!(
+                matches!(
+                    planned[0].state,
+                    crate::composed_forward::State::FailedBeforeSend(_)
+                ),
+                "{kind}"
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
     fn composed_forward_retry_replans_failed_preparation_without_losing_accepted_rows() {
         let (api, server) = forward_fixture(vec![
             ("GET /v1/chats/source/messages/message ", 503, "{}".into()),
