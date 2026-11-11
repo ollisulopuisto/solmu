@@ -49,3 +49,11 @@ API contracts checked:
 - https://developers.beeper.com/desktop-api-reference/resources/messages/methods/send
 - https://developers.beeper.com/desktop-api-reference/resources/messages/methods/retrieve
 - https://developers.beeper.com/desktop-api-reference/resources/assets/methods/upload_base64
+
+Review follow-up: batch rows and generation belong to the owning app account.
+Hidden-account events still update progress and local provenance; switching back
+restores the results dialog. Non-text display placeholders (including locations)
+are refused against the original wire type/body before a POST. Accepted pending
+identities are saved with exact server/account/chat and resumed as read-only
+confirmation lookups on startup/reconnection. Confirmed final IDs replace pending
+marks; timeout keeps the saved association for another startup, never resends.

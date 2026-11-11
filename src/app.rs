@@ -1833,6 +1833,17 @@ impl App {
             self.remove_account(abandoned);
         }
         self.restore_composer();
+        if let Some(first) = self.forward_items.first() {
+            let chat = first.source_chat.clone();
+            let mut messages = Vec::new();
+            for item in &self.forward_items {
+                if !messages.contains(&item.source_message) {
+                    messages.push(item.source_message.clone());
+                }
+            }
+            self.dialog = Some(Dialog::Forward { chat, messages });
+            self.forward_reviewing = true;
+        }
         // Labels belong to their account: show the one this account showed.
         self.label_filter = self.remembered_label();
         self.page = Page::Chats;
@@ -15047,6 +15058,9 @@ mod tests {
         app.active = visible;
         app.switch_account(&owner);
         assert_eq!(app.forward_generation, 9);
+        assert!(
+            matches!(&app.dialog, Some(Dialog::Forward { chat, messages }) if chat == "source" && messages == &["m"])
+        );
         assert!(matches!(
             app.forward_items[0].state,
             crate::composed_forward::State::FailedBeforeSend(_)
