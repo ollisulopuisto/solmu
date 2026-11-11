@@ -11,7 +11,11 @@ version in Cargo.toml is bumped.
 
 - Cmd-R now quote-replies to the latest loaded incoming message in ordinary chats too, preserving the draft and focusing the composer through the existing Reply action. Cmd-L opens the existing Forward dialog for the selected messages, or the latest forwardable message. Beeper forwarding itself remains unsupported until the separate composed re-send feature is implemented.
 
+- Accept Beeper send confirmation when a pending message resolves to its final message ID. Successful sends no longer get a false 60-second warning solely because the ID changed. Unknown confirmations are not called pending; nothing is automatically resent.
+
+
 - Telegram and other media downloads wait in a bounded backlog when the worker queue is full, instead of failing immediately. Downloads start as slots free; exceeding the backlog limit or losing the worker still reports an error. New explicit requests go before automatic backlog work, but the current UI cannot promote an automatic download already shown as Downloading.
+
 - Exported attachment names cannot select NTFS alternate data streams through a colon in the original filename.
 
 - Saving an attachment whose name Windows reserves for a device (CON, NUL, COM1, ...) now keeps its extension: `CON.pdf` is saved as `attachment.pdf`, not `attachment`.
