@@ -838,3 +838,20 @@ Native CI at b041035 passed 1959 tests and failed one old combined draft test be
 ## Export alternate-stream names - November 10, 2026
 
 PR #272 follow-up: normalize colon to underscore before reserved-DOS-stem replacement so `CON.pdf:payload` becomes `attachment.pdf_payload` and ordinary filenames cannot select NTFS streams either. Four new regression cases; the old code failed on the first case, 242 other portable tests passed. Linux portable adapter tests rerun after repair; real Windows/NTFS not exercised. No merge or release build.
+
+
+## Linked-chat avatar source - November 11, 2026
+
+Owner Instinct, branch `fix/linked-avatar-default`, isolated from #267/#269.
+Use the saved primary picture, then saved member order. Resolve exact identities
+in the active app account and reject locked, missing, replaced, duplicate-ID,
+group and foreign-origin sources. Thumbnail and Contact info full-size lookups
+share that order. Never write fallback paths over member caches or change send
+routing. Re-evaluate each lookup so late pictures/default changes take effect.
+
+Portable current-source regressions and Python checks run locally; native App
+regressions added for fallback, late primary arrival, changed default, source
+cache preservation, full-size/thumbnail agreement and request order. Native GUI
+and real Mac/connected-network avatar behavior remain unverified locally.
+Custom contact pictures are a separate requested feature awaiting UI approval.
+No merge, main push or release build.

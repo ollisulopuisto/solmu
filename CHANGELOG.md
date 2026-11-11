@@ -9,6 +9,8 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Linked chats use the default network's profile picture, then the other linked networks in their saved order. Initials appear only when none has a picture.
+
 - Exported attachment names cannot select NTFS alternate data streams through a colon in the original filename.
 
 - Saving an attachment whose name Windows reserves for a device (CON, NUL, COM1, ...) now keeps its extension: `CON.pdf` is saved as `attachment.pdf`, not `attachment`.
