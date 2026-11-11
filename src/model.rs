@@ -1503,7 +1503,22 @@ impl Content {
     /// left out.
     pub fn gallery_kind(&self) -> Option<GalleryKind> {
         match self {
-            Self::Image { .. } => Some(GalleryKind::Photo),
+            Self::Image { media, .. } => {
+                // Before the file downloads there is no extension to check,
+                // so the declared MIME decides: a format the image crate is
+                // not built to draw (a GIF, a TIFF, a BMP) stays in its own
+                // surface instead of opening the viewer and failing. An
+                // unknown or missing MIME keeps the old behavior and lets
+                // the downloaded-path check decide.
+                let mime = media.mime.to_ascii_lowercase();
+                let mime = mime.split(';').next().unwrap_or("").trim();
+                match mime {
+                    "" | "image/jpeg" | "image/jpg" | "image/pjpeg" | "image/png"
+                    | "image/webp" => Some(GalleryKind::Photo),
+                    _ if mime.starts_with("image/") => None,
+                    _ => Some(GalleryKind::Photo),
+                }
+            }
             Self::Video { gif: false, .. } => Some(GalleryKind::Video),
             _ => None,
         }
@@ -3839,6 +3854,23 @@ mod tests {
         };
         assert_eq!(clip(false).gallery_kind(), Some(GalleryKind::Video));
         assert_eq!(clip(true).gallery_kind(), None, "a GIF plays inline");
+        // Beeper can send a still `img` attachment whose format the viewer
+        // cannot draw (a GIF, a TIFF); with no downloaded path the extension
+        // check cannot run, so the declared MIME keeps it out of the album.
+        for mime in ["image/gif", "image/tiff", "image/bmp"] {
+            let mut still = media();
+            still.mime = mime.into();
+            let picture = Content::Image {
+                caption: None,
+                media: still,
+                motion: None,
+            };
+            assert_eq!(
+                picture.gallery_kind(),
+                None,
+                "{mime} is not a drawable photo"
+            );
+        }
         let file = Content::Document {
             media: media(),
             file_name: "holiday.jpg".into(),
