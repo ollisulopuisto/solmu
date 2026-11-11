@@ -2597,7 +2597,10 @@ mod tests {
             app.actions.as_slice(),
             [Action::ToggleInfoSidebar]
         ));
-        assert!(app.sidebar_visible, "Cmd+Alt+I does not toggle the left list");
+        assert!(
+            app.sidebar_visible,
+            "Cmd+Alt+I does not toggle the left list"
+        );
         assert_eq!(
             INFO_SIDEBAR.keys,
             &[(Modifiers::COMMAND | Modifiers::ALT, Key::I)]
