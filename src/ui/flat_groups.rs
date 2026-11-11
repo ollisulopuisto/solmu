@@ -112,7 +112,7 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
                 }
                 if let Some(target) = response.dnd_release_payload::<Member>() {
                     // A stale drag from another account must not mutate the current view.
-                    if target.account == app.account().id.0
+                    if keys.contains(&target)
                         && app.settings.flat_groups.add(group.id, (*target).clone())
                     {
                         app.flat_group_ui.undo = Some((group.id, (*target).clone()));
@@ -189,7 +189,7 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
     let Some((target, mut selected)) = app.flat_group_ui.assigning.clone() else {
         return;
     };
-    if target.account != app.account().id.0 {
+    if !app.chats.iter().any(|chat| member(app, chat) == target) {
         app.flat_group_ui.assigning = None;
         return;
     }

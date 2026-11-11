@@ -1902,6 +1902,7 @@ mod tests {
             ("Ctrl+C", "Copy the selected messages"),
             ("Ctrl+B", "Collapse or expand the chat list"),
             ("Ctrl+Alt+I", "Show or hide the info sidebar"),
+            ("Ctrl+D", "Switch Latest and Groups"),
             (
                 "Ctrl+End",
                 "Jump to the newest message (when the input is empty)",
