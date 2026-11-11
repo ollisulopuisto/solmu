@@ -182,10 +182,11 @@ fn virtual_aliases(app: &mut App, ui: &mut egui::Ui, chats: &[&Chat], salt: (&st
         egui::vec2(ui.available_width(), height * chats.len() as f32),
         egui::Sense::hover(),
     );
-    if let Some(index) = app
-        .scroll_chat_into_view
-        .as_ref()
-        .and_then(|target| chats.iter().position(|chat| &chat.id == target))
+    if ui.is_enabled()
+        && let Some(index) = app
+            .scroll_chat_into_view
+            .as_ref()
+            .and_then(|target| chats.iter().position(|chat| &chat.id == target))
     {
         let row = egui::Rect::from_min_size(
             rect.min + egui::vec2(0.0, index as f32 * height),
@@ -570,6 +571,16 @@ mod tests {
             );
         }
         assert!(!app.flat_group_ui.collapsed.contains(&group));
+        app.scroll_chat_into_view = Some("work".into());
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.disable();
+            list(&mut app, ui);
+        });
+        output.textures_delta.clear();
+        assert_eq!(app.scroll_chat_into_view.as_deref(), Some("work"));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| list(&mut app, ui));
+        output.textures_delta.clear();
+        assert!(app.scroll_chat_into_view.is_none());
     }
 
     #[test]
