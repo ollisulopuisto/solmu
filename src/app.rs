@@ -721,8 +721,6 @@ pub struct App {
     /// Whether the forwarding dialog shows its recipients for confirmation.
     pub forward_reviewing: bool,
     pub forward_include_group: bool,
-    pub forward_generation: u64,
-    pub forward_items: Vec<crate::composed_forward::Item>,
     /// How many recipients the forwarding dialog's messages may have.
     pub forward_limit: usize,
     /// The group name being typed in the group info dialog.
@@ -1617,8 +1615,6 @@ impl App {
             forward_recipients: Vec::new(),
             forward_reviewing: false,
             forward_include_group: false,
-            forward_generation: 0,
-            forward_items: Vec::new(),
             forward_limit: crate::model::FORWARD_LIMIT,
             group_name_edit: None,
             new_contact_to_phone: true,
@@ -1869,8 +1865,7 @@ impl App {
         self.invalidate_composer_undo();
         self.forward_recipients.clear();
         self.forward_reviewing = false;
-        self.forward_items.clear();
-        self.forward_generation = self.forward_generation.wrapping_add(1);
+        // Batch state belongs to its account; hidden progress must survive.
         // The locked folder and the picker show the previous account's chats
         // and stickers.
         if self.locked_folder {
@@ -4407,7 +4402,7 @@ impl App {
     fn apply_backend_event(&mut self, event: Event, live: bool) {
         match event {
             Event::BeeperForwardPrepared { generation, items } => {
-                if live && generation == self.forward_generation {
+                if generation == self.forward_generation {
                     self.forward_items = items;
                 }
             }
@@ -4416,8 +4411,7 @@ impl App {
                 index,
                 state,
             } => {
-                if live
-                    && generation == self.forward_generation
+                if generation == self.forward_generation
                     && let Some(item) = self.forward_items.get_mut(index)
                 {
                     item.state = state;
@@ -4429,19 +4423,17 @@ impl App {
                 chat,
                 message,
             } => {
-                if live {
-                    let mark = crate::settings::ForwardedMessage {
-                        member: crate::merged::Member {
-                            origin,
-                            account,
-                            chat,
-                        },
-                        message,
-                    };
-                    if !self.settings.beeper.forwarded_messages.contains(&mark) {
-                        self.settings.beeper.forwarded_messages.push(mark);
-                        self.mark_settings_dirty();
-                    }
+                let mark = crate::settings::ForwardedMessage {
+                    member: crate::merged::Member {
+                        origin,
+                        account,
+                        chat,
+                    },
+                    message,
+                };
+                if !self.settings.beeper.forwarded_messages.contains(&mark) {
+                    self.settings.beeper.forwarded_messages.push(mark);
+                    self.mark_settings_dirty();
                 }
             }
             Event::BeeperForwardResolved {
@@ -4462,11 +4454,15 @@ impl App {
                     .forwarded_messages
                     .iter()
                     .any(|mark| mark.member == member && mark.message == pending);
-                if live && pending_message {
+                if pending_message {
                     let mark = crate::settings::ForwardedMessage {
-                        member,
+                        member: member.clone(),
                         message: final_id,
+                        pending: false,
                     };
+                    self.settings.beeper.forwarded_messages.retain(|mark| {
+                        !(mark.member == member && mark.message == pending && mark.pending)
+                    });
                     if !self.settings.beeper.forwarded_messages.contains(&mark) {
                         self.settings.beeper.forwarded_messages.push(mark);
                         self.mark_settings_dirty();

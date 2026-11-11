@@ -1705,11 +1705,7 @@ mod giphy_tests {
 }
 
 /// Local provenance only. Never sent as a bridge-native forwarding claim.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ForwardedMessage {
-    pub member: crate::merged::Member,
-    pub message: String,
-}
+pub use crate::composed_forward::ForwardedMessage;
 
 /// Local preferences for the native Beeper view. Never written to remote accounts.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

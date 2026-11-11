@@ -1,5 +1,6 @@
 //! Per-item state for composed forwards. Acceptance is not delivery, and an
 //! unknown send outcome is never safe for bulk retry.
+use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum State {
     Waiting,
@@ -136,4 +137,49 @@ mod tests {
         assert_eq!(items[3].state, State::Waiting);
         assert_eq!(items[4].state, State::Waiting);
     }
+}
+
+/// Exact local provenance and restart-safe pending resolution identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardedMessage {
+    pub member: crate::merged::Member,
+    pub message: String,
+    #[serde(default = "pending_by_default")]
+    pub pending: bool,
+}
+fn pending_by_default() -> bool {
+    true
+}
+
+pub fn unresolved_marks(path: &std::path::Path, origin: &str) -> Vec<ForwardedMessage> {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut bytes = Vec::new();
+    if file
+        .take(8 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() > 8 * 1024 * 1024
+    {
+        return Vec::new();
+    }
+    let Ok(settings) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Vec::new();
+    };
+    settings
+        .pointer("/beeper/forwarded_messages")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<Vec<ForwardedMessage>>(v).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| {
+            m.pending
+                && m.member.origin == origin
+                && !m.member.account.is_empty()
+                && !m.member.chat.is_empty()
+                && !m.message.is_empty()
+        })
+        .collect()
 }

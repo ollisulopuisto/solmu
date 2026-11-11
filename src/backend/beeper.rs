@@ -1584,7 +1584,13 @@ impl Api {
                         expanded.push(copy);
                     }
                 }
-                Ok(_) => {
+                Ok(message) => {
+                    if !forwardable_text(&message) {
+                        item.state = State::FailedBeforeSend(
+                            "This source type has no supported text or attachment to forward"
+                                .into(),
+                        );
+                    }
                     item.planned = true;
                     expanded.push(item);
                 }
@@ -1635,7 +1641,9 @@ impl Api {
             {
                 return Err("Source message is no longer available; nothing submitted".into());
             }
-            if item.attachment.is_none() && item.text.lines().count() < 2 {
+            if item.attachment.is_none()
+                && (!forwardable_text(&message) || item.text.lines().count() < 2)
+            {
                 return Err("This message has no supported text or attachment to forward".into());
             }
             let mut payload = serde_json::json!({"text": item.text});
@@ -2291,6 +2299,14 @@ fn newest_content_message(items: Vec<BeeperMessage>) -> Option<BeeperMessage> {
                 )
         })
         .max_by_key(|m| unix(&Some(m.timestamp.clone())))
+}
+
+fn forwardable_text(message: &BeeperMessage) -> bool {
+    matches!(message.message_type.as_deref(), None | Some("TEXT"))
+        && message
+            .text
+            .as_ref()
+            .is_some_and(|text| !text.trim().is_empty())
 }
 
 fn body_of(m: &BeeperMessage) -> (String, bool) {
@@ -3283,6 +3299,13 @@ pub fn run(
     let mut last_receipt_refresh = Instant::now();
     let mut pending_sends: Vec<(ChatId, String, Instant)> = Vec::new();
     let mut forward_pending = HashMap::new();
+    for mark in crate::composed_forward::unresolved_marks(&dirs.settings_file(), &api.base_url) {
+        forward_pending.insert(
+            (mark.member.chat.clone(), mark.message.clone()),
+            mark.member.account,
+        );
+        pending_sends.push((mark.member.chat, mark.message, Instant::now()));
+    }
     let mut pending_storage: Option<(u64, bool)> = None;
     // Set by Command::Resumed: after a wake every poll timer is due at once,
     // so a link the server dropped during sleep is noticed on the next tick.
@@ -4425,23 +4448,11 @@ pub fn run(
                 let forward_account = forward_pending
                     .get(&(chat.clone(), pending_id.clone()))
                     .cloned();
-                let keep = poll_pending_send(&api, chat, pending_id, started.elapsed(), &|event| {
-                    if forward_account.is_some()
-                        && let Event::Messages { messages, .. } = &event
-                        && let Some(message) = messages
-                            .first()
-                            .filter(|message| message.from_me && message.chat == *chat)
-                    {
-                        emit(Event::BeeperForwardResolved {
-                            origin: api.base_url.clone(),
-                            account: forward_account.clone().unwrap_or_default(),
-                            chat: chat.clone(),
-                            pending: pending_id.clone(),
-                            final_id: message.id.clone(),
-                        });
-                    }
-                    emit(event);
-                });
+                let keep = if let Some(account) = forward_account {
+                    poll_forward_mark(&api, chat, pending_id, &account, started.elapsed(), &emit)
+                } else {
+                    poll_pending_send(&api, chat, pending_id, started.elapsed(), &emit)
+                };
                 if !keep {
                     forward_pending.remove(&(chat.clone(), pending_id.clone()));
                 }
@@ -4841,6 +4852,44 @@ fn refresh_inventory(api: &Api, accounts: &mut Vec<BeeperAccount>, emit: &dyn Fn
             reason: format!("Beeper chat refresh failed: {error}"),
         })),
     }
+}
+
+fn poll_forward_mark(
+    api: &Api,
+    chat: &ChatId,
+    pending: &str,
+    account: &str,
+    elapsed: Duration,
+    emit: &dyn Fn(Event),
+) -> bool {
+    if let Ok(wire) = api.get_message(chat, pending)
+        && wire.chat_id == *chat
+        && wire.account_id == account
+        && wire.is_sender == Some(true)
+    {
+        let confirmed = wire.send_status.as_ref().is_some_and(|s| {
+            s.status == "SUCCESS"
+                || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
+        });
+        if confirmed && !wire.id.is_empty() {
+            emit(Event::BeeperForwardResolved {
+                origin: api.base_url.clone(),
+                account: account.into(),
+                chat: chat.clone(),
+                pending: pending.into(),
+                final_id: wire.id.clone(),
+            });
+            emit(Event::Messages {
+                chat: chat.clone(),
+                messages: vec![api.map_message(&wire, chat)],
+                older: false,
+                complete: false,
+            });
+            return false;
+        }
+    }
+    // Timeout never prunes persisted identity: a later startup resolves it.
+    elapsed < Duration::from_secs(60)
 }
 
 fn poll_pending_send(
@@ -5421,6 +5470,49 @@ mod tests {
                 ),
                 "{kind}"
             );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn composed_forward_restart_reloads_exact_pending_identity_and_resolves_final_mark() {
+        for (account, sender, expected) in [
+            ("signal", true, true),
+            ("foreign", true, false),
+            ("signal", false, false),
+        ] {
+            let body=serde_json::json!({"id":"final","chatID":"target","accountID":account,"isSender":sender,"sendStatus":{"status":"SUCCESS"}}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("settings.json");
+            let mark = crate::composed_forward::ForwardedMessage {
+                member: crate::merged::Member {
+                    origin: api.base_url.clone(),
+                    account: "signal".into(),
+                    chat: "target".into(),
+                },
+                message: "pending".into(),
+                pending: true,
+            };
+            std::fs::write(
+                &path,
+                serde_json::json!({"beeper":{"forwarded_messages":[mark]}}).to_string(),
+            )
+            .unwrap();
+            let restored = crate::composed_forward::unresolved_marks(&path, &api.base_url);
+            assert_eq!(restored.len(), 1);
+            assert!(crate::composed_forward::unresolved_marks(&path, "foreign-origin").is_empty());
+            let events = Mutex::new(Vec::new());
+            assert!(!poll_forward_mark(
+                &api,
+                &restored[0].member.chat,
+                &restored[0].message,
+                &restored[0].member.account,
+                Duration::from_secs(61),
+                &|e| events.lock().unwrap().push(e)
+            ));
+            assert_eq!(events.into_inner().unwrap().iter().any(|e| matches!(e,Event::BeeperForwardResolved {pending,final_id,..} if pending=="pending" && final_id=="final")),expected);
             server.join().unwrap();
         }
     }

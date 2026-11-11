@@ -19,6 +19,8 @@ use crate::settings::AccountSettings;
 /// One WhatsApp account's runtime state.
 pub struct Account {
     pub id: AccountId,
+    pub forward_generation: u64,
+    pub forward_items: Vec<crate::composed_forward::Item>,
     pub dirs: AccountDirs,
     pub settings: AccountSettings,
     pub(crate) settings_dirty: bool,
@@ -173,6 +175,8 @@ impl Account {
         let chat_filter = settings.chat_queue.unwrap_or(chat_filter);
         Self {
             id,
+            forward_generation: 0,
+            forward_items: Vec::new(),
             dirs,
             settings,
             settings_dirty: false,
