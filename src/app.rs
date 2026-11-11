@@ -4511,9 +4511,42 @@ impl App {
                             }
                         }
                         // The gallery worker reports plain-English strings;
-                        // translate them here, where the locale is known.
+                        // translate the known ones here, where the locale is
+                        // known. Each stays a literal gettext call so the
+                        // catalogs regenerated on main pick the strings up.
                         Err(error) => {
-                            self.toast_error(crate::i18n::gettext(self.locale, &error).into_owned())
+                            let localized = match error.as_str() {
+                                "Media history is busy; try the arrow again" => {
+                                    crate::i18n::gettext(
+                                        self.locale,
+                                        "Media history is busy; try the arrow again",
+                                    )
+                                    .into_owned()
+                                }
+                                "Media history reached its 20000-item safety limit" => {
+                                    crate::i18n::gettext(
+                                        self.locale,
+                                        "Media history reached its 20000-item safety limit",
+                                    )
+                                    .into_owned()
+                                }
+                                "Media history cursor repeated; earlier items are kept" => {
+                                    crate::i18n::gettext(
+                                        self.locale,
+                                        "Media history cursor repeated; earlier items are kept",
+                                    )
+                                    .into_owned()
+                                }
+                                "Media history did not match the requested chat" => {
+                                    crate::i18n::gettext(
+                                        self.locale,
+                                        "Media history did not match the requested chat",
+                                    )
+                                    .into_owned()
+                                }
+                                _ => error,
+                            };
+                            self.toast_error(localized)
                         }
                     }
                 }

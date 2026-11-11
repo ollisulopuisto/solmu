@@ -3888,19 +3888,3 @@ msgstr "Velocidad de reproducción 2x"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Anteayer"
-
-#: src/backend/beeper.rs
-msgid "Media history is busy; try the arrow again"
-msgstr "El historial de medios está ocupado; prueba la flecha de nuevo"
-
-#: src/backend/beeper/gallery.rs
-msgid "Media history reached its 20000-item safety limit"
-msgstr "El historial de medios alcanzó su límite de seguridad de 20000 elementos"
-
-#: src/backend/beeper/gallery.rs
-msgid "Media history cursor repeated; earlier items are kept"
-msgstr "El cursor del historial de medios se repitió; se conservan los elementos anteriores"
-
-#: src/backend/beeper/gallery.rs
-msgid "Media history did not match the requested chat"
-msgstr "El historial de medios no coincide con el chat solicitado"

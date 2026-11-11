@@ -33,5 +33,3 @@ src/group_admin.rs
 src/ui/polls.rs
 src/ui/update.rs
 src/a11y.rs
-src/backend/beeper.rs
-src/backend/beeper/gallery.rs

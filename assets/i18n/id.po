@@ -3851,19 +3851,3 @@ msgstr "Enter untuk mengirim"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Dua hari lalu"
-
-#: src/backend/beeper.rs
-msgid "Media history is busy; try the arrow again"
-msgstr "Riwayat media sedang sibuk; coba panah lagi"
-
-#: src/backend/beeper/gallery.rs
-msgid "Media history reached its 20000-item safety limit"
-msgstr "Riwayat media mencapai batas keamanan 20000 item"
-
-#: src/backend/beeper/gallery.rs
-msgid "Media history cursor repeated; earlier items are kept"
-msgstr "Kursor riwayat media berulang; item sebelumnya dipertahankan"
-
-#: src/backend/beeper/gallery.rs
-msgid "Media history did not match the requested chat"
-msgstr "Riwayat media tidak cocok dengan obrolan yang diminta"

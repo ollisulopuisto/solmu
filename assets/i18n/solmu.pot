@@ -3676,19 +3676,3 @@ msgstr ""
 #: src/ui/conversation.rs
 msgid "Playback speed 2x"
 msgstr ""
-
-#: src/backend/beeper.rs
-msgid "Media history is busy; try the arrow again"
-msgstr ""
-
-#: src/backend/beeper/gallery.rs
-msgid "Media history reached its 20000-item safety limit"
-msgstr ""
-
-#: src/backend/beeper/gallery.rs
-msgid "Media history cursor repeated; earlier items are kept"
-msgstr ""
-
-#: src/backend/beeper/gallery.rs
-msgid "Media history did not match the requested chat"
-msgstr ""

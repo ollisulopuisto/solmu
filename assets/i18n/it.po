@@ -3857,19 +3857,3 @@ msgstr "Invio invia"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "L'altro ieri"
-
-#: src/backend/beeper.rs
-msgid "Media history is busy; try the arrow again"
-msgstr "La cronologia dei media è occupata; riprova la freccia"
-
-#: src/backend/beeper/gallery.rs
-msgid "Media history reached its 20000-item safety limit"
-msgstr "La cronologia dei media ha raggiunto il limite di sicurezza di 20000 elementi"
-
-#: src/backend/beeper/gallery.rs
-msgid "Media history cursor repeated; earlier items are kept"
-msgstr "Il cursore della cronologia dei media si è ripetuto; gli elementi precedenti sono mantenuti"
-
-#: src/backend/beeper/gallery.rs
-msgid "Media history did not match the requested chat"
-msgstr "La cronologia dei media non corrisponde alla chat richiesta"
