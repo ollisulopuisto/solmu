@@ -4731,6 +4731,19 @@ impl App {
                         && record.job.temporary
                         && let crate::pending_media::Payload::File { path, .. } = record.job.payload
                     {
+                        // A history merge normally preserves a downloaded path.
+                        // This path is an owned preview being retired, not a cache
+                        // entry. Clear only that exact path before merge can copy it.
+                        if let Some(media) = self
+                            .conversations
+                            .get_mut(&chat)
+                            .and_then(|c| c.message_mut(&record.visible))
+                            .and_then(|m| m.content.media_mut())
+                            && media.path.as_ref() == Some(&path)
+                        {
+                            media.path = None;
+                            media.state = crate::model::MediaState::Idle;
+                        }
                         crate::backend::beeper::discard_temp_upload(&path);
                     }
                 }
