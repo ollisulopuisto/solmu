@@ -9,6 +9,7 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Telegram and other videos no longer fail with "Media queue is busy; retry after current downloads finish" when many attachments are on screen. Downloads the worker cannot take yet now wait and start as slots free; a click goes before automatic ones.
 - Exported attachment names cannot select NTFS alternate data streams through a colon in the original filename.
 
 - Saving an attachment whose name Windows reserves for a device (CON, NUL, COM1, ...) now keeps its extension: `CON.pdf` is saved as `attachment.pdf`, not `attachment`.
