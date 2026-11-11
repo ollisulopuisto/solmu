@@ -47,3 +47,10 @@ Artwork source: `render_backgrounds.py`, Pillow and DejaVu Sans (development-onl
 The committed PNGs require no image library at packaging time. This layout expects
 only the app and Applications at the visible root; unexpected extra files fail
 closed rather than hiding their content or leaving black labels on dark art.
+
+The owner requested Finnish + English together on 11 November 2026.
+Finnish instructions use natural imperative wording; key senses checked against
+https://www.kielitoimistonsanakirja.fi/asentaa and
+https://www.kielitoimistonsanakirja.fi/vet%C3%A4%C3%A4 and
+https://www.kielitoimistonsanakirja.fi/kansio .
+The dictionary grounds word senses, not a claim that it approved these sentences.

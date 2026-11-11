@@ -40,7 +40,9 @@ class Contract(unittest.TestCase):
         # Exported composition metadata is a review aid, not a Finder test.
         self.assertIn("no app icon", (HERE / "README.md").read_text())
 
-    def _simulate(self, fail=False, wrong_link=False):
+    def _simulate(
+        self, fail=False, wrong_link=False, bg_link=False, picture_link=False
+    ):
         with tempfile.TemporaryDirectory() as td:
             image = Path(td) / "test image.dmg"
             image.write_bytes(b"original signed image")
@@ -54,6 +56,13 @@ class Contract(unittest.TestCase):
                 elif args[:2] == ("hdiutil", "attach"):
                     mount = Path(args[args.index("-mountpoint") + 1])
                     (mount / "Test App.app").mkdir()
+                    if bg_link:
+                        (mount / ".background").symlink_to(Path(td) / "outside")
+                    if picture_link:
+                        (mount / ".background").mkdir()
+                        (mount / ".background/welcome.png").symlink_to(
+                            Path(td) / "outside.png"
+                        )
                     if wrong_link:
                         (mount / "Applications").symlink_to(
                             str(Path(td) / "not-applications")
@@ -73,7 +82,7 @@ class Contract(unittest.TestCase):
                 mock.patch.object(layout, "run", fake_run),
                 mock.patch.dict(os.environ, {"DMG_WELCOME_CAPTURE_LOG": "0"}),
             ):
-                if fail or wrong_link:
+                if fail or wrong_link or bg_link or picture_link:
                     with self.assertRaises(
                         (RuntimeError, subprocess.CalledProcessError)
                     ):
@@ -96,6 +105,19 @@ class Contract(unittest.TestCase):
 
     def test_wrong_alias_is_rejected(self):
         self._simulate(wrong_link=True)
+
+    def test_background_directory_symlink_rejected(self):
+        self._simulate(bg_link=True)
+
+    def test_background_picture_symlink_rejected(self):
+        self._simulate(picture_link=True)
+
+    def test_optional_capture_failure_is_after_commit(self):
+        source = (HERE / "restyle.py").read_text()
+        self.assertLess(
+            source.index("os.replace(final, image)"),
+            source.index("capture_image(image)"),
+        )
 
     def test_non_macos_fails_closed(self):
         with (

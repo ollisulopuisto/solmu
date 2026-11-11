@@ -22,7 +22,7 @@ APPLESCRIPT = """on run argv
         set current view of w to icon view
         set toolbar visible of w to false
         set statusbar visible of w to false
-        set bounds of w to {80, 80, 855, 620}
+        set bounds of w to {80, 80, 855, 840}
         set opts to icon view options of w
         set arrangement of opts to not arranged
         set icon size of opts to 128
@@ -34,10 +34,13 @@ APPLESCRIPT = """on run argv
         set background picture of opts to POSIX file picturePath
         set position of item appName of rootFolder to {199, 247}
         set position of item "Applications" of rootFolder to {576, 247}
+        if exists item "Documentation" of rootFolder then
+            set position of item "Documentation" of rootFolder to {388, 560}
+        end if
         close w
         open rootFolder
         delay 2
-        set bounds of container window of rootFolder to {80, 80, 855, 620}
+        set bounds of container window of rootFolder to {80, 80, 855, 840}
         update rootFolder without registering applications
         delay 3
         close container window of rootFolder
@@ -113,15 +116,20 @@ def restyle(image: Path, app_name: str, background: Path) -> None:
                 p.name
                 for p in mounted.iterdir()
                 if not p.name.startswith(".")
-                and p.name not in (app_name, "Applications")
+                and p.name not in (app_name, "Applications", "Documentation")
             ]
             if extras:
                 raise RuntimeError(
                     f"Unexpected visible payload files need an explicit layout: {extras}"
                 )
             bg_dir = mounted / ".background"
+            if bg_dir.is_symlink():
+                raise RuntimeError("Refusing a symlinked background directory")
             bg_dir.mkdir(exist_ok=True)
-            shutil.copyfile(background, bg_dir / "welcome.png")
+            picture = bg_dir / "welcome.png"
+            if picture.is_symlink():
+                raise RuntimeError("Refusing a symlinked background image")
+            shutil.copyfile(background, picture)
             script = work / "layout.applescript"
             script.write_text(APPLESCRIPT)
             print(run("osascript", str(script), str(mounted), app_name).decode())
@@ -146,40 +154,23 @@ def restyle(image: Path, app_name: str, background: Path) -> None:
                 ).decode()
             )
             print(run("hdiutil", "verify", str(final)).decode())
-            if (
-                os.environ.get("DMG_WELCOME_CAPTURE_LOG") == "1"
-                and os.environ.get("GITHUB_ACTIONS") == "true"
-            ):
-                # Capture the FINAL read-only image, not just the source artwork.
-                from capture import capture
-
-                evidence_mount = work / "evidence"
-                evidence_mount.mkdir()
-                evidence_attached = False
-                try:
-                    run(
-                        "hdiutil",
-                        "attach",
-                        str(final),
-                        "-readonly",
-                        "-nobrowse",
-                        "-noautoopen",
-                        "-mountpoint",
-                        str(evidence_mount),
-                    )
-                    evidence_attached = True
-                    capture(evidence_mount, work)
-                except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
-                    print(f"DMG_WELCOME_CAPTURE_UNAVAILABLE: {exc}")
-                finally:
-                    if evidence_attached:
-                        run("hdiutil", "detach", str(evidence_mount))
             os.replace(final, image)
         finally:
             if attached:
                 # Do not force-detach a possibly busy disk. Failure is visible.
                 run("hdiutil", "detach", str(mounted))
     print(f"DMG welcome layout saved: {image.name}; sign/notarize only after this step")
+    if (
+        os.environ.get("DMG_WELCOME_CAPTURE_LOG") == "1"
+        and os.environ.get("GITHUB_ACTIONS") == "true"
+    ):
+        # Evidence runs after atomic replacement, outside the packaging transaction.
+        from capture import capture_image
+
+        try:
+            capture_image(image)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            print(f"DMG_WELCOME_CAPTURE_UNAVAILABLE: {exc}")
 
 
 def main() -> None:
@@ -190,7 +181,7 @@ def main() -> None:
     args = parser.parse_args()
     try:
         restyle(args.image, args.app_name, args.background)
-    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         if isinstance(exc, subprocess.CalledProcessError):
             print(exc.output.decode(errors="replace"), file=sys.stderr)
         parser.exit(1, f"DMG styling failed: {exc}\n")

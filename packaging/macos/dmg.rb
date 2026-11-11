@@ -10,6 +10,12 @@ abort "usage: dmg.rb PAYLOAD OUTPUT.dmg" unless payload && output
 abort "output already exists: #{output}" if File.exist?(output)
 Dir.mktmpdir("solmu-dmg-") do |directory|
   FileUtils.cp_r(File.join(payload, "."), directory, preserve: true)
+  documents = File.join(directory, "Documentation")
+  FileUtils.mkdir_p(documents)
+  %w[README.md LICENSE THIRD-PARTY-NOTICES.md].each do |name|
+    source = File.join(directory, name)
+    FileUtils.mv(source, documents) if File.file?(source)
+  end
   File.symlink("/Applications", File.join(directory, "Applications"))
   # hdiutil sizes an image from -srcfolder by estimate, and on GitHub's macOS
   # runners that estimate has come up short ("No space left on device"), so
