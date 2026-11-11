@@ -214,6 +214,12 @@ name or description, in the interface language or in English.
   as on the phone. Group receipts and voice-message played receipts are
   unaffected.
 - **Show when you are typing**: send typing and recording state.
+- **Remove tracking parameters when opening, copying and fetching links**: off
+  by default. Removes known tracking query keys at explicit Open URL, Copy URL
+  and hyperlink Copy link actions. Original messages and general Copy text stay
+  unchanged. Recognized signed/token URLs remain intact. An unrecognized signed
+  link may still need its original parameters; turn this off for that link.
+  If local preview fetching is installed, it uses the same action-time policy.
 - **Last seen**, **Online**, **Profile photo**, **About**, **Groups**, **Read
   receipts**, **Calls**: your WhatsApp account privacy, stored on WhatsApp's
   servers and shared with your phone. They can be changed while connected.

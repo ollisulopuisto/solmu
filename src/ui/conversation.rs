@@ -7214,7 +7214,7 @@ fn link_context_menu(ui: &mut egui::Ui, view: &View<'_>, url: &str, actions: &mu
         Some(Icon::Copy),
         &crate::i18n::gettext(view.locale, "Copy link"),
     ) {
-        actions.push(Action::CopyText(url.to_owned()));
+        actions.push(Action::CopyLink(url.to_owned()));
     }
 }
 
@@ -7453,7 +7453,7 @@ fn context_menu(
     let copy_url = crate::i18n::gettext(view.locale, "Copy URL to clipboard");
     if urls.len() == 1 {
         if widgets::menu_item(ui, &palette, Some(Icon::Copy), &copy_url) {
-            actions.push(Action::CopyText(urls[0].clone()));
+            actions.push(Action::CopyLink(urls[0].clone()));
         }
     } else if !urls.is_empty() {
         ui.menu_button(copy_url.as_ref(), |ui| {
@@ -7462,7 +7462,7 @@ fn context_menu(
                     .replace("{number}", &(index + 1).to_string());
                 let response = ui.button(label).on_hover_text(url);
                 if response.clicked() {
-                    actions.push(Action::CopyText(url.clone()));
+                    actions.push(Action::CopyLink(url.clone()));
                     ui.close();
                 }
             }

@@ -2824,6 +2824,8 @@ pub enum Action {
         files: Vec<(PathBuf, String)>,
     },
     OpenUrl(String),
+    /// A URL copy, distinct from copying original message text.
+    CopyLink(String),
     CopyText(String),
     CopyImage(PathBuf),
     /// Closes the toast at this index. Only errors wait to be dismissed.
