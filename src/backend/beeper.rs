@@ -4560,8 +4560,10 @@ fn poll_pending_send(
     let message: Result<BeeperMessage, String> = api.get_message(chat, pending_id);
     match message {
         Ok(m) => {
-            let explicit_success = m.id == pending_id
-                && m.chat_id == *chat
+            // Retrieving by pendingMessageID may resolve to the final ID.
+            // The authenticated exact-chat lookup binds that alias; comparing
+            // the returned ID with the pending ID rejects valid SUCCESS replies.
+            let explicit_success = m.chat_id == *chat
                 && m.is_sender == Some(true)
                 && m.send_status.as_ref().is_some_and(|s| {
                     s.status == "SUCCESS"
@@ -4588,7 +4590,7 @@ fn poll_pending_send(
                 complete: false,
             });
             if !complete && elapsed >= Duration::from_secs(60) {
-                emit(Event::Info("Beeper still reports this message pending after 60 seconds; delivery is unconfirmed, check history before retrying".into()));
+                emit(Event::Info("Beeper has not confirmed this send after 60 seconds; check history before retrying".into()));
                 false
             } else {
                 !complete
@@ -6058,6 +6060,65 @@ mod tests {
                 .any(|e| matches!(e, Event::Link(LinkStatus::Connected)))
         );
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn pending_lookup_accepts_final_id_but_not_foreign_or_unconfirmed_messages() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for (chat, sender, status) in [
+                ("chat", true, Some("SUCCESS")),
+                ("foreign", true, Some("SUCCESS")),
+                ("chat", false, Some("SUCCESS")),
+                ("chat", true, Some("PENDING")),
+                ("chat", true, None),
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let length = stream.read(&mut request).unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..length])
+                        .starts_with("GET /v1/chats/chat/messages/pending-fixture ")
+                );
+                let mut body = serde_json::json!({"id":"final-fixture", "chatID":chat,
+                    "accountID":"work", "isSender":sender});
+                if let Some(status) = status {
+                    body["sendStatus"] = serde_json::json!({"status":status});
+                }
+                let body = body.to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        for success in [true, false, false, false, false] {
+            let events = Mutex::new(Vec::new());
+            assert!(!poll_pending_send(
+                &api,
+                &"chat".into(),
+                "pending-fixture",
+                Duration::from_secs(61),
+                &|event| events.lock().unwrap().push(event)
+            ));
+            let events = events.into_inner().unwrap();
+            assert_eq!(events.iter().any(|event| matches!(event, Event::BeeperSendConfirmed { account, chat, .. } if account == "work" && chat == "chat")), success);
+            assert_eq!(
+                events.iter().any(
+                    |event| matches!(event, Event::Info(text) if text.contains("check history before retrying"))
+                ),
+                !success
+            );
+        }
+        server.join().unwrap();
     }
 
     #[test]
