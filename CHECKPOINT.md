@@ -859,3 +859,22 @@ to promote them. Priority applies to new explicit requests reaching the backend;
 manual upgrades are a backend safeguard, not a new user-visible promotion flow.
 The PR description/changelog now make this limitation explicit. A waiting versus
 active UI model is outside this queue-full repair.
+
+
+## Reply/forward shortcut gap - November 11, 2026
+
+Owner Instinct, branch `fix/reply-forward-shortcuts`, based on main after #274.
+Ordinary chats had no Cmd-R handler: only merged::show consumed that key. Add
+exact-modifier Cmd-R handling for ordinary chats via existing Action::Reply,
+which preserves an unedited draft and focuses the composer. Latest incoming
+selection ignores later outgoing/revoked rows, independently of unread divider.
+Linked Cmd-R remains in merged::show and retains exact-source routing.
+
+Cmd-L was free (Cmd-Option-Shift-L is app lock). It now opens the existing
+Forward dialog for the selection or latest forwardable loaded message, including
+an exact source chat in linked views. No send is performed by the shortcut.
+Existing Beeper Command::Forward remains unsupported: this is dialog wiring,
+not the separately proposed composed-forward implementation. Overlay guards and
+exact modifiers preserve other shortcuts. Added native key-dispatch regressions
+and updated the shortcut registry/help. Fmt and diff checks pass locally; native
+execution/real Mac UI remain unverified pending CI. No merge or build.
