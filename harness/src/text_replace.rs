@@ -80,12 +80,24 @@ pub fn expand_at(
                 continue;
             }
             let range = start..start + trigger.len();
-            if best.as_ref().is_none_or(|(known, _)| range.len() > known.len()) {
+            if best
+                .as_ref()
+                .is_none_or(|(known, _)| range.len() > known.len())
+            {
                 best = Some((range, entry.with.as_str()));
             }
         }
     }
     best.map(|(range, with)| (range, with.to_owned()))
+}
+
+/// The composer cursor, in chars, after an expansion: right after the
+/// replacement, plus one for the delimiter that closed the trigger when it
+/// stays in the text.
+pub fn cursor_after(text: &str, cursor: usize, range: &Range<usize>, with: &str) -> usize {
+    text[..range.start].chars().count()
+        + with.chars().count()
+        + usize::from(range.end < cursor)
 }
 
 /// Parses the output of `defaults read -g NSUserDictionaryReplacementItems`
@@ -225,9 +237,7 @@ impl<'a> Parser<'a> {
         let end = self
             .rest
             .iter()
-            .position(|byte| {
-                byte.is_ascii_whitespace() || b"(){}=;,\"".contains(byte)
-            })
+            .position(|byte| byte.is_ascii_whitespace() || b"(){}=;,\"".contains(byte))
             .unwrap_or(self.rest.len());
         if end == 0 {
             return None;
@@ -272,6 +282,16 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn hex_quad(&mut self) -> Option<u32> {
+        if self.rest.len() < 4 {
+            return None;
+        }
+        let (hex, rest) = self.rest.split_at(4);
+        let code = u32::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?;
+        self.rest = rest;
+        Some(code)
+    }
+
     fn escape(&mut self) -> Option<char> {
         let (&byte, rest) = self.rest.split_first()?;
         self.rest = rest;
@@ -282,13 +302,22 @@ impl<'a> Parser<'a> {
             b'\\' => Some('\\'),
             b'"' => Some('"'),
             b'U' => {
-                if self.rest.len() < 4 {
-                    return None;
+                let code = self.hex_quad()?;
+                if (0xD800..0xDC00).contains(&code) {
+                    // A supplementary character as a UTF-16 surrogate pair:
+                    // the high surrogate is followed by a \Uhhhh low one.
+                    if self.rest.len() < 2 || &self.rest[..2] != b"\\U" {
+                        return None;
+                    }
+                    self.rest = &self.rest[2..];
+                    let low = self.hex_quad()?;
+                    if !(0xDC00..0xE000).contains(&low) {
+                        return None;
+                    }
+                    char::from_u32(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
+                } else {
+                    char::from_u32(code)
                 }
-                let (hex, rest) = self.rest.split_at(4);
-                self.rest = rest;
-                let code = u32::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?;
-                char::from_u32(code)
             }
             b'0'..=b'7' => {
                 // Octal escape, up to three digits.
@@ -425,6 +454,37 @@ mod tests {
         let (range, with) = expand_at(&table, text, text.len()).expect("unicode trigger");
         assert_eq!(&text[range], "åh");
         assert_eq!(with, "Åhå");
+    }
+
+    #[test]
+    fn surrogate_pair_escapes_decode_to_one_scalar() {
+        let input = "({ replace = smile; with = \"\\Ud83d\\Ude00\"; }, { replace = omw; with = \"On my way!\"; })";
+        assert_eq!(
+            parse_replacements(input),
+            vec![
+                Replacement {
+                    replace: "smile".into(),
+                    with: "\u{1F600}".into(),
+                },
+                Replacement {
+                    replace: "omw".into(),
+                    with: "On my way!".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn cursor_lands_after_the_replacement_and_a_retained_delimiter() {
+        // `omw ` expands before the space the user typed.
+        let text = "ok omw ";
+        let (range, with) = expand_at(&table(), text, 7).expect("omw expands");
+        assert_eq!(cursor_after(text, 7, &range, &with), 14);
+        // A punctuation-ended trigger keeps no delimiter after it.
+        let text = "shrug,,";
+        let (range, with) = expand_at(&table(), text, 7).expect("shrug expands");
+        let at = cursor_after(text, 7, &range, &with);
+        assert_eq!(at, "\u{af}\\_(\u{30c4})_/\u{af}".chars().count());
     }
 
     #[test]

@@ -13114,6 +13114,11 @@ impl App {
         {
             self.refocus_composer(ctx);
         }
+        // Text replacements may have changed in System Settings while Solmu
+        // was away; the composer reloads the table on its next use.
+        if regained_focus {
+            self.text_replacements = None;
+        }
         self.window_focused = focused;
         self.report_presence();
         if locked {
@@ -13142,7 +13147,7 @@ impl App {
     }
 
     /// Inserts text at the composer cursor or end.
-    fn insert_in_composer(&mut self, ctx: &egui::Context, text: &str) {
+    pub(crate) fn insert_in_composer(&mut self, ctx: &egui::Context, text: &str) {
         let id = egui::Id::new("composer-text");
         let at = egui::TextEdit::load_state(ctx, id)
             .and_then(|state| state.cursor.char_range())
