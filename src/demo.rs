@@ -21218,6 +21218,7 @@ mod tests {
                 Stop::Saved,
                 Stop::Archived,
                 Stop::Locked,
+                Stop::Settings,
                 Stop::Profile,
                 Stop::Search,
                 Stop::All,
