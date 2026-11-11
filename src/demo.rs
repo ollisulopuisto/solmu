@@ -14035,6 +14035,84 @@ mod tests {
     }
 
     #[test]
+    fn album_caption_and_carousel_links_use_the_owning_popup() {
+        for carousel in [false, true] {
+            let mut app = app();
+            let expected = "https://example.org/exact?q=second#caption";
+            let message = if carousel {
+                carousel_sample(&mut app, 2);
+                let row = &mut app.conversations.get_mut(SAMPLES[0].id).unwrap().messages[0];
+                let Content::Interactive {
+                    card: Some(card), ..
+                } = &mut row.content
+                else {
+                    panic!()
+                };
+                card.body = "Parent body https://example.com/parent".into();
+                card.carousel[0].body = format!("First child ({expected})");
+                card.carousel[1].body = format!("Second child ({expected})");
+                "interactive-card"
+            } else {
+                media_album_sample(&mut app, true);
+                let rows = &mut app.conversations.get_mut(SAMPLES[0].id).unwrap().messages;
+                for (index, row) in rows.iter_mut().enumerate() {
+                    if let Content::Image { caption, .. } = &mut row.content {
+                        *caption = Some(if index == 1 {
+                            format!("Second caption ({expected})")
+                        } else {
+                            format!("Photo {index}")
+                        });
+                    }
+                }
+                "album-0"
+            };
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            render(&mut app, &ctx);
+            let owner = crate::ui::conversation::bubble_id(SAMPLES[0].id, message);
+            let hits = ctx
+                .data(|data| {
+                    data.get_temp::<Vec<(egui::Rect, String)>>(owner.with("web-link-hits"))
+                })
+                .unwrap_or_default();
+            let links: Vec<_> = hits.iter().filter(|(_, url)| url == expected).collect();
+            assert!(
+                !links.is_empty(),
+                "child link hits must reach the parent popup, carousel={carousel}"
+            );
+            if carousel {
+                assert!(links.len() >= 2, "each visible child contributes hits");
+            }
+            for (rect, _) in links {
+                let pos = rect.center();
+                let button = |pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![egui::Event::PointerMoved(pos), button(true)],
+                );
+                frame_with(&mut app, &ctx, vec![button(false)]);
+                assert!(egui::Popup::is_id_open(&ctx, owner.with("popup")));
+                assert_eq!(
+                    ctx.data(|data| data.get_temp::<String>(owner.with("link-menu-target")))
+                        .as_deref(),
+                    Some(expected)
+                );
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+                );
+            }
+        }
+    }
+
+    #[test]
     fn hyperlink_secondary_click_is_scoped_and_keeps_exact_destination() {
         use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
         let mut app = app();

@@ -2480,6 +2480,8 @@ pub(crate) fn reply_strip_id() -> egui::Id {
 
 /// App data needed while drawing a checked-out conversation.
 struct View<'a> {
+    /// Bubble owning link context menus, including album/carousel children.
+    link_menu_owner: Option<egui::Id>,
     sender_hue: Option<f32>,
     hide_grouped_status: bool,
     covered_top: Option<f32>,
@@ -2872,6 +2874,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     let list_label =
         || crate::a11y::messages_list_label(app.locale, &app.chat_title(chat), chat.is_group());
     let view = View {
+        link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
         covered_top: None,
@@ -5399,8 +5402,10 @@ fn bubble_frame(
 ) -> egui::Response {
     let outside_palette = view.palette;
     let own = message.from_me;
+    let owner = bubble_id(&view.chat.id, &message.id);
     // Bubble text uses its contrast palette; metadata uses the panel palette.
     let view = &View {
+        link_menu_owner: Some(owner),
         palette: view.palette.on_bubble(own),
         ..*view
     };
@@ -6814,6 +6819,7 @@ pub(crate) fn list_menu(
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
     let view = View {
+        link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
         covered_top: None,
@@ -6896,6 +6902,7 @@ pub(crate) fn linked_bubble(
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
     let view = View {
+        link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
         covered_top: None,
@@ -9339,8 +9346,16 @@ fn rich_body(
         })
         .filter(|(rect, _)| rect.is_positive())
         .collect();
-    ui.ctx()
-        .data_mut(|data| data.insert_temp(id.with("web-link-hits"), web_links));
+    // Child captions retain their own selection IDs but accumulate hits for
+    // the one bubble which owns their popup. Clear once in bubble_frame.
+    let owner = view.link_menu_owner.unwrap_or(id);
+    ui.ctx().data_mut(|data| {
+        let mut hits = data
+            .get_temp::<Vec<(Rect, String)>>(owner.with("web-link-hits"))
+            .unwrap_or_default();
+        hits.extend(web_links);
+        data.insert_temp(owner.with("web-link-hits"), hits);
+    });
     let message_number = crate::i18n::gettext(view.locale, "Message");
     let copy_number = crate::i18n::gettext(view.locale, "Copy number");
     let menu_labels = [message_number.as_ref(), copy_number.as_ref()];
@@ -12576,6 +12591,7 @@ mod tests {
         let avatars = HashMap::new();
         let keyboard_navigation = std::cell::Cell::new(false);
         let view = View {
+            link_menu_owner: None,
             sender_hue: None,
             hide_grouped_status: false,
             covered_top: None,
