@@ -1665,3 +1665,5 @@ mod idle_tests {
 }
 
 pub mod merged;
+
+mod view_once;
