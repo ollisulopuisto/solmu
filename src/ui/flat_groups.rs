@@ -405,9 +405,8 @@ mod tests {
         let ctx = egui::Context::default();
         for target in ["work", "ungrouped"] {
             app.scroll_chat_into_view = Some(target.into());
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| list(&mut app, ui));
-            });
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| list(&mut app, ui));
+            output.textures_delta.clear();
             assert!(
                 app.scroll_chat_into_view.is_none(),
                 "keyboard target must be drawn and reveal request consumed"
