@@ -60,8 +60,8 @@ pub fn preview_action(key: Key, modifiers: Modifiers) -> Option<crate::model::Ac
             Some(crate::model::Action::RotateImage(false))
         }
         (false, Key::R) if !modifiers.any() => Some(crate::model::Action::RotateImage(true)),
-        // A clip on the stage takes the arrows first, to jump five seconds;
-        // otherwise they step through the album.
+        // Photos and videos use the same album navigation. Alt+arrows seek
+        // a playing clip through video_keys without consuming plain arrows.
         (false, Key::ArrowLeft) if !modifiers.any() => Some(crate::model::Action::ViewerStep(-1)),
         (false, Key::ArrowRight) if !modifiers.any() => Some(crate::model::Action::ViewerStep(1)),
         _ => None,

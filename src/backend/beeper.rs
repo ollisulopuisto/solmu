@@ -26,6 +26,8 @@ use super::{Command, Event, LinkStatus, Waker};
 use crate::model::{Chat, ChatId, ChatKind, Content, Delivery, LastMessage, Message};
 use crate::paths::AccountDirs;
 
+mod gallery;
+
 const CHAT_PAGE_LIMIT: u32 = 100;
 /// How often the chat list (ordering, previews, unread counts) is refreshed.
 const CHAT_REFRESH: Duration = Duration::from_secs(60);
@@ -2812,6 +2814,8 @@ pub fn run(
         emit(Event::Info(format!("Cache cleanup failed: {e}")));
     }
 
+    let gallery_tx = gallery::worker(api.clone(), events.clone(), waker.clone());
+
     // Bounded single download worker: a slow image must not block typing,
     // read state, history or send confirmations on the control worker.
     let (media_tx, media_rx) =
@@ -4225,6 +4229,23 @@ pub fn run(
                             unsent: crate::backend::Unsent::Voice(samples),
                             reason: crate::backend::Refusal::UnsupportedBackend,
                         }),
+                    }
+                }
+                Command::LoadChatMedia {
+                    chat,
+                    around,
+                    fresh,
+                } => {
+                    if let Err(error) = gallery_tx.try_send((chat, around, fresh)) {
+                        let (chat, around, _) = match error {
+                            std::sync::mpsc::TrySendError::Full(request)
+                            | std::sync::mpsc::TrySendError::Disconnected(request) => request,
+                        };
+                        emit(Event::BeeperViewerMedia {
+                            chat,
+                            around,
+                            result: Err("Media history is busy; try the arrow again".into()),
+                        });
                     }
                 }
                 Command::Download {

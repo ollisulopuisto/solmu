@@ -9,6 +9,9 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- The info sidebar moves from Cmd-D to Cmd-Option-I under the shared Postilaatikko/Solmu keymap; Cmd-D is reserved for the upcoming groups toggle. The shortcuts dialog and the macOS menu show the new chord.
+- Hide the View once photo toggle on Beeper chats. The send API cannot carry this mode, so offering it led to a refused send. Existing attachment drafts are retained without silently changing their send mode.
+
 ## v0.24.21
 
 - Link suggestions: when two one-to-one chats on different networks have the same full name or the same phone number or username, Contact info shows a "Same person?" card with Link and Not the same person, and Filters lists them under "Link suggestions". Linking can be undone for a few seconds, and a dismissed pair is not suggested again. Nothing is linked automatically and nothing leaves your computer.
