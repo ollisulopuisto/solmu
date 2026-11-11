@@ -272,11 +272,16 @@ Desktop running adds this UI rather than demonstrating a memory saving.
 - Authoritative account inventory includes accounts with no chats, supplied
   identity/network/status, and per-account settings. Missing network/status is
   labeled rather than guessed. Chat network fills older API omissions.
-- HTML-looking message bodies become conservative plain text. No HTML engine,
+- HTML-looking message bodies become conservative styled text. No HTML engine,
   scripts/styles/iframe execution, remote assets, or markup-provided actions.
-  Common/numeric entities and block/list boundaries are decoded. This is not
-  full rich-text fidelity: links represented only in href may lose their URL,
-  uncommon entities can remain literal, malformed markup may be imperfect.
+  Common/numeric entities and block/list boundaries are decoded. Bold, italic,
+  strike, inline code, fenced blocks, blockquotes and list bullets survive as
+  the WhatsApp-style markup the renderer already parses; properly nested tags
+  style correctly, crossing or unclosed tags degrade to literal characters.
+  This is not full rich-text fidelity: links represented only in href may lose
+  their URL, uncommon entities can remain literal, malformed markup may be
+  imperfect. Parser behaviour is fixture-tested; only live captures per bridge
+  prove every bridge sends the shapes the fixtures assume.
 - Opaque Matrix-like IDs are no longer presented as human names. A supplied
   matching participant name can be used; otherwise label says name unavailable.
   This does not invent a contact name or prove contacts resolved on real data.
