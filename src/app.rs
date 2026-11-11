@@ -31546,7 +31546,23 @@ mod linked_attachment_tests {
     fn linked_voice_uses_default_and_never_sends_on_a_missing_route() {
         let (_root, mut app, ctx, mut commands) = fixture();
         app.recording = Some(crate::audio::Recorder::simulated(app.waker.clone()));
-        std::thread::sleep(Duration::from_millis(700));
+        // The simulated recorder records in real time, one level per 50 ms,
+        // and its thread can start late on a loaded runner: a fixed sleep can
+        // finish the take below the half-second minimum, which drops it
+        // silently. Wait for enough audio, with a bound, instead. Twelve
+        // levels are 600 ms of samples, safely over the minimum.
+        let wait = Instant::now();
+        while app
+            .recording
+            .as_ref()
+            .is_some_and(|recorder| recorder.levels().len() < 12)
+        {
+            assert!(
+                wait.elapsed() < Duration::from_secs(10),
+                "the simulated recorder produced no audio"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
         app.apply(Action::SendRecording, &ctx);
         assert!(
             matches!(commands.try_recv(), Ok(Command::SendVoice { chat, samples, .. }) if chat == "default" && !samples.is_empty())
