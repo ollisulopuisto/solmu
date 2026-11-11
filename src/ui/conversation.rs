@@ -2481,6 +2481,8 @@ pub(crate) fn reply_strip_id() -> egui::Id {
 /// App data needed while drawing a checked-out conversation.
 struct View<'a> {
     pending_media: Option<&'a HashMap<String, crate::pending_media::Record>>,
+    /// Bubble owning link context menus, including album/carousel children.
+    link_menu_owner: Option<egui::Id>,
     sender_hue: Option<f32>,
     hide_grouped_status: bool,
     covered_top: Option<f32>,
@@ -2874,6 +2876,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         || crate::a11y::messages_list_label(app.locale, &app.chat_title(chat), chat.is_group());
     let view = View {
         pending_media: Some(&app.pending_media),
+        link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
         covered_top: None,
@@ -5401,8 +5404,10 @@ fn bubble_frame(
 ) -> egui::Response {
     let outside_palette = view.palette;
     let own = message.from_me;
+    let owner = bubble_id(&view.chat.id, &message.id);
     // Bubble text uses its contrast palette; metadata uses the panel palette.
     let view = &View {
+        link_menu_owner: Some(owner),
         palette: view.palette.on_bubble(own),
         ..*view
     };
@@ -5417,6 +5422,9 @@ fn bubble_frame(
     // Register the bubble from its previous rect before its contents so inner
     // links, quotes, and attachments win clicks. The bubble handles right-click.
     let bubble_id = bubble_id(&view.chat.id, &message.id);
+    // Hit evidence belongs to this frame, never the previous layout.
+    ui.ctx()
+        .data_mut(|data| data.remove::<Vec<(Rect, String)>>(bubble_id.with("web-link-hits")));
     // Store the final rect separately. Reusing the early response would keep
     // the first frame's rect.
     let rect_id = bubble_id.with("rect");
@@ -5721,6 +5729,23 @@ fn bubble_frame(
                 .layer_id_at(pos)
                 .is_none_or(|layer| layer == bubble.layer_id)
         });
+    let link_target_id = bubble_id.with("link-menu-target");
+    if right_clicked {
+        let pointer = ui.input(|input| input.pointer.interact_pos());
+        let target = ui
+            .ctx()
+            .data(|data| data.get_temp::<Vec<(Rect, String)>>(bubble_id.with("web-link-hits")))
+            .unwrap_or_default()
+            .into_iter()
+            .find(|(rect, _)| pointer.is_some_and(|pos| rect.contains(pos)))
+            .map(|(_, url)| url);
+        ui.ctx().data_mut(|data| {
+            data.remove::<String>(link_target_id);
+            if let Some(url) = target {
+                data.insert_temp(link_target_id, url);
+            }
+        });
+    }
     // In an album the menu belongs to the member under the pointer, so a
     // reply, reaction, forward or deletion reaches that item, not the first.
     let target_id = bubble_id.with("album-target");
@@ -5761,9 +5786,26 @@ fn bubble_frame(
         || (album.is_some()
             && view.reaction_menu
             && view.reaction == Some(menu_target.id.as_str()));
-    let width = menu_width(ui, view.locale, view.reaction_emoji, menu_target);
+    if force_menu || reacting {
+        ui.ctx()
+            .data_mut(|data| data.remove::<String>(link_target_id));
+    }
     let keyboard_clicked =
         bubble.clicked() && bubble.has_focus() && !ui.input(|input| input.pointer.any_click());
+    if keyboard_clicked
+        || (!right_clicked && !egui::Popup::is_id_open(ui.ctx(), bubble_id.with("popup")))
+    {
+        ui.ctx()
+            .data_mut(|data| data.remove::<String>(link_target_id));
+    }
+    let link_target = ui
+        .ctx()
+        .data(|data| data.get_temp::<String>(link_target_id));
+    let width = if link_target.is_some() {
+        240.0
+    } else {
+        menu_width(ui, view.locale, view.reaction_emoji, menu_target)
+    };
     let open = if right_clicked || force_menu || reacting || keyboard_clicked {
         Some(egui::SetOpenCommand::Bool(true))
     } else if bubble.clicked() {
@@ -5799,7 +5841,11 @@ fn bubble_frame(
         popup.at_pointer_fixed()
     };
     let menu = popup.show(|ui| {
-        context_menu(ui, view, menu_target, MenuOrigin::Chat, actions);
+        if let Some(url) = &link_target {
+            link_context_menu(ui, view, url, actions);
+        } else {
+            context_menu(ui, view, menu_target, MenuOrigin::Chat, actions);
+        }
     });
     if let Some(menu) = menu {
         ui.ctx()
@@ -5807,7 +5853,7 @@ fn bubble_frame(
     }
     // Keep the target explicit for every menu action, not just the emoji
     // picker. Paint in the message layer so the menu itself remains above it.
-    if egui::Popup::is_id_open(ui.ctx(), bubble_id.with("popup")) {
+    if link_target.is_none() && egui::Popup::is_id_open(ui.ctx(), bubble_id.with("popup")) {
         ui.painter().rect_stroke(
             inner.response.rect.expand(2.0),
             12.0,
@@ -6849,6 +6895,7 @@ pub(crate) fn list_menu(
     let keyboard_navigation = std::cell::Cell::new(false);
     let view = View {
         pending_media: None,
+        link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
         covered_top: None,
@@ -6932,6 +6979,7 @@ pub(crate) fn linked_bubble(
     let keyboard_navigation = std::cell::Cell::new(false);
     let view = View {
         pending_media: Some(&app.pending_media),
+        link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
         covered_top: None,
@@ -7133,6 +7181,35 @@ fn copyable_urls(text: &str) -> Vec<String> {
         .into_iter()
         .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
         .collect()
+}
+
+/// Hyperlink scope is fixed when secondary-click opens the popup.
+/// Never derive actions from a shortened label or the other message links.
+fn link_context_menu(ui: &mut egui::Ui, view: &View<'_>, url: &str, actions: &mut Vec<Action>) {
+    let label = url.chars().take(55).collect::<String>();
+    let label = if url.chars().count() > 55 {
+        format!("{label}…")
+    } else {
+        label
+    };
+    ui.add(egui::Label::new(label).wrap()).on_hover_text(url);
+    ui.separator();
+    if widgets::menu_item(
+        ui,
+        &view.palette,
+        None,
+        &crate::i18n::gettext(view.locale, "Open link"),
+    ) {
+        actions.push(Action::OpenUrl(url.to_owned()));
+    }
+    if widgets::menu_item(
+        ui,
+        &view.palette,
+        Some(Icon::Copy),
+        &crate::i18n::gettext(view.locale, "Copy link"),
+    ) {
+        actions.push(Action::CopyText(url.to_owned()));
+    }
 }
 
 fn context_menu(
@@ -9330,6 +9407,32 @@ fn rich_body(
     if visible || selection_alive {
         markup::paint_selectable(ui, &laid, &response, origin, palette.text, visible);
     }
+    let web_links: Vec<(Rect, String)> = laid
+        .links
+        .iter()
+        .filter(|(_, url)| url.starts_with("https://") || url.starts_with("http://"))
+        .flat_map(|(range, url)| {
+            crate::bidi::char_bounds_by_row(&laid.galley, range.start, range.end)
+                .into_iter()
+                .map(|(_, bounds)| {
+                    (
+                        bounds.translate(origin.to_vec2()).intersect(ui.clip_rect()),
+                        url.clone(),
+                    )
+                })
+        })
+        .filter(|(rect, _)| rect.is_positive())
+        .collect();
+    // Child captions retain their own selection IDs but accumulate hits for
+    // the one bubble which owns their popup. Clear once in bubble_frame.
+    let owner = view.link_menu_owner.unwrap_or(id);
+    ui.ctx().data_mut(|data| {
+        let mut hits = data
+            .get_temp::<Vec<(Rect, String)>>(owner.with("web-link-hits"))
+            .unwrap_or_default();
+        hits.extend(web_links);
+        data.insert_temp(owner.with("web-link-hits"), hits);
+    });
     let message_number = crate::i18n::gettext(view.locale, "Message");
     let copy_number = crate::i18n::gettext(view.locale, "Copy number");
     let menu_labels = [message_number.as_ref(), copy_number.as_ref()];
@@ -12567,6 +12670,7 @@ mod tests {
         let keyboard_navigation = std::cell::Cell::new(false);
         let view = View {
             pending_media: None,
+            link_menu_owner: None,
             sender_hue: None,
             hide_grouped_status: false,
             covered_top: None,

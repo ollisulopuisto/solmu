@@ -88,6 +88,7 @@ jobs:
           python-version: '3.13'
       - run: python3 contrib/beeper-tools/check_adapter.py
       - run: python3 -m unittest discover -s contrib/beeper-tools -p 'test_*.py'
+      - run: python3 packaging/dmg/test_layout.py
 
   audit:
     needs: [changes, portable]
