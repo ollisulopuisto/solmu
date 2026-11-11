@@ -13379,6 +13379,7 @@ mod reaction_tests {
         message: Message,
         marks: Marks,
         pinned: bool,
+        saved: bool,
     }
 
     /// The accessible labels of the message menu for `row`, drawn in
@@ -13396,6 +13397,18 @@ mod reaction_tests {
                 .insert(message.chat.clone(), HashSet::from([message.id.clone()]));
         }
         let chat = Chat::new(message.chat.clone(), "Ada".into());
+        if row.saved {
+            crate::saved::add(
+                &mut app.settings.beeper.saved,
+                crate::saved::SavedMessage::new(
+                    app.later_key(&chat),
+                    message,
+                    chat.title.clone(),
+                    "Ada".into(),
+                    "Kept for later.".into(),
+                ),
+            );
+        }
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         crate::theme::install(&ctx);
@@ -13448,6 +13461,7 @@ mod reaction_tests {
                 message,
                 marks: Marks { starred: false },
                 pinned: false,
+                saved: false,
             }
         };
         let photo = |path: Option<PathBuf>, state| {
@@ -13457,12 +13471,16 @@ mod reaction_tests {
                 motion: None,
             })
         };
+        let mut saved_row = row(Content::text("Kept for later."));
+        saved_row.saved = true;
         vec![
             MenuRow {
                 message: own,
                 marks: Marks { starred: true },
                 pinned: true,
+                saved: false,
             },
+            saved_row,
             photo(path.clone(), Idle),
             photo(None, Idle),
             photo(None, Downloading),
