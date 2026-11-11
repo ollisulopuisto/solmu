@@ -2358,8 +2358,8 @@ fn card_widths_sample(app: &mut App) {
         Content::text("Thanks!"),
     ));
     for (id, text) in [
-        ("text-medium", "The final notes are ready."),
-        ("text-medium-two", "The final notes are ready!!!"),
+        ("text-medium", "The final notes are ready!!!"),
+        ("text-medium-two", "The final notes are ready."),
         (
             "text-long",
             "The revised document is ready for review today.",
@@ -23309,18 +23309,20 @@ mod card_width_tests {
                                 .x
                         })
                     };
-                    let (one, two) = (
+                    let (narrower, wider) = (
                         natural("The final notes are ready."),
                         natural("The final notes are ready!!!"),
                     );
                     assert!(
-                        two - one >= 3.0 && two - one <= 16.0,
-                        "the fixture's natural widths differ measurably but stay within the join tolerance: {one} vs {two}"
+                        wider - narrower >= 3.0 && wider - narrower <= 16.0,
+                        "the fixture's natural widths differ measurably but stay within the join tolerance: {narrower} vs {wider}"
                     );
+                    // The wider text leads the run; the narrower arrival
+                    // joins its frozen width, so both render exactly equal.
                     assert_eq!(
                         rect("text-medium").width(),
                         rect("text-medium-two").width(),
-                        "near-equal neighbours join at exactly one width"
+                        "a near-equal later neighbour joins the frozen wider width"
                     );
                     assert!(
                         rect("text-long").width() > rect("text-medium").width() + 10.0,
