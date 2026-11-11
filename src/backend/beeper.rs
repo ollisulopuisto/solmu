@@ -2509,13 +2509,8 @@ fn supplied_link_preview(message: &BeeperMessage, body: &str) -> Option<crate::m
             continue;
         };
         let Some(preview) = message.links.iter().take(16).find(|preview| {
-            preview
-                .original_url
-                .as_deref()
-                .and_then(crate::safety::preview_url)
-                .as_ref()
-                == Some(&valid)
-                || crate::safety::preview_url(&preview.url).as_ref() == Some(&valid)
+            let source = preview.original_url.as_deref().unwrap_or(&preview.url);
+            crate::safety::preview_url(source).as_ref() == Some(&valid)
         }) else {
             continue;
         };
@@ -5245,6 +5240,29 @@ mod tests {
         assert!(matches!(
             map_message(&wire, "chat").content,
             Content::Text { preview: None, .. }
+        ));
+    }
+
+    #[test]
+    fn supplied_original_url_is_authoritative_over_resolved_url() {
+        let raw = serde_json::json!({"id":"preview", "text":"https://example.org/story", "links":[{"originalURL":"https://unrelated.example/redirect", "url":"https://example.org/story", "title":"Wrong article"}]});
+        let wire: BeeperMessage = serde_json::from_value(raw.clone()).unwrap();
+        assert!(matches!(
+            map_message(&wire, "chat").content,
+            Content::Text { preview: None, .. }
+        ));
+        let mut raw = raw;
+        raw["links"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("originalURL");
+        let wire: BeeperMessage = serde_json::from_value(raw).unwrap();
+        assert!(matches!(
+            map_message(&wire, "chat").content,
+            Content::Text {
+                preview: Some(_),
+                ..
+            }
         ));
     }
 
