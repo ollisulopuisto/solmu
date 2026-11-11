@@ -941,3 +941,11 @@ including direct-chat, unlocked, same-origin and unique-ID constraints.
 CI caught one needless-unwrap Clippy lint and a regression fixture borrow
 conflict. Use if-let dispatch and construct the member before mutating settings.
 No production behavior change in this follow-up.
+
+## 2026-11-11 - Favorites list sections, option B (Instinct, draft)
+
+Approved sketch B: small Pinned/Other chats labels, with a subtle rule only at
+the group boundary. Headers appear only when both favorite and ordinary chats
+remain visible; search/empty/Favorites-only/all-unpinned views remain ungrouped.
+Variable-height virtual rows include headers in keyboard reveal geometry.
+Native tests and actual pixels still require verification. No release build.
