@@ -291,9 +291,10 @@ fn parse(text: &str, mentions: &[Mention]) -> Vec<Span> {
             continue;
         }
         if in_block {
-            // A leading backslash escapes the line inside a block: `\\```
-            // carries a literal fence and `\\` a literal backslash.
-            let line = line.strip_prefix('\\').unwrap_or(line);
+            // The bridge mapper escapes a content line that would collide
+            // with the fence as `\```; only that exact line resolves back,
+            // so a native backslash line keeps its bytes.
+            let line = if line.trim() == "\\```" { "```" } else { line };
             spans.push(Span {
                 text: line.to_owned(),
                 mono: true,
@@ -428,10 +429,16 @@ fn inline(line: &str) -> Vec<Span> {
     while i < chars.len() {
         let c = chars[i];
         // The mapper's zero-width-space hint lets a marker open or close
-        // mid-word: it counts as a boundary but never reaches the text.
+        // mid-word: next to a marker it counts as a boundary but never
+        // reaches the text. A zero-width space anywhere else is native
+        // content and stays.
         if c == '\u{200B}' {
-            i += 1;
-            continue;
+            let by_marker = (i > 0 && matches!(chars[i - 1], '*' | '_' | '~' | '`'))
+                || (i + 1 < chars.len() && matches!(chars[i + 1], '*' | '_' | '~' | '`'));
+            if by_marker {
+                i += 1;
+                continue;
+            }
         }
         // URL syntax wins over WhatsApp emphasis markers. Query strings and
         // paths commonly contain paired underscores which must remain bytes
@@ -500,8 +507,10 @@ fn inline(line: &str) -> Vec<Span> {
     spans
 }
 
-/// Finds the closing marker run of an inline code span, skipping
-/// backslash-escaped bytes: `\\`` and `\\\\` are content, not syntax.
+/// Finds the closing marker run of an inline code span. The bridge
+/// mapper's `\\`` and `\\\\` escapes are content, not syntax; if that
+/// reading finds no close, the text was native and unescaped, so the
+/// plain scan decides - code ending in a backslash still closes.
 fn code_close(chars: &[char], from: usize, width: usize) -> Option<usize> {
     let mut j = from;
     while j + width <= chars.len() {
@@ -514,7 +523,11 @@ fn code_close(chars: &[char], from: usize, width: usize) -> Option<usize> {
         }
         j += 1;
     }
-    None
+    // Native text is not escaped: when the escaped reading finds no
+    // close, the plain scan decides, so code ending in a backslash
+    // still closes at its backtick.
+    (from..chars.len())
+        .find(|&j| j + width <= chars.len() && (j..j + width).all(|at| chars[at] == '`'))
 }
 
 /// Resolves the `\\`` and `\\\\` escapes inline code content can carry.
@@ -1205,9 +1218,10 @@ mod tests {
         assert_eq!(plain("2 * 3 = 6", &[]), "2 * 3 = 6");
     }
 
-    /// Escapes keep code content from closing its own span or fence:
-    /// `\`` and `\\` are content bytes inside code, and a fence-content
-    /// line with a leading backslash drops it.
+    /// Escapes keep bridge-mapped code content from closing its own span
+    /// or fence; native text is not escaped, so a zero-width space away
+    /// from markers, a backslash line, and code ending in a backslash all
+    /// keep their bytes.
     #[test]
     fn code_content_escapes_delimiters() {
         assert_eq!(plain("`foo\\`bar\\`baz`", &[]), "foo`bar`baz");
@@ -1222,8 +1236,15 @@ mod tests {
             plain("```\nfirst\n\\```\nsecond\n```", &[]),
             "\nfirst\n```\nsecond\n"
         );
-        // A content line that begins with a backslash escapes it too.
-        assert_eq!(plain("```\n\\\\home\n```", &[]), "\n\\home\n");
+        // A native backslash line keeps its backslash.
+        assert_eq!(plain("```\n\\home\\user\n```", &[]), "\n\\home\\user\n");
+        // Native code ending in a backslash still closes at its backtick.
+        let spans = parse("`a\\`", &[]);
+        let mono: Vec<_> = spans.iter().filter(|span| span.mono).collect();
+        assert_eq!(mono.len(), 1);
+        assert_eq!(mono[0].text, "a\\");
+        // A native zero-width space away from markers survives.
+        assert_eq!(plain("a\u{200B}b", &[]), "a\u{200B}b");
     }
 
     #[test]

@@ -1960,20 +1960,25 @@ fn plain_rich_text(raw: &str) -> String {
     // spans. Raw HTML is never emitted.
     let mut in_pre = false;
     let mut quote_depth: usize = 0;
-    // Open style markers, oldest first. The renderer parses styles per
-    // line, so a break closes every open marker and reopens them after.
+    // Styles covering the current text position, oldest first. Markers
+    // materialize lazily, at the first text char they cover, and close at
+    // line ends because the renderer parses styles per line. A line or
+    // pair without styled text never sees a marker at all.
     let mut styles: Vec<char> = Vec::new();
+    // The prefix of `styles` whose markers are emitted on this line.
+    let mut emitted: Vec<char> = Vec::new();
     // Inside inline code, backticks and backslashes are escaped so code
     // content cannot close its own span.
     let mut in_code = false;
-    // Fenced content buffers so lines that would collide with the fence -
-    // a literal ``` line or one starting with a backslash - get a leading
-    // backslash escape, the same rule the renderer resolves.
+    // Fenced content buffers so a content line that would collide with
+    // the fence gets the backslash escape the renderer resolves.
     let mut pre_content = String::new();
     // Set when a style marker just closed: a zero-width space before a
     // following alphanumeric keeps the marker a closer at the renderer's
-    // word-boundary rules without a visible character.
-    let mut pending_boundary = false;
+    // word-boundary rules without a visible character. The hint fires
+    // only while the closed marker is still the last emitted char, so
+    // neutral tags in between break nothing.
+    let mut pending_boundary: Option<char> = None;
     while !rest.is_empty() {
         if rest.starts_with('<') {
             // A quoted > is an attribute value, not the end of a tag.
@@ -2013,8 +2018,6 @@ fn plain_rich_text(raw: &str) -> String {
                         blocked = Some(name);
                     }
                 } else if blocked.is_none() {
-                    // Any tag breaks adjacency with a just-closed marker.
-                    pending_boundary = false;
                     if !in_pre {
                         let marker = match name.as_str() {
                             "strong" | "b" => Some('*'),
@@ -2025,26 +2028,26 @@ fn plain_rich_text(raw: &str) -> String {
                         };
                         if let Some(marker) = marker {
                             if closing {
-                                // A close for a marker that never opened
-                                // stays a literal character, as do crossing
-                                // tags; only balanced pairs style.
-                                if let Some(at) = styles.iter().rposition(|open| *open == marker) {
-                                    styles.remove(at);
-                                    out.push(marker);
-                                    pending_boundary = true;
-                                    if marker == '`' {
-                                        in_code = false;
+                                match styles.iter().rposition(|open| *open == marker) {
+                                    // The style never covered text: no
+                                    // marker pair is emitted at all.
+                                    Some(at) if at >= emitted.len() => {
+                                        styles.remove(at);
                                     }
-                                } else {
-                                    out.push(marker);
+                                    Some(at) => {
+                                        styles.remove(at);
+                                        emitted.remove(at);
+                                        out.push(marker);
+                                        pending_boundary = Some(marker);
+                                    }
+                                    // A close for a marker that never
+                                    // opened stays a literal character.
+                                    None => out.push(marker),
+                                }
+                                if marker == '`' {
+                                    in_code = false;
                                 }
                             } else {
-                                // A marker opening mid-word needs the
-                                // zero-width boundary hint to parse.
-                                if out.chars().last().is_some_and(char::is_alphanumeric) {
-                                    out.push('\u{200B}');
-                                }
-                                out.push(marker);
                                 styles.push(marker);
                                 if marker == '`' {
                                     in_code = true;
@@ -2056,15 +2059,15 @@ fn plain_rich_text(raw: &str) -> String {
                         if closing {
                             if in_pre {
                                 in_pre = false;
-                                // Escape lines that would collide with the
-                                // fence: a literal ``` line and any line
-                                // starting with a backslash.
+                                // Escape a content line that would collide
+                                // with the fence; the renderer resolves the
+                                // same escape, and only that exact line.
                                 let trimmed = pre_content.trim_end_matches('\n');
                                 for (n, line) in trimmed.split('\n').enumerate() {
                                     if n > 0 {
                                         out.push('\n');
                                     }
-                                    if line == "```" || line.starts_with('\\') {
+                                    if line.trim() == "```" {
                                         out.push('\\');
                                     }
                                     out.push_str(line);
@@ -2074,19 +2077,18 @@ fn plain_rich_text(raw: &str) -> String {
                                     out.push('\n');
                                 }
                                 out.push_str("```\n");
-                                // Styles suspended for the block reopen.
-                                for marker in &styles {
-                                    out.push(*marker);
-                                }
+                                // Styles suspended for the block re-emit
+                                // lazily at the next text char.
                             }
                         } else if !in_pre {
                             in_pre = true;
                             pre_content.clear();
-                            // Open styles close before the fence line; they
-                            // reopen when the block ends.
-                            for marker in styles.iter().rev() {
+                            // Styles emitted on this line close before the
+                            // fence line; they re-emit lazily after it.
+                            for marker in emitted.iter().rev() {
                                 out.push(*marker);
                             }
+                            emitted.clear();
                             if !out.ends_with('\n') {
                                 out.push('\n');
                             }
@@ -2102,9 +2104,10 @@ fn plain_rich_text(raw: &str) -> String {
                             }
                             let broke = !out.ends_with('\n');
                             if broke {
-                                for marker in styles.iter().rev() {
+                                for marker in emitted.iter().rev() {
                                     out.push(*marker);
                                 }
+                                emitted.clear();
                                 out.push('\n');
                             }
                             // Text after a nested quote still belongs to
@@ -2112,26 +2115,17 @@ fn plain_rich_text(raw: &str) -> String {
                             if quote_depth > 0 && !out.ends_with("> ") {
                                 out.push_str("> ");
                             }
-                            if broke {
-                                for marker in &styles {
-                                    out.push(*marker);
-                                }
-                            }
                         } else {
                             let broke = !out.ends_with('\n') && !out.ends_with("> ");
                             if broke {
-                                for marker in styles.iter().rev() {
+                                for marker in emitted.iter().rev() {
                                     out.push(*marker);
                                 }
+                                emitted.clear();
                                 out.push('\n');
                             }
                             quote_depth += 1;
                             out.push_str("> ");
-                            if broke {
-                                for marker in &styles {
-                                    out.push(*marker);
-                                }
-                            }
                         }
                     }
                     if name == "a" {
@@ -2141,13 +2135,15 @@ fn plain_rich_text(raw: &str) -> String {
                                 // A matrix.to mention link already carries the
                                 // person's name as its text; the raw URL is noise.
                                 if !url.starts_with("https://matrix.to/#/@") {
+                                    // Entities in the attribute decode here,
+                                    // where the URL is emitted.
+                                    let url = decode_entities(&url);
                                     // A link whose text already is the address -
                                     // a pasted URL the bridge marked up - keeps
                                     // just the text; repeating the address in
                                     // parentheses would show such links twice.
                                     let shows_address = label_start.is_some_and(|start| {
-                                        let label = decode_entities(&out[start..]);
-                                        let label = label.trim();
+                                        let label = out[start..].trim();
                                         label == url
                                             || label.trim_end_matches('/')
                                                 == url.trim_end_matches('/')
@@ -2178,9 +2174,10 @@ fn plain_rich_text(raw: &str) -> String {
                     ) {
                         let broke = !out.ends_with('\n') && !out.ends_with("> ");
                         if broke {
-                            for marker in styles.iter().rev() {
+                            for marker in emitted.iter().rev() {
                                 out.push(*marker);
                             }
+                            emitted.clear();
                             out.push('\n');
                         }
                         if quote_depth > 0 && !in_pre && !out.ends_with("> ") {
@@ -2189,53 +2186,72 @@ fn plain_rich_text(raw: &str) -> String {
                         if name == "li" && !closing {
                             out.push_str("• ");
                         }
-                        if broke {
-                            for marker in &styles {
-                                out.push(*marker);
-                            }
-                        }
                     }
                 }
                 rest = &rest[end + 1..];
                 continue;
             }
         }
-        let ch = rest.chars().next().unwrap();
-        if blocked.is_none() {
+        // A text run up to the next tag. Entities decode here, before
+        // the code escaping sees the text, so an entity-encoded backtick
+        // or fence line cannot slip past the escaping.
+        let end = rest.find('<').unwrap_or(rest.len());
+        let (taken, run) = if end == 0 {
+            // A '<' that opens no known tag is literal text.
+            let ch = rest.chars().next().unwrap();
+            (ch.len_utf8(), ch.to_string())
+        } else {
+            (end, decode_entities(&rest[..end]))
+        };
+        rest = &rest[taken..];
+        if blocked.is_some() {
+            continue;
+        }
+        for ch in run.chars() {
             if in_pre {
                 pre_content.push(ch);
-            } else if ch == '\n' && (quote_depth > 0 || !styles.is_empty()) {
-                // A break closes open styles; they reopen on the new line
-                // after the quote bar.
-                pending_boundary = false;
-                for marker in styles.iter().rev() {
+                continue;
+            }
+            if ch == '\n' {
+                // A break closes the styles emitted on this line; they
+                // re-emit lazily at the next text char.
+                pending_boundary = None;
+                for marker in emitted.iter().rev() {
                     out.push(*marker);
                 }
+                emitted.clear();
                 out.push('\n');
                 if quote_depth > 0 {
                     out.push_str("> ");
                 }
-                for marker in &styles {
-                    out.push(*marker);
-                }
-            } else {
-                if pending_boundary
-                    && !in_code
-                    && ch.is_alphanumeric()
-                    && matches!(out.chars().last(), Some('*' | '_' | '~' | '`'))
-                {
+                continue;
+            }
+            // Markers covering this char materialize now: after a break,
+            // after a neutral tag, wherever the text actually is. A
+            // style that opens mid-word gets the zero-width boundary
+            // hint so the renderer accepts the marker.
+            while emitted.len() < styles.len() {
+                let marker = styles[emitted.len()];
+                if out.chars().last().is_some_and(char::is_alphanumeric) {
                     out.push('\u{200B}');
                 }
-                pending_boundary = false;
-                if in_code && matches!(ch, '`' | '\\') {
-                    out.push('\\');
-                }
-                out.push(ch);
+                out.push(marker);
+                emitted.push(marker);
             }
+            if let Some(closed) = pending_boundary.take() {
+                if ch.is_alphanumeric() && out.chars().last() == Some(closed) {
+                    out.push('\u{200B}');
+                }
+            }
+            if in_code && matches!(ch, '`' | '\\') {
+                out.push('\\');
+            }
+            out.push(ch);
         }
-        rest = &rest[ch.len_utf8()..];
     }
-    decode_entities(&out).trim().to_owned()
+    // Text runs and URLs decode at emission, so `out` is already decoded:
+    // a second pass would misdecode literal entity-looking text.
+    out.trim().to_owned()
 }
 
 /// A message with nothing to show: no text, no attachment, and a type that
@@ -5386,10 +5402,41 @@ mod tests {
                 "<pre>first\n```\nsecond</pre>",
                 "```\nfirst\n\\```\nsecond\n```",
             ),
+            // A native backslash line keeps its bytes: only an exact
+            // fence line is escaped.
             (
                 "pre holding a backslash line",
                 "<pre>\\home\\user</pre>",
-                "```\n\\\\home\\user\n```",
+                "```\n\\home\\user\n```",
+            ),
+            // Entities decode before escaping, so an entity-encoded
+            // backtick or fence line cannot slip past it.
+            (
+                "entity backtick in code",
+                "<p><code>foo&#96;bar</code></p>",
+                "`foo\\`bar`",
+            ),
+            (
+                "entity fence in pre",
+                "<pre>a\n&#96;&#96;&#96;\nb</pre>",
+                "```\na\n\\```\nb\n```",
+            ),
+            // A neutral tag between a close and the next word keeps the
+            // boundary hint; an empty style never emits a marker pair.
+            (
+                "neutral span keeps the boundary",
+                "<strong>a</strong><span>b</span>",
+                "*a*\u{200B}b",
+            ),
+            (
+                "empty styled line stays clean",
+                "<strong><br>word</strong>",
+                "*word*",
+            ),
+            (
+                "empty style pair vanishes",
+                "<p><strong></strong>b</p>",
+                "b",
             ),
             // Nested quotes keep the outer bar once the inner quote ends.
             (
