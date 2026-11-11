@@ -9,7 +9,11 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+
 - Linked chats use the default network's profile picture, then the other linked networks in their saved order. Initials appear only when none has a picture.
+
+
+- Telegram and other media downloads wait in a bounded backlog when the worker queue is full, instead of failing immediately. Downloads start as slots free; exceeding the backlog limit or losing the worker still reports an error. New explicit requests go before automatic backlog work, but the current UI cannot promote an automatic download already shown as Downloading.
 
 - Exported attachment names cannot select NTFS alternate data streams through a colon in the original filename.
 
