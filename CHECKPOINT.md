@@ -1,5 +1,9 @@
 # Fast-beeper coordination and development checkpoint
 
+## Automatic chat categories - November 10, 2026
+
+Branch `feat/chat-auto-categories`, based on main c4e24cc, version 0.24.18. First slice of option 4: Filters > Automatic category (People, Quiet people 7+ days, Long quiet 30+ days, Notifications) from plain rules in `src/categories.rs`, plus Move to... / Sort automatically on a one-to-one chat's menu, stored in `beeper.category_overrides`. Quiet tiers fade in search. Tests in `src/categories.rs`, `src/ui/chats.rs` and `tests/chat_scope.rs`. Not compiled locally (no libpipewire headers here); CI is the first compile. No demo captures yet. Details and gaps: docs/chat-categories.md. No merge by the author.
+
 ## Beeper attachment replies - November 10, 2026
 
 Branch `feat/beeper-attachment-replies`, based on main 0486c64, version 0.24.12 (open PRs #264 and #265 are on 0.24.11 without bumps, so no version conflict expected). The Beeper backend refused or kept any file, document or pasted picture sent as a reply: SendFiles and the pasted-image gate treated a quote like the genuinely unsupported mentions and view-once. The Beeper message API takes an attachment and replyToMessageID in one body (voice notes already send that way), so the upload batch now carries the quote, the worker sets it on the first file only, and a failed upload returns the quote to the composer with the kept files, like a failed voice note does. The kept-files toast now names only mentions and view-once. Tests: a quoted pasted image passes the unsupported gate, and a quoted document's request body carries the attachment and replyToMessageID together. Not run locally (no Rust toolchain in this checkout), CI is the check. Unverified: a live bridge accepting reply plus attachment on every network. No merge by the author.
@@ -834,6 +838,10 @@ The next automatic review confirmed the previous three findings resolved and ide
 ### Native CI shutdown-test contract
 
 Native CI at b041035 passed 1959 tests and failed one old combined draft test because it injected a logout event after `App::shutdown`. Shutdown now deliberately closes event delivery to reclaim unpolled media. Split that test into shutdown saving/rejection and live-account logout clearing. Both exact production tests pass in the reduced build, alongside all 29 linked regressions; full all-target/all-feature clippy and fmt pass. No production shutdown cleanup was weakened.
+
+### Link suggestions, first slice
+
+Added `src/suggest.rs` (pure matcher with tests), `Chat.handles` filled from the other participant's phone number and username, per-pair dismissals in `beeper.dismissed_links`, a Contact info card, a collapsed Filters row and an Undo toast (`ToastKind::Undo`). The portable adapter harness passes with suggest.rs staged; the UI is first compiled in CI.
 
 ## Export alternate-stream names - November 10, 2026
 

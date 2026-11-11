@@ -151,6 +151,8 @@ impl ScrollRoute {
 const COMPOSING_TIMEOUT: Duration = Duration::from_secs(4);
 /// How long an info toast stays, including its fade.
 pub const INFO_TOAST_LIFETIME: Duration = Duration::from_millis(3200);
+/// An Undo toast stays long enough to read and reach.
+pub const UNDO_TOAST_LIFETIME: Duration = Duration::from_secs(8);
 /// Error toasts kept on screen at once; older ones give way to newer ones.
 const MAX_ERROR_TOASTS: usize = 3;
 /// Typing-state timeout when no stop event arrives.
@@ -737,9 +739,14 @@ pub struct App {
     pub label_editing: Option<(String, String)>,
     /// Label the chat list shows; `None` shows every chat.
     pub label_filter: Option<String>,
+    /// Automatic category the chat list shows; `None` shows every chat.
+    pub auto_category_filter: Option<crate::categories::AutoCategory>,
     /// Chats opened from the Unread list, kept there until the filter changes.
     unread_kept: HashSet<ChatId>,
     pub toasts: Vec<Toast>,
+    /// Link suggestions for the current chats, people and dismissals, kept
+    /// until one of them changes.
+    link_suggestions_cache: Option<(u64, Vec<crate::suggest::Suggestion>)>,
     pub actions: Vec<Action>,
     /// Invalidates editor history when a composer closes and reopens before
     /// another frame, including a new session reusing the same account id.
@@ -1618,8 +1625,10 @@ impl App {
             label_color: crate::archive::DEFAULT_COLOR.to_owned(),
             label_editing: None,
             label_filter: None,
+            auto_category_filter: None,
             unread_kept: HashSet::new(),
             toasts: Vec::new(),
+            link_suggestions_cache: None,
             actions: Vec::new(),
             composer_undo_epoch: 0,
             prefilled: None,
@@ -3304,6 +3313,40 @@ impl App {
         })
     }
 
+    /// The category a chat is in: the one the user moved it to, otherwise
+    /// the one the rules give it. Groups have none; they stay in Groups.
+    pub fn chat_category(&self, chat: &Chat) -> Option<crate::categories::AutoCategory> {
+        if chat.kind == crate::model::ChatKind::Group {
+            return None;
+        }
+        let member = self.later_key(chat);
+        self.settings
+            .beeper
+            .category_overrides
+            .iter()
+            .find(|(saved, _)| saved == &member)
+            .map(|(_, category)| *category)
+            .or_else(|| crate::categories::automatic(chat, crate::util::now()))
+    }
+
+    /// Moves a chat to a category for good, or hands it back to the rules
+    /// with `None`. The move is this chat's alone and local only.
+    fn set_chat_category(&mut self, id: &str, category: Option<crate::categories::AutoCategory>) {
+        let Some(chat) = self.chat(id) else {
+            return;
+        };
+        if chat.kind == crate::model::ChatKind::Group {
+            return;
+        }
+        let member = self.later_key(chat);
+        let overrides = &mut self.settings.beeper.category_overrides;
+        overrides.retain(|(saved, _)| saved != &member);
+        if let Some(category) = category {
+            overrides.push((member, category));
+        }
+        self.mark_settings_dirty();
+    }
+
     pub fn toggle_reply_later(&mut self) {
         let Some(chat) = self.current_chat() else {
             return;
@@ -3376,6 +3419,7 @@ impl App {
         !self.show_archived
             && self.chat_filter == ChatFilter::All
             && self.label_filter.is_none()
+            && self.auto_category_filter.is_none()
             && self.chats.iter().any(|c| c.backend_account.is_some())
     }
 
@@ -3484,9 +3528,11 @@ impl App {
             && (self.show_archived
                 || (queue == ChatFilter::All
                     && (self.category_filter == Some(ChatFilter::Channels)
-                        || self.label_filter.is_some()))
+                        || self.label_filter.is_some()
+                        || self.auto_category_filter.is_some()))
                 || (queue == ChatFilter::Unread
-                    && self.category_filter == Some(ChatFilter::Channels)
+                    && (self.category_filter == Some(ChatFilter::Channels)
+                        || (self.auto_category_filter.is_some() && chat.is_channel()))
                     && chat.looks_unread())
                 || self.filter_matches(queue, chat)
                 || (queue == ChatFilter::Unread && self.unread_kept.contains(&chat.id)))
@@ -3494,6 +3540,9 @@ impl App {
                 .category_filter
                 .is_none_or(|filter| filter.matches(chat))
             && (!self.favorites_only || chat.favorite)
+            && self
+                .auto_category_filter
+                .is_none_or(|category| self.chat_category(chat) == Some(category))
             && self
                 .label_filter
                 .as_ref()
@@ -3513,6 +3562,7 @@ impl App {
             || self.category_filter.is_some()
             || self.favorites_only
             || self.label_filter.is_some()
+            || self.auto_category_filter.is_some()
             || self.beeper_unreplied
     }
 
@@ -3566,6 +3616,7 @@ impl App {
         self.category_filter = None;
         self.favorites_only = false;
         self.label_filter = None;
+        self.auto_category_filter = None;
         self.beeper_unreplied = false;
         self.select_beeper_scope(None, None);
         self.remember_list_filter();
@@ -6954,6 +7005,80 @@ impl App {
         self.mark_settings_dirty();
     }
 
+    fn refresh_linked_scopes(&mut self) {
+        let ids: Vec<_> = self.conversations.keys().cloned().collect();
+        for id in ids {
+            self.reconcile_linked_read_scope(&id);
+        }
+    }
+
+    /// Pairs of chats on different networks that look like one person. Local
+    /// only: names and handles already loaded, never a request.
+    pub fn link_suggestions(&mut self) -> Vec<crate::suggest::Suggestion> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for chat in &self.chats {
+            (&chat.id, &chat.name, &chat.handles, &chat.backend_network).hash(&mut hasher);
+            (chat.kind == crate::model::ChatKind::Direct, chat.locked).hash(&mut hasher);
+            (&chat.backend_origin, &chat.backend_account).hash(&mut hasher);
+        }
+        self.settings.beeper.people.hash(&mut hasher);
+        self.settings.beeper.dismissed_links.hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some((known, found)) = &self.link_suggestions_cache
+            && *known == key
+        {
+            return found.clone();
+        }
+        let found = crate::suggest::suggestions(
+            &self.chats,
+            &self.settings.beeper.people,
+            &self.settings.beeper.dismissed_links,
+        );
+        self.link_suggestions_cache = Some((key, found.clone()));
+        found
+    }
+
+    /// Links the suggested pair, with an Undo toast that takes back only this link.
+    pub fn accept_link_suggestion(&mut self, suggestion: &crate::suggest::Suggestion) {
+        let before = self.settings.beeper.people.clone();
+        let added = crate::suggest::added_by(&before, suggestion);
+        let name = self
+            .chat(&suggestion.a.chat)
+            .map(|chat| chat.name.clone())
+            .unwrap_or_default();
+        // Joining a person that earlier links built makes those links
+        // foundations of this one. Their Undo would take this join with it
+        // while this toast still offers it, so only the newest Undo stays.
+        let extended = before
+            .iter()
+            .find(|p| p.members.contains(&suggestion.a) || p.members.contains(&suggestion.b))
+            .cloned();
+        if let Some(person) = extended {
+            self.toasts.retain(|toast| match &toast.kind {
+                ToastKind::Undo(earlier) => !crate::suggest::depends_on(&person, earlier),
+                _ => true,
+            });
+        }
+        self.settings.beeper.people = crate::suggest::accepted(before, suggestion, name.trim());
+        self.refresh_linked_scopes();
+        self.mark_settings_dirty();
+        let message = crate::i18n::gettext(self.locale, "Linked as one person").into_owned();
+        self.toast(message);
+        if let Some(toast) = self.toasts.last_mut() {
+            toast.kind = ToastKind::Undo(added);
+        }
+    }
+
+    /// Remembers that this pair is not the same person.
+    pub fn dismiss_link_suggestion(&mut self, suggestion: &crate::suggest::Suggestion) {
+        let pair = suggestion.pair();
+        if !self.settings.beeper.dismissed_links.contains(&pair) {
+            self.settings.beeper.dismissed_links.push(pair);
+            self.mark_settings_dirty();
+        }
+    }
+
     pub(crate) fn person_history_error(&self, chat: &str) -> Option<String> {
         self.beeper_history_errors.get(chat).cloned().or_else(|| {
             self.conversations
@@ -8050,8 +8175,10 @@ impl App {
             typers.retain(|(_, since)| now.duration_since(*since) < TYPING_TIMEOUT);
         }
         self.typing.retain(|_, typers| !typers.is_empty());
-        self.toasts.retain(|toast| {
-            toast.kind == ToastKind::Error || toast.created.elapsed() < INFO_TOAST_LIFETIME
+        self.toasts.retain(|toast| match toast.kind {
+            ToastKind::Error => true,
+            ToastKind::Undo(_) => toast.created.elapsed() < UNDO_TOAST_LIFETIME,
+            ToastKind::Info => toast.created.elapsed() < INFO_TOAST_LIFETIME,
         });
         if self.settings.check_for_updates
             && !self.backend.is_offline()
@@ -8403,7 +8530,7 @@ impl App {
     }
 
     /// Applies one model action after drawing the views, respecting the app lock and account state.
-    fn apply(&mut self, action: Action, ctx: &egui::Context) {
+    pub(crate) fn apply(&mut self, action: Action, ctx: &egui::Context) {
         if self.app_lock.is_locked() && !allowed_while_locked(&action) {
             // A clicked notification opens its message once unlocked, and a
             // link opens the chat it named; the rest would show or change
@@ -9136,6 +9263,15 @@ impl App {
             }
             Action::CopyImage(path) => {
                 self.backend.send(Command::PrepareClipboardImage(path));
+            }
+            Action::UndoLinks(added) => {
+                let people = std::mem::take(&mut self.settings.beeper.people);
+                self.settings.beeper.people = crate::suggest::undone(people, &added);
+                self.toasts
+                    .retain(|toast| toast.kind != ToastKind::Undo(added.clone()));
+                self.refresh_linked_scopes();
+                self.mark_settings_dirty();
+                self.toast("Link undone");
             }
             Action::DismissToast(index) => {
                 if index < self.toasts.len() {
@@ -10332,6 +10468,25 @@ impl App {
                 if !queued {
                     self.toast(crate::i18n::gettext(self.locale, "Marked to reply later"));
                 }
+            }
+            Action::SelectAutoCategory(category) => {
+                if self.locked_folder {
+                    self.close_locked_folder();
+                    self.search.clear();
+                    self.search_hits.clear();
+                }
+                self.auto_category_filter = category;
+                self.show_archived = false;
+                self.unread_kept.clear();
+            }
+            Action::SetChatCategory(id, category) => {
+                self.set_chat_category(&id, category);
+                let text = match category {
+                    Some(category) => crate::i18n::gettext(self.locale, "Moved to {category}")
+                        .replace("{category}", &category.label(self.locale)),
+                    None => crate::i18n::gettext(self.locale, "Sorted automatically").into_owned(),
+                };
+                self.toast(text);
             }
             Action::ToggleReadLater(id) => {
                 let Some(chat) = self.chat(&id) else {

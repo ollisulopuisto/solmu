@@ -1709,11 +1709,16 @@ mod giphy_tests {
 #[serde(default)]
 pub struct BeeperPreferences {
     pub people: Vec<crate::merged::Person>,
+    /// Pairs the user said are not the same person; never suggested again.
+    pub dismissed_links: Vec<crate::suggest::LinkPair>,
     /// Local display names for single chats, by chat id. Never sent anywhere.
     pub chat_names: std::collections::HashMap<String, String>,
     pub reply_later: Vec<crate::merged::Member>,
     /// Flagged to read later, same local per-chat shape as reply_later.
     pub read_later: Vec<crate::merged::Member>,
+    /// Chats the user moved out of their automatic category; the rules never
+    /// re-sort them. Local only, same per-chat key as the later marks.
+    pub category_overrides: Vec<(crate::merged::Member, crate::categories::AutoCategory)>,
     pub incognito: bool,
     pub compact_list: bool,
     pub show_previews: bool,
@@ -1733,9 +1738,11 @@ impl Default for BeeperPreferences {
     fn default() -> Self {
         Self {
             people: Vec::new(),
+            dismissed_links: Vec::new(),
             chat_names: std::collections::HashMap::new(),
             reply_later: Vec::new(),
             read_later: Vec::new(),
+            category_overrides: Vec::new(),
             incognito: false,
             compact_list: false,
             show_previews: true,
