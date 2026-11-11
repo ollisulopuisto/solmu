@@ -878,3 +878,10 @@ not the separately proposed composed-forward implementation. Overlay guards and
 exact modifiers preserve other shortcuts. Added native key-dispatch regressions
 and updated the shortcut registry/help. Fmt and diff checks pass locally; native
 execution/real Mac UI remain unverified pending CI. No merge or build.
+
+PR #276 follow-up review: exclude synthetic call records from ordinary replies,
+cancel selection before Reply so its composer is visible, and share the exact
+linked-view ownership predicate with merged::show (duplicate IDs/group-kind
+fallbacks keep ordinary Cmd-R). Regressions include those edge cases. Local
+native test compilation was attempted but exceeded the available command window
+while building dependencies; no passing native result claimed.

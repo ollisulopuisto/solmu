@@ -248,6 +248,9 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     if message_shortcuts_allowed(app, ctx) {
         let ordinary_reply = latest_incoming_action(app);
         if ordinary_reply.is_some() && take_exact(ctx, Modifiers::COMMAND, Key::R) {
+            if app.selection.is_some() {
+                actions.push(Action::CancelSelection);
+            }
             actions.push(ordinary_reply.unwrap());
         }
         if take_exact(ctx, Modifiers::COMMAND, Key::L)
@@ -989,8 +992,7 @@ fn sticker_view_keys(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-/// Ctrl+F has one scope: the open chat. No chat means no action; settings
-/// and other pages never fall back to a different search scope.
+/// Consume one exact modifier chord without swallowing its shifted variants.
 fn take_exact(ctx: &egui::Context, modifiers: Modifiers, key: Key) -> bool {
     ctx.input_mut(|input| {
         let mut pressed = false;
@@ -1020,11 +1022,7 @@ fn message_shortcuts_allowed(app: &App, ctx: &egui::Context) -> bool {
 }
 
 fn linked_person<'a>(app: &'a App, chat: &Chat) -> Option<&'a crate::merged::Person> {
-    app.settings
-        .beeper
-        .people
-        .iter()
-        .find(|person| person.members.iter().any(|member| member.matches(chat)))
+    super::merged::person_for_view(app, chat)
 }
 
 fn latest_incoming_action(app: &App) -> Option<Action> {
@@ -1040,7 +1038,10 @@ fn latest_incoming_action(app: &App) -> Option<Action> {
         .filter(|message| {
             message.chat == chat.id
                 && !message.from_me
-                && !matches!(message.content, crate::model::Content::Revoked)
+                && !matches!(
+                    message.content,
+                    crate::model::Content::Revoked | crate::model::Content::Call { .. }
+                )
         })
         .max_by_key(|message| (message.timestamp, message.history_order, &message.id))
         .map(|message| Action::Reply(message.id.clone()))
@@ -1105,6 +1106,7 @@ fn forward_action(app: &App) -> Option<Action> {
     }))
 }
 
+/// Ctrl+F has one scope: the open chat, never a different search scope.
 fn find_action(_app: &App) -> Action {
     Action::OpenChatSearch
 }
@@ -2437,6 +2439,13 @@ mod tests {
         app.composer = "preserve draft".into();
         let mut revoked = shortcut_message(&chat, "revoked", true, 40);
         revoked.content = crate::model::Content::Revoked;
+        let mut call = shortcut_message(&chat, "call-entry", true, 50);
+        call.content = crate::model::Content::Call {
+            video: false,
+            status: crate::model::CallStatus::Missed,
+            duration: 0,
+            group: false,
+        };
         app.conversations.insert(
             chat.clone(),
             crate::app::Conversation {
@@ -2445,6 +2454,7 @@ mod tests {
                     shortcut_message(&chat, "latest-incoming", true, 20),
                     shortcut_message(&chat, "outgoing-quote", false, 30),
                     revoked,
+                    call,
                 ],
                 ..Default::default()
             },
@@ -2454,6 +2464,16 @@ mod tests {
         assert_eq!(app.actions, [Action::Reply("latest-incoming".into())]);
         app.actions.clear();
         assert_eq!(app.composer, "preserve draft");
+        app.selection = Some((chat.clone(), vec!["older".into()]));
+        assert!(!press(&mut app, &ctx, Key::R, Modifiers::COMMAND));
+        assert_eq!(
+            app.actions,
+            [
+                Action::CancelSelection,
+                Action::Reply("latest-incoming".into())
+            ]
+        );
+        app.actions.clear();
         assert!(press(
             &mut app,
             &ctx,
@@ -2461,6 +2481,42 @@ mod tests {
             Modifiers::COMMAND | Modifiers::ALT
         ));
         assert!(app.actions.is_empty());
+    }
+
+    #[test]
+    fn ordinary_reply_remains_owned_when_saved_link_cannot_render() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.chats[0].backend_origin = Some("origin".into());
+        app.chats[0].backend_account = Some("account".into());
+        app.settings.beeper.people.push(crate::merged::Person {
+            name: "Person".into(),
+            members: vec![crate::merged::Member::of(&app.chats[0]).unwrap()],
+            primary: None,
+        });
+        app.open_chat = Some(chat.clone());
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![shortcut_message(&chat, "incoming", true, 10)],
+                ..Default::default()
+            },
+        );
+        assert!(
+            latest_incoming_action(&app).is_none(),
+            "linked view owns its unavailable state"
+        );
+        app.chats.push(app.chats[0].clone());
+        assert_eq!(
+            latest_incoming_action(&app),
+            Some(Action::Reply("incoming".into()))
+        );
+        app.chats.pop();
+        app.chats[0].kind = crate::model::ChatKind::Group;
+        assert_eq!(
+            latest_incoming_action(&app),
+            Some(Action::Reply("incoming".into()))
+        );
     }
 
     #[test]

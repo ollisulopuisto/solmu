@@ -235,29 +235,28 @@ fn bounded_note(ui: &mut egui::Ui, palette: &crate::theme::Palette, text: &str, 
     ui.painter().galley(rect.min, galley, palette.text);
 }
 
-pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
-    if chat.backend_account.is_none() {
-        return false;
+/// Whether this exact chat is owned by the linked view, including its
+/// unavailable-member state. Shortcut dispatch must use the same predicate.
+pub(super) fn person_for_view<'a>(app: &'a App, chat: &Chat) -> Option<&'a Person> {
+    if chat.backend_account.is_none()
+        || chat.kind != ChatKind::Direct
+        || app.chats.iter().filter(|c| c.id == chat.id).count() != 1
+    {
+        return None;
     }
-    if chat.kind != ChatKind::Direct {
-        return false;
-    }
-    if app.chats.iter().filter(|c| c.id == chat.id).count() != 1 {
-        return false;
-    }
-    let current = Member::of(chat);
-    let person = app
-        .settings
+    let current = Member::of(chat)?;
+    app.settings
         .beeper
         .people
         .iter()
-        .find(|p| p.members.iter().any(|m| Some(m) == current.as_ref()))
-        .cloned();
-    if person.is_none() {
+        .find(|p| p.members.contains(&current))
+}
+
+pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
+    let Some(person) = person_for_view(app, chat).cloned() else {
         // Linking lives in Contact info; the conversation top stays clean.
         return false;
-    }
-    let person = person.unwrap();
+    };
     let valid = valid_members(app, &person, chat);
     if valid.len() < 2 {
         app.ensure_person_loaded(&[]);
