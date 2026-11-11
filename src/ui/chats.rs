@@ -2278,6 +2278,8 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
     };
     // While searching, the result reached with the arrows is the selection;
     // before any arrow press it stays the open chat, as a click leaves it.
+    let batch_selected =
+        app.batch_ui.owner == app.account().id.0 && app.batch_ui.selected_chats.contains(&chat.id);
     let selected = app
         .search_selected
         .as_ref()
@@ -2305,7 +2307,7 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
         )
     });
     if ui.is_rect_visible(rect) {
-        if selected {
+        if selected || batch_selected {
             widgets::row_highlight(ui, &palette, rect, palette.surface_active);
         } else if response.hovered() {
             widgets::row_highlight(ui, &palette, rect, palette.surface_hover);
@@ -2525,7 +2527,11 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
         full_preview_tooltip(app, ui, &chat.id, area, &prefix, &full);
     }
     if response.clicked() {
-        app.actions.push(Action::OpenChat(chat.id.clone()));
+        if ui.input(|input| input.modifiers.command) {
+            super::batch_actions::toggle_chat(app, &chat.id);
+        } else {
+            app.actions.push(Action::OpenChat(chat.id.clone()));
+        }
     }
     let menu_palette = palette;
     // The favorite item is translated, so its width counts in the reader's

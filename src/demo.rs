@@ -2381,6 +2381,50 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
     };
     for part in page.split(',').map(str::trim) {
         match part {
+            "delete-review" | "delete-review-unsupported" => {
+                let chat = app.open_chat.clone().unwrap();
+                let known = app.chats.iter_mut().find(|c| c.id == chat).unwrap();
+                known.backend_account = Some("synthetic-account".into());
+                known.backend_origin = Some("http://127.0.0.1:23374".into());
+                known.mutation_capabilities = crate::model::MutationCapabilities {
+                    delete: Some(2),
+                    delete_for_me: Some(true),
+                    delete_max_age: Some(86400),
+                    archive: Some(true),
+                };
+                let messages = &mut app.conversations.get_mut(&chat).unwrap().messages;
+                let ids: Vec<_> = messages
+                    .iter_mut()
+                    .filter(|m| m.from_me)
+                    .take(2)
+                    .map(|m| {
+                        m.timestamp = crate::util::now() - 60;
+                        if part == "delete-review-unsupported" {
+                            m.status = crate::model::Delivery::Pending;
+                        }
+                        m.id.clone()
+                    })
+                    .collect();
+                app.dialog = Some(Dialog::ConfirmDeleteSelection {
+                    chat,
+                    messages: ids,
+                    for_everyone: true,
+                });
+            }
+            "archive-review" => {
+                let ids: Vec<_> = app
+                    .chats
+                    .iter_mut()
+                    .take(3)
+                    .map(|chat| {
+                        chat.mutation_capabilities.archive = Some(true);
+                        chat.id.clone()
+                    })
+                    .collect();
+                app.batch_ui.owner = app.account().id.0.clone();
+                app.batch_ui.selected_chats = ids;
+                app.batch_ui.reviewing_archive = true;
+            }
             "history-date" => history_date_sample(app),
             "card-widths" => card_widths_sample(app),
             "minute-gutter" => minute_gutter_sample(app),

@@ -19,6 +19,12 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
         return;
     }
+    if app.batch_ui.reviewing_archive {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            app.batch_ui.reviewing_archive = false;
+        }
+        return;
+    }
     if app.picture_edit.is_some() {
         editor_keys(app, ctx);
         return;

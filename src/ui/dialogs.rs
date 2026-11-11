@@ -1597,6 +1597,16 @@ fn confirm_delete_messages(
                     .and_then(|c| c.messages.iter().find(|m| &m.id == id));
                 match message {
                     None => Some(format!("{id}: message unavailable")),
+                    Some(message)
+                        if message.chat != chat
+                            || matches!(message.content, crate::model::Content::Revoked)
+                            || matches!(
+                                message.status,
+                                crate::model::Delivery::Pending | crate::model::Delivery::Failed
+                            ) =>
+                    {
+                        Some(format!("{id}: message is unavailable or not final"))
+                    }
                     Some(message) => caps
                         .delete_refusal(
                             for_everyone,
