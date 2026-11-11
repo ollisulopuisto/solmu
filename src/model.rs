@@ -4405,8 +4405,10 @@ impl BatchState {
         self.reviewing_archive = false;
         self.request = None;
         for mut item in self.results.drain(..) {
-            if item.result.is_none() {
-                item.result = Some(Err("Connection changed before confirmation; check the previous connection before retrying".into()));
+            if !matches!(item.result, Some(Ok(()))) {
+                if item.result.is_none() {
+                    item.result = Some(Err("Connection changed before confirmation; check the previous connection before retrying".into()));
+                }
                 self.previous_session_results.push(item);
             }
         }
@@ -4437,12 +4439,22 @@ mod batch_session_tests {
                 result: None,
             },
         ];
+        state.results.push(BatchItem {
+            chat: "uncertain".into(),
+            message: Some("message".into()),
+            everyone: true,
+            result: Some(Err("POST accepted but confirmation failed".into())),
+        });
         state.replace_session();
         assert!(state.results.is_empty());
         assert!(state.selected_chats.is_empty());
         assert!(!state.reviewing_archive);
         assert_eq!(state.request, None);
-        assert_eq!(state.previous_session_results.len(), 1);
+        assert_eq!(state.previous_session_results.len(), 2);
+        assert_eq!(
+            state.previous_session_results[1].result,
+            Some(Err("POST accepted but confirmation failed".into()))
+        );
         assert_eq!(state.previous_session_results[0].chat, "pending");
         assert!(
             state.previous_session_results[0]

@@ -93,7 +93,7 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
     if !app.batch_ui.previous_session_results.is_empty() {
         ui.label(gettext(
             app.locale,
-            "Unconfirmed outcomes from a previous connection (not the current session)",
+            "Unconfirmed or failed outcomes from a previous connection (not the current session)",
         ));
         for item in &app.batch_ui.previous_session_results {
             ui.label(
@@ -104,7 +104,11 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
                 .replace("{chat}", &item.chat)
                 .replace("{message}", item.message.as_deref().unwrap_or("")),
             );
+            if let Some(Err(error)) = &item.result {
+                ui.label(error);
+            }
         }
+
         if ui
             .button(gettext(app.locale, "Dismiss previous connection history"))
             .clicked()
