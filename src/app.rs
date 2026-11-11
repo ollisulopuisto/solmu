@@ -1266,17 +1266,7 @@ impl std::ops::DerefMut for App {
 
 impl App {
     pub fn connect_beeper_session(&mut self, cfg: crate::backend::beeper::BeeperConfig) {
-        self.batch_ui.selected_chats.clear();
-        self.batch_ui.selected_identities.clear();
-        self.batch_ui.reviewing_archive = false;
-        for item in &mut self.batch_ui.results {
-            if item.result.is_none() {
-                item.result = Some(Err(
-                    "Connection changed before confirmation; check current state before retrying"
-                        .into(),
-                ));
-            }
-        }
+        self.batch_ui.replace_session();
         self.dialog = None;
         self.actions.retain(|action| {
             !matches!(

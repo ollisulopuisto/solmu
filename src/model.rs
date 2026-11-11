@@ -4394,4 +4394,62 @@ pub struct BatchState {
     pub owner: String,
     pub reviewing_archive: bool,
     pub results: Vec<BatchItem>,
+    pub previous_session_results: Vec<BatchItem>,
+}
+impl BatchState {
+    /// A new connection cannot inherit current outcomes. Preserve only unresolved
+    /// work, explicitly separated as uncertain history of the old connection.
+    pub fn replace_session(&mut self) {
+        self.selected_chats.clear();
+        self.selected_identities.clear();
+        self.reviewing_archive = false;
+        self.request = None;
+        for mut item in self.results.drain(..) {
+            if item.result.is_none() {
+                item.result = Some(Err("Connection changed before confirmation; check the previous connection before retrying".into()));
+                self.previous_session_results.push(item);
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod batch_session_tests {
+    use super::*;
+    #[test]
+    fn replacement_clears_completed_current_results_and_retains_only_uncertain_history() {
+        let mut state = BatchState {
+            request: Some(4),
+            selected_chats: vec!["old".into()],
+            reviewing_archive: true,
+            ..Default::default()
+        };
+        state.results = vec![
+            BatchItem {
+                chat: "old".into(),
+                message: None,
+                everyone: false,
+                result: Some(Ok(())),
+            },
+            BatchItem {
+                chat: "pending".into(),
+                message: None,
+                everyone: false,
+                result: None,
+            },
+        ];
+        state.replace_session();
+        assert!(state.results.is_empty());
+        assert!(state.selected_chats.is_empty());
+        assert!(!state.reviewing_archive);
+        assert_eq!(state.request, None);
+        assert_eq!(state.previous_session_results.len(), 1);
+        assert_eq!(state.previous_session_results[0].chat, "pending");
+        assert!(
+            state.previous_session_results[0]
+                .result
+                .as_ref()
+                .unwrap()
+                .is_err()
+        );
+    }
 }

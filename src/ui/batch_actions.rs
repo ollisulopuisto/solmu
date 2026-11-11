@@ -90,6 +90,28 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
                 .unwrap_or_else(|| gettext(app.locale, "archive").into_owned())
         ));
     }
+    if !app.batch_ui.previous_session_results.is_empty() {
+        ui.label(gettext(
+            app.locale,
+            "Unconfirmed outcomes from a previous connection (not the current session)",
+        ));
+        for item in &app.batch_ui.previous_session_results {
+            ui.label(
+                gettext(
+                    app.locale,
+                    "{chat} {message}: check the previous connection before retrying",
+                )
+                .replace("{chat}", &item.chat)
+                .replace("{message}", item.message.as_deref().unwrap_or("")),
+            );
+        }
+        if ui
+            .button(gettext(app.locale, "Dismiss previous connection history"))
+            .clicked()
+        {
+            app.batch_ui.previous_session_results.clear();
+        }
+    }
     if !app.batch_ui.results.is_empty()
         && app
             .batch_ui
