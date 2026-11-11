@@ -3022,6 +3022,11 @@ pub enum Action {
     SetChatFilter(ChatFilter),
     /// Picks the label the chat list shows; `None` shows every chat.
     SelectLabel(Option<String>),
+    /// Shows one automatic category in the chat list; `None` shows every chat.
+    SelectAutoCategory(Option<crate::categories::AutoCategory>),
+    /// Moves a chat to a category for good, or back to the automatic rules
+    /// with `None`. Local only.
+    SetChatCategory(ChatId, Option<crate::categories::AutoCategory>),
     /// Replaces the labels worn by one chat.
     SetChatLabels {
         chat: ChatId,
