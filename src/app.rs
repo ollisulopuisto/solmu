@@ -718,6 +718,9 @@ pub struct App {
     pub forward_recipients: Vec<ChatId>,
     /// Whether the forwarding dialog shows its recipients for confirmation.
     pub forward_reviewing: bool,
+    pub forward_include_group: bool,
+    pub forward_generation: u64,
+    pub forward_items: Vec<crate::composed_forward::Item>,
     /// How many recipients the forwarding dialog's messages may have.
     pub forward_limit: usize,
     /// The group name being typed in the group info dialog.
@@ -1606,6 +1609,9 @@ impl App {
             forward_search: String::new(),
             forward_recipients: Vec::new(),
             forward_reviewing: false,
+            forward_include_group: false,
+            forward_generation: 0,
+            forward_items: Vec::new(),
             forward_limit: crate::model::FORWARD_LIMIT,
             group_name_edit: None,
             new_contact_to_phone: true,
@@ -1854,6 +1860,8 @@ impl App {
         self.invalidate_composer_undo();
         self.forward_recipients.clear();
         self.forward_reviewing = false;
+        self.forward_items.clear();
+        self.forward_generation = self.forward_generation.wrapping_add(1);
         // The locked folder and the picker show the previous account's chats
         // and stickers.
         if self.locked_folder {
@@ -3348,6 +3356,121 @@ impl App {
         self.later_contains(&self.settings.beeper.reply_later, chat)
     }
 
+    pub fn composed_forward_running(&self) -> bool {
+        self.forward_items.iter().any(|item| {
+            matches!(
+                item.state,
+                crate::composed_forward::State::Waiting | crate::composed_forward::State::Sending
+            )
+        })
+    }
+
+    fn is_composed_forward(&self, message: &Message) -> bool {
+        message.from_me
+            && self
+                .chat(&message.chat)
+                .and_then(crate::merged::Member::of)
+                .is_some_and(|member| {
+                    self.settings
+                        .beeper
+                        .forwarded_messages
+                        .iter()
+                        .any(|mark| mark.member == member && mark.message == message.id)
+                })
+    }
+
+    fn prepare_composed_forward(
+        &self,
+        source: &str,
+        ids: &[String],
+    ) -> Result<Vec<crate::composed_forward::Item>, String> {
+        let source_chat = self
+            .chat(source)
+            .filter(|chat| !chat.locked)
+            .ok_or("Source chat is unavailable or locked")?;
+        let member = crate::merged::Member::of(source_chat).ok_or("Source identity unavailable")?;
+        if self.chats.iter().filter(|chat| chat.id == source).count() != 1 {
+            return Err("Source identity is ambiguous".into());
+        }
+        let conversation = self
+            .conversations
+            .get(source)
+            .ok_or("Source messages are not loaded")?;
+        let mut messages = Vec::new();
+        for id in ids {
+            let message = conversation
+                .message(id)
+                .filter(|message| {
+                    message.chat == source && crate::app::can_select(&message.content)
+                })
+                .ok_or("A selected message is no longer available")?;
+            messages.push(message);
+        }
+        messages.sort_by_key(|message| (message.timestamp, message.history_order, &message.id));
+        messages.dedup_by_key(|message| &message.id);
+        let mut items = Vec::new();
+        for message in messages {
+            let sender = if message.from_me {
+                "You".into()
+            } else {
+                self.display_name_or(&message.sender, message.sender_name.as_deref())
+            };
+            let body = match &message.content {
+                Content::Text { text, .. } | Content::Interactive { text, .. } => text.as_str(),
+                Content::Image { caption, .. }
+                | Content::Video { caption, .. }
+                | Content::Document { caption, .. } => caption.as_deref().unwrap_or_default(),
+                _ => "",
+            };
+            let text = crate::composed_forward::compose(
+                &sender,
+                source_chat
+                    .backend_network
+                    .as_deref()
+                    .or(source_chat.network.as_deref())
+                    .unwrap_or("Unknown network"),
+                &crate::util::full_stamp(message.timestamp),
+                (self.forward_include_group && source_chat.kind == crate::model::ChatKind::Group)
+                    .then_some(source_chat.name.as_str()),
+                body,
+            );
+            for destination in &self.forward_recipients {
+                let target = self
+                    .chat(destination)
+                    .filter(|chat| crate::ui::dialogs::forwardable(chat))
+                    .ok_or("A destination is no longer writable")?;
+                let target_member = crate::merged::Member::of(target)
+                    .filter(|target| target.origin == member.origin)
+                    .ok_or("Destination identity unavailable or belongs to another server")?;
+                if self
+                    .chats
+                    .iter()
+                    .filter(|chat| chat.id == *destination)
+                    .count()
+                    != 1
+                {
+                    return Err("Destination identity ambiguous".into());
+                }
+                items.push(crate::composed_forward::Item {
+                    origin: member.origin.clone(),
+                    planned: false,
+                    source_chat: source.into(),
+                    source_message: message.id.clone(),
+                    source_account: member.account.clone(),
+                    destination_account: target_member.account,
+                    destination: destination.clone(),
+                    attachment: None,
+                    text: text.clone(),
+                    state: crate::composed_forward::State::Waiting,
+                });
+            }
+        }
+        if items.is_empty() {
+            return Err("No messages selected".into());
+        }
+        Ok(items)
+    }
+
     pub fn read_later_contains(&self, chat: &Chat) -> bool {
         self.later_contains(&self.settings.beeper.read_later, chat)
     }
@@ -4232,6 +4355,73 @@ impl App {
 
     fn apply_backend_event(&mut self, event: Event, live: bool) {
         match event {
+            Event::BeeperForwardPrepared { generation, items } => {
+                if live && generation == self.forward_generation {
+                    self.forward_items = items;
+                }
+            }
+            Event::BeeperForwardProgress {
+                generation,
+                index,
+                state,
+            } => {
+                if live
+                    && generation == self.forward_generation
+                    && let Some(item) = self.forward_items.get_mut(index)
+                {
+                    item.state = state;
+                }
+            }
+            Event::BeeperForwardMarked {
+                origin,
+                account,
+                chat,
+                message,
+            } => {
+                if live {
+                    let mark = crate::settings::ForwardedMessage {
+                        member: crate::merged::Member {
+                            origin,
+                            account,
+                            chat,
+                        },
+                        message,
+                    };
+                    if !self.settings.beeper.forwarded_messages.contains(&mark) {
+                        self.settings.beeper.forwarded_messages.push(mark);
+                        self.mark_settings_dirty();
+                    }
+                }
+            }
+            Event::BeeperForwardResolved {
+                origin,
+                account,
+                chat,
+                pending,
+                final_id,
+            } => {
+                let member = crate::merged::Member {
+                    origin,
+                    account,
+                    chat: chat.clone(),
+                };
+                let pending_message = self
+                    .settings
+                    .beeper
+                    .forwarded_messages
+                    .iter()
+                    .any(|mark| mark.member == member && mark.message == pending);
+                if live && pending_message {
+                    let mark = crate::settings::ForwardedMessage {
+                        member,
+                        message: final_id,
+                    };
+                    if !self.settings.beeper.forwarded_messages.contains(&mark) {
+                        self.settings.beeper.forwarded_messages.push(mark);
+                        self.mark_settings_dirty();
+                    }
+                }
+            }
             Event::BeeperAccounts { origin, accounts } => {
                 self.beeper_accounts.insert(origin, accounts);
             }
@@ -4461,10 +4651,13 @@ impl App {
             }
             Event::Messages {
                 chat,
-                messages,
+                mut messages,
                 older,
                 complete,
             } => {
+                for message in &mut messages {
+                    message.forwarded |= self.is_composed_forward(message);
+                }
                 for message in &messages {
                     if !message.from_me
                         && let Some(name) =
@@ -4773,7 +4966,8 @@ impl App {
                 }
             }
             Event::MessageUpdated(message) => {
-                let message = *message;
+                let mut message = *message;
+                message.forwarded |= self.is_composed_forward(&message);
                 // The starred panel holds its own copy. An edit has to
                 // replace that row, or the open list keeps the old text.
                 let in_starred = self.starred.iter().any(|entry| {
@@ -9227,7 +9421,35 @@ impl App {
                 }
             }
             Action::BackToForwardSelection => self.forward_reviewing = false,
+            Action::RetryComposedForward => {
+                if !self.forward_items.iter().any(|item| {
+                    matches!(
+                        item.state,
+                        crate::composed_forward::State::FailedBeforeSend(_)
+                    )
+                }) {
+                    return;
+                }
+                if self.forward_items.iter().any(|item| {
+                    matches!(
+                        item.state,
+                        crate::composed_forward::State::Sending
+                            | crate::composed_forward::State::Waiting
+                    )
+                }) {
+                    return;
+                }
+                crate::composed_forward::retry_failed(&mut self.forward_items);
+                self.backend.send(Command::BeeperForward {
+                    generation: self.forward_generation,
+                    prepared: false,
+                    items: self.forward_items.iter().cloned().enumerate().collect(),
+                });
+            }
             Action::ConfirmForward => {
+                if !self.forward_items.is_empty() {
+                    return;
+                }
                 let Some(Dialog::Forward { chat, messages }) = self.dialog.clone() else {
                     return;
                 };
@@ -9263,6 +9485,25 @@ impl App {
                     return;
                 }
                 let to_chats = std::mem::take(&mut self.forward_recipients);
+                if self
+                    .chat(&chat)
+                    .is_some_and(|source| source.backend_origin.is_some())
+                {
+                    self.forward_recipients = to_chats;
+                    match self.prepare_composed_forward(&chat, &messages) {
+                        Ok(items) => {
+                            self.forward_generation = self.forward_generation.wrapping_add(1);
+                            self.forward_items = items;
+                            self.backend.send(Command::BeeperForward {
+                                generation: self.forward_generation,
+                                prepared: false,
+                                items: self.forward_items.iter().cloned().enumerate().collect(),
+                            });
+                        }
+                        Err(error) => self.toast_error(error),
+                    }
+                    return;
+                }
                 self.backend.send(Command::Forward {
                     from_chat: chat,
                     messages,
@@ -10300,6 +10541,10 @@ impl App {
                 }
             }
             Action::ShowDialog(dialog) => {
+                if self.composed_forward_running() {
+                    self.toast_error("The forward batch is still running. Wait for its results.");
+                    return;
+                }
                 if dialog == Dialog::SendLater && self.has_unsent_media_here() {
                     self.toast_error(crate::i18n::gettext(self.locale, "Send Later cannot include attachments. Remove the staged files before scheduling text.").into_owned());
                     return;
@@ -10362,6 +10607,9 @@ impl App {
                     self.forward_search.clear();
                     self.forward_recipients.clear();
                     self.forward_reviewing = false;
+                    self.forward_include_group = false;
+                    self.forward_items.clear();
+                    self.forward_generation = self.forward_generation.wrapping_add(1);
                     // Until the worker has read the messages' forwarding
                     // scores; it refuses a batch over the real limit anyway.
                     self.forward_limit = crate::model::FORWARD_LIMIT;
@@ -10389,6 +10637,10 @@ impl App {
                 self.dialog = Some(dialog);
             }
             Action::CloseDialog => {
+                if self.composed_forward_running() {
+                    self.toast_error("The forward batch is still running. Wait for its results.");
+                    return;
+                }
                 self.cancel_contact_dialog_request();
                 self.clear_chat_lock_entry();
                 if self.dialog == Some(Dialog::WhatsNew) {
@@ -14559,6 +14811,79 @@ mod tests {
             chat: "source".into(),
             messages: messages.iter().map(|id| (*id).to_owned()).collect(),
         }
+    }
+
+    #[test]
+    fn composed_forward_keeps_in_flight_results_visible_and_refuses_duplicate_confirmation() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let ctx = egui::Context::default();
+        let dialog = forward_dialog(&["m"]);
+        app.dialog = Some(dialog.clone());
+        app.forward_items.push(crate::composed_forward::Item {
+            origin: "synthetic".into(),
+            planned: true,
+            source_chat: "source".into(),
+            source_message: "m".into(),
+            source_account: "a".into(),
+            destination_account: "b".into(),
+            attachment: None,
+            destination: "target".into(),
+            text: "header\nbody".into(),
+            state: crate::composed_forward::State::Sending,
+        });
+        app.apply(Action::CloseDialog, &ctx);
+        assert_eq!(app.dialog, Some(dialog.clone()));
+        app.apply(Action::ShowDialog(forward_dialog(&["another"])), &ctx);
+        assert_eq!(app.dialog, Some(dialog));
+        app.apply(Action::ConfirmForward, &ctx);
+        assert!(commands.try_recv().is_err());
+        app.forward_items[0].state = crate::composed_forward::State::Accepted {
+            pending_id: "pending".into(),
+        };
+        app.apply(Action::CloseDialog, &ctx);
+        assert!(app.dialog.is_none());
+    }
+
+    #[test]
+    fn composed_forward_retry_preserves_nonretryable_rows_for_stable_progress_indices() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let ctx = egui::Context::default();
+        let item = crate::composed_forward::Item {
+            origin: "synthetic".into(),
+            planned: true,
+            source_chat: "source".into(),
+            source_message: "m".into(),
+            source_account: "a".into(),
+            destination_account: "b".into(),
+            attachment: None,
+            destination: "target".into(),
+            text: "header\nbody".into(),
+            state: crate::composed_forward::State::Accepted {
+                pending_id: "previous".into(),
+            },
+        };
+        app.forward_items = vec![item.clone(), item.clone(), item];
+        app.forward_items[1].state =
+            crate::composed_forward::State::FailedBeforeSend("download".into());
+        app.forward_items[2].state = crate::composed_forward::State::Uncertain("timeout".into());
+        app.apply(Action::RetryComposedForward, &ctx);
+        let Command::BeeperForward { items, .. } = commands.try_recv().unwrap() else {
+            panic!("expected retry");
+        };
+        assert_eq!(items.len(), 3);
+        assert!(matches!(
+            items[0].1.state,
+            crate::composed_forward::State::Accepted { .. }
+        ));
+        assert_eq!(items[1].1.state, crate::composed_forward::State::Waiting);
+        assert!(matches!(
+            items[2].1.state,
+            crate::composed_forward::State::Uncertain(_)
+        ));
     }
 
     #[test]

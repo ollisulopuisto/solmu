@@ -1704,11 +1704,19 @@ mod giphy_tests {
     }
 }
 
+/// Local provenance only. Never sent as a bridge-native forwarding claim.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForwardedMessage {
+    pub member: crate::merged::Member,
+    pub message: String,
+}
+
 /// Local preferences for the native Beeper view. Never written to remote accounts.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BeeperPreferences {
     pub people: Vec<crate::merged::Person>,
+    pub forwarded_messages: Vec<ForwardedMessage>,
     /// Local display names for single chats, by chat id. Never sent anywhere.
     pub chat_names: std::collections::HashMap<String, String>,
     pub reply_later: Vec<crate::merged::Member>,
@@ -1733,6 +1741,7 @@ impl Default for BeeperPreferences {
     fn default() -> Self {
         Self {
             people: Vec::new(),
+            forwarded_messages: Vec::new(),
             chat_names: std::collections::HashMap::new(),
             reply_later: Vec::new(),
             read_later: Vec::new(),
