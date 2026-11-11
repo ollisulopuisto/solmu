@@ -5378,9 +5378,11 @@ fn bubbleless(palette: &Palette, message: &Message) -> bool {
 }
 
 /// Up to three emoji alone drop the bubble like a sticker, enlarged by
-/// markup's emoji scale. A quote, a link preview or mixed text keeps it.
+/// markup's emoji scale. A quote, a link preview, the forwarded label or
+/// mixed text keeps it.
 fn free_emoji(message: &Message) -> bool {
     message.quoted.is_none()
+        && !message.forwarded
         && matches!(
             &message.content,
             Content::Text { text, preview: None }
@@ -13472,6 +13474,10 @@ mod reaction_tests {
             mentions: Vec::new(),
         });
         assert!(!bubbleless(&palette, &quoting));
+        // The forwarded label needs a surface behind it.
+        let mut forwarded = emoji("\u{1F4A3}");
+        forwarded.forwarded = true;
+        assert!(!bubbleless(&palette, &forwarded));
     }
 
     #[test]
