@@ -14120,6 +14120,13 @@ mod tests {
         ctx.enable_accesskit();
         app.attach(&ctx);
         let chat = sample_ids()[0].to_owned();
+        // This fixture tests every visual link row. Keep the message fully in
+        // view instead of inheriting scroll/height changes from unrelated media.
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .messages
+            .retain(|message| message.id == "ada-link");
         let id = crate::ui::conversation::bubble_id(&chat, "ada-link");
         let first = "https://example.com/trips?from=chat&view=full#july";
         let second = "https://example.org/details?mode=exact#map";
