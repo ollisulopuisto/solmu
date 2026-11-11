@@ -2724,7 +2724,7 @@ mod tests {
         );
         let about = sections(&app)
             .into_iter()
-            .find(|section| section.title == translated(Locale::English, "About"))
+            .find(|section| section.title.shown == "About")
             .expect("About section");
         assert!(
             !about.visible(&Filter::new("whatsapp-rust")).1.is_empty(),
