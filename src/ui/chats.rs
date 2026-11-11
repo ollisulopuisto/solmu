@@ -212,7 +212,7 @@ fn search_keyboard(app: &mut App, ui: &egui::Ui) {
 
 /// Search, title and queues, then the composed scope. Shared by every platform.
 fn header(app: &mut App, ui: &mut egui::Ui) {
-    if app.show_starred || app.show_archived || app.locked_folder_open() {
+    if app.show_starred || app.show_saved || app.show_archived || app.locked_folder_open() {
         legacy_header(app, ui);
         return;
     }
@@ -3959,6 +3959,39 @@ mod tests {
         assert!(!title_fits(100.0, 176.0, three, spacing));
         assert!(title_fits(100.0, 214.0, three, spacing));
         assert_eq!(row_width(0, 30.0, spacing), 0.0);
+    }
+
+    /// The Saved list keeps the scoped lists' Back control: opening it must
+    /// not drop the arrow that returns to the chat list.
+    #[test]
+    fn the_saved_list_header_offers_a_way_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        app.show_saved = true;
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install(&ctx);
+        app.attach(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            header(&mut app, ui);
+        });
+        output.textures_delta.clear();
+        let tree = output
+            .platform_output
+            .accesskit_update
+            .expect("accessibility tree");
+        let labels: Vec<_> = tree
+            .nodes
+            .iter()
+            .filter_map(|(_, node)| node.label().or_else(|| node.value()))
+            .collect();
+        assert!(
+            labels.iter().any(|label| label == "Back to chats"),
+            "no way back in {labels:?}"
+        );
     }
 
     /// The title measures its room from the list the header draws: New chat,
