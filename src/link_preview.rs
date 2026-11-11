@@ -494,6 +494,27 @@ mod tests {
         assert!(bytes(too_long, 4).is_err());
     }
     #[test]
+    fn documentation_networks_rejected_as_literals_and_actual_dns_answers() {
+        for address in [
+            "192.0.2.0",
+            "192.0.2.1",
+            "192.0.2.255",
+            "198.51.100.0",
+            "198.51.100.1",
+            "198.51.100.255",
+        ] {
+            assert!(!public_ip(address.parse().unwrap()), "{address}");
+            assert!(
+                validate(&format!("https://{address}/")).is_err(),
+                "{address}"
+            );
+            let blocked = format!("{address}:443").parse().unwrap();
+            let public = "93.184.216.34:443".parse().unwrap();
+            assert!(!public_answers(&[blocked]));
+            assert!(!public_answers(&[public, blocked]));
+        }
+    }
+    #[test]
     fn rejects_private_addresses_encodings_and_non_https() {
         for value in [
             "https://127.0.0.1/",

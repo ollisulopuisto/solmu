@@ -9680,7 +9680,7 @@ fn local_link_previews(
         .into_iter()
         .filter(|url| url.starts_with("https://"))
     {
-        if supplied.is_some_and(|card| card.url == url) {
+        if supplied.is_some_and(|card| card.covers_url(&url)) {
             continue;
         }
         drawn = true;
@@ -9745,20 +9745,19 @@ fn local_link_previews(
                     }
                 }
                 Some(crate::preview_worker::Status::Loading) => {
-                    ui.horizontal(|ui| { ui.spinner(); ui.label("Fetching preview..."); });
+                    ui.horizontal(|ui| { ui.spinner(); ui.label(crate::i18n::gettext(view.locale, "Fetching preview...")); });
                     ui.ctx().request_repaint_after(Duration::from_millis(100));
                 }
                 Some(crate::preview_worker::Status::Failed) => {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label("Preview unavailable");
-                        if ui.small_button("Retry preview").on_hover_text(&url).clicked() {
+                        ui.label(crate::i18n::gettext(view.locale, "Preview unavailable"));
+                        if ui.small_button(crate::i18n::gettext(view.locale, "Retry preview")).on_hover_text(&url).clicked() {
                             actions.push(action(false, true));
                         }
                     });
                 }
                 None => {
-                    let response = ui.small_button("Fetch preview").on_hover_text(format!(
-                        "Contacts this website directly, sharing your IP address and this URL:\n{request_url}"));
+                    let response = ui.small_button(crate::i18n::gettext(view.locale, "Fetch preview")).on_hover_text(crate::i18n::gettext(view.locale, "Contacts this website directly, sharing your IP address and this URL:\n{url}").replace("{url}", &request_url));
                     ui.ctx().data_mut(|data| data.insert_temp(
                         bubble_id(&message.chat, &message.id).with(("fetch-preview", &url)), response.rect));
                     if response.clicked() || (view.auto_previews && ui.is_rect_visible(response.rect)) {
@@ -9766,7 +9765,7 @@ fn local_link_previews(
                     }
                 }
             }
-            if requested && !view.auto_previews && ui.small_button("Automatic previews in Preferences > Privacy").clicked() {
+            if requested && !view.auto_previews && ui.small_button(crate::i18n::gettext(view.locale, "Automatic previews in Preferences > Privacy")).clicked() {
                 actions.push(Action::LinkPreviewPreferences);
             }
         });

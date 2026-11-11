@@ -5623,6 +5623,36 @@ mod tests {
             app.link_previews.is_none(),
             "supplied card must not trigger website requests"
         );
+        // The UI must use the same URL equivalence as the link list.
+        let row = app
+            .conversations
+            .get_mut(&chat)
+            .unwrap()
+            .message_mut("ada-link")
+            .unwrap();
+        row.content = Content::Text {
+            text: "https://example.invalid".into(),
+            preview: Some(crate::model::LinkPreview {
+                url: "https://example.invalid/".into(),
+                title: Some("Supplied".into()),
+                description: None,
+            }),
+        };
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews.is_none(),
+            "equivalent supplied URL must not fetch"
+        );
+        // Restore the original source before checking action boundaries below.
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .message_mut("ada-link")
+            .unwrap()
+            .content = Content::Text {
+            text: url.into(),
+            preview: None,
+        };
         app.settings.auto_link_previews = false;
         app.settings.remove_link_tracking = true;
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
