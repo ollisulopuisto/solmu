@@ -1631,6 +1631,7 @@ pub fn menu_accelerator(modifiers: Modifiers, key: Key) -> Option<String> {
         Key::C => "KeyC",
         Key::D => "KeyD",
         Key::F => "KeyF",
+        Key::I => "KeyI",
         Key::N => "KeyN",
         Key::Q => "KeyQ",
         Key::V => "KeyV",
@@ -2607,10 +2608,13 @@ mod tests {
         );
         assert_eq!(REPLY_LATER.keys, &[(Modifiers::COMMAND, Key::I)]);
         assert_eq!(SIDEBAR.keys, &[(Modifiers::COMMAND, Key::B)]);
-        assert_eq!(
-            menu_accelerator(Modifiers::COMMAND, Key::D).as_deref(),
-            None
-        );
+        // menu_accelerator formats any chord, bound or not, so the registry
+        // itself must show Cmd+D unbound until the groups toggle claims it.
+        assert!(!REGISTRY.iter().any(|row| matches!(
+            row,
+            Row::Binding(entry)
+                if entry.keys.contains(&(Modifiers::COMMAND, Key::D))
+        )));
         assert_eq!(
             menu_accelerator(Modifiers::COMMAND | Modifiers::ALT, Key::I).as_deref(),
             Some("Super+Alt+KeyI")
