@@ -291,6 +291,9 @@ fn parse(text: &str, mentions: &[Mention]) -> Vec<Span> {
             continue;
         }
         if in_block {
+            // A leading backslash escapes the line inside a block: `\\```
+            // carries a literal fence and `\\` a literal backslash.
+            let line = line.strip_prefix('\\').unwrap_or(line);
             spans.push(Span {
                 text: line.to_owned(),
                 mono: true,
@@ -424,6 +427,12 @@ fn inline(line: &str) -> Vec<Span> {
     };
     while i < chars.len() {
         let c = chars[i];
+        // The mapper's zero-width-space hint lets a marker open or close
+        // mid-word: it counts as a boundary but never reaches the text.
+        if c == '\u{200B}' {
+            i += 1;
+            continue;
+        }
         // URL syntax wins over WhatsApp emphasis markers. Query strings and
         // paths commonly contain paired underscores which must remain bytes
         // of the click target, not italic delimiters.
@@ -438,12 +447,12 @@ fn inline(line: &str) -> Vec<Span> {
         }
         // WhatsApp inline monospace: ```text```.
         if triple(i)
-            && let Some(close) = (i + 3..chars.len()).find(|&at| triple(at))
+            && let Some(close) = code_close(&chars, i + 3, 3)
             && close > i + 3
         {
             flush(&mut run, &mut spans, flags);
             spans.push(Span {
-                text: chars[i + 3..close].iter().collect(),
+                text: unescape_code(&chars[i + 3..close]),
                 mono: true,
                 ..Default::default()
             });
@@ -451,13 +460,12 @@ fn inline(line: &str) -> Vec<Span> {
             continue;
         }
         if c == '`'
-            && let Some(close) = chars[i + 1..].iter().position(|c| *c == '`')
+            && let Some(close) = code_close(&chars, i + 1, 1)
         {
-            let close = i + 1 + close;
             if close > i + 1 {
                 flush(&mut run, &mut spans, flags);
                 spans.push(Span {
-                    text: chars[i + 1..close].iter().collect(),
+                    text: unescape_code(&chars[i + 1..close]),
                     mono: true,
                     ..Default::default()
                 });
@@ -490,6 +498,39 @@ fn inline(line: &str) -> Vec<Span> {
     }
     flush(&mut run, &mut spans, flags);
     spans
+}
+
+/// Finds the closing marker run of an inline code span, skipping
+/// backslash-escaped bytes: `\\`` and `\\\\` are content, not syntax.
+fn code_close(chars: &[char], from: usize, width: usize) -> Option<usize> {
+    let mut j = from;
+    while j + width <= chars.len() {
+        if chars[j] == '\\' && j + 1 < chars.len() && matches!(chars[j + 1], '`' | '\\') {
+            j += 2;
+            continue;
+        }
+        if (j..j + width).all(|at| chars[at] == '`') {
+            return Some(j);
+        }
+        j += 1;
+    }
+    None
+}
+
+/// Resolves the `\\`` and `\\\\` escapes inline code content can carry.
+fn unescape_code(chars: &[char]) -> String {
+    let mut out = String::new();
+    let mut j = 0;
+    while j < chars.len() {
+        if chars[j] == '\\' && j + 1 < chars.len() && matches!(chars[j + 1], '`' | '\\') {
+            out.push(chars[j + 1]);
+            j += 2;
+        } else {
+            out.push(chars[j]);
+            j += 1;
+        }
+    }
+    out
 }
 
 fn is_opener(chars: &[char], i: usize) -> bool {
@@ -1146,8 +1187,43 @@ mod tests {
             plain("```\nline one\nline two\n```", &[]),
             "\nline one\nline two\n"
         );
-        // The mapper's crossing-tag degradation stays literal and readable.
+        // Raw crossing markers stay literal and readable.
         assert_eq!(plain("*a_b*c_", &[]), "*a_b*c_");
+    }
+
+    /// The mapper's zero-width-space hint lets a marker open or close
+    /// mid-word without showing; the hint itself never reaches the text.
+    #[test]
+    fn boundary_hints_style_mid_word_markers() {
+        let spans = parse("a\u{200B}*b*\u{200B}c", &[]);
+        let bold: Vec<_> = spans.iter().filter(|span| span.bold).collect();
+        assert_eq!(bold.len(), 1);
+        assert_eq!(bold[0].text, "b");
+        assert_eq!(plain("a\u{200B}*b*\u{200B}c", &[]), "abc");
+        // Without the hint the same markers stay literal, as before.
+        assert_eq!(plain("a*b*c", &[]), "a*b*c");
+        assert_eq!(plain("2 * 3 = 6", &[]), "2 * 3 = 6");
+    }
+
+    /// Escapes keep code content from closing its own span or fence:
+    /// `\`` and `\\` are content bytes inside code, and a fence-content
+    /// line with a leading backslash drops it.
+    #[test]
+    fn code_content_escapes_delimiters() {
+        assert_eq!(plain("`foo\\`bar\\`baz`", &[]), "foo`bar`baz");
+        let spans = parse("`foo\\`bar`", &[]);
+        let mono: Vec<_> = spans.iter().filter(|span| span.mono).collect();
+        assert_eq!(mono.len(), 1);
+        assert_eq!(mono[0].text, "foo`bar");
+        // A backslash escapes itself so content can carry one.
+        assert_eq!(plain("`a\\\\b`", &[]), "a\\b");
+        // A fence line inside a fenced block arrives backslash-escaped.
+        assert_eq!(
+            plain("```\nfirst\n\\```\nsecond\n```", &[]),
+            "\nfirst\n```\nsecond\n"
+        );
+        // A content line that begins with a backslash escapes it too.
+        assert_eq!(plain("```\n\\\\home\n```", &[]), "\n\\home\n");
     }
 
     #[test]

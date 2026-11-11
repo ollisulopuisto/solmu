@@ -277,7 +277,12 @@ Desktop running adds this UI rather than demonstrating a memory saving.
   Common/numeric entities and block/list boundaries are decoded. Bold, italic,
   strike, inline code, fenced blocks, blockquotes and list bullets survive as
   the WhatsApp-style markup the renderer already parses; properly nested tags
-  style correctly, crossing or unclosed tags degrade to literal characters.
+  style correctly, overlapping tags style by their spans, and unclosed tags
+  degrade to literal characters. Markers that open or close mid-word carry a
+  zero-width-space hint so the renderer's word-boundary rules accept them;
+  styles spanning line breaks close and reopen per line; code content that
+  holds backticks or fence lines is backslash-escaped, and the renderer
+  resolves those escapes in inline code and fenced blocks alike.
   This is not full rich-text fidelity: links represented only in href may lose
   their URL, uncommon entities can remain literal, malformed markup may be
   imperfect. Parser behaviour is fixture-tested; only live captures per bridge
