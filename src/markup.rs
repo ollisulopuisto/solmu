@@ -473,17 +473,16 @@ fn inline(line: &str) -> Vec<Span> {
         }
         if c == '`'
             && let Some(close) = code_close(&chars, i + 1, 1)
+            && close > i + 1
         {
-            if close > i + 1 {
-                flush(&mut run, &mut spans, flags);
-                spans.push(Span {
-                    text: unescape_code(&chars[i + 1..close]),
-                    mono: true,
-                    ..Default::default()
-                });
-                i = close + 1;
-                continue;
-            }
+            flush(&mut run, &mut spans, flags);
+            spans.push(Span {
+                text: unescape_code(&chars[i + 1..close]),
+                mono: true,
+                ..Default::default()
+            });
+            i = close + 1;
+            continue;
         }
         if matches!(c, '*' | '_' | '~') {
             let index = match c {

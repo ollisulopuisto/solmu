@@ -2449,7 +2449,7 @@ fn plain_rich_text(raw: &str) -> String {
             }
             if let Some(closed) = pending_boundary.take()
                 && ch.is_alphanumeric()
-                && out.chars().last() == Some(closed)
+                && out.ends_with(closed)
             {
                 out.push('\u{200B}');
             }
