@@ -173,6 +173,10 @@ jobs:
               --demo-size "$size" --demo-page "$page" --demo-shot-delay 6000 "$@"
             test -s "$out/$name.png"
           }
+          # Neighbour-aware bubble widths: near-equal outgoing texts share a
+          # width, in light and dark themes.
+          shot chat-card-widths-1180x780 1180x780 chat,card-widths
+          shot chat-card-widths-dark-1180x780 1180x780 chat,card-widths,theme=Catppuccin.json
           # The combined sidebar beside the list, and where it must fall
           # back to the compact rail.
           shot chat-1180x780 1180x780 chat

@@ -2581,10 +2581,15 @@ pub(crate) fn reply_strip_id() -> egui::Id {
 
 /// App data needed while drawing a checked-out conversation.
 struct View<'a> {
+    /// Bubble owning link context menus, including album/carousel children.
+    link_menu_owner: Option<egui::Id>,
     sender_hue: Option<f32>,
     hide_grouped_status: bool,
     covered_top: Option<f32>,
     show_timestamp: bool,
+    /// The neighbour-aware width the pre-pass settled for this row's own
+    /// plain-text bubble, frozen in the conversation's [`crate::run_widths::WidthBook`].
+    neighbour_width: Option<f32>,
     footer_right: Option<f32>,
     palette: Palette,
     locale: crate::i18n::Locale,
@@ -2973,11 +2978,13 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     let list_label =
         || crate::a11y::messages_list_label(app.locale, &app.chat_title(chat), chat.is_group());
     let view = View {
+        link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
         covered_top: None,
         show_timestamp: true,
         footer_right: None,
+        neighbour_width: None,
         palette,
         locale: app.locale,
         chat,
@@ -3303,6 +3310,50 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                         ui.add_space(under);
                     }
                     top_of_history(ui, &palette, &conversation, chat, &mut actions);
+                    // Neighbour-aware widths for own plain-text bubbles: each
+                    // settles once per width cap, so an appended or prepended
+                    // message never resizes bubbles already on screen. Only
+                    // undecided messages are measured; the run tail always
+                    // walks in list order, which freezes older decisions and
+                    // lets a slightly wider arrival grow alone. Rule and
+                    // tolerance: crate::run_widths.
+                    let text_cap = own_text_cap(ui, &palette, selection.is_some());
+                    // The epoch covers the cap and the fonts: reinstalled
+                    // fonts change the metrics a width was measured under.
+                    conversation.width_book.retain_fingerprint(
+                        text_cap.to_bits()
+                            ^ crate::theme::font_generation().wrapping_mul(0x9E37_79B9),
+                    );
+                    // Taken out of the conversation so the immutable message
+                    // walk can settle new entries; put back below.
+                    let mut book = std::mem::take(&mut conversation.width_book);
+                    let mut run_tail: Option<f32> = None;
+                    let mut neighbour_widths: HashMap<String, f32> = HashMap::new();
+                    for (index, message) in conversation.messages.iter().enumerate() {
+                        if !neighbour_eligible(message) {
+                            run_tail = None;
+                            continue;
+                        }
+                        let settled = if let Some(frozen) = book.get(&message.id) {
+                            frozen
+                        } else {
+                            let neighbour = if index > 0
+                                && same_run(&conversation.messages[index - 1], message)
+                                && crate::util::day_key(conversation.messages[index - 1].timestamp)
+                                    == crate::util::day_key(message.timestamp)
+                            {
+                                run_tail
+                            } else {
+                                None
+                            };
+                            let natural =
+                                natural_text_width(ui, &view, message, text_cap).unwrap_or(0.0);
+                            book.settle(&message.id, natural, neighbour)
+                        };
+                        neighbour_widths.insert(message.id.clone(), settled);
+                        run_tail = Some(settled);
+                    }
+                    conversation.width_book = book;
                     let mut previous: Option<&Message> = None;
                     let mut day_separator_top = f32::NEG_INFINITY;
                     // The pin notices still to place, in time order. Each one
@@ -3516,6 +3567,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                 let band = selection.as_ref().map(|_| {
                                     (ui.painter().add(egui::Shape::Noop), ui.cursor().top())
                                 });
+                                let view = View {
+                                    neighbour_width: neighbour_widths.get(&message.id).copied(),
+                                    ..view
+                                };
                                 let response = if selection.is_some() {
                                     ui.horizontal_top(|ui| {
                                         ui.add_space(SELECT_GUTTER);
@@ -5500,8 +5555,10 @@ fn bubble_frame(
 ) -> egui::Response {
     let outside_palette = view.palette;
     let own = message.from_me;
+    let owner = bubble_id(&view.chat.id, &message.id);
     // Bubble text uses its contrast palette; metadata uses the panel palette.
     let view = &View {
+        link_menu_owner: Some(owner),
         palette: view.palette.on_bubble(own),
         ..*view
     };
@@ -5516,6 +5573,9 @@ fn bubble_frame(
     // Register the bubble from its previous rect before its contents so inner
     // links, quotes, and attachments win clicks. The bubble handles right-click.
     let bubble_id = bubble_id(&view.chat.id, &message.id);
+    // Hit evidence belongs to this frame, never the previous layout.
+    ui.ctx()
+        .data_mut(|data| data.remove::<Vec<(Rect, String)>>(bubble_id.with("web-link-hits")));
     // Store the final rect separately. Reusing the early response would keep
     // the first frame's rect.
     let rect_id = bubble_id.with("rect");
@@ -5585,6 +5645,7 @@ fn bubble_frame(
         let reserve = 0.0;
         let settled = album
             .map(|_| CARD_WIDTH.min(cap))
+            .or_else(|| view.neighbour_width.map(|width| width.min(cap)))
             .or_else(|| settled_width(ui, view, message, cap));
         let _slot = if let Some(messages) = album {
             for member in messages {
@@ -5747,6 +5808,23 @@ fn bubble_frame(
                 .layer_id_at(pos)
                 .is_none_or(|layer| layer == bubble.layer_id)
         });
+    let link_target_id = bubble_id.with("link-menu-target");
+    if right_clicked {
+        let pointer = ui.input(|input| input.pointer.interact_pos());
+        let target = ui
+            .ctx()
+            .data(|data| data.get_temp::<Vec<(Rect, String)>>(bubble_id.with("web-link-hits")))
+            .unwrap_or_default()
+            .into_iter()
+            .find(|(rect, _)| pointer.is_some_and(|pos| rect.contains(pos)))
+            .map(|(_, url)| url);
+        ui.ctx().data_mut(|data| {
+            data.remove::<String>(link_target_id);
+            if let Some(url) = target {
+                data.insert_temp(link_target_id, url);
+            }
+        });
+    }
     // In an album the menu belongs to the member under the pointer, so a
     // reply, reaction, forward or deletion reaches that item, not the first.
     let target_id = bubble_id.with("album-target");
@@ -5787,9 +5865,26 @@ fn bubble_frame(
         || (album.is_some()
             && view.reaction_menu
             && view.reaction == Some(menu_target.id.as_str()));
-    let width = menu_width(ui, view.locale, view.reaction_emoji, menu_target);
+    if force_menu || reacting {
+        ui.ctx()
+            .data_mut(|data| data.remove::<String>(link_target_id));
+    }
     let keyboard_clicked =
         bubble.clicked() && bubble.has_focus() && !ui.input(|input| input.pointer.any_click());
+    if keyboard_clicked
+        || (!right_clicked && !egui::Popup::is_id_open(ui.ctx(), bubble_id.with("popup")))
+    {
+        ui.ctx()
+            .data_mut(|data| data.remove::<String>(link_target_id));
+    }
+    let link_target = ui
+        .ctx()
+        .data(|data| data.get_temp::<String>(link_target_id));
+    let width = if link_target.is_some() {
+        240.0
+    } else {
+        menu_width(ui, view.locale, view.reaction_emoji, menu_target)
+    };
     let open = if right_clicked || force_menu || reacting || keyboard_clicked {
         Some(egui::SetOpenCommand::Bool(true))
     } else if bubble.clicked() {
@@ -5825,7 +5920,11 @@ fn bubble_frame(
         popup.at_pointer_fixed()
     };
     let menu = popup.show(|ui| {
-        context_menu(ui, view, menu_target, MenuOrigin::Chat, actions);
+        if let Some(url) = &link_target {
+            link_context_menu(ui, view, url, actions);
+        } else {
+            context_menu(ui, view, menu_target, MenuOrigin::Chat, actions);
+        }
     });
     if let Some(menu) = menu {
         ui.ctx()
@@ -5833,7 +5932,7 @@ fn bubble_frame(
     }
     // Keep the target explicit for every menu action, not just the emoji
     // picker. Paint in the message layer so the menu itself remains above it.
-    if egui::Popup::is_id_open(ui.ctx(), bubble_id.with("popup")) {
+    if link_target.is_none() && egui::Popup::is_id_open(ui.ctx(), bubble_id.with("popup")) {
         ui.painter().rect_stroke(
             inner.response.rect.expand(2.0),
             12.0,
@@ -5909,6 +6008,34 @@ fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) ->
     } else {
         None
     }
+}
+
+/// The width cap an own plain-text bubble settles within: the same share
+/// and inset the row computes, without carousel or avatar allowances. The
+/// neighbour-aware pre-pass and the row itself must agree on it.
+fn own_text_cap(ui: &egui::Ui, palette: &Palette, selecting: bool) -> f32 {
+    let share = if palette.bubbles == theme::BubbleStyle::Messages {
+        MESSAGES_WIDTH_SHARE
+    } else {
+        WHATSAPP_WIDTH_SHARE
+    };
+    let available = ui.available_width() - if selecting { SELECT_GUTTER } else { 0.0 };
+    let max_width = (available * share).clamp(0.0, 560.0);
+    let inset = if palette.bubbles == theme::BubbleStyle::Messages {
+        MESSAGES_BUBBLE_MARGIN.sum().x
+    } else {
+        20.0
+    };
+    ((max_width - inset).min(available)).max(0.0)
+}
+
+/// Own plain-text bubbles join neighbour-aware widths; media, quotes,
+/// cards and forwarded messages keep the stepped grid.
+fn neighbour_eligible(message: &Message) -> bool {
+    message.from_me
+        && !message.forwarded
+        && message.quoted.is_none()
+        && matches!(message.content, Content::Text { preview: None, .. })
 }
 
 /// Shared 320/400/480/... content widths, with one narrower final viewport step.
@@ -6874,11 +7001,13 @@ pub(crate) fn list_menu(
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
     let view = View {
+        link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
         covered_top: None,
         show_timestamp: true,
         footer_right: None,
+        neighbour_width: None,
         palette: app.conversation_palette(),
         locale: app.locale,
         chat,
@@ -6956,11 +7085,13 @@ pub(crate) fn linked_bubble(
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
     let view = View {
+        link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
         covered_top: None,
         show_timestamp,
         footer_right: Some(footer_right),
+        neighbour_width: None,
         palette,
         locale: app.locale,
         chat,
@@ -7157,6 +7288,35 @@ fn copyable_urls(text: &str) -> Vec<String> {
         .into_iter()
         .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
         .collect()
+}
+
+/// Hyperlink scope is fixed when secondary-click opens the popup.
+/// Never derive actions from a shortened label or the other message links.
+fn link_context_menu(ui: &mut egui::Ui, view: &View<'_>, url: &str, actions: &mut Vec<Action>) {
+    let label = url.chars().take(55).collect::<String>();
+    let label = if url.chars().count() > 55 {
+        format!("{label}…")
+    } else {
+        label
+    };
+    ui.add(egui::Label::new(label).wrap()).on_hover_text(url);
+    ui.separator();
+    if widgets::menu_item(
+        ui,
+        &view.palette,
+        None,
+        &crate::i18n::gettext(view.locale, "Open link"),
+    ) {
+        actions.push(Action::OpenUrl(url.to_owned()));
+    }
+    if widgets::menu_item(
+        ui,
+        &view.palette,
+        Some(Icon::Copy),
+        &crate::i18n::gettext(view.locale, "Copy link"),
+    ) {
+        actions.push(Action::CopyText(url.to_owned()));
+    }
 }
 
 fn context_menu(
@@ -9354,6 +9514,32 @@ fn rich_body(
     if visible || selection_alive {
         markup::paint_selectable(ui, &laid, &response, origin, palette.text, visible);
     }
+    let web_links: Vec<(Rect, String)> = laid
+        .links
+        .iter()
+        .filter(|(_, url)| url.starts_with("https://") || url.starts_with("http://"))
+        .flat_map(|(range, url)| {
+            crate::bidi::char_bounds_by_row(&laid.galley, range.start, range.end)
+                .into_iter()
+                .map(|(_, bounds)| {
+                    (
+                        bounds.translate(origin.to_vec2()).intersect(ui.clip_rect()),
+                        url.clone(),
+                    )
+                })
+        })
+        .filter(|(rect, _)| rect.is_positive())
+        .collect();
+    // Child captions retain their own selection IDs but accumulate hits for
+    // the one bubble which owns their popup. Clear once in bubble_frame.
+    let owner = view.link_menu_owner.unwrap_or(id);
+    ui.ctx().data_mut(|data| {
+        let mut hits = data
+            .get_temp::<Vec<(Rect, String)>>(owner.with("web-link-hits"))
+            .unwrap_or_default();
+        hits.extend(web_links);
+        data.insert_temp(owner.with("web-link-hits"), hits);
+    });
     let message_number = crate::i18n::gettext(view.locale, "Message");
     let copy_number = crate::i18n::gettext(view.locale, "Copy number");
     let menu_labels = [message_number.as_ref(), copy_number.as_ref()];
@@ -12589,11 +12775,13 @@ mod tests {
         let avatars = HashMap::new();
         let keyboard_navigation = std::cell::Cell::new(false);
         let view = View {
+            link_menu_owner: None,
             sender_hue: None,
             hide_grouped_status: false,
             covered_top: None,
             show_timestamp: true,
             footer_right: None,
+            neighbour_width: None,
             transcriber: None,
             transcription_account: "test",
             palette: Palette::dark(),

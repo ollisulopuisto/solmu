@@ -1823,7 +1823,12 @@ impl Api {
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("attachment");
-        let body = serde_json::json!({ "content": base64::engine::general_purpose::STANDARD.encode(bytes), "fileName": filename });
+        let mut body = serde_json::json!({ "content": base64::engine::general_purpose::STANDARD.encode(bytes), "fileName": filename });
+        // Our recorded clips are known Ogg/Opus, not arbitrary Ogg audio.
+        // WhatsApp voice capabilities distinguish this from generic audio/ogg.
+        if matches!(kind, Attachment::Voice(_)) {
+            body["mimeType"] = "audio/ogg; codecs=opus".into();
+        }
         if upload_stopped(cancel) {
             return Err("Upload worker stopped; message was not submitted".into());
         }
@@ -1862,6 +1867,7 @@ impl Api {
             Attachment::Sticker => attachment["type"] = "sticker".into(),
             Attachment::Voice(seconds) => {
                 attachment["type"] = "voice-note".into();
+                attachment["mimeType"] = "audio/ogg; codecs=opus".into();
                 attachment["duration"] = seconds.into();
             }
         }
@@ -6555,6 +6561,20 @@ mod tests {
         reply: Option<&str>,
         kind: Attachment,
     ) -> (Result<SendAccepted, String>, String) {
+        let (result, requests) = capture_typed_send_both(reply, kind);
+        let last = requests
+            .split("\n--NEXT--\n")
+            .filter(|s| !s.is_empty())
+            .last()
+            .unwrap_or_default()
+            .to_owned();
+        (result, last)
+    }
+
+    fn capture_typed_send_both(
+        reply: Option<&str>,
+        kind: Attachment,
+    ) -> (Result<SendAccepted, String>, String) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
         let worker = std::thread::spawn(move || {
@@ -6588,7 +6608,8 @@ mod tests {
                         break;
                     }
                 }
-                sent = String::from_utf8_lossy(&request).to_string();
+                sent.push_str(&String::from_utf8_lossy(&request));
+                sent.push_str("\n--NEXT--\n");
                 write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -6703,6 +6724,40 @@ mod tests {
         assert!(request.contains(r#""type":"voice-note""#), "{request}");
         assert!(request.contains(r#""duration":7"#), "{request}");
         assert!(!request.contains("replyToMessageID"), "{request}");
+    }
+
+    #[test]
+    fn recorded_voice_declares_opus_mime_on_upload_and_message() {
+        let (result, requests) = capture_typed_send_both(None, Attachment::Voice(7));
+        assert!(result.is_ok());
+        let requests: Vec<_> = requests
+            .split("\n--NEXT--\n")
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(requests.len(), 2);
+        let upload: serde_json::Value =
+            serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+        let send: serde_json::Value =
+            serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(upload["mimeType"], "audio/ogg; codecs=opus");
+        assert_eq!(send["attachment"]["mimeType"], "audio/ogg; codecs=opus");
+        assert_eq!(send["attachment"]["type"], "voice-note");
+        assert_eq!(send["attachment"]["duration"], 7);
+    }
+
+    #[test]
+    fn ordinary_audio_upload_keeps_auto_detected_mime() {
+        let (result, requests) = capture_typed_send_both(None, Attachment::Auto);
+        assert!(result.is_ok());
+        for request in requests.split("\n--NEXT--\n").filter(|s| !s.is_empty()) {
+            let body: serde_json::Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert!(body.get("mimeType").is_none());
+            assert!(
+                body.get("attachment")
+                    .is_none_or(|a| a.get("mimeType").is_none() && a.get("type").is_none())
+            );
+        }
     }
 
     #[test]
