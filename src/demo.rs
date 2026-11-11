@@ -14151,7 +14151,15 @@ mod tests {
                 assert!(hits.iter().filter(|(_, url)| url == first).count() > 1);
             }
             // Every visual row of each link owns its target, including a wrapped title.
-            for (rect, expected) in &hits {
+            for (hit_index, (_, expected)) in hits.iter().enumerate() {
+                // Closing a popup and measuring selected text may move rows.
+                // Keep the expected destination, but read current geometry.
+                render(&mut app, &ctx);
+                let current_hits = ctx
+                    .data(|data| data.get_temp::<Vec<(Rect, String)>>(id.with("web-link-hits")))
+                    .unwrap();
+                let (rect, target) = &current_hits[hit_index];
+                assert_eq!(target, expected, "settling must not change the link target");
                 let pos = rect.center();
                 let button = |pressed| Event::PointerButton {
                     pos,
@@ -14363,6 +14371,9 @@ mod tests {
         // A click in the bubble's margin, beside its time: the text and
         // media inside take clicks for themselves.
         let click = |app: &mut App, message: &str, modifiers: egui::Modifiers| {
+            // Selection changes bubble widths/heights. Settle that layout
+            // before reading the next click target, never reuse its old rect.
+            render(app, &ctx);
             let id = crate::ui::conversation::bubble_id(&chat, message);
             let rect = ctx
                 .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
