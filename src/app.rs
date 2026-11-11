@@ -736,6 +736,8 @@ pub struct App {
     pub label_editing: Option<(String, String)>,
     /// Label the chat list shows; `None` shows every chat.
     pub label_filter: Option<String>,
+    /// Automatic category the chat list shows; `None` shows every chat.
+    pub auto_category_filter: Option<crate::categories::AutoCategory>,
     /// Chats opened from the Unread list, kept there until the filter changes.
     unread_kept: HashSet<ChatId>,
     pub toasts: Vec<Toast>,
@@ -1616,6 +1618,7 @@ impl App {
             label_color: crate::archive::DEFAULT_COLOR.to_owned(),
             label_editing: None,
             label_filter: None,
+            auto_category_filter: None,
             unread_kept: HashSet::new(),
             toasts: Vec::new(),
             actions: Vec::new(),
@@ -3302,6 +3305,40 @@ impl App {
         })
     }
 
+    /// The category a chat is in: the one the user moved it to, otherwise
+    /// the one the rules give it. Groups have none; they stay in Groups.
+    pub fn chat_category(&self, chat: &Chat) -> Option<crate::categories::AutoCategory> {
+        if chat.kind == crate::model::ChatKind::Group {
+            return None;
+        }
+        let member = self.later_key(chat);
+        self.settings
+            .beeper
+            .category_overrides
+            .iter()
+            .find(|(saved, _)| saved == &member)
+            .map(|(_, category)| *category)
+            .or_else(|| crate::categories::automatic(chat, crate::util::now()))
+    }
+
+    /// Moves a chat to a category for good, or hands it back to the rules
+    /// with `None`. The move is this chat's alone and local only.
+    fn set_chat_category(&mut self, id: &str, category: Option<crate::categories::AutoCategory>) {
+        let Some(chat) = self.chat(id) else {
+            return;
+        };
+        if chat.kind == crate::model::ChatKind::Group {
+            return;
+        }
+        let member = self.later_key(chat);
+        let overrides = &mut self.settings.beeper.category_overrides;
+        overrides.retain(|(saved, _)| saved != &member);
+        if let Some(category) = category {
+            overrides.push((member, category));
+        }
+        self.mark_settings_dirty();
+    }
+
     pub fn toggle_reply_later(&mut self) {
         let Some(chat) = self.current_chat() else {
             return;
@@ -3374,6 +3411,7 @@ impl App {
         !self.show_archived
             && self.chat_filter == ChatFilter::All
             && self.label_filter.is_none()
+            && self.auto_category_filter.is_none()
             && self.chats.iter().any(|c| c.backend_account.is_some())
     }
 
@@ -3482,9 +3520,11 @@ impl App {
             && (self.show_archived
                 || (queue == ChatFilter::All
                     && (self.category_filter == Some(ChatFilter::Channels)
-                        || self.label_filter.is_some()))
+                        || self.label_filter.is_some()
+                        || self.auto_category_filter.is_some()))
                 || (queue == ChatFilter::Unread
-                    && self.category_filter == Some(ChatFilter::Channels)
+                    && (self.category_filter == Some(ChatFilter::Channels)
+                        || (self.auto_category_filter.is_some() && chat.is_channel()))
                     && chat.looks_unread())
                 || self.filter_matches(queue, chat)
                 || (queue == ChatFilter::Unread && self.unread_kept.contains(&chat.id)))
@@ -3492,6 +3532,9 @@ impl App {
                 .category_filter
                 .is_none_or(|filter| filter.matches(chat))
             && (!self.favorites_only || chat.favorite)
+            && self
+                .auto_category_filter
+                .is_none_or(|category| self.chat_category(chat) == Some(category))
             && self
                 .label_filter
                 .as_ref()
@@ -3511,6 +3554,7 @@ impl App {
             || self.category_filter.is_some()
             || self.favorites_only
             || self.label_filter.is_some()
+            || self.auto_category_filter.is_some()
             || self.beeper_unreplied
     }
 
@@ -3564,6 +3608,7 @@ impl App {
         self.category_filter = None;
         self.favorites_only = false;
         self.label_filter = None;
+        self.auto_category_filter = None;
         self.beeper_unreplied = false;
         self.select_beeper_scope(None, None);
         self.remember_list_filter();
@@ -10287,6 +10332,25 @@ impl App {
                 if !queued {
                     self.toast(crate::i18n::gettext(self.locale, "Marked to reply later"));
                 }
+            }
+            Action::SelectAutoCategory(category) => {
+                if self.locked_folder {
+                    self.close_locked_folder();
+                    self.search.clear();
+                    self.search_hits.clear();
+                }
+                self.auto_category_filter = category;
+                self.show_archived = false;
+                self.unread_kept.clear();
+            }
+            Action::SetChatCategory(id, category) => {
+                self.set_chat_category(&id, category);
+                let text = match category {
+                    Some(category) => crate::i18n::gettext(self.locale, "Moved to {category}")
+                        .replace("{category}", &category.label(self.locale)),
+                    None => crate::i18n::gettext(self.locale, "Sorted automatically").into_owned(),
+                };
+                self.toast(text);
             }
             Action::ToggleReadLater(id) => {
                 let Some(chat) = self.chat(&id) else {
