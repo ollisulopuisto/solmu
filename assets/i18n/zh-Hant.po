@@ -3749,35 +3749,3 @@ msgstr "以 Enter 送出"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "前天"
-
-#. rail destination
-msgid "Saved"
-msgstr "已儲存"
-
-#. saved list title
-msgid "Saved messages"
-msgstr "已儲存的訊息"
-
-#. message context menu item
-msgid "Save for later"
-msgstr "稍後儲存"
-
-#. message context menu item
-msgid "Remove from Saved"
-msgstr "從已儲存中移除"
-
-#. saved list search hint
-msgid "Search saved messages"
-msgstr "搜尋已儲存的訊息"
-
-#. saved list empty state title
-msgid "No saved messages"
-msgstr "沒有已儲存的訊息"
-
-#. saved list empty state hint
-msgid "Right-click a message and choose Save for later to keep it here."
-msgstr "以滑鼠右鍵點選訊息並選擇「稍後儲存」，將其保留在這裡。"
-
-#. saved row when the source message is gone
-msgid "Original message unavailable"
-msgstr "原始訊息不可用"

@@ -13707,8 +13707,6 @@ mod reaction_tests {
                 motion: None,
             })
         };
-        let mut saved_row = row(Content::text("Kept for later."));
-        saved_row.saved = true;
         vec![
             MenuRow {
                 message: own,
@@ -13716,7 +13714,6 @@ mod reaction_tests {
                 pinned: true,
                 saved: false,
             },
-            saved_row,
             photo(path.clone(), Idle),
             photo(None, Idle),
             photo(None, Downloading),
@@ -13777,9 +13774,11 @@ mod reaction_tests {
             let msgid = format!("msgid \"{text}\"");
             TEMPLATE.lines().any(|line| line == msgid)
                 // CONTRIBUTING leaves catalog/template regeneration to the
-                // maintainer. This new gettext key awaits that extraction;
+                // maintainer. These new gettext keys await that extraction;
                 // keep testing every existing catalogued menu item meanwhile.
                 || text == "Copy URL to clipboard"
+                || text == "Save for later"
+                || text == "Remove from Saved"
         };
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("photo.jpg");
@@ -13810,6 +13809,26 @@ mod reaction_tests {
                 .any(|label| label == "Copy URL to clipboard")
         );
         labels.extend(link_labels);
+        // A saved message swaps the menu entry to its removal form. The new
+        // keys await extraction, so cover the swap in English alone here.
+        let saved_row = MenuRow {
+            message: with_reactions(Vec::new()),
+            marks: Marks { starred: false },
+            pinned: false,
+            saved: true,
+        };
+        let saved_labels = drawn_menu_words(crate::i18n::Locale::English, &saved_row);
+        assert!(
+            saved_labels
+                .iter()
+                .any(|label| label == "Remove from Saved"),
+            "{saved_labels:?}"
+        );
+        assert!(
+            !saved_labels.iter().any(|label| label == "Save for later"),
+            "{saved_labels:?}"
+        );
+        labels.extend(saved_labels);
         let undrawn: Vec<&str> = measured
             .iter()
             .map(String::as_str)

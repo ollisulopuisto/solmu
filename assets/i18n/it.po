@@ -3857,35 +3857,3 @@ msgstr "Invio invia"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "L'altro ieri"
-
-#. rail destination
-msgid "Saved"
-msgstr "Salvati"
-
-#. saved list title
-msgid "Saved messages"
-msgstr "Messaggi salvati"
-
-#. message context menu item
-msgid "Save for later"
-msgstr "Salva per dopo"
-
-#. message context menu item
-msgid "Remove from Saved"
-msgstr "Rimuovi dai Salvati"
-
-#. saved list search hint
-msgid "Search saved messages"
-msgstr "Cerca nei messaggi salvati"
-
-#. saved list empty state title
-msgid "No saved messages"
-msgstr "Nessun messaggio salvato"
-
-#. saved list empty state hint
-msgid "Right-click a message and choose Save for later to keep it here."
-msgstr "Fai clic con il pulsante destro su un messaggio e scegli Salva per dopo per conservarlo qui."
-
-#. saved row when the source message is gone
-msgid "Original message unavailable"
-msgstr "Messaggio originale non disponibile"

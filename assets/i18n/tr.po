@@ -3847,35 +3847,3 @@ msgstr "Enter ile gönder"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Evvelsi gün"
-
-#. rail destination
-msgid "Saved"
-msgstr "Kaydedilenler"
-
-#. saved list title
-msgid "Saved messages"
-msgstr "Kaydedilen mesajlar"
-
-#. message context menu item
-msgid "Save for later"
-msgstr "Daha sonra kaydet"
-
-#. message context menu item
-msgid "Remove from Saved"
-msgstr "Kaydedilenlerden kaldır"
-
-#. saved list search hint
-msgid "Search saved messages"
-msgstr "Kaydedilen mesajlarda ara"
-
-#. saved list empty state title
-msgid "No saved messages"
-msgstr "Kaydedilen mesaj yok"
-
-#. saved list empty state hint
-msgid "Right-click a message and choose Save for later to keep it here."
-msgstr "Bir mesaja sağ tıklayıp Daha sonra kaydet seçeneğini seçerek burada saklayın."
-
-#. saved row when the source message is gone
-msgid "Original message unavailable"
-msgstr "Orijinal mesaj kullanılamıyor"

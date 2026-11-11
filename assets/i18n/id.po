@@ -3851,35 +3851,3 @@ msgstr "Enter untuk mengirim"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Dua hari lalu"
-
-#. rail destination
-msgid "Saved"
-msgstr "Tersimpan"
-
-#. saved list title
-msgid "Saved messages"
-msgstr "Pesan tersimpan"
-
-#. message context menu item
-msgid "Save for later"
-msgstr "Simpan untuk nanti"
-
-#. message context menu item
-msgid "Remove from Saved"
-msgstr "Hapus dari Tersimpan"
-
-#. saved list search hint
-msgid "Search saved messages"
-msgstr "Cari pesan tersimpan"
-
-#. saved list empty state title
-msgid "No saved messages"
-msgstr "Tidak ada pesan tersimpan"
-
-#. saved list empty state hint
-msgid "Right-click a message and choose Save for later to keep it here."
-msgstr "Klik kanan pesan dan pilih Simpan untuk nanti untuk menyimpannya di sini."
-
-#. saved row when the source message is gone
-msgid "Original message unavailable"
-msgstr "Pesan asli tidak tersedia"

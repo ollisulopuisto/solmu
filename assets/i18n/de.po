@@ -3870,35 +3870,3 @@ msgstr "Enter sendet"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Vorgestern"
-
-#. rail destination
-msgid "Saved"
-msgstr "Gespeichert"
-
-#. saved list title
-msgid "Saved messages"
-msgstr "Gespeicherte Nachrichten"
-
-#. message context menu item
-msgid "Save for later"
-msgstr "Für später speichern"
-
-#. message context menu item
-msgid "Remove from Saved"
-msgstr "Aus Gespeichert entfernen"
-
-#. saved list search hint
-msgid "Search saved messages"
-msgstr "Gespeicherte Nachrichten durchsuchen"
-
-#. saved list empty state title
-msgid "No saved messages"
-msgstr "Keine gespeicherten Nachrichten"
-
-#. saved list empty state hint
-msgid "Right-click a message and choose Save for later to keep it here."
-msgstr "Klicke mit der rechten Maustaste auf eine Nachricht und wähle „Für später speichern“, um sie hier aufzubewahren."
-
-#. saved row when the source message is gone
-msgid "Original message unavailable"
-msgstr "Originalnachricht nicht verfügbar"

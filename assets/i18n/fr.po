@@ -3874,35 +3874,3 @@ msgstr "Entrée envoie"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Avant-hier"
-
-#. rail destination
-msgid "Saved"
-msgstr "Enregistrés"
-
-#. saved list title
-msgid "Saved messages"
-msgstr "Messages enregistrés"
-
-#. message context menu item
-msgid "Save for later"
-msgstr "Enregistrer pour plus tard"
-
-#. message context menu item
-msgid "Remove from Saved"
-msgstr "Retirer des enregistrés"
-
-#. saved list search hint
-msgid "Search saved messages"
-msgstr "Rechercher dans les messages enregistrés"
-
-#. saved list empty state title
-msgid "No saved messages"
-msgstr "Aucun message enregistré"
-
-#. saved list empty state hint
-msgid "Right-click a message and choose Save for later to keep it here."
-msgstr "Faites un clic droit sur un message et choisissez Enregistrer pour plus tard pour le garder ici."
-
-#. saved row when the source message is gone
-msgid "Original message unavailable"
-msgstr "Message d'origine indisponible"

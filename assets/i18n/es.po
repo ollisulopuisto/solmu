@@ -3888,35 +3888,3 @@ msgstr "Velocidad de reproducción 2x"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Anteayer"
-
-#. rail destination
-msgid "Saved"
-msgstr "Guardados"
-
-#. saved list title
-msgid "Saved messages"
-msgstr "Mensajes guardados"
-
-#. message context menu item
-msgid "Save for later"
-msgstr "Guardar para más tarde"
-
-#. message context menu item
-msgid "Remove from Saved"
-msgstr "Quitar de Guardados"
-
-#. saved list search hint
-msgid "Search saved messages"
-msgstr "Buscar mensajes guardados"
-
-#. saved list empty state title
-msgid "No saved messages"
-msgstr "No hay mensajes guardados"
-
-#. saved list empty state hint
-msgid "Right-click a message and choose Save for later to keep it here."
-msgstr "Haz clic con el botón derecho en un mensaje y elige Guardar para más tarde para conservarlo aquí."
-
-#. saved row when the source message is gone
-msgid "Original message unavailable"
-msgstr "Mensaje original no disponible"

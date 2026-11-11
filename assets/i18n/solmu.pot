@@ -3676,35 +3676,3 @@ msgstr ""
 #: src/ui/conversation.rs
 msgid "Playback speed 2x"
 msgstr ""
-
-#. rail destination
-msgid "Saved"
-msgstr ""
-
-#. saved list title
-msgid "Saved messages"
-msgstr ""
-
-#. message context menu item
-msgid "Save for later"
-msgstr ""
-
-#. message context menu item
-msgid "Remove from Saved"
-msgstr ""
-
-#. saved list search hint
-msgid "Search saved messages"
-msgstr ""
-
-#. saved list empty state title
-msgid "No saved messages"
-msgstr ""
-
-#. saved list empty state hint
-msgid "Right-click a message and choose Save for later to keep it here."
-msgstr ""
-
-#. saved row when the source message is gone
-msgid "Original message unavailable"
-msgstr ""
