@@ -4598,6 +4598,33 @@ impl App {
                 older,
                 complete,
             } => {
+                let exact_member = self.chats.iter().filter(|c| c.id == chat).count() == 1;
+                let member = exact_member
+                    .then(|| self.chat(&chat).and_then(crate::merged::Member::of))
+                    .flatten();
+                let completed: Vec<_> = self
+                    .pending_media
+                    .iter()
+                    .filter(|(_, record)| {
+                        record.state == crate::pending_media::State::Confirmed
+                            && member.as_ref() == Some(&record.job.member)
+                            && messages.iter().any(|message| {
+                                message.id == record.visible
+                                    && message.chat == chat
+                                    && message.from_me
+                                    && message.content.media().is_some()
+                            })
+                    })
+                    .map(|(local, _)| local.clone())
+                    .collect();
+                for local in completed {
+                    if let Some(record) = self.pending_media.remove(&local)
+                        && record.job.temporary
+                        && let crate::pending_media::Payload::File { path, .. } = record.job.payload
+                    {
+                        crate::backend::beeper::discard_temp_upload(&path);
+                    }
+                }
                 for message in &messages {
                     if !message.from_me
                         && let Some(name) =
