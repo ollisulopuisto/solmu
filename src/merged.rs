@@ -77,13 +77,37 @@ pub fn row_near_view(
 ) -> bool {
     top + height >= view_top - overscan && top <= view_bottom + overscan
 }
+/// Checks whether `text` contains `query_lower` (which is already lowercase),
+/// avoiding string allocations when `is_ascii` is true.
+fn case_contains(text: &str, query_lower: &str, is_ascii: bool) -> bool {
+    if is_ascii {
+        // Zero-allocation byte-level sliding window ASCII case-insensitive search.
+        let q_bytes = query_lower.as_bytes();
+        text.as_bytes()
+            .windows(q_bytes.len())
+            .any(|w| w.eq_ignore_ascii_case(q_bytes))
+    } else {
+        text.to_lowercase().contains(query_lower)
+    }
+}
+
 /// Literal case-insensitive search of already-loaded data. No remote query.
 pub fn search_matches(body: &str, query: &str, network: &str, sender: &str) -> bool {
-    let query = query.trim().to_lowercase();
-    query.is_empty()
-        || [body, network, sender]
-            .iter()
-            .any(|value| value.to_lowercase().contains(&query))
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+    // Performance optimization:
+    // 1. Return immediately when `query.trim()` is empty without lowercase conversion.
+    // 2. When `query` is ASCII, match without allocating lowercased Strings for
+    //    `body`, `network`, and `sender`.
+    // 3. Short-circuit across `[body, network, sender]` sequentially to avoid
+    //    redundant checks and allocations once a match is found.
+    let is_ascii = query.is_ascii();
+    let query_lower = query.to_lowercase();
+    [body, network, sender]
+        .into_iter()
+        .any(|value| case_contains(value, &query_lower, is_ascii))
 }
 /// Keyboard-focusable fallback operates on the same filtered, ordered rows as the view.
 pub fn latest_replyable<'a>(messages: &[&'a Message]) -> Option<&'a Message> {
