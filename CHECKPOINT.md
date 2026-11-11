@@ -887,3 +887,11 @@ manual upgrades are a backend safeguard, not a new user-visible promotion flow.
 The PR description/changelog now make this limitation explicit. A waiting versus
 active UI model is outside this queue-full repair.
 
+
+## 2026-11-11 - Favorites list sections, option B (Instinct, draft)
+
+Approved sketch B: small Pinned/Other chats labels, with a subtle rule only at
+the group boundary. Headers appear only when both favorite and ordinary chats
+remain visible; search/empty/Favorites-only/all-unpinned views remain ungrouped.
+Variable-height virtual rows include headers in keyboard reveal geometry.
+Native tests and actual pixels still require verification. No release build.

@@ -1640,6 +1640,73 @@ fn favorite_chip(
     response
 }
 
+/// Section headers are virtual rows too: keyboard reveal and wheel scrolling
+/// use the same row indices as painting, without invisible pixel offsets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChatListRow {
+    Header(bool),
+    Chat(usize),
+}
+
+fn sectioned_rows(favorites: &[bool]) -> Vec<ChatListRow> {
+    let split = favorites.iter().take_while(|favorite| **favorite).count();
+    let grouped = split > 0 && split < favorites.len();
+    let mut rows = Vec::with_capacity(favorites.len() + if grouped { 2 } else { 0 });
+    for index in 0..favorites.len() {
+        if grouped && (index == 0 || index == split) {
+            rows.push(ChatListRow::Header(index == 0));
+        }
+        rows.push(ChatListRow::Chat(index));
+    }
+    rows
+}
+
+fn section_height(pinned: bool) -> f32 {
+    if pinned { 26.0 } else { 32.0 }
+}
+
+fn section_offsets(rows: &[ChatListRow], row_height: f32) -> Vec<f32> {
+    let mut offsets = vec![0.0];
+    for row in rows {
+        offsets.push(
+            offsets.last().unwrap()
+                + match row {
+                    ChatListRow::Header(pinned) => section_height(*pinned),
+                    ChatListRow::Chat(_) => row_height,
+                },
+        );
+    }
+    offsets
+}
+
+fn reveal_bounds(current: f32, viewport: f32, top: f32, bottom: f32) -> f32 {
+    if top < current {
+        top
+    } else if bottom > current + viewport {
+        (bottom - viewport).max(0.0)
+    } else {
+        current
+    }
+}
+
+fn section_header(app: &App, ui: &mut egui::Ui, pinned: bool, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    if !pinned {
+        ui.painter().hline(
+            (rect.left() + 14.0)..=(rect.right() - 14.0),
+            rect.top() + 1.0,
+            egui::Stroke::new(1.0, app.palette.outline),
+        );
+    }
+    ui.painter().text(
+        rect.left_center() + vec2(16.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        crate::i18n::gettext(app.locale, if pinned { "Pinned" } else { "Other chats" }),
+        egui::FontId::proportional(12.0),
+        app.palette.secondary,
+    );
+}
+
 fn list(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     // Taken here so a send seen while the list is hidden cannot move it later.
@@ -1702,20 +1769,27 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
         widgets::empty_state(ui, &palette, Icon::MessageCircle, title, body);
         return;
     }
-    // Rows touch: one clickable surface from top to bottom, no gaps or rules.
+    // Labels appear only when both groups remain in this filtered view.
+    let favorites = chat_ids
+        .iter()
+        .map(|id| app.chat(id).is_some_and(|chat| chat.favorite))
+        .collect::<Vec<_>>();
+    let list_rows = sectioned_rows(&favorites);
+    // Virtual headers have short, noninteractive rows of their own.
     ui.spacing_mut().item_spacing.y = 0.0;
     let row_height = chat_row_height(app.settings.beeper.compact_list);
-    let total = chat_ids.len();
+    let offsets = section_offsets(&list_rows, row_height);
     let mut scroll_area = egui::ScrollArea::vertical()
         .id_salt("chat-list")
         .auto_shrink([false, false]);
     if to_top && near_top(ui, "chat-list", row_height) {
         scroll_area = scroll_area.vertical_scroll_offset(0.0);
     }
-    let target_row = app
-        .scroll_chat_into_view
-        .as_ref()
-        .and_then(|target| chat_ids.iter().position(|id| id == target));
+    let target_row = app.scroll_chat_into_view.as_ref().and_then(|target| {
+        list_rows
+            .iter()
+            .position(|row| matches!(row, ChatListRow::Chat(index) if &chat_ids[*index] == target))
+    });
     // The copies a narrow window's slide draws have widget ids of their own:
     // they show the real list's offset instead of keeping one.
     let copy = ui
@@ -1737,12 +1811,11 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
             .unwrap_or_default()
             .offset
             .y;
-        let offset = row_scroll_offset(
+        let offset = reveal_bounds(
             current,
             ui.available_height(),
-            target_row,
-            row_height,
-            ui.spacing().item_spacing.y,
+            offsets[target_row],
+            offsets[target_row + 1],
         );
         scroll_area = scroll_area.vertical_scroll_offset(offset);
         app.scroll_chat_into_view = None;
@@ -1753,36 +1826,59 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
     } else {
         0.0
     };
-    let output = scroll_area.show_rows(ui, row_height, total, |ui, range| {
-        if carried != 0.0 {
-            ui.scroll_with_delta_animation(
-                vec2(0.0, carried),
-                egui::style::ScrollAnimation::none(),
-            );
-        }
-        let rows_to_display: Vec<Chat> = range
-            .clone()
-            .filter_map(|index| {
-                let id = &chat_ids[index];
-                app.chat(id).map(|chat| app.beeper_person_preview(chat))
-            })
-            .collect();
-        for display in rows_to_display {
-            // Key by chat so an open menu survives list reordering.
-            let response = ui
-                .push_id(("chat", &display.id), |ui| row(app, ui, &display))
-                .inner;
-            // Store the row rect for interaction tests.
-            ui.ctx()
-                .data_mut(|data| data.insert_temp(chat_row_id(&display.id), response.rect));
-            #[cfg(test)]
-            ui.ctx().data_mut(|data| {
-                data.insert_temp(chat_row_id(&display.id).with("widget"), response.id);
-            });
-            if response.clicked() && !app.show_archived {
-                app.actions.push(Action::KeepUnread(display.id.clone()));
+    let output = scroll_area.show_viewport(ui, |ui, viewport| {
+        ui.set_height(*offsets.last().unwrap_or(&0.0));
+        let start = offsets
+            .partition_point(|offset| *offset <= viewport.top())
+            .saturating_sub(1)
+            .min(list_rows.len());
+        let end = offsets
+            .partition_point(|offset| *offset < viewport.bottom())
+            .min(list_rows.len());
+        let top = ui.max_rect().top();
+        let rect = Rect::from_x_y_ranges(
+            ui.max_rect().x_range(),
+            (top + offsets[start])..=(top + offsets[end]),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            ui.skip_ahead_auto_ids(start);
+            let range = start..end;
+            if carried != 0.0 {
+                ui.scroll_with_delta_animation(
+                    vec2(0.0, carried),
+                    egui::style::ScrollAnimation::none(),
+                );
             }
-        }
+            for index in range {
+                let chat_index = match list_rows[index] {
+                    ChatListRow::Header(pinned) => {
+                        section_header(app, ui, pinned, section_height(pinned));
+                        continue;
+                    }
+                    ChatListRow::Chat(index) => index,
+                };
+                let Some(display) = app
+                    .chat(&chat_ids[chat_index])
+                    .map(|chat| app.beeper_person_preview(chat))
+                else {
+                    continue;
+                };
+                // Key by chat so an open menu survives list reordering.
+                let response = ui
+                    .push_id(("chat", &display.id), |ui| row(app, ui, &display))
+                    .inner;
+                // Store the row rect for interaction tests.
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(chat_row_id(&display.id), response.rect));
+                #[cfg(test)]
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(chat_row_id(&display.id).with("widget"), response.id);
+                });
+                if response.clicked() && !app.show_archived {
+                    app.actions.push(Action::KeepUnread(display.id.clone()));
+                }
+            }
+        });
     });
     if !copy {
         ui.ctx()
@@ -3344,6 +3440,28 @@ mod tests {
                 assert!((pair[0].width() - pair[1].width()).abs() < 0.01);
             }
         }
+    }
+
+    #[test]
+    fn favorites_sections_exist_only_with_both_visible_groups() {
+        use ChatListRow::{Chat, Header};
+        assert_eq!(sectioned_rows(&[]), vec![]);
+        assert_eq!(sectioned_rows(&[false, false]), vec![Chat(0), Chat(1)]);
+        assert_eq!(sectioned_rows(&[true, true]), vec![Chat(0), Chat(1)]);
+        assert_eq!(
+            sectioned_rows(&[true, true, false]),
+            vec![Header(true), Chat(0), Chat(1), Header(false), Chat(2)]
+        );
+    }
+
+    #[test]
+    fn favorites_headers_are_included_in_virtual_scroll_geometry() {
+        let rows = sectioned_rows(&[true, false, false]);
+        let offsets = section_offsets(&rows, 80.0);
+        assert_eq!(offsets, vec![0.0, 26.0, 106.0, 138.0, 218.0, 298.0]);
+        assert_eq!(reveal_bounds(0.0, 200.0, offsets[4], offsets[5]), 98.0);
+        assert_eq!(reveal_bounds(98.0, 200.0, offsets[1], offsets[2]), 26.0);
+        assert_eq!(section_offsets(&rows, 56.0).last(), Some(&226.0));
     }
 
     #[test]
