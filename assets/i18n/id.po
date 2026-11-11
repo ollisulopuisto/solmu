@@ -3851,3 +3851,11 @@ msgstr "Enter untuk mengirim"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Dua hari lalu"
+
+#: src/ui/chats.rs
+msgid "Pinned"
+msgstr "Disematkan"
+
+#: src/ui/chats.rs
+msgid "Other chats"
+msgstr "Obrolan lain"

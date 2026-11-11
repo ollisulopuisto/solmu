@@ -3856,3 +3856,11 @@ msgstr "Enter envia"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Anteontem"
+
+#: src/ui/chats.rs
+msgid "Pinned"
+msgstr "Fixados"
+
+#: src/ui/chats.rs
+msgid "Other chats"
+msgstr "Outras conversas"

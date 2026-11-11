@@ -3878,3 +3878,11 @@ msgstr "Enter отправляет"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Позавчера"
+
+#: src/ui/chats.rs
+msgid "Pinned"
+msgstr "Закреплённые"
+
+#: src/ui/chats.rs
+msgid "Other chats"
+msgstr "Другие чаты"

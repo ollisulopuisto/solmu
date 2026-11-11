@@ -3749,3 +3749,11 @@ msgstr "以 Enter 送出"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "前天"
+
+#: src/ui/chats.rs
+msgid "Pinned"
+msgstr "已釘選"
+
+#: src/ui/chats.rs
+msgid "Other chats"
+msgstr "其他聊天"

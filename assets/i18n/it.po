@@ -3857,3 +3857,11 @@ msgstr "Invio invia"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "L'altro ieri"
+
+#: src/ui/chats.rs
+msgid "Pinned"
+msgstr "Fissati"
+
+#: src/ui/chats.rs
+msgid "Other chats"
+msgstr "Altre chat"

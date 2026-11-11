@@ -1698,10 +1698,17 @@ fn section_header(app: &App, ui: &mut egui::Ui, pinned: bool, height: f32) {
             egui::Stroke::new(1.0, app.palette.outline),
         );
     }
+    // Keep each catalog key a literal call: extraction reads gettext's
+    // argument, not a conditional expression.
+    let label = if pinned {
+        crate::i18n::gettext(app.locale, "Pinned")
+    } else {
+        crate::i18n::gettext(app.locale, "Other chats")
+    };
     ui.painter().text(
         rect.left_center() + vec2(16.0, 0.0),
         egui::Align2::LEFT_CENTER,
-        crate::i18n::gettext(app.locale, if pinned { "Pinned" } else { "Other chats" }),
+        label,
         egui::FontId::proportional(12.0),
         app.palette.secondary,
     );
@@ -1731,11 +1738,13 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
     }
     // A pin is a shortcut, not a removal: pinned chats keep their rail
     // chips AND their ordinary rows here, linked ones included.
-    let chat_ids: Vec<ChatId> = app
+    // One traversal keeps both the ids and the favorite flags: a per-row
+    // app.chat lookup would repeat a hash search for every chat every frame.
+    let (chat_ids, favorites): (Vec<ChatId>, Vec<bool>) = app
         .visible_chats()
         .into_iter()
-        .map(|c| c.id.clone())
-        .collect();
+        .map(|chat| (chat.id.clone(), chat.favorite))
+        .unzip();
     if chat_ids.is_empty() {
         // The favorites title is translated, so it is bound here: the tuple
         // below borrows it for this frame, and every other arm stays a literal.
@@ -1770,10 +1779,6 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     // Labels appear only when both groups remain in this filtered view.
-    let favorites = chat_ids
-        .iter()
-        .map(|id| app.chat(id).is_some_and(|chat| chat.favorite))
-        .collect::<Vec<_>>();
     let list_rows = sectioned_rows(&favorites);
     // Virtual headers have short, noninteractive rows of their own.
     ui.spacing_mut().item_spacing.y = 0.0;

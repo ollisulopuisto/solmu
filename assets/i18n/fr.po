@@ -3874,3 +3874,11 @@ msgstr "Entrée envoie"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Avant-hier"
+
+#: src/ui/chats.rs
+msgid "Pinned"
+msgstr "Épinglés"
+
+#: src/ui/chats.rs
+msgid "Other chats"
+msgstr "Autres discussions"

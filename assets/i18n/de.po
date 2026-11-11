@@ -3870,3 +3870,11 @@ msgstr "Enter sendet"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Vorgestern"
+
+#: src/ui/chats.rs
+msgid "Pinned"
+msgstr "Angepinnt"
+
+#: src/ui/chats.rs
+msgid "Other chats"
+msgstr "Andere Chats"
