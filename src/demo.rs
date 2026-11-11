@@ -22943,11 +22943,25 @@ mod bubble_detail_tests {
                     bubble.left() - balloon.left()
                 }
             };
+            // bubbles-out-2 is two emoji and nothing else: it draws free,
+            // without a balloon, so it has no tail to measure.
+            let free = rect(
+                &ctx,
+                crate::ui::conversation::bubble_id(chat, "bubbles-out-2").with("rect"),
+            )
+            .unwrap_or_else(|| panic!("{page}: bubbles-out-2 is drawn"));
+            assert!(
+                !meshes.iter().any(|mesh| {
+                    (mesh.top() - free.top()).abs() < 1.5
+                        && (mesh.bottom() - free.bottom()).abs() < 1.5
+                        && mesh.contains(free.center())
+                }),
+                "{page}: bubbles-out-2's free emoji must not grow a balloon"
+            );
             for (id, own, tailed) in [
                 ("bubbles-in-1", false, false),
                 ("bubbles-in-2", false, true),
                 ("bubbles-out-1", true, false),
-                ("bubbles-out-2", true, false),
                 ("bubbles-out-3", true, true),
                 ("bubbles-in-4", false, true),
                 ("bubbles-out-4", true, true),
