@@ -15004,8 +15004,12 @@ mod tests {
     #[test]
     fn composed_forward_survives_account_switch_and_hidden_progress() {
         let mut app = app();
-        let (second, _) =
-            Account::detached(&app.dirs, AccountId::from("second"), Default::default()).unwrap();
+        let (second, _) = Account::detached(
+            &app.dirs,
+            AccountId::parse("2").unwrap(),
+            Default::default(),
+        )
+        .unwrap();
         app.accounts.push(second);
         let owner = app.account().id.clone();
         app.forward_generation = 9;
@@ -15021,7 +15025,7 @@ mod tests {
             text: "header\nbody".into(),
             state: crate::composed_forward::State::Sending,
         });
-        app.switch_account(&AccountId::from("second"));
+        app.switch_account(&AccountId::parse("2").unwrap());
         assert!(app.forward_items.is_empty());
         let visible = app.active;
         app.active = 0;
