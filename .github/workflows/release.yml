@@ -34,6 +34,12 @@ jobs:
       - name: Require the release commit on main
         run: |
           git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          # This throwaway branch builds only the user-requested PR277+278 test DMG.
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF_NAME" = test/pr277-pr278 ]; then
+            git merge-base --is-ancestor 761a8e552c0e7eb804a8116eb2ed9e9ab5aa4626 "$GITHUB_SHA"
+            git merge-base --is-ancestor c536b652b37cc2911c4a8c35b1b1a314cfd5092f "$GITHUB_SHA"
+            exit 0
+          fi
           if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
             echo "Release tags must point to a commit already on origin/main." >&2
             exit 1
@@ -227,7 +233,7 @@ jobs:
             # native-packages only accepts alpha/beta/rc prereleases.
             # Keep the descriptive manual suffix for the download filename.
             package_version="$version-alpha.${{ github.run_number }}"
-            version="$version-manual.${{ github.run_number }}"
+            version="$version-test-pr277-761a8e5-pr278-c536b65.${{ github.run_number }}"
           else
             version="${GITHUB_REF_NAME#v}"
             package_version="$version"
@@ -284,13 +290,13 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           # Not a v* tag, so it can never retrigger this workflow.
-          tag_name: manual-macos
+          tag_name: test-pr277-pr278
           target_commitish: ${{ github.sha }}
-          name: macOS manual builds
+          name: Solmu PR277 + PR278 test build
           body: |
-            Notarized macOS builds from manual runs (Apple Silicon by default) (Actions -> Release -> Run workflow).
-            Download the newest DMG; discard the draft to clear old builds. Multi-platform
-            releases still come from v* tags.
+            Experimental arm64 build combining draft PR277 (761a8e5) and PR278 (c536b65).
+            No merge to main. Viewer interaction and favorites list pixels await user testing.
+            This is separate from normal main builds.
           draft: true
           prerelease: true
           make_latest: false
