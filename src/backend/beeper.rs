@@ -3645,8 +3645,10 @@ pub fn run(
                 Command::BeeperResumeForwards(marks) => {
                     for mark in crate::composed_forward::unresolved_marks(marks, &api.base_url) {
                         let key = (mark.member.chat.clone(), mark.message.clone());
-                        if !forward_pending.contains_key(&key) {
-                            forward_pending.insert(key, mark.member.account);
+                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                            forward_pending.entry(key)
+                        {
+                            entry.insert(mark.member.account);
                             pending_sends.push((mark.member.chat, mark.message, Instant::now()));
                         }
                     }
@@ -4902,15 +4904,15 @@ fn poll_forward_mark(
                 account: account.into(),
                 chat: chat.clone(),
             });
-            if !wire.id.is_empty() {
-                emit(Event::BeeperForwardResolved {
-                    origin: api.base_url.clone(),
-                    account: account.into(),
-                    chat: chat.clone(),
-                    pending: pending.into(),
-                    final_id: wire.id.clone(),
-                });
-            }
+        }
+        if (confirmed || failed) && !wire.id.is_empty() {
+            emit(Event::BeeperForwardResolved {
+                origin: api.base_url.clone(),
+                account: account.into(),
+                chat: chat.clone(),
+                pending: pending.into(),
+                final_id: wire.id.clone(),
+            });
         }
         if failed {
             emit(Event::Info(

@@ -5716,6 +5716,10 @@ impl App {
             }
             Event::Info(message) => {
                 let message = match message.as_str() {
+                    "Beeper reports that a message failed to send" => crate::i18n::gettext(self.locale,
+                        "Beeper reports that a message failed to send").into_owned(),
+                    "Beeper forward confirmation timed out; check history before retrying" => crate::i18n::gettext(self.locale,
+                        "Beeper forward confirmation timed out; check history before retrying").into_owned(),
                     "Beeper has not confirmed this send after 60 seconds; check history before retrying" => crate::i18n::gettext(self.locale,
                         "Beeper has not confirmed this send after 60 seconds; check history before retrying").into_owned(),
                     _ => message,
@@ -15148,6 +15152,22 @@ mod tests {
         };
         app.apply(Action::CloseDialog, &ctx);
         assert!(app.dialog.is_none());
+    }
+
+    #[test]
+    fn forward_failure_notices_are_extractable_translations() {
+        let source = include_str!("app.rs");
+        let normalized = source.split_whitespace().collect::<Vec<_>>().join(" ");
+        for literal in [
+            "Beeper reports that a message failed to send",
+            "Beeper forward confirmation timed out; check history before retrying",
+        ] {
+            assert!(
+                normalized.contains(&format!("gettext(self.locale, \"{literal}\")"))
+                    || normalized.contains(&format!("gettext( self.locale, \"{literal}\", )")),
+                "{literal}"
+            );
+        }
     }
 
     #[test]
