@@ -1832,6 +1832,8 @@ impl App {
         let abandoned =
             (self.adding_account && !self.is_linked()).then(|| self.account().id.clone());
         self.park_composer();
+        self.forward_dialog_hidden =
+            matches!(self.dialog, Some(Dialog::Forward { .. })) || self.composed_forward_running();
         self.clear_account_ui();
         self.active = index;
         self.adding_account = false;
@@ -1839,7 +1841,9 @@ impl App {
             self.remove_account(abandoned);
         }
         self.restore_composer();
-        if let Some(first) = self.forward_items.first() {
+        if (self.forward_dialog_hidden || self.composed_forward_running())
+            && let Some(first) = self.forward_items.first()
+        {
             let chat = first.source_chat.clone();
             let mut messages = Vec::new();
             for item in &self.forward_items {
@@ -10927,6 +10931,7 @@ impl App {
                     self.settings_dirty = true;
                 }
                 self.dialog = None;
+                self.forward_dialog_hidden = false;
                 self.invite = None;
                 self.forward_search.clear();
                 self.forward_recipients.clear();
