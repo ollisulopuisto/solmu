@@ -2411,6 +2411,15 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     for_everyone: true,
                 });
             }
+            "previous-session-results" => {
+                app.batch_ui.owner = app.account().id.0.clone();
+                app.batch_ui.previous_session_results = vec![crate::model::BatchItem {
+                    chat: "Synthetic previous chat".into(),
+                    message: Some("Synthetic message".into()),
+                    everyone: true,
+                    result: Some(Err("Accepted request, confirmation unavailable".into())),
+                }];
+            }
             "archive-review" | "archived-selection" => {
                 let ids: Vec<_> = app
                     .chats
