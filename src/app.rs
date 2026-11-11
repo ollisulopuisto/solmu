@@ -14327,6 +14327,149 @@ mod tests {
     }
 
     #[test]
+    fn pending_media_survives_cache_eviction_and_inactive_trimming() {
+        let mut app = app();
+        let (backend, _commands) = Backend::recording();
+        app.backend = backend;
+        let local = seed_pending_media(&mut app);
+        let member = app.pending_media[&local].job.member.clone();
+        let template = app.conversations["pending-target"].messages[0].clone();
+        for n in 0..210 {
+            let mut message = template.clone();
+            message.id = format!("history-{n}");
+            app.conversations
+                .get_mut("pending-target")
+                .unwrap()
+                .messages
+                .push(message);
+        }
+        for n in 0..20 {
+            let id = format!("other-{n}");
+            app.chats.push(Chat::new(id.clone(), "Other".into()));
+            app.conversations.entry(id.clone()).or_default();
+            app.open_chat(id);
+            assert!(
+                app.conversations
+                    .get("pending-target")
+                    .is_some_and(|c| c.message(&local).is_some()),
+                "unresolved row must survive cache rotation"
+            );
+        }
+        app.apply_backend_event(
+            Event::BeeperMediaProgress {
+                local: local.clone(),
+                member,
+                state: crate::pending_media::State::NotSubmitted("upload".into()),
+            },
+            true,
+        );
+        app.open_chat("pending-target".into());
+        assert!(app.pending_media[&local].retryable());
+        assert_eq!(
+            app.conversations["pending-target"]
+                .message(&local)
+                .unwrap()
+                .status,
+            Delivery::Failed
+        );
+    }
+
+    #[test]
+    fn pending_media_sparse_echo_keeps_preview_and_caption_until_real_attachment() {
+        let mut app = app();
+        let local = seed_pending_media(&mut app);
+        let member = app.pending_media[&local].job.member.clone();
+        let mut echo = app.conversations["pending-target"].messages[0].clone();
+        echo.id = "pending".into();
+        echo.content = Content::Text("[message]".into());
+        app.apply_backend_event(
+            Event::BeeperMediaResolved {
+                local: local.clone(),
+                member: member.clone(),
+                message: Box::new(echo.clone()),
+                complete: false,
+            },
+            true,
+        );
+        let preview = app.conversations["pending-target"]
+            .message("pending")
+            .unwrap();
+        assert!(
+            matches!(&preview.content, Content::Document { file_name, caption: Some(caption), .. } if file_name == "synthetic.pdf" && caption == "caption")
+        );
+        assert_eq!(app.pending_media[&local].visible, "pending");
+        // Even a success with sparse content must not turn a file into generic text.
+        echo.id = "final".into();
+        app.apply_backend_event(
+            Event::BeeperMediaResolved {
+                local: local.clone(),
+                member,
+                message: Box::new(echo),
+                complete: true,
+            },
+            true,
+        );
+        assert!(matches!(
+            app.conversations["pending-target"]
+                .message("final")
+                .unwrap()
+                .content,
+            Content::Document { .. }
+        ));
+        assert!(!app.pending_media.contains_key(&local));
+    }
+
+    #[test]
+    fn pending_media_refusal_preserves_view_once_and_staged_photo() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let mut chat = Chat::new("target".into(), "Target".into());
+        chat.backend_origin = Some("local".into());
+        chat.backend_account = Some("whatsapp".into());
+        app.chats.push(chat);
+        app.open_chat = Some("target".into());
+        app.stage(Pending::Picture {
+            width: 1,
+            height: 1,
+            rgba: std::sync::Arc::new(vec![1, 2, 3, 255]),
+            texture: None,
+        });
+        app.pending_view_once = true;
+        let account = app.account().id.clone();
+        app.send_pending(account, "target".into(), "caption".into(), vec![]);
+        assert!(
+            app.pending_view_once,
+            "refusal cannot downgrade a private photo"
+        );
+        assert_eq!(app.pending.len(), 1);
+        assert_eq!(app.composer, "caption");
+        assert!(
+            !std::iter::from_fn(|| commands.try_recv().ok())
+                .any(|c| matches!(c, Command::BeeperMedia(_) | Command::SendImage { .. }))
+        );
+    }
+
+    #[test]
+    fn pending_media_guard_literals_are_extractable_translations() {
+        let source = include_str!("app.rs");
+        let normalized = source.split_whitespace().collect::<Vec<_>>().join(" ");
+        for literal in [
+            "Destination unavailable, ambiguous or read-only; files kept.",
+            "Beeper attachments cannot carry view-once or selected mentions; files kept.",
+            "Too many pending media items; files kept.",
+            "Original destination is unavailable; not retried.",
+            "This media item has no confirmed message identity yet. Check its sending status.",
+        ] {
+            assert!(
+                normalized.contains(&format!("gettext(self.locale, \"{literal}\")"))
+                    || normalized.contains(&format!("gettext( self.locale, \"{literal}\", )")),
+                "untranslated guard: {literal}"
+            );
+        }
+    }
+
+    #[test]
     fn opening_an_offline_chat_preserves_seeded_history() {
         let root = tempfile::tempdir().unwrap();
         let (mut app, _events) = App::headless(AppDirs::under(root.path()), Settings::default());

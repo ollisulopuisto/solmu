@@ -5209,6 +5209,51 @@ mod tests {
         }
     }
     #[test]
+    fn pending_media_acceptance_uses_requested_chat_when_omitted() {
+        for (chat_field, pending, accepted) in [
+            ("", "pending", true),
+            (",\"chatID\":\"target\"", "pending", true),
+            (",\"chatID\":\"foreign\"", "pending", false),
+            ("", "", false),
+        ] {
+            let response = format!("{{\"pendingMessageID\":\"{pending}\"{chat_field}}}");
+            let (api, server) = pending_media_fixture(vec![
+                (
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ),
+                (
+                    "POST /v1/assets/upload/base64 ",
+                    200,
+                    r#"{"uploadID":"asset"}"#.into(),
+                ),
+                (
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ),
+                ("POST /v1/chats/target/messages ", 200, response),
+            ]);
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), b"synthetic").unwrap();
+            let result = api.send_pending_media(
+                &pending_media_job(&api.base_url, file.path()),
+                &AtomicBool::new(false),
+            );
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "chat field {chat_field:?}, pending {pending:?}"
+            );
+            if let Ok(result) = result {
+                assert_eq!(result.chat, "target");
+            }
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
     fn pending_media_poll_requires_exact_account_and_binds_final_id() {
         for (account, sender, expect_resolved) in [
             ("foreign", true, false),
