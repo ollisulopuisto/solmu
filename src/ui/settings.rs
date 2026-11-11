@@ -2130,17 +2130,8 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
         {
             app.actions.push(Action::ShowDialog(Dialog::Shortcuts));
         }
-        if theme::soft_button(
-            ui,
-            &palette,
-            Some(Icon::Info),
-            &crate::i18n::gettext(app.locale, "About"),
-            false,
-        )
-        .clicked()
-        {
-            app.actions.push(Action::ShowDialog(Dialog::About));
-        }
+        // No About chip: the section itself already carries what the
+        // dialog shows, and the macOS menu opens the dialog on its own.
         if theme::soft_button(
             ui,
             &palette,
@@ -2404,6 +2395,42 @@ fn theme_option(ui: &mut egui::Ui, palette: &theme::Palette, text: &str, selecte
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The About section links to shortcuts and source; an About chip inside
+    /// it would only reopen the dialog already on screen, so none exists.
+    #[test]
+    fn the_about_section_does_not_offer_a_second_about_dialog() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install(&ctx);
+        app.attach(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            about(&mut app, ui);
+        });
+        output.textures_delta.clear();
+        let tree = output
+            .platform_output
+            .accesskit_update
+            .expect("accessibility tree");
+        let buttons: Vec<_> = tree
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.role() == egui::accesskit::Role::Button)
+            .filter_map(|(_, node)| node.label().or_else(|| node.value()))
+            .collect();
+        for expected in ["Keyboard shortcuts", "Source code"] {
+            assert!(buttons.contains(&expected), "missing chip: {expected}");
+        }
+        assert!(
+            !buttons.contains(&"About"),
+            "the About section must not open a second About dialog"
+        );
+    }
 
     /// The account panel's theme combo is reachable by clicks alone: the
     /// header expanded by egui's everything-visible memory, the combo by a

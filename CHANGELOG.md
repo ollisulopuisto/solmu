@@ -9,6 +9,8 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Settings no longer shows an About button inside the About section. The button only reopened the About dialog over the section that was already on screen; the dialog remains available from the macOS menu.
+
 - The info sidebar moves from Cmd-D to Cmd-Option-I under the shared Postilaatikko/Solmu keymap; Cmd-D is reserved for the upcoming groups toggle. The shortcuts dialog and the macOS menu show the new chord.
 - Hide the View once photo toggle on Beeper chats. The send API cannot carry this mode, so offering it led to a refused send. Existing attachment drafts are retained without silently changing their send mode.
 
