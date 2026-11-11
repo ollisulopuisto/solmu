@@ -5373,7 +5373,19 @@ fn bubbleless(palette: &Palette, message: &Message) -> bool {
         &message.content,
         Content::Sticker { .. } | Content::Video { note: true, .. }
     ) || matches!(&message.content, Content::Interactive { card: Some(card), .. } if !card.carousel.is_empty())
+        || free_emoji(message)
         || bare_picture(palette, message)
+}
+
+/// Up to three emoji alone drop the bubble like a sticker, enlarged by
+/// markup's emoji scale. A quote, a link preview or mixed text keeps it.
+fn free_emoji(message: &Message) -> bool {
+    message.quoted.is_none()
+        && matches!(
+            &message.content,
+            Content::Text { text, preview: None }
+                if crate::emoji::only_emoji(text).is_some_and(|count| count <= 3)
+        )
 }
 
 /// Whether `messages[index]` ends its run: the next message is from the other
@@ -13414,6 +13426,52 @@ mod reaction_tests {
         });
         assert!(!bare_picture(&messages, &quoting));
         assert!(!bare_picture(&messages, &with_reactions(Vec::new())));
+    }
+
+    /// One to three emoji alone draw without a bubble, like a sticker, in
+    /// either direction; four or more, mixed text, a link preview or a
+    /// quote keep it. markup::emoji_scale enlarges the same range.
+    #[test]
+    fn pure_emoji_messages_drop_the_bubble() {
+        let palette = Palette::dark();
+        let emoji = |text: &str| Message {
+            content: Content::text(text),
+            ..with_reactions(Vec::new())
+        };
+        assert!(bubbleless(&palette, &emoji("\u{1F4A3}")));
+        assert!(bubbleless(
+            &palette,
+            &emoji("\u{1F602} \u{1F64F} \u{1F44D}")
+        ));
+        let mut own = emoji("\u{1F4A3}");
+        own.from_me = true;
+        assert!(bubbleless(&palette, &own));
+        assert!(!bubbleless(
+            &palette,
+            &emoji("\u{1F602}\u{1F602}\u{1F602}\u{1F602}")
+        ));
+        assert!(!bubbleless(&palette, &emoji("ok \u{1F602}")));
+        let mut linked = emoji("\u{1F4A3}");
+        linked.content = Content::Text {
+            text: "\u{1F4A3}".into(),
+            preview: Some(crate::model::LinkPreview {
+                url: "https://example.com".into(),
+                title: None,
+                description: None,
+            }),
+        };
+        assert!(!bubbleless(&palette, &linked));
+        let mut quoting = emoji("\u{1F4A3}");
+        quoting.quoted = Some(crate::model::Quoted {
+            labelled: None,
+            chat: None,
+            id: "q".into(),
+            sender: "a@s.whatsapp.net".into(),
+            sender_name: None,
+            summary: "hi".into(),
+            mentions: Vec::new(),
+        });
+        assert!(!bubbleless(&palette, &quoting));
     }
 
     #[test]

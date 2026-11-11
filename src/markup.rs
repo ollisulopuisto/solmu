@@ -70,6 +70,17 @@ struct Span {
     quote: bool,
 }
 
+/// Size multiplier for an emoji-only message: one emoji largest, two or
+/// three big, anything else body size. Bubbles drop at the same threshold
+/// (`bubbleless` in ui::conversation), like a sticker.
+fn emoji_scale(text: &str) -> f32 {
+    match emoji::only_emoji(text) {
+        Some(1) => 3.0,
+        Some(2..=3) => 2.4,
+        _ => 1.0,
+    }
+}
+
 /// Lays text out within `max_width`.
 pub fn layout(
     ui: &egui::Ui,
@@ -78,8 +89,9 @@ pub fn layout(
     style: &Style,
     max_width: f32,
 ) -> Text {
-    let big = emoji::only_emoji(text).is_some_and(|count| count <= 3);
-    let size = if big { style.size * 2.4 } else { style.size };
+    let scale = emoji_scale(text);
+    let big = scale > 1.0;
+    let size = style.size * scale;
     let mut job = LayoutJob::default();
     job.wrap.max_width = max_width;
     let mut placements = Vec::new();
@@ -971,6 +983,21 @@ const KNOWN_TLDS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
+    use super::emoji_scale;
+
+    /// One emoji draws largest, two or three big, four or more and mixed
+    /// text at body size. `bubbleless` frees the same one-to-three range.
+    #[test]
+    fn emoji_only_messages_scale_by_count() {
+        assert_eq!(emoji_scale("\u{1F4A3}"), 3.0);
+        assert_eq!(emoji_scale("\u{1F602} \u{1F44D}"), 2.4);
+        assert_eq!(emoji_scale("\u{1F602} \u{1F64F} \u{1F44D}"), 2.4);
+        assert_eq!(emoji_scale("\u{1F602}\u{1F602}\u{1F602}\u{1F602}"), 1.0);
+        assert_eq!(emoji_scale("ok \u{1F602}"), 1.0);
+        assert_eq!(emoji_scale("hello"), 1.0);
+        assert_eq!(emoji_scale(""), 1.0);
+    }
+
     #[test]
     fn wrapped_named_links_keep_the_target_on_each_title_character() {
         let ctx = egui::Context::default();

@@ -9,6 +9,7 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Emoji-only messages of up to three emoji draw without a bubble, like stickers: one emoji largest, two or three big, and in group chats under a floating sender name. A message quoting another, carrying a link preview, or mixing text with emoji keeps its bubble.
 - The info sidebar moves from Cmd-D to Cmd-Option-I under the shared Postilaatikko/Solmu keymap; Cmd-D is reserved for the upcoming groups toggle. The shortcuts dialog and the macOS menu show the new chord.
 - Hide the View once photo toggle on Beeper chats. The send API cannot carry this mode, so offering it led to a refused send. Existing attachment drafts are retained without silently changing their send mode.
 - On macOS the message field applies the system's text replacements (System Settings > Keyboard > Text Replacements): a shortcut typed before a space, return, or punctuation expands to its phrase, including when adding a line or sending. Edits in System Settings apply the next time the window gains focus.
