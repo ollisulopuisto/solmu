@@ -798,8 +798,8 @@ fn sections(app: &App) -> Vec<Section> {
         |settings| &mut settings.send_typing,
     );
     privacy.toggle(
-        "Remove tracking parameters when opening, copying and fetching links",
-        "Off by default. Removes known tracking keys, keeps recognized signed URLs, and never changes messages. Some links may still need their original parameters.",
+        translated(locale, "Remove tracking parameters when opening, copying and fetching links"),
+        translated(locale, "Off by default. Removes known tracking keys, keeps recognized signed URLs, and never changes messages. Some links may still need their original parameters."),
         |settings| &mut settings.remove_link_tracking,
     );
     app_lock_rows(app, &mut privacy);
