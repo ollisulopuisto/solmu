@@ -1122,6 +1122,36 @@ mod tests {
         );
     }
 
+    /// The Beeper adapter's `plain_rich_text` maps normalized bridge HTML
+    /// (`<strong>`, `<em>`, `<del>`, `<code>`, `<pre>`, `<blockquote>`) to
+    /// exactly these strings; keep the renderer in lockstep with the mapper.
+    #[test]
+    fn beeper_emitted_styles_parse_and_strip() {
+        assert_eq!(
+            kinds("*bold* _and_ ~gone~ `x`"),
+            vec![
+                ("bold".into(), true, false, false, false),
+                (" ".into(), false, false, false, false),
+                ("and".into(), false, true, false, false),
+                (" ".into(), false, false, false, false),
+                ("gone".into(), false, false, true, false),
+                (" ".into(), false, false, false, false),
+                ("x".into(), false, false, false, true),
+            ]
+        );
+        assert_eq!(
+            plain("*bold* _and_ ~gone~ `x`", &[]),
+            "bold and gone x"
+        );
+        assert_eq!(plain("> quoted", &[]), "\u{258e} quoted");
+        assert_eq!(
+            plain("```\nline one\nline two\n```", &[]),
+            "line one\nline two"
+        );
+        // The mapper's crossing-tag degradation stays readable, never panics.
+        assert_eq!(plain("*a_b*_c_", &[]), "a_bc");
+    }
+
     #[test]
     fn stray_markers_stay_literal() {
         assert_eq!(plain("2 * 3 = 6", &[]), "2 * 3 = 6");

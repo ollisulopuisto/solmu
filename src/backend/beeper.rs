@@ -5062,6 +5062,164 @@ mod tests {
         );
     }
 
+    /// Bridge-labelled fixture matrix: the normalized-HTML shapes each
+    /// network's bridge is expected to deliver through Beeper's `text`
+    /// field, plus the raw/plain/Markdown fallbacks seen when a bridge does
+    /// no conversion at all. Each expectation is the WhatsApp-style markup
+    /// string the renderer (`crate::markup`) turns back into styled spans.
+    /// These prove parser behaviour only; only live captures per bridge
+    /// prove every bridge really sends these shapes.
+    #[test]
+    fn rich_text_style_fixture_matrix() {
+        let fixtures: &[(&str, &str, &str)] = &[
+            // WhatsApp: *bold*, _italic_, ~strike~, `mono` arrive as tags.
+            ("whatsapp bold", "<p><strong>bold</strong></p>", "*bold*"),
+            ("whatsapp bold b", "<p><b>bold</b></p>", "*bold*"),
+            ("whatsapp italics", "<p><em>italics</em></p>", "_italics_"),
+            ("whatsapp italics i", "<p><i>italics</i></p>", "_italics_"),
+            (
+                "whatsapp overstrike",
+                "<p><del>overstrike</del></p>",
+                "~overstrike~",
+            ),
+            ("telegram strike s", "<p><s>gone</s></p>", "~gone~"),
+            (
+                "signal strike strike",
+                "<p><strike>gone</strike></p>",
+                "~gone~",
+            ),
+            (
+                "inline code",
+                "<p>run <code>make test</code> now</p>",
+                "run `make test` now",
+            ),
+            (
+                "pre block",
+                "<pre>line one\nline two</pre>",
+                "```\nline one\nline two\n```",
+            ),
+            (
+                "pre wrapping code",
+                "<pre><code>fn main() {}</code></pre>",
+                "```\nfn main() {}\n```",
+            ),
+            (
+                "blockquote",
+                "<blockquote>quoted</blockquote>",
+                "> quoted",
+            ),
+            (
+                "blockquote paragraphs",
+                "<blockquote><p>one</p><p>two</p></blockquote>",
+                "> one\n> two",
+            ),
+            (
+                "blockquote raw newline",
+                "<blockquote>one\ntwo</blockquote>",
+                "> one\n> two",
+            ),
+            (
+                "nested bold italic",
+                "<p><strong>bold <em>both</em></strong></p>",
+                "*bold _both_*",
+            ),
+            (
+                "styled entities",
+                "<p><strong>a &amp; b</strong></p>",
+                "*a & b*",
+            ),
+            (
+                "bullet list",
+                "<ul><li>one</li><li>two</li></ul>",
+                "\u{2022} one\n\u{2022} two",
+            ),
+            (
+                "numbered list keeps bullets",
+                "<ol><li>one</li><li>two</li></ol>",
+                "\u{2022} one\n\u{2022} two",
+            ),
+            (
+                "styled link label",
+                r#"<a href="https://example.com/page"><strong>Fixture</strong></a>"#,
+                "*Fixture* (https://example.com/page)",
+            ),
+            // Raw fallbacks: no tags, so the field passes through untouched
+            // and the renderer applies WhatsApp rules as it always has.
+            (
+                "raw whatsapp markers",
+                "*bold* _italics_ ~overstrike~",
+                "*bold* _italics_ ~overstrike~",
+            ),
+            (
+                "raw bullet list",
+                "* one\n* two",
+                "* one\n* two",
+            ),
+            (
+                "markdown fallback stays literal",
+                "**bold** and __italic__",
+                "**bold** and __italic__",
+            ),
+            (
+                "entity-escaped tags stay literal",
+                "&lt;del&gt;literal&lt;/del&gt;",
+                "<del>literal</del>",
+            ),
+        ];
+        for (label, raw, expected) in fixtures {
+            assert_eq!(&plain_rich_text(raw), expected, "{label}");
+        }
+    }
+
+    /// The exact shapes behind the 2026-11-11 WhatsApp self-chat report:
+    /// "*bold*", "_italics_", "~overstrike~" and a "* " bullet list
+    /// arrived as unstyled plain text, overstrike as literal "<del>" tags.
+    #[test]
+    fn whatsapp_self_message_styles_survive() {
+        let raw = "<p><strong>bold</strong></p><p><em>italics</em></p><p><del>overstrike</del></p><ul><li>one</li><li>two</li></ul>";
+        assert_eq!(
+            plain_rich_text(raw),
+            "*bold*\n_italics_\n~overstrike~\n\u{2022} one\n\u{2022} two"
+        );
+    }
+
+    /// Styling must never become an injection channel: blocked elements stay
+    /// dropped, unsafe URLs stay label-only, event attributes never reach the
+    /// output, and the mapper never emits raw HTML of its own.
+    #[test]
+    fn rich_text_styles_stay_safe() {
+        assert_eq!(
+            plain_rich_text("<p>a</p><script>alert(1)</script><p><strong>b</strong></p>"),
+            "a\n*b*"
+        );
+        assert_eq!(
+            plain_rich_text("<style>* { color: red }</style><p><em>x</em></p>"),
+            "_x_"
+        );
+        assert_eq!(
+            plain_rich_text(r#"<a href="https://example.com" onclick="alert(1)">x</a>"#),
+            "x (https://example.com)"
+        );
+        assert_eq!(
+            plain_rich_text(r#"<del><a href="javascript:alert(1)">x</a></del>"#),
+            "~x~"
+        );
+        // An unknown tag stays literal text; styles around it still apply.
+        assert_eq!(
+            plain_rich_text("<strong>a</strong> <foo>bar</foo>"),
+            "*a* <foo>bar</foo>"
+        );
+    }
+
+    /// Malformed and crossing tags degrade to literal marker characters the
+    /// renderer leaves unstyled, never to panics or raw HTML.
+    #[test]
+    fn rich_text_malformed_tags_degrade_safely() {
+        assert_eq!(plain_rich_text("<strong>bold"), "*bold");
+        assert_eq!(plain_rich_text("<b>a<i>b</b>c</i>"), "*a_b*_c_");
+        assert_eq!(plain_rich_text("<strong>ok</strong> <del"), "*ok* <del");
+    }
+
     #[test]
     fn dropped_command_channel_stops_connected_control_worker() {
         let (base_url, _, stop) = start_stub();
