@@ -9,7 +9,9 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Cmd-R now quote-replies to the latest loaded incoming message in ordinary chats too, preserving the draft and focusing the composer through the existing Reply action. Cmd-L opens the existing Forward dialog for the selected messages, or the latest forwardable message. Beeper forwarding itself remains unsupported until the separate composed re-send feature is implemented.
 
+- Linked chats use the default network's profile picture, then the other linked networks in their saved order. Initials appear only when none has a picture.
 - Accept Beeper send confirmation when a pending message resolves to its final message ID. Successful sends no longer get a false 60-second warning solely because the ID changed. Unknown confirmations are not called pending; nothing is automatically resent.
 
 
