@@ -23285,19 +23285,40 @@ mod card_width_tests {
                     );
                 }
                 if width > 1000.0 {
-                    assert!((rect("card-plain").width() - 100.0).abs() < 1.0);
-                    assert!((rect("text-medium").width() - 260.0).abs() < 1.0);
-                    assert!((rect("text-medium-two").width() - 260.0).abs() < 1.0);
-                    assert!((rect("text-long").width() - 420.0).abs() < 1.0);
+                    // Own text bubbles settle at their natural content width
+                    // and near-equal neighbours join the larger one; only the
+                    // incoming rows keep the stepped grid.
+                    assert!(
+                        rect("card-plain").width() < 100.0,
+                        "short own text takes its natural width, not the80pt step: {:?}",
+                        rect("card-plain")
+                    );
+                    assert!(
+                        (rect("text-medium").width() - rect("text-medium-two").width()).abs() < 8.0,
+                        "near-equal neighbours settle within the join tolerance: {:?} vs {:?}",
+                        rect("text-medium"),
+                        rect("text-medium-two")
+                    );
+                    assert!(
+                        rect("text-long").width() > rect("text-medium").width() + 10.0,
+                        "a much longer text keeps its own width: {:?} vs {:?}",
+                        rect("text-long"),
+                        rect("text-medium")
+                    );
+                    assert!(
+                        rect("text-long").width() < 420.0,
+                        "natural width stays under the old400pt step: {:?}",
+                        rect("text-long")
+                    );
                     assert!((default - 340.0).abs() < 1.0, "320pt content plus margins");
                     assert!(
                         (rect("card-wider").width() - 420.0).abs() < 1.0,
-                        "long reply uses the400pt content step: {:?}",
+                        "incoming long reply keeps the400pt content step: {:?}",
                         rect("card-wider")
                     );
                     assert!(
                         (rect("card-wider-preview").width() - 420.0).abs() < 1.0,
-                        "different body lengths share the400pt step: {:?}",
+                        "incoming previews keep the400pt step: {:?}",
                         rect("card-wider-preview")
                     );
                 } else {
