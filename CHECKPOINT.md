@@ -861,3 +861,7 @@ confirmation. Real network send confirmations remain unverified. No merge/build.
 API references:
 https://developers.beeper.com/desktop-api-reference/resources/messages/methods/retrieve
 https://developers.beeper.com/desktop-api-reference/resources/messages/methods/send
+
+Review follow-up: route the new static confirmation-timeout key through gettext
+at the Event::Info UI boundary. Other dynamic Info messages are unchanged. No
+translation catalogs regenerated; the maintainer owns that step.
