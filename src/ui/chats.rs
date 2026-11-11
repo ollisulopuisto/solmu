@@ -597,6 +597,27 @@ fn legacy_header(app: &mut App, ui: &mut egui::Ui) {
                             palette.text,
                             buttons_width,
                         );
+                    } else if app.show_saved {
+                        if theme::icon_button(
+                            ui,
+                            Icon::ArrowLeft,
+                            18.0,
+                            palette.secondary,
+                            palette.text,
+                            "Back to chats",
+                        )
+                        .tab_stop(Stop::Back)
+                        .clicked()
+                        {
+                            app.actions.push(Action::ToggleSaved);
+                        }
+                        header_title(
+                            ui,
+                            crate::i18n::gettext(app.locale, "Saved").as_ref(),
+                            theme::bold(20.0),
+                            palette.text,
+                            buttons_width,
+                        );
                     } else if app.show_archived || app.locked_folder {
                         if theme::icon_button(
                             ui,
@@ -687,7 +708,7 @@ fn search_field(app: &mut App, ui: &mut egui::Ui) {
 
 /// Four permanent queue cells, independent of the additional scope.
 fn facet_row(app: &mut App, ui: &mut egui::Ui) {
-    if app.show_starred {
+    if app.show_starred || app.show_saved {
         return;
     }
     let palette = app.palette;
@@ -954,6 +975,27 @@ fn macos_header(app: &mut App, ui: &mut egui::Ui) {
                         palette.text,
                         header_buttons_width(ui, &buttons),
                     );
+                } else if app.show_saved {
+                    if theme::icon_button(
+                        ui,
+                        Icon::ArrowLeft,
+                        18.0,
+                        palette.secondary,
+                        palette.text,
+                        "Back to chats",
+                    )
+                    .tab_stop(Stop::Back)
+                    .clicked()
+                    {
+                        app.actions.push(Action::ToggleSaved);
+                    }
+                    header_title(
+                        ui,
+                        crate::i18n::gettext(app.locale, "Saved").as_ref(),
+                        theme::bold(16.0),
+                        palette.text,
+                        header_buttons_width(ui, &buttons),
+                    );
                 } else if app.show_archived || app.locked_folder {
                     if theme::icon_button(
                         ui,
@@ -1127,8 +1169,9 @@ fn filter_icon(
 /// labeled row above the chat list, so the rail keeps the rest. Search
 /// lists every match, so the chips hide there.
 pub(super) fn filter_chips(app: &mut App, ui: &mut egui::Ui) {
-    if app.show_starred {
-        // The starred panel replaces the chat list, so its filters go with it.
+    if app.show_starred || app.show_saved {
+        // The starred and saved panels replace the chat list, so its
+        // filters go with it.
         return;
     }
     if !app.locked_folder_open() && !app.search.trim().is_empty() {
@@ -1466,6 +1509,215 @@ fn starred_row(
         actions.push(Action::OpenMessage {
             chat: message.chat.clone(),
             message: message.id.clone(),
+        });
+    }
+}
+
+/// The locally saved messages, newest bookmark first, filtered by the
+/// panel's own search over text, sender and chat. Clicking an entry opens
+/// its chat at the message; removing a bookmark never deletes the message,
+/// and saving never marked the chat read.
+fn saved_list(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let width = ui.available_width();
+    let mut text = app.saved_search.clone();
+    widgets::search_field(
+        ui,
+        &palette,
+        egui::Id::new("saved-search"),
+        &mut text,
+        crate::i18n::gettext(app.locale, "Search saved messages").as_ref(),
+        width,
+    );
+    if text != app.saved_search {
+        app.saved_search = text;
+    }
+    ui.add_space(4.0);
+    if app.settings.beeper.saved.is_empty() {
+        widgets::empty_state(
+            ui,
+            &palette,
+            Icon::Bookmark,
+            crate::i18n::gettext(app.locale, "No saved messages").as_ref(),
+            crate::i18n::gettext(
+                app.locale,
+                "Right-click a message and choose Save for later to keep it here.",
+            )
+            .as_ref(),
+        );
+        return;
+    }
+    // Rows read the list from the app while they hand their actions back, so
+    // the actions are collected here and applied once the list is drawn.
+    let mut actions = Vec::new();
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for entry in crate::saved::filtered(&app.settings.beeper.saved, &app.saved_search) {
+                if app.chat(&entry.member.chat).is_some_and(|chat| chat.locked) {
+                    continue;
+                }
+                saved_row(app, ui, &palette, entry, &mut actions);
+            }
+        });
+    app.actions.append(&mut actions);
+}
+
+/// One saved message: where it is, its date and the words it had when it
+/// was saved. Clicking opens the chat at the message while the original is
+/// still known; once it is gone the row says so instead of jumping.
+fn saved_row(
+    app: &App,
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    entry: &crate::saved::SavedMessage,
+    actions: &mut Vec<Action>,
+) {
+    let width = ui.available_width();
+    let clock = widgets::line(
+        ui,
+        &crate::util::clock(entry.timestamp),
+        theme::regular(11.0),
+        palette.secondary,
+        80.0,
+        1,
+    );
+    let body_width = (width - 32.0 - clock.size().x - 10.0).max(60.0);
+    let body = widgets::line(
+        ui,
+        &entry.preview,
+        theme::regular(13.0),
+        palette.text,
+        body_width,
+        12,
+    );
+    let bubble_height = body.size().y + 12.0;
+    let row_id = list_row_id(&entry.member.chat, &entry.message);
+    let (rect, _) =
+        ui.allocate_exact_size(vec2(width, 26.0 + bubble_height + 10.0), Sense::hover());
+    let response = ui.interact(rect, row_id, Sense::click());
+    theme::reveal_focus(&response);
+    // The jump works only while the chat is still there and the message is
+    // known locally; a fully loaded chat without it means it is gone.
+    let chat = app.chat(&entry.member.chat);
+    let available = chat.is_some()
+        && app
+            .conversations
+            .get(&entry.member.chat)
+            .is_none_or(|conversation| {
+                !conversation.complete
+                    || conversation
+                        .messages
+                        .iter()
+                        .any(|message| message.id == entry.message)
+            });
+    let name = chat
+        .map(|chat| app.chat_title_of(&chat.id))
+        .unwrap_or_else(|| entry.chat_title.clone());
+    let label = if available {
+        format!("{name}, {}", entry.preview)
+    } else {
+        format!(
+            "{name}, {}",
+            crate::i18n::gettext(app.locale, "Original message unavailable")
+        )
+    };
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &label)
+    });
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, 6.0, palette.surface_hover.gamma_multiply(0.5));
+    }
+    let when = crate::util::moment_stamp(app.locale, entry.timestamp);
+    let name_line = widgets::line(
+        ui,
+        &name,
+        theme::medium(14.0),
+        palette.text,
+        width - 140.0,
+        1,
+    );
+    name_line.paint(
+        ui,
+        pos2(
+            rect.left() + 16.0,
+            rect.top() + 14.0 - name_line.size().y / 2.0,
+        ),
+        palette.text,
+    );
+    ui.painter().text(
+        pos2(rect.right() - 16.0, rect.top() + 14.0),
+        egui::Align2::RIGHT_CENTER,
+        when,
+        theme::regular(11.5),
+        palette.secondary,
+    );
+    let bubble_width = (body.size().x + 20.0 + clock.size().x + 6.0).min(width - 32.0);
+    let left = if entry.from_me {
+        rect.right() - 16.0 - bubble_width
+    } else {
+        rect.left() + 16.0
+    };
+    let bubble = Rect::from_min_size(
+        pos2(left, rect.top() + 26.0),
+        vec2(bubble_width, bubble_height),
+    );
+    ui.painter().rect_filled(
+        bubble,
+        10.0,
+        if entry.from_me {
+            palette.bubble_out
+        } else {
+            palette.bubble_in
+        },
+    );
+    body.paint(
+        ui,
+        pos2(bubble.left() + 10.0, bubble.top() + 6.0),
+        palette.text,
+    );
+    clock.paint(
+        ui,
+        pos2(
+            bubble.right() - 10.0 - clock.size().x,
+            bubble.bottom() - 6.0 - clock.size().y,
+        ),
+        palette.secondary,
+    );
+    if !available {
+        ui.painter().text(
+            pos2(rect.left() + 16.0, bubble.bottom() + 4.0),
+            egui::Align2::LEFT_CENTER,
+            crate::i18n::gettext(app.locale, "Original message unavailable"),
+            theme::regular(11.0),
+            palette.dim,
+        );
+    }
+    response.context_menu(|ui| {
+        if ui
+            .button(crate::i18n::gettext(app.locale, "Remove from Saved"))
+            .clicked()
+        {
+            actions.push(Action::SetSaved {
+                chat: entry.member.chat.clone(),
+                message: entry.message.clone(),
+                saved: false,
+            });
+            ui.close();
+        }
+    });
+    if available
+        && response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+    {
+        actions.push(Action::OpenMessage {
+            chat: entry.member.chat.clone(),
+            message: entry.message.clone(),
         });
     }
 }
@@ -1832,6 +2084,10 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
     }
     if app.show_starred {
         starred_list(app, ui);
+        return;
+    }
+    if app.show_saved {
+        saved_list(app, ui);
         return;
     }
     if !app.search.trim().is_empty() {

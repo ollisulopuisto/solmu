@@ -33,6 +33,7 @@ pub enum Stop {
     /// One network plate in the rail's bottom group, by its position.
     Network(u8),
     Starred,
+    Saved,
     Archived,
     Locked,
     Settings,

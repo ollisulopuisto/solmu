@@ -126,6 +126,10 @@ pub struct Account {
     /// them instead of the chats.
     pub starred: Vec<crate::archive::Starred>,
     pub show_starred: bool,
+    /// Whether the left panel lists the locally saved messages instead of
+    /// the chats, and the text the panel's own search filters them by.
+    pub show_saved: bool,
+    pub saved_search: String,
     /// Ids of the starred messages of each chat, for the mark in the
     /// conversation. Filled when a chat opens and on every confirmed star.
     pub stars: HashMap<ChatId, HashSet<String>>,
@@ -263,6 +267,8 @@ impl Account {
             labels: Vec::new(),
             starred: Vec::new(),
             show_starred: false,
+            show_saved: false,
+            saved_search: String::new(),
             stars: HashMap::new(),
             pins: HashMap::new(),
             chat_pins: HashMap::new(),

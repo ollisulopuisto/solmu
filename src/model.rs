@@ -2888,6 +2888,14 @@ pub enum Action {
         message: String,
         starred: bool,
     },
+    /// Saves the message locally for later, or removes the bookmark. Local
+    /// only: nothing is starred or pinned on the account, and removing the
+    /// bookmark never deletes the message.
+    SetSaved {
+        chat: ChatId,
+        message: String,
+        saved: bool,
+    },
     /// Opens the attachment picker for the current chat. With `documents`
     /// the picked files go as documents, pictures included.
     Attach {
@@ -3060,6 +3068,8 @@ pub enum Action {
     ShowArchived(bool),
     /// Shows or hides the starred messages in the left panel.
     ToggleStarred,
+    /// Opens or closes the locally saved messages list.
+    ToggleSaved,
     /// Mutes (`true`) or unmutes every followed channel.
     MuteAllChannels(bool),
     /// Joins the group of the invite being previewed.
