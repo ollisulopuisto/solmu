@@ -170,6 +170,11 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             let (modifiers, key_code) = READ_LATER.keys[0];
             key(modifiers, key_code, read_later);
         }
+        // Cmd+Alt+I is consumed before plain Cmd+I: consume_key also matches
+        // when the event carries extra modifiers, so Reply later would
+        // otherwise swallow the info-sidebar chord.
+        let (modifiers, key_code) = INFO_SIDEBAR.keys[0];
+        key(modifiers, key_code, Action::ToggleInfoSidebar);
         if let Some(reply_later) = reply_later {
             let (modifiers, key_code) = REPLY_LATER.keys[0];
             key(modifiers, key_code, reply_later);
@@ -196,8 +201,6 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
         let (modifiers, key_code) = SIDEBAR.keys[0];
         key(modifiers, key_code, Action::ToggleSidebar);
-        let (modifiers, key_code) = INFO_SIDEBAR.keys[0];
-        key(modifiers, key_code, Action::ToggleInfoSidebar);
         let (modifiers, key_code) = SETTINGS.keys[0];
         key(modifiers, key_code, Action::ToggleSettings);
         let (modifiers, key_code) = QUIT.keys[0];
@@ -746,7 +749,7 @@ fn take_control_tab(input: &mut egui::InputState) -> Option<i32> {
 }
 
 /// Handles keys while the image preview is open. No chat shortcut runs, and
-/// typing and clipboard input are swallowed; Left/Right browse photos, while
+/// typing and clipboard input are swallowed; Left/Right browse photos and videos, while
 /// Tab, Enter, Space and Up/Down stay for the preview's own controls.
 fn preview_keys(app: &mut App, ctx: &egui::Context) {
     let mut actions = Vec::new();
@@ -926,8 +929,8 @@ fn editor_keys(app: &mut App, ctx: &egui::Context) {
 }
 
 /// Handles a playing clip's keys while the viewer shows it: Space plays or
-/// pauses, M mutes, S changes the speed, and the arrows jump five seconds, as
-/// they step through the album only while a picture is on the stage. Escape
+/// pauses, M mutes, S changes the speed, and Alt+arrows jump five seconds.
+/// Plain arrows step through the album for both photos and videos. Escape
 /// closes the viewer, which puts a video back in its message.
 fn video_keys(app: &mut App, ctx: &egui::Context) {
     let Some((message, path)) = app
@@ -970,10 +973,10 @@ fn video_keys(app: &mut App, ctx: &egui::Context) {
         if input.consume_key(Modifiers::NONE, Key::S) {
             actions.push(Action::CycleVideoSpeed);
         }
-        if input.consume_key(Modifiers::NONE, Key::ArrowLeft) {
+        if input.consume_key(Modifiers::ALT, Key::ArrowLeft) {
             actions.extend(jump(-5.0));
         }
-        if input.consume_key(Modifiers::NONE, Key::ArrowRight) {
+        if input.consume_key(Modifiers::ALT, Key::ArrowRight) {
             actions.extend(jump(5.0));
         }
     });
@@ -1330,13 +1333,15 @@ const SIDEBAR: Shortcut = Shortcut {
 };
 const INFO_SIDEBAR: Shortcut = Shortcut {
     id: "info-sidebar",
-    keys: &[(Modifiers::COMMAND, Key::D)],
-    label: Some("Ctrl+D"),
+    // Shared Postilaatikko/Solmu keymap: the info sidebar lives on
+    // Cmd+Alt+I; Cmd+D is reserved for the groups toggle.
+    keys: &[(COMMAND_ALT, Key::I)],
+    label: Some("Ctrl+Alt+I"),
     description: Some("Show or hide the info sidebar"),
     menu: Some(MenuItem {
         id: "info-sidebar",
         text: "Toggle Info Sidebar",
-        accelerator: "Super+KeyD",
+        accelerator: "Super+Alt+KeyI",
     }),
 };
 const SETTINGS: Shortcut = Shortcut {
@@ -1626,6 +1631,7 @@ pub fn menu_accelerator(modifiers: Modifiers, key: Key) -> Option<String> {
         Key::C => "KeyC",
         Key::D => "KeyD",
         Key::F => "KeyF",
+        Key::I => "KeyI",
         Key::N => "KeyN",
         Key::Q => "KeyQ",
         Key::V => "KeyV",
@@ -1874,7 +1880,7 @@ mod tests {
             ),
             ("Ctrl+C", "Copy the selected messages"),
             ("Ctrl+B", "Collapse or expand the chat list"),
-            ("Ctrl+D", "Show or hide the info sidebar"),
+            ("Ctrl+Alt+I", "Show or hide the info sidebar"),
             (
                 "Ctrl+End",
                 "Jump to the newest message (when the input is empty)",
@@ -2569,21 +2575,49 @@ mod tests {
     }
 
     #[test]
-    fn command_d_opens_info_not_the_chat_list_or_reply_later() {
+    fn command_alt_i_opens_info_and_command_d_is_free_for_groups() {
         let (_root, mut app, ids) = app_with_chats(1);
         app.open_chat = Some(ids[0].clone());
         let ctx = egui::Context::default();
-        assert!(!press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
+        // The shared keymap moves the info sidebar to Cmd+Alt+I and reserves
+        // Cmd+D for the groups toggle, so Cmd+D no longer opens info.
+        assert!(press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
+        assert!(
+            app.actions.is_empty(),
+            "Cmd+D stays unbound until the groups toggle lands"
+        );
+        // The extra Alt must not leak the press into plain Cmd+I (Reply
+        // later): the info binding is consumed before that one.
+        assert!(!press(
+            &mut app,
+            &ctx,
+            Key::I,
+            Modifiers::COMMAND | Modifiers::ALT
+        ));
         assert!(matches!(
             app.actions.as_slice(),
             [Action::ToggleInfoSidebar]
         ));
-        assert!(app.sidebar_visible, "Cmd+D does not toggle the left list");
+        assert!(
+            app.sidebar_visible,
+            "Cmd+Alt+I does not toggle the left list"
+        );
+        assert_eq!(
+            INFO_SIDEBAR.keys,
+            &[(Modifiers::COMMAND | Modifiers::ALT, Key::I)]
+        );
         assert_eq!(REPLY_LATER.keys, &[(Modifiers::COMMAND, Key::I)]);
         assert_eq!(SIDEBAR.keys, &[(Modifiers::COMMAND, Key::B)]);
+        // menu_accelerator formats any chord, bound or not, so the registry
+        // itself must show Cmd+D unbound until the groups toggle claims it.
+        assert!(!REGISTRY.iter().any(|row| matches!(
+            row,
+            Row::Binding(entry)
+                if entry.keys.contains(&(Modifiers::COMMAND, Key::D))
+        )));
         assert_eq!(
-            menu_accelerator(Modifiers::COMMAND, Key::D).as_deref(),
-            Some("Super+KeyD")
+            menu_accelerator(Modifiers::COMMAND | Modifiers::ALT, Key::I).as_deref(),
+            Some("Super+Alt+KeyI")
         );
     }
 
