@@ -9559,6 +9559,7 @@ impl App {
                 }
             }
             Action::OpenUrl(url) => {
+                let url = self.link_action_url(&url);
                 if let Some(code) = crate::safety::group_invite_code(&url) {
                     self.invite = Some(crate::model::GroupInvite {
                         code: code.clone(),
@@ -9571,6 +9572,10 @@ impl App {
                 } else {
                     self.toast_error("This link type cannot be opened from Solmu");
                 }
+            }
+            Action::CopyLink(url) => {
+                ctx.copy_text(self.link_action_url(&url));
+                self.toast("Copied");
             }
             Action::CopyText(text) => {
                 ctx.copy_text(text);
@@ -12236,6 +12241,14 @@ impl App {
                 account.reported_online = Some(online);
                 account.backend.send(Command::SetOnline(online));
             }
+        }
+    }
+
+    pub fn link_action_url(&self, url: &str) -> String {
+        if self.settings.remove_link_tracking {
+            crate::link_policy::without_tracking(url)
+        } else {
+            url.to_owned()
         }
     }
 
@@ -30801,5 +30814,46 @@ mod linked_attachment_tests {
         crate::backend::beeper::flush_temp_cleanup();
         assert!(!path.exists());
         assert!(!late.exists());
+    }
+}
+
+#[cfg(test)]
+mod link_tracking_tests {
+    use super::*;
+    #[test]
+    fn link_tracking_is_opt_in_and_never_changes_message_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(directory.path()), Settings::default());
+        let ctx = egui::Context::default();
+        let original = "https://example.com/a?q=stay%20exact&utm_source=chat#part";
+        assert!(!app.settings.remove_link_tracking);
+        assert_eq!(app.link_action_url(original), original);
+        app.settings.remove_link_tracking = true;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.actions.extend([
+                Action::CopyLink(original.into()),
+                Action::CopyText(original.into()),
+                Action::OpenUrl(original.into()),
+            ]);
+            app.background_frame(ui.ctx());
+        });
+        output.textures_delta.clear();
+        let mut copies = Vec::new();
+        let mut opened = Vec::new();
+        for command in &output.platform_output.commands {
+            match command {
+                egui::OutputCommand::CopyText(text) => copies.push(text.as_str()),
+                egui::OutputCommand::OpenUrl(url) => opened.push(url.url.as_str()),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            copies,
+            ["https://example.com/a?q=stay%20exact#part", original]
+        );
+        assert_eq!(opened, ["https://example.com/a?q=stay%20exact#part"]);
+        let signed = "https://example.com/a?utm_source=chat&X-Amz-Signature=exact#part";
+        assert_eq!(app.link_action_url(signed), signed);
+        assert!(!Settings::default().remove_link_tracking);
     }
 }

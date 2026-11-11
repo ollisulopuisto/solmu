@@ -2440,6 +2440,10 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "chat" | "" => {}
             "phone-menu" => phone_menu_sample(app),
             "link-menu" => link_menu_sample(app),
+            "tracking-privacy" => {
+                app.page = Page::Settings;
+                app.settings_search = "Privacy".into();
+            }
             "short-chat" => short_chat_sample(app),
             "chat-menu" => app.open_chat_menu = Some(app.chats[0].id.clone()),
             // Reply later / Read later: flagged rows carry the clock and
