@@ -188,6 +188,10 @@ pub struct Conversation {
     /// The height each row last took, keyed by message id, so the transcript
     /// can skip rows far from the viewport instead of laying them out.
     pub(crate) rows: HashMap<String, RowHeight>,
+    /// Settled neighbour-aware widths, keyed by message id. Decisions stick
+    /// while the chat and width cap stay the same, so appends and prepends
+    /// never resize loaded runs.
+    pub(crate) width_book: crate::run_widths::WidthBook,
     /// The keyboard page, Home, or End scroll under way in the message list.
     pub(crate) key_scroll: Option<KeyScroll>,
 }
