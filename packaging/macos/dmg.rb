@@ -26,5 +26,8 @@ Dir.mktmpdir("solmu-dmg-") do |directory|
     system("df", "-h", Dir.tmpdir, File.dirname(File.expand_path(output)))
     abort "DMG creation failed"
   end
+  abort "DMG welcome layout failed" unless system("python3",
+    File.expand_path("../dmg/restyle.py", __dir__), output, "Solmu.app",
+    File.expand_path("../dmg/welcome-solmu.png", __dir__))
   abort "DMG verification failed" unless system("hdiutil", "verify", output)
 end
