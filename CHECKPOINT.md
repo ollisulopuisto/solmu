@@ -906,3 +906,34 @@ manual upgrades are a backend safeguard, not a new user-visible promotion flow.
 The PR description/changelog now make this limitation explicit. A waiting versus
 active UI model is outside this queue-full repair.
 
+
+## Reply/forward shortcut gap - November 11, 2026
+
+Owner Instinct, branch `fix/reply-forward-shortcuts`, based on main after #274.
+Ordinary chats had no Cmd-R handler: only merged::show consumed that key. Add
+exact-modifier Cmd-R handling for ordinary chats via existing Action::Reply,
+which preserves an unedited draft and focuses the composer. Latest incoming
+selection ignores later outgoing/revoked rows, independently of unread divider.
+Linked Cmd-R remains in merged::show and retains exact-source routing.
+
+Cmd-L was free (Cmd-Option-Shift-L is app lock). It now opens the existing
+Forward dialog for the selection or latest forwardable loaded message, including
+an exact source chat in linked views. No send is performed by the shortcut.
+Existing Beeper Command::Forward remains unsupported: this is dialog wiring,
+not the separately proposed composed-forward implementation. Overlay guards and
+exact modifiers preserve other shortcuts. Added native key-dispatch regressions
+and updated the shortcut registry/help. Fmt and diff checks pass locally; native
+execution/real Mac UI remain unverified pending CI. No merge or build.
+
+PR #276 follow-up review: exclude synthetic call records from ordinary replies,
+cancel selection before Reply so its composer is visible, and share the exact
+linked-view ownership predicate with merged::show (duplicate IDs/group-kind
+fallbacks keep ordinary Cmd-R). Regressions include those edge cases. Local
+native test compilation was attempted but exceeded the available command window
+while building dependencies; no passing native result claimed.
+Own adversarial pass also keeps the new message shortcuts out of the image
+viewer and uses the linked view's exact valid-members filter for Forward,
+including direct-chat, unlocked, same-origin and unique-ID constraints.
+CI caught one needless-unwrap Clippy lint and a regression fixture borrow
+conflict. Use if-let dispatch and construct the member before mutating settings.
+No production behavior change in this follow-up.
