@@ -1,3 +1,9 @@
+## Unreleased: local flat groups
+
+- Latest/Groups list views with local-only many-to-many membership.
+- Assign groups with Apply/Cancel, additive drag with Undo, safe group deletion.
+- Cmd-D switches views; requires shared keymap #281 (info is Cmd-Option-I).
+
 # Changelog
 
 Newest first. One `## <version>` section per release, bullets under it;

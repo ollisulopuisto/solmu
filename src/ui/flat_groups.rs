@@ -227,6 +227,7 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
         });
     });
     if apply {
+        app.flat_group_ui.undo = None;
         for group in &mut app.settings.flat_groups.items {
             group.members.retain(|m| m != &target);
             if selected.contains(&group.id) {

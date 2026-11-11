@@ -2596,17 +2596,15 @@ mod tests {
     }
 
     #[test]
-    fn command_alt_i_opens_info_and_command_d_is_free_for_groups() {
+    fn command_alt_i_opens_info_and_command_d_toggles_groups() {
         let (_root, mut app, ids) = app_with_chats(1);
         app.open_chat = Some(ids[0].clone());
         let ctx = egui::Context::default();
         // The shared keymap moves the info sidebar to Cmd+Alt+I and reserves
         // Cmd+D for the groups toggle, so Cmd+D no longer opens info.
-        assert!(press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
-        assert!(
-            app.actions.is_empty(),
-            "Cmd+D stays unbound until the groups toggle lands"
-        );
+        assert!(!press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
+        assert_eq!(app.actions, [Action::ToggleFlatGroups]);
+        app.actions.clear();
         // The extra Alt must not leak the press into plain Cmd+I (Reply
         // later): the info binding is consumed before that one.
         assert!(!press(
@@ -2629,13 +2627,15 @@ mod tests {
         );
         assert_eq!(REPLY_LATER.keys, &[(Modifiers::COMMAND, Key::I)]);
         assert_eq!(SIDEBAR.keys, &[(Modifiers::COMMAND, Key::B)]);
-        // menu_accelerator formats any chord, bound or not, so the registry
-        // itself must show Cmd+D unbound until the groups toggle claims it.
-        assert!(!REGISTRY.iter().any(|row| matches!(
+        assert!(REGISTRY.iter().any(|row| matches!(
             row,
             Row::Binding(entry)
-                if entry.keys.contains(&(Modifiers::COMMAND, Key::D))
+                if entry.id == "flat-groups" && entry.keys.contains(&(Modifiers::COMMAND, Key::D))
         )));
+        assert_eq!(
+            menu_accelerator(Modifiers::COMMAND, Key::D).as_deref(),
+            Some("Super+KeyD")
+        );
         assert_eq!(
             menu_accelerator(Modifiers::COMMAND | Modifiers::ALT, Key::I).as_deref(),
             Some("Super+Alt+KeyI")
