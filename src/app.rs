@@ -650,6 +650,9 @@ pub struct App {
     /// Photos and playable videos of the open chat, oldest first, as the viewer
     /// album lists them. Loaded when the viewer opens.
     pub viewer_media: Vec<crate::model::MediaItem>,
+    pub viewer_media_more: bool,
+    pub viewer_media_loading: bool,
+    viewer_step_pending: Option<i8>,
     /// Chat whose album `viewer_media` belongs to, so a late answer for another
     /// chat is dropped instead of shown.
     pub viewer_media_chat: Option<ChatId>,
@@ -1577,6 +1580,9 @@ impl App {
             motion_playing: None,
             sticker_view: None,
             viewer_media: Vec::new(),
+            viewer_media_more: true,
+            viewer_media_loading: false,
+            viewer_step_pending: None,
             viewer_media_chat: None,
             viewer_media_state: HashMap::new(),
             copy_rows: Default::default(),
@@ -4444,11 +4450,77 @@ impl App {
                     }
                 }
             }
+            Event::BeeperViewerMedia {
+                chat,
+                around,
+                result,
+            } => {
+                if live && self.viewer_media_chat.as_deref() == Some(chat.as_str()) {
+                    self.viewer_media_loading = false;
+                    let pending = self.viewer_step_pending.take();
+                    match result {
+                        Ok((mut items, more)) => {
+                            for item in &mut items {
+                                if let Some(local) = self
+                                    .conversations
+                                    .get(&chat)
+                                    .and_then(|conversation| conversation.message(&item.id))
+                                    .and_then(|message| {
+                                        crate::model::MediaItem::of_message(message)
+                                            .into_iter()
+                                            .find(|local| local.card == item.card)
+                                    })
+                                {
+                                    item.path = local.path;
+                                    item.thumbnail = local.thumbnail;
+                                }
+                                if let Some(known) = self
+                                    .viewer_media
+                                    .iter()
+                                    .find(|old| old.id == item.id && old.card == item.card)
+                                {
+                                    item.path = known.path.clone().or(item.path.take());
+                                }
+                                if let Some(preview) = &self.image_preview
+                                    && preview.message() == item.id
+                                    && preview.card() == item.card
+                                {
+                                    item.path = preview
+                                        .path()
+                                        .map(std::path::Path::to_path_buf)
+                                        .or(item.path.take());
+                                }
+                            }
+                            self.viewer_media = items;
+                            self.viewer_media_more = more;
+                            if let Some(step) = pending
+                                && self.image_preview.as_ref().is_some_and(|preview| {
+                                    Some(preview.message()) == around.as_deref()
+                                })
+                            {
+                                // Apply only if this page actually supplied a neighbour.
+                                let can_step = self
+                                    .image_preview
+                                    .as_ref()
+                                    .and_then(|p| p.position(&self.viewer_media))
+                                    .and_then(|i| i.checked_add_signed(isize::from(step)))
+                                    .is_some_and(|i| i < self.viewer_media.len());
+                                if can_step {
+                                    self.actions.push(Action::ViewerStep(step));
+                                }
+                            }
+                        }
+                        Err(error) => self.toast_error(error),
+                    }
+                }
+            }
             Event::ChatMedia { chat, items, .. } => {
                 // An album for a chat the viewer has already left, or from an
                 // account that is not on screen, arrives too late to matter.
                 if live && self.viewer_media_chat.as_deref() == Some(chat.as_str()) {
                     self.viewer_media = items;
+                    self.viewer_media_loading = false;
+                    self.viewer_media_more = false;
                 }
             }
             Event::ChatUpdated(chat) => {
@@ -6756,6 +6828,7 @@ impl App {
         self.backend.send(Command::LoadChatMedia {
             chat: chat.to_owned(),
             around,
+            fresh: true,
         });
     }
 
@@ -9037,6 +9110,7 @@ impl App {
                     return;
                 }
                 let Some(index) = preview.position(&self.viewer_media) else {
+                    self.request_viewer_page(step);
                     return;
                 };
                 // Stepping stops at either end of the album, as it always has.
@@ -9044,6 +9118,9 @@ impl App {
                     .checked_add_signed(isize::from(step))
                     .filter(|next| *next < self.viewer_media.len())
                 else {
+                    if step < 0 {
+                        self.request_viewer_page(step);
+                    }
                     return;
                 };
                 let item = self.viewer_media[next].clone();
@@ -12152,6 +12229,22 @@ impl App {
         }
     }
 
+    fn request_viewer_page(&mut self, step: i8) {
+        if self.viewer_media_loading || !self.viewer_media_more {
+            return;
+        }
+        let Some(preview) = &self.image_preview else {
+            return;
+        };
+        self.viewer_step_pending = Some(step);
+        self.viewer_media_loading = true;
+        self.backend.send(Command::LoadChatMedia {
+            chat: preview.chat().to_owned(),
+            around: Some(preview.message().to_owned()),
+            fresh: false,
+        });
+    }
+
     /// Opens the full-window viewer on `preview`, and asks for the album
     /// around it, so stepping through the chat's photos and clips works from
     /// the first frame.
@@ -12164,9 +12257,13 @@ impl App {
         self.viewer_media.clear();
         self.viewer_media_state.clear();
         self.viewer_media_chat = Some(preview.chat().to_owned());
+        self.viewer_media_more = true;
+        self.viewer_media_loading = true;
+        self.viewer_step_pending = None;
         self.backend.send(Command::LoadChatMedia {
             chat: preview.chat().to_owned(),
             around: Some(preview.message().to_owned()),
+            fresh: true,
         });
         self.image_preview = Some(preview);
         self.dialog = None;

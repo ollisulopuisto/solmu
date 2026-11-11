@@ -933,3 +933,13 @@ including direct-chat, unlocked, same-origin and unique-ID constraints.
 CI caught one needless-unwrap Clippy lint and a regression fixture borrow
 conflict. Use if-let dispatch and construct the member before mutating settings.
 No production behavior change in this follow-up.
+## 2026-11-11 - Beeper chat media album (Instinct, draft)
+
+User request: browse chat-wide media with Left/Right. Existing key handlers and
+ViewerStep were already in the delivered manual.29 build, but Beeper silently
+ignored LoadChatMedia. Added a dedicated bounded history worker, exact-chat
+validation, fresh/continuation requests, and older-edge continuation. Plain arrows
+now browse photos and playable videos; Alt+arrows retain video seeking. Does not
+create an audio/document/GIF viewer or combine linked sources into one album.
+Portable adapter tests cover paging/cursor/source boundaries. Full native tests
+and macOS interaction remain unverified; do not describe this as a shipped fix.

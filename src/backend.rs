@@ -264,6 +264,8 @@ pub enum Command {
     LoadChatMedia {
         chat: ChatId,
         around: Option<String>,
+        /// True for an open/live refresh; false continues the older edge.
+        fresh: bool,
     },
     Download {
         /// Asked for by the reader: no size limit, a deadline that grows
@@ -1189,6 +1191,12 @@ pub enum Event {
         chat: ChatId,
         around: Option<String>,
         items: Vec<crate::model::MediaItem>,
+    },
+    /// Beeper album page, cumulative within its exact source chat.
+    BeeperViewerMedia {
+        chat: ChatId,
+        around: Option<String>,
+        result: Result<(Vec<crate::model::MediaItem>, bool), String>,
     },
     ChatUpdated(Box<Chat>),
     /// Active pins of one chat, for the line under its header.
