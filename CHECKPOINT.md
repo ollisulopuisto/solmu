@@ -943,3 +943,10 @@ now browse photos and playable videos; Alt+arrows retain video seeking. Does not
 create an audio/document/GIF viewer or combine linked sources into one album.
 Portable adapter tests cover paging/cursor/source boundaries. Full native tests
 and macOS interaction remain unverified; do not describe this as a shipped fix.
+## 2026-11-11 - Favorites list sections, option B (Instinct, draft)
+
+Approved sketch B: small Pinned/Other chats labels, with a subtle rule only at
+the group boundary. Headers appear only when both favorite and ordinary chats
+remain visible; search/empty/Favorites-only/all-unpinned views remain ungrouped.
+Variable-height virtual rows include headers in keyboard reveal geometry.
+Native tests and actual pixels still require verification. No release build.
