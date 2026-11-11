@@ -5870,7 +5870,7 @@ fn own_text_cap(ui: &egui::Ui, palette: &Palette, selecting: bool) -> f32 {
         WHATSAPP_WIDTH_SHARE
     };
     let available = ui.available_width() - if selecting { SELECT_GUTTER } else { 0.0 };
-    let max_width = (available * share).min(560.0).max(0.0);
+    let max_width = (available * share).clamp(0.0, 560.0);
     let inset = if palette.bubbles == theme::BubbleStyle::Messages {
         MESSAGES_BUBBLE_MARGIN.sum().x
     } else {
