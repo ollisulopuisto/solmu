@@ -5477,6 +5477,49 @@ mod tests {
     }
 
     #[test]
+    fn composed_forward_poll_preserves_confirmation_failure_and_progress_feedback() {
+        for (status, keep, confirmed, failed) in [
+            ("SUCCESS", false, true, false),
+            ("FAIL_SEND", false, false, true),
+            ("PENDING", true, false, false),
+        ] {
+            let body = serde_json::json!({"id":"final", "chatID":"target", "accountID":"signal", "isSender":true, "sendStatus":{"status":status}}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let events = Mutex::new(Vec::new());
+            assert_eq!(
+                poll_forward_mark(
+                    &api,
+                    &"target".into(),
+                    "pending",
+                    "signal",
+                    Duration::ZERO,
+                    &|e| events.lock().unwrap().push(e)
+                ),
+                keep,
+                "{status}"
+            );
+            let events = events.into_inner().unwrap();
+            assert_eq!(events.iter().any(|e| matches!(e, Event::BeeperSendConfirmed { account, chat, .. } if account == "signal" && chat == "target")), confirmed, "{status}");
+            assert!(events.iter().any(|e| matches!(e, Event::Messages { chat, messages, .. } if chat == "target" && messages.len() == 1)), "{status}: missing chat feedback");
+            assert_eq!(events.iter().any(|e| matches!(e, Event::Messages { messages, .. } if messages.iter().any(|m| matches!(m.status, Delivery::Failed)))), failed, "{status}");
+            assert_eq!(
+                events.iter().any(|e| matches!(e, Event::Info(_))),
+                failed,
+                "{status}"
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .any(|e| matches!(e, Event::BeeperForwardResolved { .. })),
+                confirmed,
+                "{status}"
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
     fn composed_forward_restart_reloads_exact_pending_identity_and_resolves_final_mark() {
         for (account, sender, expected) in [
             ("signal", true, true),

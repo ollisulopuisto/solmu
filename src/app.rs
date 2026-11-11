@@ -4443,6 +4443,7 @@ impl App {
                         chat,
                     },
                     message,
+                    pending: true,
                 };
                 if !self.settings.beeper.forwarded_messages.contains(&mark) {
                     self.settings.beeper.forwarded_messages.push(mark);
@@ -15008,6 +15009,43 @@ mod tests {
         };
         app.apply(Action::CloseDialog, &ctx);
         assert!(app.dialog.is_none());
+    }
+
+    #[test]
+    fn dismissed_forward_results_stay_closed_after_account_round_trip() {
+        let mut app = app();
+        let (second, _) = Account::detached(
+            &app.dirs,
+            AccountId::parse("2").unwrap(),
+            Default::default(),
+        )
+        .unwrap();
+        app.accounts.push(second);
+        let owner = app.account().id.clone();
+        app.dialog = Some(forward_dialog(&["m"]));
+        app.forward_items.push(crate::composed_forward::Item {
+            origin: "local".into(),
+            planned: true,
+            source_chat: "source".into(),
+            source_message: "m".into(),
+            source_account: "a".into(),
+            destination_account: "b".into(),
+            attachment: None,
+            destination: "target".into(),
+            text: "body".into(),
+            state: crate::composed_forward::State::Accepted {
+                pending_id: "p".into(),
+            },
+        });
+        app.apply(Action::CloseDialog, &egui::Context::default());
+        assert!(app.dialog.is_none());
+        app.switch_account(&AccountId::parse("2").unwrap());
+        app.switch_account(&owner);
+        assert!(
+            app.dialog.is_none(),
+            "dismissed results must stay dismissed"
+        );
+        assert_eq!(app.forward_items.len(), 1, "keep provenance and batch rows");
     }
 
     #[test]
