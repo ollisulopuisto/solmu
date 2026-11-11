@@ -13398,10 +13398,11 @@ mod reaction_tests {
         }
         let chat = Chat::new(message.chat.clone(), "Ada".into());
         if row.saved {
+            let member = app.later_key(&chat);
             crate::saved::add(
                 &mut app.settings.beeper.saved,
                 crate::saved::SavedMessage::new(
-                    app.later_key(&chat),
+                    member,
                     message,
                     chat.name.clone(),
                     "Ada".into(),
