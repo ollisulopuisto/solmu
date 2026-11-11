@@ -11,9 +11,12 @@ def use_official_mirrors(root):
     paths += sorted((apt / 'sources.list.d').glob('*.list'))
     paths += sorted((apt / 'sources.list.d').glob('*.sources'))
     replacements = {
-        'mirror+file:/etc/apt/apt-mirrors-security.txt': 'http://security.ubuntu.com/ubuntu',
-        'mirror+file:/etc/apt/apt-mirrors.txt': 'http://archive.ubuntu.com/ubuntu',
-        'azure.archive.ubuntu.com': 'archive.ubuntu.com',
+        'mirror+file:/etc/apt/apt-mirrors-security.txt': 'https://security.ubuntu.com/ubuntu',
+        'mirror+file:/etc/apt/apt-mirrors.txt': 'https://archive.ubuntu.com/ubuntu',
+        'http://azure.archive.ubuntu.com/ubuntu': 'https://archive.ubuntu.com/ubuntu',
+        'https://azure.archive.ubuntu.com/ubuntu': 'https://archive.ubuntu.com/ubuntu',
+        'http://archive.ubuntu.com/ubuntu': 'https://archive.ubuntu.com/ubuntu',
+        'http://security.ubuntu.com/ubuntu': 'https://security.ubuntu.com/ubuntu',
     }
     changed = 0
     for path in paths:
