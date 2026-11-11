@@ -1,0 +1,51 @@
+name: Ubuntu connectivity diagnostic
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/ubuntu-connectivity.yml
+
+permissions:
+  contents: read
+
+jobs:
+  connectivity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Resolver configuration and fixed-host DNS probes
+        shell: bash
+        run: |
+          set +e
+          date -u
+          echo '=== Resolver configuration ==='
+          cat /etc/resolv.conf
+          echo '=== Resolver service status ==='
+          timeout 10 resolvectl status 2>&1 || true
+          echo '=== Fixed-host DNS lookups ==='
+          for host in azure.archive.ubuntu.com archive.ubuntu.com security.ubuntu.com packages.microsoft.com github.com; do
+            echo "=== $host ==="
+            timeout 8 getent ahostsv4 "$host"
+            echo "lookup_exit=$?"
+          done
+      - name: Plain curl timings for fixed public endpoints
+        shell: bash
+        run: |
+          set +e
+          for url in \
+            http://azure.archive.ubuntu.com/ubuntu/dists/noble/InRelease \
+            https://azure.archive.ubuntu.com/ubuntu/dists/noble/InRelease \
+            http://archive.ubuntu.com/ubuntu/dists/noble/InRelease \
+            https://archive.ubuntu.com/ubuntu/dists/noble/InRelease \
+            http://security.ubuntu.com/ubuntu/dists/noble-security/InRelease \
+            https://security.ubuntu.com/ubuntu/dists/noble-security/InRelease \
+            https://packages.microsoft.com/ubuntu/24.04/prod/dists/noble/InRelease \
+            https://github.com; do
+            echo "=== $url ==="
+            curl --silent --show-error --output /dev/null \
+              --connect-timeout 5 --max-time 10 \
+              --write-out 'http=%{http_code} remote=%{remote_ip} dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} first_byte=%{time_starttransfer} total=%{time_total}\n' \
+              "$url"
+            echo "curl_exit=$?"
+          done
