@@ -14381,7 +14381,10 @@ mod tests {
         let member = app.pending_media[&local].job.member.clone();
         let mut echo = app.conversations["pending-target"].messages[0].clone();
         echo.id = "pending".into();
-        echo.content = Content::Text("[message]".into());
+        echo.content = Content::Text {
+            text: "[message]".into(),
+            preview: None,
+        };
         app.apply_backend_event(
             Event::BeeperMediaResolved {
                 local: local.clone(),
