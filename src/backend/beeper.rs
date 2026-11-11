@@ -1917,6 +1917,11 @@ fn plain_rich_text(raw: &str) -> String {
         "h2",
         "h3",
         "tr",
+        "del",
+        "s",
+        "strike",
+        "code",
+        "pre",
     ];
     let looks_html = lower.match_indices('<').any(|(start, _)| {
         let tail = lower[start + 1..].trim_start_matches('/');
@@ -1949,6 +1954,12 @@ fn plain_rich_text(raw: &str) -> String {
     let mut blocked: Option<String> = None;
     let mut link: Option<String> = None;
     let mut link_label: Option<usize> = None;
+    // Semantic styles survive as the WhatsApp-style markup the renderer
+    // already parses: markers are emitted where the tags sit, so properly
+    // nested HTML styles correctly and crossing tags degrade to literal
+    // marker characters. Raw HTML is never emitted.
+    let mut in_pre = false;
+    let mut quote_depth: usize = 0;
     while !rest.is_empty() {
         if rest.starts_with('<') {
             // A quoted > is an attribute value, not the end of a tag.
@@ -1988,6 +1999,53 @@ fn plain_rich_text(raw: &str) -> String {
                         blocked = Some(name);
                     }
                 } else if blocked.is_none() {
+                    if !in_pre {
+                        let marker = match name.as_str() {
+                            "strong" | "b" => Some('*'),
+                            "em" | "i" => Some('_'),
+                            "del" | "s" | "strike" => Some('~'),
+                            "code" => Some('`'),
+                            _ => None,
+                        };
+                        if let Some(marker) = marker {
+                            out.push(marker);
+                        }
+                    }
+                    if name == "pre" {
+                        if closing {
+                            if in_pre {
+                                in_pre = false;
+                                if !out.ends_with('\n') {
+                                    out.push('\n');
+                                }
+                                out.push_str("```\n");
+                            }
+                        } else if !in_pre {
+                            in_pre = true;
+                            if !out.ends_with('\n') {
+                                out.push('\n');
+                            }
+                            out.push_str("```\n");
+                        }
+                    }
+                    if name == "blockquote" && !in_pre {
+                        if closing {
+                            quote_depth = quote_depth.saturating_sub(1);
+                            // An empty trailing quote line adds nothing.
+                            if out.ends_with("> ") {
+                                out.truncate(out.len() - 2);
+                            }
+                            if !out.ends_with('\n') {
+                                out.push('\n');
+                            }
+                        } else {
+                            if !out.ends_with('\n') && !out.ends_with("> ") {
+                                out.push('\n');
+                            }
+                            quote_depth += 1;
+                            out.push_str("> ");
+                        }
+                    }
                     if name == "a" {
                         if closing {
                             let label_start = link_label.take();
@@ -2028,10 +2086,13 @@ fn plain_rich_text(raw: &str) -> String {
                     }
                     if matches!(
                         name.as_str(),
-                        "br" | "p" | "div" | "li" | "blockquote" | "tr" | "h1" | "h2" | "h3"
+                        "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3"
                     ) {
-                        if !out.ends_with('\n') {
+                        if !out.ends_with('\n') && !out.ends_with("> ") {
                             out.push('\n');
+                        }
+                        if quote_depth > 0 && !in_pre && !out.ends_with("> ") {
+                            out.push_str("> ");
                         }
                         if name == "li" && !closing {
                             out.push_str("• ");
@@ -2044,7 +2105,12 @@ fn plain_rich_text(raw: &str) -> String {
         }
         let ch = rest.chars().next().unwrap();
         if blocked.is_none() {
-            out.push(ch);
+            if ch == '\n' && quote_depth > 0 && !in_pre {
+                out.push('\n');
+                out.push_str("> ");
+            } else {
+                out.push(ch);
+            }
         }
         rest = &rest[ch.len_utf8()..];
     }
@@ -5103,11 +5169,7 @@ mod tests {
                 "<pre><code>fn main() {}</code></pre>",
                 "```\nfn main() {}\n```",
             ),
-            (
-                "blockquote",
-                "<blockquote>quoted</blockquote>",
-                "> quoted",
-            ),
+            ("blockquote", "<blockquote>quoted</blockquote>", "> quoted"),
             (
                 "blockquote paragraphs",
                 "<blockquote><p>one</p><p>two</p></blockquote>",
@@ -5150,11 +5212,7 @@ mod tests {
                 "*bold* _italics_ ~overstrike~",
                 "*bold* _italics_ ~overstrike~",
             ),
-            (
-                "raw bullet list",
-                "* one\n* two",
-                "* one\n* two",
-            ),
+            ("raw bullet list", "* one\n* two", "* one\n* two"),
             (
                 "markdown fallback stays literal",
                 "**bold** and __italic__",
@@ -5216,7 +5274,7 @@ mod tests {
     #[test]
     fn rich_text_malformed_tags_degrade_safely() {
         assert_eq!(plain_rich_text("<strong>bold"), "*bold");
-        assert_eq!(plain_rich_text("<b>a<i>b</b>c</i>"), "*a_b*_c_");
+        assert_eq!(plain_rich_text("<b>a<i>b</b>c</i>"), "*a_b*c_");
         assert_eq!(plain_rich_text("<strong>ok</strong> <del"), "*ok* <del");
     }
 
@@ -6611,10 +6669,11 @@ mod tests {
     }
 
     #[test]
-    fn rich_html_is_text_only_and_opaque_names_are_not_presented_as_names() {
+    fn rich_html_stays_safe_and_opaque_names_are_not_presented_as_names() {
+        // Styles survive as renderer markup; scripts and raw HTML never do.
         assert_eq!(
             plain_rich_text("<p>Hi &amp; welcome</p><br><p>Next <b>bold</b></p>"),
-            "Hi & welcome\nNext bold"
+            "Hi & welcome\nNext *bold*"
         );
         assert_eq!(
             plain_rich_text(

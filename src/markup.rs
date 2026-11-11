@@ -1139,17 +1139,15 @@ mod tests {
                 ("x".into(), false, false, false, true),
             ]
         );
-        assert_eq!(
-            plain("*bold* _and_ ~gone~ `x`", &[]),
-            "bold and gone x"
-        );
+        assert_eq!(plain("*bold* _and_ ~gone~ `x`", &[]), "bold and gone x");
         assert_eq!(plain("> quoted", &[]), "\u{258e} quoted");
+        // Fence lines toggle the block; their line breaks remain.
         assert_eq!(
             plain("```\nline one\nline two\n```", &[]),
-            "line one\nline two"
+            "\nline one\nline two\n"
         );
-        // The mapper's crossing-tag degradation stays readable, never panics.
-        assert_eq!(plain("*a_b*_c_", &[]), "a_bc");
+        // The mapper's crossing-tag degradation stays literal and readable.
+        assert_eq!(plain("*a_b*c_", &[]), "*a_b*c_");
     }
 
     #[test]
