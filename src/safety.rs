@@ -204,7 +204,7 @@ pub(crate) fn is_reserved_dos_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     matches!(
         lower.as_str(),
-        "con" | "prn" | "aux" | "nul" | "conin$" | "conout$"
+        "con" | "prn" | "aux" | "nul" | "clock$" | "conin$" | "conout$"
     ) || (lower.starts_with("com") || lower.starts_with("lpt"))
         && lower.len() == 4
         && lower.as_bytes()[3].is_ascii_digit()
@@ -218,12 +218,14 @@ pub fn can_open_attachment(path: &Path) -> bool {
     if name.ends_with('.') || name.ends_with(' ') || name.contains(':') {
         return false;
     }
-    // Reject Windows DOS device names (e.g. CON, PRN, AUX, NUL, COM1..9, LPT1..9)
-    let stem = path
+    // Reject Windows DOS device names (e.g. CON, PRN, AUX, NUL, CLOCK$, COM0..9, LPT0..9).
+    // Windows checks the primary prefix before any dot, so con.custom.pdf also accesses CON.
+    let primary_stem = name.split('.').next().unwrap_or(name);
+    let file_stem = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or_default();
-    if is_reserved_dos_name(stem) {
+    if is_reserved_dos_name(primary_stem) || is_reserved_dos_name(file_stem) {
         return false;
     }
     let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
@@ -531,6 +533,13 @@ mod tests {
             "lpt0.csv",
             "CONIN$.txt",
             "conout$.png",
+            "CLOCK$.txt",
+            "clock$.pdf",
+            "CON.custom.pdf",
+            "con.tar.gz",
+            "aux.backup.png",
+            "NUL.preview.jpg",
+            "com1.data.csv",
         ] {
             assert!(!can_open_attachment(Path::new(name)), "{name}");
         }
