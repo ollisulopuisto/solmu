@@ -1116,6 +1116,7 @@ fn sections(app: &App) -> Vec<Section> {
             "Solmu".into(),
             translated(locale, "Keyboard shortcuts"),
             translated(locale, "Source code"),
+            "whatsapp-rust".into(),
         ],
         |ui, app| about(app, ui),
     );
@@ -2710,5 +2711,24 @@ mod tests {
         let mut account = Section::new(translated(Locale::English, "Account"));
         account.block(Vec::new(), |_, _| {});
         assert!(account.visible(&Filter::new("unlink")).1.is_empty());
+    }
+
+    /// Searching the protocol library's name keeps the section whose chip
+    /// links it: the keyword list names every chip the section draws.
+    #[test]
+    fn settings_search_finds_the_protocol_library_chip() {
+        let directory = tempfile::tempdir().unwrap();
+        let (app, _) = App::headless(
+            crate::paths::AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        let about = sections(&app)
+            .into_iter()
+            .find(|section| section.title == translated(Locale::English, "About"))
+            .expect("About section");
+        assert!(
+            !about.visible(&Filter::new("whatsapp-rust")).1.is_empty(),
+            "searching whatsapp-rust must keep the About section"
+        );
     }
 }
