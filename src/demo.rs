@@ -2440,7 +2440,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "chat" | "" => {}
             "phone-menu" => phone_menu_sample(app),
             "link-menu" => link_menu_sample(app),
-            "local-preview" | "local-preview-ready" => {
+            "local-preview" | "local-preview-ready" | "local-preview-image" => {
                 phone_menu_sample(app);
                 let row = app
                     .conversations
@@ -2452,12 +2452,17 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     "A guide for the weekend: https://example.invalid/weekend?utm_source=chat#walk",
                 );
                 row.thumbnail = None;
-                if part == "local-preview-ready" {
+                if part != "local-preview" {
                     let worker = crate::preview_worker::Worker::new();
                     worker.seed_fixture(&app.account().id.0, "https://example.invalid/weekend?utm_source=chat#walk", crate::link_preview::Preview {
                         title: Some("A slow weekend in Helsinki".into()),
                         description: Some("Coffee, a waterfront walk and a few places worth a detour. A synthetic preview, stored locally, with no website request.".into()),
-                        image: None, no_store: false,
+                        image: if part == "local-preview-image" {
+                            let pixels = image::RgbaImage::from_fn(160,120,|x,y| image::Rgba(if y < 70 { [90,160,180,255] } else if x < 90 { [40,100,90,255] } else { [190,160,110,255] }));
+                            let mut bytes=std::io::Cursor::new(Vec::new());
+                            image::DynamicImage::ImageRgba8(pixels).write_to(&mut bytes,image::ImageFormat::Png).unwrap();
+                            Some(bytes.into_inner())
+                        } else {None}, no_store: false,
                     });
                     app.link_previews = Some(worker);
                 }
