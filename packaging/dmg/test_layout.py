@@ -187,5 +187,20 @@ class CaptureContract(unittest.TestCase):
                 )
 
 
+class CaptureLayoutAgreement(unittest.TestCase):
+    def test_initial_capture_matches_saved_bounds(self):
+        # The first-open layout restyle.py saves and the initial evidence
+        # capture must use the same window bounds, or the initial screenshot
+        # crops the Documentation well out of the saved 760-point layout.
+        import re
+
+        restyle_text = (HERE / "restyle.py").read_text()
+        capture_text = (HERE / "capture.py").read_text()
+        saved = set(re.findall(r"set bounds of w to (\{[^}]+\})", restyle_text))
+        initial = re.search(r'\("initial",\s*"(\{[^}]+\})"\)', capture_text)
+        self.assertIsNotNone(initial, "capture.py has no initial bounds")
+        self.assertIn(initial.group(1), saved)
+
+
 if __name__ == "__main__":
     unittest.main()

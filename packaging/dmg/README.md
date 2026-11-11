@@ -11,7 +11,7 @@ and atomically replaces the image. App contents are not edited. No extra Python
 packages, downloaded executables, runner jobs, cache or artifact retention.
 
 `welcome*.png` is 4096 x 2160 at 72 dpi. The approved 775-point composition is
-anchored top-left; extra space is flat #171a20. Standard initial Finder bounds are 775 x 540
+anchored top-left; extra space is flat #171a20. Standard initial Finder bounds are 775 x 760
 including window chrome. Icon positions are (199,247) and (576,247), size 128,
 label size 16. The bottom 59 points of the 480-point composition are expendable.
 A matching background colour is set before the picture, but Finder may ignore
