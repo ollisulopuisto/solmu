@@ -292,9 +292,14 @@ fn parse(text: &str, mentions: &[Mention]) -> Vec<Span> {
         }
         if in_block {
             // The bridge mapper escapes a content line that would collide
-            // with the fence as `\```; only that exact line resolves back,
-            // so a native backslash line keeps its bytes.
-            let line = if line.trim() == "\\```" { "```" } else { line };
+            // with the fence by backslashing its backticks; that exact
+            // escape, and only it, resolves back, so a native backslash
+            // line keeps its bytes and indentation survives.
+            let resolved = line.find("\\```").and_then(|at| {
+                let candidate = format!("{}{}", &line[..at], &line[at + 1..]);
+                (candidate.trim() == "```").then_some(candidate)
+            });
+            let line = resolved.as_deref().unwrap_or(line);
             spans.push(Span {
                 text: line.to_owned(),
                 mono: true,
@@ -1238,6 +1243,8 @@ mod tests {
         );
         // A native backslash line keeps its backslash.
         assert_eq!(plain("```\n\\home\\user\n```", &[]), "\n\\home\\user\n");
+        // An escaped indented fence resolves and keeps its indentation.
+        assert_eq!(plain("```\n  \\```\n```", &[]), "\n  ```\n");
         // Native code ending in a backslash still closes at its backtick.
         let spans = parse("`a\\`", &[]);
         let mono: Vec<_> = spans.iter().filter(|span| span.mono).collect();

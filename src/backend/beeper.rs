@@ -2264,17 +2264,22 @@ fn plain_rich_text(raw: &str) -> String {
                             if in_pre {
                                 in_pre = false;
                                 // Escape a content line that would collide
-                                // with the fence; the renderer resolves the
-                                // same escape, and only that exact line.
+                                // with the fence: the backslash goes right
+                                // before the backticks, so the renderer
+                                // resolves it and any indentation survives.
                                 let trimmed = pre_content.trim_end_matches('\n');
                                 for (n, line) in trimmed.split('\n').enumerate() {
                                     if n > 0 {
                                         out.push('\n');
                                     }
                                     if line.trim() == "```" {
+                                        let at = line.find("```").unwrap_or(0);
+                                        out.push_str(&line[..at]);
                                         out.push('\\');
+                                        out.push_str(&line[at..]);
+                                    } else {
+                                        out.push_str(line);
                                     }
-                                    out.push_str(line);
                                 }
                                 pre_content.clear();
                                 if !out.ends_with('\n') {
@@ -2436,16 +2441,17 @@ fn plain_rich_text(raw: &str) -> String {
             // hint so the renderer accepts the marker.
             while emitted.len() < styles.len() {
                 let marker = styles[emitted.len()];
-                if out.chars().last().is_some_and(char::is_alphanumeric) {
+                if out.ends_with(char::is_alphanumeric) {
                     out.push('\u{200B}');
                 }
                 out.push(marker);
                 emitted.push(marker);
             }
-            if let Some(closed) = pending_boundary.take() {
-                if ch.is_alphanumeric() && out.chars().last() == Some(closed) {
-                    out.push('\u{200B}');
-                }
+            if let Some(closed) = pending_boundary.take()
+                && ch.is_alphanumeric()
+                && out.chars().last() == Some(closed)
+            {
+                out.push('\u{200B}');
             }
             if in_code && matches!(ch, '`' | '\\') {
                 out.push('\\');
@@ -6264,6 +6270,13 @@ mod tests {
                 "entity fence in pre",
                 "<pre>a\n&#96;&#96;&#96;\nb</pre>",
                 "```\na\n\\```\nb\n```",
+            ),
+            // The escape sits right before the backticks so the renderer
+            // resolves it while the indentation survives.
+            (
+                "indented fence in pre",
+                "<pre>  ```</pre>",
+                "```\n  \\```\n```",
             ),
             // A neutral tag between a close and the next word keeps the
             // boundary hint; an empty style never emits a marker pair.
