@@ -49,6 +49,11 @@ pub fn literal_text(value: &str) -> String {
             result.push('\\');
         }
         result.push(ch);
+        // The send endpoint has no explicit empty-mentions override. Break
+        // automatic @room/user scanning while preserving the visible text.
+        if ch == '@' {
+            result.push('\u{200b}');
+        }
     }
     result
 }
@@ -104,6 +109,13 @@ mod tests {
             compose("Ada\nEve", "Signal", "date", None, "<script>*hello* _yes_"),
             "Forwarded from Ada Eve (Signal), date:\n\\<script\\>\\*hello\\* \\_yes\\_"
         );
+    }
+    #[test]
+    fn source_mentions_are_visible_but_not_destination_mentions() {
+        let escaped = literal_text("hello @room and @Ada");
+        assert_eq!(escaped, "hello @\u{200b}room and @\u{200b}Ada");
+        assert!(!escaped.contains("@room"));
+        assert_eq!(escaped.replace('\u{200b}', ""), "hello @room and @Ada");
     }
     #[test]
     fn bulk_retry_never_repeats_accepted_sending_or_uncertain_items() {

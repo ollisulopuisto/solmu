@@ -4,6 +4,8 @@ This is a new send, not a bridge-native forward. The text header includes sender
 network and original timestamp (including local time zone). The source group's
 name is an explicit, default-off disclosure. Source text is escaped rather than
 carrying source mention identities or rich-text control syntax into another chat.
+A zero-width separator after each @ prevents destination-side mention scanning
+without changing the visible text.
 
 Each attachment is downloaded through the authenticated Beeper asset endpoint,
 re-uploaded, and sent separately. The first attachment carries the source body;
