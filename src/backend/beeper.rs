@@ -2995,8 +2995,18 @@ pub fn run(
     // Set by Command::Resumed: after a wake every poll timer is due at once,
     // so a link the server dropped during sleep is noticed on the next tick.
     let mut refresh_after_wake = false;
+    // Downloads the worker's queue had no room for wait here, not fail.
+    let mut media_backlog = MediaBacklog::default();
 
     loop {
+        for (card, chat, message) in media_backlog.flush(&media_tx) {
+            emit(Event::Media {
+                card,
+                chat,
+                message,
+                result: Err("Media queue is busy; retry after current downloads finish".into()),
+            });
+        }
         loop {
             let cmd = match commands.try_recv() {
                 Ok(command) => command,
@@ -4005,11 +4015,11 @@ pub fn run(
                     chat,
                     message,
                 } => {
-                    if let Err(error) = media_tx.try_send((manual, card, chat, message)) {
-                        let (_, card, chat, message) = match error {
-                            std::sync::mpsc::TrySendError::Full(value)
-                            | std::sync::mpsc::TrySendError::Disconnected(value) => value,
-                        };
+                    // A full queue parks the request; it is sent as slots free.
+                    // Only an overflowing backlog or a dead worker reports failure.
+                    if let Some((card, chat, message)) =
+                        media_backlog.submit(&media_tx, (manual, card, chat, message))
+                    {
                         emit(Event::Media {
                             card,
                             chat,
@@ -4227,6 +4237,102 @@ fn run_chat_search_cached(
     let result =
         chat_search_params(&chat, &query, from, until).and_then(|params| cache.next(api, params));
     emit_chat_search(api, chat, query, from, until, emit, result, cache.pages);
+}
+
+type MediaJob = (bool, Option<usize>, ChatId, String);
+
+/// Download requests the bounded worker queue had no room for. Without it a
+/// screenful of auto-downloading videos filled the queue and every overflow
+/// became a permanent "Media queue is busy" failure, with no retry.
+#[derive(Default)]
+struct MediaBacklog {
+    waiting: std::collections::VecDeque<MediaJob>,
+}
+
+impl MediaBacklog {
+    const LIMIT: usize = 256;
+
+    /// Queues the job, or hands back what must be reported as failed.
+    fn submit(
+        &mut self,
+        tx: &std::sync::mpsc::SyncSender<MediaJob>,
+        job: MediaJob,
+    ) -> Option<(Option<usize>, ChatId, String)> {
+        use std::sync::mpsc::TrySendError;
+        if self.waiting.is_empty() {
+            match tx.try_send(job) {
+                Ok(()) => return None,
+                Err(TrySendError::Disconnected((_, card, chat, message))) => {
+                    return Some((card, chat, message));
+                }
+                Err(TrySendError::Full(job)) => return self.park(job),
+            }
+        }
+        self.park(job)
+    }
+
+    fn park(&mut self, job: MediaJob) -> Option<(Option<usize>, ChatId, String)> {
+        if let Some(index) = self
+            .waiting
+            .iter()
+            .position(|waiting| (&waiting.2, &waiting.3, waiting.1) == (&job.2, &job.3, job.1))
+        {
+            // A click upgrades an automatic request, including the permission
+            // to download media which automatic-download settings may forbid.
+            if !job.0 || self.waiting[index].0 {
+                return None;
+            }
+            self.waiting.remove(index);
+        } else if self.waiting.len() >= Self::LIMIT {
+            // Keep accepted automatic work in FIFO order; a new click may
+            // replace one automatic job, but never another accepted click.
+            if job.0
+                && let Some(index) = self.waiting.iter().rposition(|waiting| !waiting.0)
+            {
+                let (_, card, chat, message) = self.waiting.remove(index).expect("index in range");
+                self.insert(job);
+                return Some((card, chat, message));
+            }
+            return Some((job.1, job.2, job.3));
+        }
+        self.insert(job);
+        None
+    }
+
+    fn insert(&mut self, job: MediaJob) {
+        if job.0 {
+            let index = self
+                .waiting
+                .iter()
+                .position(|waiting| !waiting.0)
+                .unwrap_or(self.waiting.len());
+            self.waiting.insert(index, job);
+        } else {
+            self.waiting.push_back(job);
+        }
+    }
+
+    /// Moves waiting jobs into freed queue slots; returns those the worker can no longer take.
+    fn flush(
+        &mut self,
+        tx: &std::sync::mpsc::SyncSender<MediaJob>,
+    ) -> Vec<(Option<usize>, ChatId, String)> {
+        use std::sync::mpsc::TrySendError;
+        let mut failed = Vec::new();
+        while let Some(job) = self.waiting.pop_front() {
+            match tx.try_send(job) {
+                Ok(()) => {}
+                Err(TrySendError::Full(job)) => {
+                    self.waiting.push_front(job);
+                    break;
+                }
+                Err(TrySendError::Disconnected((_, card, chat, message))) => {
+                    failed.push((card, chat, message));
+                }
+            }
+        }
+        failed
+    }
 }
 
 #[cfg(test)]
@@ -4579,6 +4685,79 @@ mod tests {
     //! They pin the demo's contract: multiple accounts on one network stay
     //! distinguishable, background startup/polling causes NO mutating HTTP
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
+
+    #[test]
+    fn full_media_queue_parks_downloads_and_sends_them_as_slots_free() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<MediaJob>(1);
+        let mut backlog = MediaBacklog::default();
+        let job = |m: &str, manual| (manual, None, "c".to_string(), m.to_string());
+        assert!(backlog.submit(&tx, job("a", false)).is_none());
+        // Queue is full: these wait instead of failing.
+        assert!(backlog.submit(&tx, job("b", false)).is_none());
+        assert!(
+            backlog.submit(&tx, job("b", false)).is_none(),
+            "duplicate ignored"
+        );
+        assert!(backlog.submit(&tx, job("click", true)).is_none());
+        assert_eq!(backlog.waiting.len(), 2);
+        assert!(backlog.flush(&tx).is_empty());
+        assert_eq!(rx.recv().unwrap().3, "a");
+        assert!(backlog.flush(&tx).is_empty());
+        assert_eq!(
+            rx.recv().unwrap().3,
+            "click",
+            "a click goes before automatic ones"
+        );
+        assert!(backlog.flush(&tx).is_empty());
+        assert_eq!(rx.recv().unwrap().3, "b");
+        assert!(backlog.waiting.is_empty());
+    }
+
+    #[test]
+    fn media_click_promotes_a_duplicate_and_preserves_click_fifo_at_capacity() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<MediaJob>(1);
+        let mut backlog = MediaBacklog::default();
+        let job = |message: &str, manual| (manual, None, "c".to_owned(), message.to_owned());
+        backlog.submit(&tx, job("in-flight", false));
+        backlog.submit(&tx, job("auto", false));
+        backlog.submit(&tx, job("first-click", true));
+        backlog.submit(&tx, job("auto", true));
+        backlog.submit(&tx, job("auto", false));
+        assert_eq!(backlog.waiting.len(), 2);
+        rx.recv().unwrap();
+        backlog.flush(&tx);
+        assert_eq!(rx.recv().unwrap().3, "first-click");
+        backlog.flush(&tx);
+        let upgraded = rx.recv().unwrap();
+        assert_eq!(upgraded.3, "auto");
+        assert!(upgraded.0, "a click retains manual download permission");
+        backlog.submit(&tx, job("in-flight", false));
+        for index in 0..MediaBacklog::LIMIT {
+            backlog.submit(&tx, job(&format!("auto-{index}"), false));
+        }
+        let refused = backlog.submit(&tx, job("overflow-auto", false)).unwrap();
+        assert_eq!(refused.2, "overflow-auto");
+        let displaced = backlog.submit(&tx, job("priority-click", true)).unwrap();
+        assert_eq!(displaced.2, format!("auto-{}", MediaBacklog::LIMIT - 1));
+        assert!(backlog.waiting.front().unwrap().0);
+        assert_eq!(backlog.waiting.len(), MediaBacklog::LIMIT);
+    }
+
+    #[test]
+    fn media_backlog_is_bounded_and_reports_a_dead_worker() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<MediaJob>(1);
+        let mut backlog = MediaBacklog::default();
+        let job = |m: String| (false, None, "c".to_string(), m);
+        assert!(backlog.submit(&tx, job("first".into())).is_none());
+        for i in 0..MediaBacklog::LIMIT {
+            assert!(backlog.submit(&tx, job(format!("m{i}"))).is_none());
+        }
+        assert!(backlog.submit(&tx, job("over".into())).is_some());
+        assert_eq!(backlog.waiting.len(), MediaBacklog::LIMIT);
+        drop(rx);
+        assert_eq!(backlog.flush(&tx).len(), MediaBacklog::LIMIT);
+        assert!(backlog.submit(&tx, job("dead".into())).is_some());
+    }
 
     #[test]
     fn downloads_without_a_message_type_get_an_extension_from_name_header_or_bytes() {
