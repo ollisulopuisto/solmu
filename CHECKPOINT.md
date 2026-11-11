@@ -888,3 +888,6 @@ while building dependencies; no passing native result claimed.
 Own adversarial pass also keeps the new message shortcuts out of the image
 viewer and uses the linked view's exact valid-members filter for Forward,
 including direct-chat, unlocked, same-origin and unique-ID constraints.
+CI caught one needless-unwrap Clippy lint and a regression fixture borrow
+conflict. Use if-let dispatch and construct the member before mutating settings.
+No production behavior change in this follow-up.

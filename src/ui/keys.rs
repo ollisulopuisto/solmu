@@ -248,11 +248,13 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     // separate. Linked Cmd-R is handled before its composer in merged::show.
     if message_shortcuts_allowed(app, ctx) {
         let ordinary_reply = latest_incoming_action(app);
-        if ordinary_reply.is_some() && take_exact(ctx, Modifiers::COMMAND, Key::R) {
+        if let Some(ordinary_reply) = ordinary_reply
+            && take_exact(ctx, Modifiers::COMMAND, Key::R)
+        {
             if app.selection.is_some() {
                 actions.push(Action::CancelSelection);
             }
-            actions.push(ordinary_reply.unwrap());
+            actions.push(ordinary_reply);
         }
         if take_exact(ctx, Modifiers::COMMAND, Key::L)
             && let Some(forward) = forward_action(app)
@@ -2474,9 +2476,10 @@ mod tests {
         let chat = ids[0].clone();
         app.chats[0].backend_origin = Some("origin".into());
         app.chats[0].backend_account = Some("account".into());
+        let member = crate::merged::Member::of(&app.chats[0]).unwrap();
         app.settings.beeper.people.push(crate::merged::Person {
             name: "Person".into(),
-            members: vec![crate::merged::Member::of(&app.chats[0]).unwrap()],
+            members: vec![member],
             primary: None,
         });
         app.open_chat = Some(chat.clone());
