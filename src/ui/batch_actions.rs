@@ -53,7 +53,7 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     if !app.batch_ui.selected_chats.is_empty() {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(format!(
                 "{} chats selected",
                 app.batch_ui.selected_chats.len()
