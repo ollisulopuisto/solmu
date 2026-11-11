@@ -21,10 +21,23 @@ class AptFallbackTests(unittest.TestCase):
             untouched = source.with_name('vendor.list')
             untouched.write_text('deb https://vendor.example/stable main\n')
             self.assertEqual(module.use_official_mirrors(root), 2)
-            self.assertIn('URIs: http://archive.ubuntu.com/ubuntu', source.read_text())
+            self.assertIn('URIs: https://archive.ubuntu.com/ubuntu', source.read_text())
             self.assertIn('Suites: noble noble-updates', source.read_text())
             self.assertIn('Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg', source.read_text())
             self.assertEqual(untouched.read_text(), 'deb https://vendor.example/stable main\n')
+
+    def test_direct_official_http_sources_upgrade_to_https(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            source = root / 'etc/apt/sources.list'
+            source.parent.mkdir(parents=True)
+            source.write_text('deb http://azure.archive.ubuntu.com/ubuntu noble main\n'
+                              'deb http://archive.ubuntu.com/ubuntu noble-updates main\n'
+                              'deb http://security.ubuntu.com/ubuntu noble-security main\n')
+            module.use_official_mirrors(root)
+            self.assertNotIn('http://', source.read_text())
+            self.assertIn('https://archive.ubuntu.com/ubuntu noble main', source.read_text())
+            self.assertIn('https://security.ubuntu.com/ubuntu noble-security main', source.read_text())
 
     def test_install_failure_retries_update_then_same_packages(self):
         calls = []
