@@ -453,6 +453,10 @@ pub struct App {
     composer_mentions: Vec<ComposerMention>,
     /// Byte offset of the `:` starting the active emoji query.
     pub emoji_start: Option<usize>,
+    /// The user's text replacements (System Settings > Keyboard > Text
+    /// Replacements), loaded on first composer use and reloaded when the
+    /// window regains focus. None until loaded.
+    pub text_replacements: Option<Vec<crate::text_replace::Replacement>>,
     /// Keyboard-highlighted emoji in suggestions or the full picker.
     pub emoji_selected: usize,
     /// Byte offset of the `@` starting the active mention query.
@@ -1493,6 +1497,7 @@ impl App {
             beeper_search_state: None,
             composer_mentions: Vec::new(),
             emoji_start: None,
+            text_replacements: None,
             emoji_selected: 0,
             mention_start: None,
             mention_selected: 0,
@@ -13180,7 +13185,7 @@ impl App {
         }
     }
 
-    fn set_composer_cursor(&self, ctx: &egui::Context, at: usize) {
+    pub(crate) fn set_composer_cursor(&self, ctx: &egui::Context, at: usize) {
         let id = egui::Id::new("composer-text");
         let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
         state

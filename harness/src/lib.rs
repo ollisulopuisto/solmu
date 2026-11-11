@@ -19,6 +19,7 @@ pub mod safety;
 pub mod scheduler;
 pub mod scheduler_client;
 pub mod settings;
+pub mod text_replace;
 pub mod ui;
 pub mod updates;
 pub mod util;

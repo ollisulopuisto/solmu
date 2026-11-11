@@ -1595,14 +1595,35 @@ pub(crate) fn composer_with_capabilities(
             let id = egui::Id::new("composer-text");
             let has_focus = ui.memory(|memory| memory.has_focus(id));
             let enter_sends = app.settings.enter_sends;
-            let (typed_colon, typed_at) = ui.input(|input| {
+            // System text replacements can change while Solmu runs; reload
+            // the table when the window regains focus.
+            let (typed_colon, typed_at, typed_text) = ui.input(|input| {
                 let typed = |needle: &str| {
                     input
                         .events
                         .iter()
                         .any(|event| matches!(event, egui::Event::Text(text) if text == needle))
                 };
-                (has_focus && typed(":"), has_focus && typed("@"))
+                if input
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, egui::Event::WindowFocused(true)))
+                {
+                    app.text_replacements = None;
+                }
+                let text: String = if has_focus {
+                    input
+                        .events
+                        .iter()
+                        .filter_map(|event| match event {
+                            egui::Event::Text(text) => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect()
+                } else {
+                    String::new()
+                };
+                (has_focus && typed(":"), has_focus && typed("@"), text)
             });
             if !app.pending.is_empty() {
                 pending_strip(app, ui);
@@ -1941,6 +1962,38 @@ pub(crate) fn composer_with_capabilities(
                                         app.mention_selected = 0;
                                     } else if app.emoji_start.is_some() {
                                         app.emoji_selected = 0;
+                                    }
+                                }
+                                // macOS text replacements never reach an egui
+                                // canvas, so they are applied here: a
+                                // delimiter keystroke expands the trigger it
+                                // closes. Paste arrives as Event::Paste, not
+                                // Text, and is left alone, as the system
+                                // expander leaves it.
+                                if typed_text
+                                    .chars()
+                                    .next_back()
+                                    .is_some_and(crate::text_replace::is_delimiter)
+                                    && let Some(cursor) =
+                                        output.cursor_range.map(|range| range.primary.index.0)
+                                {
+                                    let byte = app
+                                        .composer
+                                        .char_indices()
+                                        .nth(cursor)
+                                        .map_or(app.composer.len(), |(at, _)| at);
+                                    let table = app
+                                        .text_replacements
+                                        .get_or_insert_with(crate::text_replace::system_replacements);
+                                    let expansion =
+                                        crate::text_replace::expand_at(table, &app.composer, byte);
+                                    if let Some((range, with)) = expansion {
+                                        let cursor = app.composer[..range.start].chars().count()
+                                            + with.chars().count();
+                                        app.composer.replace_range(range, &with);
+                                        app.set_composer_cursor(ui.ctx(), cursor);
+                                        app.emoji_start = None;
+                                        app.mention_start = None;
                                     }
                                 }
                                 let cursor = output
