@@ -42,6 +42,8 @@ The adapter can also use an existing Beeper Desktop/Server API directly. That is
 - **Draft safety.** Failed and uncertain sends are surfaced instead of blindly retried. Inspect history before retrying an uncertain send.
 - **Desktop controls.** Keyboard shortcuts, light/dark themes, app lock and macOS background/window behavior.
 
+The View once photo toggle is hidden on Beeper chats because this send API cannot carry view-once media. Existing view-once drafts remain intact and are still refused by the backend, not silently sent as ordinary photos.
+
 Availability depends on what the endpoint and connected network support. A visible control or inherited ZapFast feature does not establish Beeper parity. For example, the current Beeper adapter refuses location sends and attachment sends with reply/mention/view-once metadata rather than pretending to send them. History pagination and network errors can leave content incomplete.
 
 [PARITY.md](PARITY.md) and [BACKEND.md](BACKEND.md) contain detailed limits and historical acceptance notes. Some inherited documents still describe a WhatsApp-only client or older unsigned trials; the adapter, launcher and current build scripts are the authority for what this fork builds. Automated tests and notarization do not establish a successful live network login, complete history or delivery.

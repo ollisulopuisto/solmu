@@ -1679,8 +1679,12 @@ pub(crate) fn composer_with_capabilities(
                 .round()
                 .max(COMPOSER_CONTROL);
             let button_width = line;
-            let view_once = app.editing.is_none()
-                && (app.pending_supports_view_once() || app.pending_view_once);
+            let view_once = super::view_once::visible(
+                app.editing.is_some(),
+                chat.backend_account.is_some() || chat.backend_origin.is_some(),
+                app.pending_supports_view_once(),
+                app.pending_view_once,
+            );
             let view_once_width = if view_once { COMPOSER_CONTROL + ui.spacing().item_spacing.x } else { 0.0 };
             let extras_width = send_extras
                 .as_ref()

@@ -11,7 +11,7 @@ import tempfile
 # These are real modules, not harness-specific leaf stubs. Always stage them
 # from src/ so a copied harness snapshot cannot hide an active-source regression.
 LIVE_MODULES = (
-    'account.rs', 'categories.rs', 'backend.rs', 'backend/beeper.rs', 'backend/local_ai.rs', 'backend/local_files.rs', 'backend/linked_media.rs',
+    'account.rs', 'categories.rs', 'backend.rs', 'backend/beeper.rs', 'backend/beeper/gallery.rs', 'backend/local_ai.rs', 'backend/local_files.rs', 'backend/linked_media.rs',
     'group_admin.rs', 'i18n.rs', 'mentions.rs', 'merged.rs', 'model.rs', 'suggest.rs',
     'new_group.rs', 'paths.rs', 'safety.rs', 'scheduler.rs',
     'scheduler_client.rs',
@@ -25,6 +25,7 @@ def stage(root: Path, destination: Path) -> None:
         source = root / 'src' / relative
         if not source.is_file():
             raise FileNotFoundError(f'Missing live adapter source: {source}')
+        (destination / 'src' / relative).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination / 'src' / relative)
 
 
