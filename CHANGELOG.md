@@ -9,7 +9,14 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
-## v0.24.18
+- Telegram and other media downloads wait in a bounded backlog when the worker queue is full, instead of failing immediately. Downloads start as slots free; exceeding the backlog limit or losing the worker still reports an error. New explicit requests go before automatic backlog work, but the current UI cannot promote an automatic download already shown as Downloading.
+- Exported attachment names cannot select NTFS alternate data streams through a colon in the original filename.
+
+- Saving an attachment whose name Windows reserves for a device (CON, NUL, COM1, ...) now keeps its extension: `CON.pdf` is saved as `attachment.pdf`, not `attachment`.
+## v0.24.19
+
+- Telegram and other videos that Beeper sends without a file type no longer save as `.bin`. Solmu now takes the type from the file name, the server's content type or the file's first bytes, so they open in the player and your system viewer.
+## v0.24.20
 
 - Automatic chat categories, first slice. Filters now has an Automatic category choice: People (one-to-one chats active in the last 7 days), Quiet people (idle 7 to 30 days), Long quiet (idle 30 days or more) and Notifications (channels and read-only chats). Groups stay in Groups. A chat's menu has Move to… to put a one-to-one chat in a category for good; the rules never re-sort it, and Sort automatically hands it back. The categories are opt-in filters: the default list, its order and its counts are unchanged, nothing is marked read, and nothing leaves this computer. While you search, the names of Quiet people chats fade a little and Long quiet chats fade more, in the chat rows and the message results, never below readable contrast. Your labels remain the tags. See docs/chat-categories.md.
 

@@ -436,6 +436,125 @@ fn cache_files(
     Ok(files)
 }
 
+/// File extension for one ISO base media `ftyp` brand, if it is known.
+fn iso_brand_extension(brand: &[u8]) -> Option<&'static str> {
+    Some(match brand {
+        b"qt  " => "mov",
+        b"M4A " | b"M4B " => "m4a",
+        b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1" | b"msf1" => "heic",
+        b"avif" | b"avis" => "avif",
+        [b'3', b'g', ..] => "3gp",
+        b"isom" | b"iso2" | b"iso3" | b"iso4" | b"iso5" | b"iso6" | b"iso7" | b"iso8" | b"iso9"
+        | b"mp41" | b"mp42" | b"avc1" | b"dash" | b"M4V " | b"M4VH" | b"M4VP" | b"f4v " => "mp4",
+        _ => return None,
+    })
+}
+
+/// File extension for a downloaded attachment: the message type first, then
+/// the original file name, then the server's content type, then the bytes.
+fn media_extension(
+    mime: Option<&str>,
+    file_name: Option<&str>,
+    content_type: Option<&str>,
+    head: &[u8],
+) -> &'static str {
+    fn from_mime(mime: &str) -> Option<&'static str> {
+        let base = mime
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        Some(match base.as_str() {
+            "image/png" => "png",
+            "image/jpeg" => "jpg",
+            "image/webp" => "webp",
+            "image/gif" => "gif",
+            "video/mp4" => "mp4",
+            "video/webm" => "webm",
+            "video/quicktime" => "mov",
+            "audio/ogg" => "ogg",
+            "audio/mpeg" => "mp3",
+            "audio/mp4" | "audio/x-m4a" => "m4a",
+            "application/pdf" => "pdf",
+            _ => return None,
+        })
+    }
+    if let Some(ext) = mime.and_then(from_mime) {
+        return ext;
+    }
+    if let Some(ext) = file_name
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .and_then(|ext| match ext.as_str() {
+            "png" => Some("png"),
+            "jpg" | "jpeg" => Some("jpg"),
+            "webp" => Some("webp"),
+            "gif" => Some("gif"),
+            "mp4" | "m4v" => Some("mp4"),
+            "mov" => Some("mov"),
+            "webm" => Some("webm"),
+            "ogg" => Some("ogg"),
+            "mp3" => Some("mp3"),
+            "m4a" => Some("m4a"),
+            "pdf" => Some("pdf"),
+            _ => None,
+        })
+    {
+        return ext;
+    }
+    if let Some(ext) = content_type.and_then(from_mime) {
+        return ext;
+    }
+    if head.len() >= 12 && &head[4..8] == b"ftyp" {
+        // The major brand says what the ISO media file is; ftyp alone also
+        // covers audio, HEIC and AVIF. When the major brand is unknown (for
+        // example iso8), the compatible brands that follow it decide.
+        let size = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
+        let end = if size >= 16 {
+            size.min(head.len())
+        } else {
+            head.len()
+        };
+        let compatible = (16..end).step_by(4).filter_map(|at| head.get(at..at + 4));
+        return std::iter::once(&head[8..12])
+            .chain(compatible)
+            .find_map(iso_brand_extension)
+            .unwrap_or("bin");
+    }
+    if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        // EBML is Matroska and WebM alike; the DocType sits in the header.
+        let window = &head[..head.len().min(64)];
+        let has = |needle: &[u8]| window.windows(needle.len()).any(|w| w == needle);
+        return if has(b"webm") {
+            "webm"
+        } else if has(b"matroska") {
+            "mkv"
+        } else {
+            "bin"
+        };
+    }
+    if head.starts_with(b"\x89PNG") {
+        return "png";
+    }
+    if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return "jpg";
+    }
+    if head.starts_with(b"GIF8") {
+        return "gif";
+    }
+    if head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP" {
+        return "webp";
+    }
+    if head.starts_with(b"OggS") {
+        return "ogg";
+    }
+    if head.starts_with(b"%PDF") {
+        return "pdf";
+    }
+    "bin"
+}
+
 pub fn cache_budget(dirs: &AccountDirs) -> u64 {
     std::fs::read_to_string(dirs.state.join("beeper-cache-limit-mib"))
         .ok()
@@ -1327,18 +1446,32 @@ impl Api {
         }
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         (chat, message, source).hash(&mut hasher);
-        let ext = match attachment.mime_type.as_deref().unwrap_or("") {
-            "image/png" => "png",
-            "image/jpeg" => "jpg",
-            "image/webp" => "webp",
-            "image/gif" => "gif",
-            "video/mp4" => "mp4",
-            "video/webm" => "webm",
-            "audio/ogg" => "ogg",
-            "audio/mpeg" => "mp3",
-            "application/pdf" => "pdf",
-            _ => "bin",
-        };
+        let mut head = Vec::with_capacity(64);
+        let mut ext = media_extension(
+            attachment.mime_type.as_deref(),
+            attachment.file_name.as_deref(),
+            None,
+            &[],
+        );
+        if ext == "bin" {
+            // Telegram often sends no usable type. Read the content type and the
+            // first bytes before choosing the name so the file opens normally.
+            let header = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            (&mut response)
+                .take(64)
+                .read_to_end(&mut head)
+                .map_err(|_| "Media transfer failed")?;
+            ext = media_extension(
+                attachment.mime_type.as_deref(),
+                attachment.file_name.as_deref(),
+                header.as_deref(),
+                &head,
+            );
+        }
         let directory = dirs.media_cache_dir();
         std::fs::create_dir_all(&directory).map_err(|_| "Could not create media cache")?;
         let path = directory.join(format!("beeper-{:016x}.{ext}", hasher.finish()));
@@ -1372,7 +1505,12 @@ impl Api {
             let mut output = options
                 .open(&temporary)
                 .map_err(|_| "Could not create media file")?;
-            let copied = std::io::copy(&mut (&mut response).take(limit), &mut output)
+            output.write_all(&head).map_err(|_| "Media write failed")?;
+            let copied = head.len() as u64
+                + std::io::copy(
+                    &mut (&mut response).take(limit.saturating_sub(head.len() as u64)),
+                    &mut output,
+                )
                 .map_err(|_| "Media transfer failed")?;
             let mut excess = [0u8; 1];
             if copied == limit
@@ -2857,8 +2995,18 @@ pub fn run(
     // Set by Command::Resumed: after a wake every poll timer is due at once,
     // so a link the server dropped during sleep is noticed on the next tick.
     let mut refresh_after_wake = false;
+    // Downloads the worker's queue had no room for wait here, not fail.
+    let mut media_backlog = MediaBacklog::default();
 
     loop {
+        for (card, chat, message) in media_backlog.flush(&media_tx) {
+            emit(Event::Media {
+                card,
+                chat,
+                message,
+                result: Err("Media queue is busy; retry after current downloads finish".into()),
+            });
+        }
         loop {
             let cmd = match commands.try_recv() {
                 Ok(command) => command,
@@ -3867,11 +4015,11 @@ pub fn run(
                     chat,
                     message,
                 } => {
-                    if let Err(error) = media_tx.try_send((manual, card, chat, message)) {
-                        let (_, card, chat, message) = match error {
-                            std::sync::mpsc::TrySendError::Full(value)
-                            | std::sync::mpsc::TrySendError::Disconnected(value) => value,
-                        };
+                    // A full queue parks the request; it is sent as slots free.
+                    // Only an overflowing backlog or a dead worker reports failure.
+                    if let Some((card, chat, message)) =
+                        media_backlog.submit(&media_tx, (manual, card, chat, message))
+                    {
                         emit(Event::Media {
                             card,
                             chat,
@@ -4089,6 +4237,102 @@ fn run_chat_search_cached(
     let result =
         chat_search_params(&chat, &query, from, until).and_then(|params| cache.next(api, params));
     emit_chat_search(api, chat, query, from, until, emit, result, cache.pages);
+}
+
+type MediaJob = (bool, Option<usize>, ChatId, String);
+
+/// Download requests the bounded worker queue had no room for. Without it a
+/// screenful of auto-downloading videos filled the queue and every overflow
+/// became a permanent "Media queue is busy" failure, with no retry.
+#[derive(Default)]
+struct MediaBacklog {
+    waiting: std::collections::VecDeque<MediaJob>,
+}
+
+impl MediaBacklog {
+    const LIMIT: usize = 256;
+
+    /// Queues the job, or hands back what must be reported as failed.
+    fn submit(
+        &mut self,
+        tx: &std::sync::mpsc::SyncSender<MediaJob>,
+        job: MediaJob,
+    ) -> Option<(Option<usize>, ChatId, String)> {
+        use std::sync::mpsc::TrySendError;
+        if self.waiting.is_empty() {
+            match tx.try_send(job) {
+                Ok(()) => return None,
+                Err(TrySendError::Disconnected((_, card, chat, message))) => {
+                    return Some((card, chat, message));
+                }
+                Err(TrySendError::Full(job)) => return self.park(job),
+            }
+        }
+        self.park(job)
+    }
+
+    fn park(&mut self, job: MediaJob) -> Option<(Option<usize>, ChatId, String)> {
+        if let Some(index) = self
+            .waiting
+            .iter()
+            .position(|waiting| (&waiting.2, &waiting.3, waiting.1) == (&job.2, &job.3, job.1))
+        {
+            // A click upgrades an automatic request, including the permission
+            // to download media which automatic-download settings may forbid.
+            if !job.0 || self.waiting[index].0 {
+                return None;
+            }
+            self.waiting.remove(index);
+        } else if self.waiting.len() >= Self::LIMIT {
+            // Keep accepted automatic work in FIFO order; a new click may
+            // replace one automatic job, but never another accepted click.
+            if job.0
+                && let Some(index) = self.waiting.iter().rposition(|waiting| !waiting.0)
+            {
+                let (_, card, chat, message) = self.waiting.remove(index).expect("index in range");
+                self.insert(job);
+                return Some((card, chat, message));
+            }
+            return Some((job.1, job.2, job.3));
+        }
+        self.insert(job);
+        None
+    }
+
+    fn insert(&mut self, job: MediaJob) {
+        if job.0 {
+            let index = self
+                .waiting
+                .iter()
+                .position(|waiting| !waiting.0)
+                .unwrap_or(self.waiting.len());
+            self.waiting.insert(index, job);
+        } else {
+            self.waiting.push_back(job);
+        }
+    }
+
+    /// Moves waiting jobs into freed queue slots; returns those the worker can no longer take.
+    fn flush(
+        &mut self,
+        tx: &std::sync::mpsc::SyncSender<MediaJob>,
+    ) -> Vec<(Option<usize>, ChatId, String)> {
+        use std::sync::mpsc::TrySendError;
+        let mut failed = Vec::new();
+        while let Some(job) = self.waiting.pop_front() {
+            match tx.try_send(job) {
+                Ok(()) => {}
+                Err(TrySendError::Full(job)) => {
+                    self.waiting.push_front(job);
+                    break;
+                }
+                Err(TrySendError::Disconnected((_, card, chat, message))) => {
+                    failed.push((card, chat, message));
+                }
+            }
+        }
+        failed
+    }
 }
 
 #[cfg(test)]
@@ -4441,6 +4685,132 @@ mod tests {
     //! They pin the demo's contract: multiple accounts on one network stay
     //! distinguishable, background startup/polling causes NO mutating HTTP
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
+
+    #[test]
+    fn full_media_queue_parks_downloads_and_sends_them_as_slots_free() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<MediaJob>(1);
+        let mut backlog = MediaBacklog::default();
+        let job = |m: &str, manual| (manual, None, "c".to_string(), m.to_string());
+        assert!(backlog.submit(&tx, job("a", false)).is_none());
+        // Queue is full: these wait instead of failing.
+        assert!(backlog.submit(&tx, job("b", false)).is_none());
+        assert!(
+            backlog.submit(&tx, job("b", false)).is_none(),
+            "duplicate ignored"
+        );
+        assert!(backlog.submit(&tx, job("click", true)).is_none());
+        assert_eq!(backlog.waiting.len(), 2);
+        assert!(backlog.flush(&tx).is_empty());
+        assert_eq!(rx.recv().unwrap().3, "a");
+        assert!(backlog.flush(&tx).is_empty());
+        assert_eq!(
+            rx.recv().unwrap().3,
+            "click",
+            "a click goes before automatic ones"
+        );
+        assert!(backlog.flush(&tx).is_empty());
+        assert_eq!(rx.recv().unwrap().3, "b");
+        assert!(backlog.waiting.is_empty());
+    }
+
+    #[test]
+    fn media_click_promotes_a_duplicate_and_preserves_click_fifo_at_capacity() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<MediaJob>(1);
+        let mut backlog = MediaBacklog::default();
+        let job = |message: &str, manual| (manual, None, "c".to_owned(), message.to_owned());
+        backlog.submit(&tx, job("in-flight", false));
+        backlog.submit(&tx, job("auto", false));
+        backlog.submit(&tx, job("first-click", true));
+        backlog.submit(&tx, job("auto", true));
+        backlog.submit(&tx, job("auto", false));
+        assert_eq!(backlog.waiting.len(), 2);
+        rx.recv().unwrap();
+        backlog.flush(&tx);
+        assert_eq!(rx.recv().unwrap().3, "first-click");
+        backlog.flush(&tx);
+        let upgraded = rx.recv().unwrap();
+        assert_eq!(upgraded.3, "auto");
+        assert!(upgraded.0, "a click retains manual download permission");
+        backlog.submit(&tx, job("in-flight", false));
+        for index in 0..MediaBacklog::LIMIT {
+            backlog.submit(&tx, job(&format!("auto-{index}"), false));
+        }
+        let refused = backlog.submit(&tx, job("overflow-auto", false)).unwrap();
+        assert_eq!(refused.2, "overflow-auto");
+        let displaced = backlog.submit(&tx, job("priority-click", true)).unwrap();
+        assert_eq!(displaced.2, format!("auto-{}", MediaBacklog::LIMIT - 1));
+        assert!(backlog.waiting.front().unwrap().0);
+        assert_eq!(backlog.waiting.len(), MediaBacklog::LIMIT);
+    }
+
+    #[test]
+    fn media_backlog_is_bounded_and_reports_a_dead_worker() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<MediaJob>(1);
+        let mut backlog = MediaBacklog::default();
+        let job = |m: String| (false, None, "c".to_string(), m);
+        assert!(backlog.submit(&tx, job("first".into())).is_none());
+        for i in 0..MediaBacklog::LIMIT {
+            assert!(backlog.submit(&tx, job(format!("m{i}"))).is_none());
+        }
+        assert!(backlog.submit(&tx, job("over".into())).is_some());
+        assert_eq!(backlog.waiting.len(), MediaBacklog::LIMIT);
+        drop(rx);
+        assert_eq!(backlog.flush(&tx).len(), MediaBacklog::LIMIT);
+        assert!(backlog.submit(&tx, job("dead".into())).is_some());
+    }
+
+    #[test]
+    fn downloads_without_a_message_type_get_an_extension_from_name_header_or_bytes() {
+        let mp4 = *b"\0\0\0\x18ftypisom\0\0\0\0";
+        assert_eq!(media_extension(Some("video/mp4"), None, None, &[]), "mp4");
+        assert_eq!(media_extension(None, Some("IMG_1.MOV"), None, &[]), "mov");
+        assert_eq!(
+            media_extension(Some(""), None, Some("video/mp4; x=1"), &[]),
+            "mp4"
+        );
+        assert_eq!(media_extension(None, None, None, &mp4), "mp4");
+        let iphone = *b"\0\0\0\x14ftypqt  \0\0\0\0";
+        assert_eq!(media_extension(None, None, None, &iphone), "mov");
+        let ebml = |doc: &[u8]| {
+            let mut head = vec![0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x82, 0x84];
+            head.extend_from_slice(doc);
+            head
+        };
+        assert_eq!(
+            media_extension(None, Some("noext"), None, &ebml(b"webm")),
+            "webm"
+        );
+        assert_eq!(media_extension(None, None, None, &ebml(b"matroska")), "mkv");
+        assert_eq!(media_extension(None, None, None, &ebml(b"????")), "bin");
+        // A major brand the table does not know falls back to the compatible brands.
+        let mut iso8 = b"\0\0\0\x18ftypiso8\0\0\0\0".to_vec();
+        iso8.extend_from_slice(b"iso8mp41");
+        assert_eq!(media_extension(None, None, None, &iso8), "mp4");
+        let mut m4a8 = b"\0\0\0\x18ftypzzzz\0\0\0\0".to_vec();
+        m4a8.extend_from_slice(b"M4A zzzz");
+        assert_eq!(media_extension(None, None, None, &m4a8), "m4a");
+        for (brand, ext) in [
+            (b"M4A ", "m4a"),
+            (b"heic", "heic"),
+            (b"avif", "avif"),
+            (b"3gp4", "3gp"),
+            (b"mp42", "mp4"),
+            (b"zzzz", "bin"),
+        ] {
+            let mut head = b"\0\0\0\x18ftyp".to_vec();
+            head.extend_from_slice(brand);
+            head.extend_from_slice(&[0; 8]);
+            assert_eq!(
+                media_extension(None, None, None, &head),
+                ext,
+                "brand {brand:?}"
+            );
+        }
+        assert_eq!(
+            media_extension(None, None, Some("application/octet-stream"), b"junk"),
+            "bin"
+        );
+    }
 
     use super::*;
 

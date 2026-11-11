@@ -202,10 +202,12 @@ pub fn call_link(value: &str) -> Option<(String, bool)> {
 /// in their folder instead. Sender-provided MIME types cannot grant permission.
 pub(crate) fn is_reserved_dos_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    matches!(lower.as_str(), "con" | "prn" | "aux" | "nul")
-        || (lower.starts_with("com") || lower.starts_with("lpt"))
-            && lower.len() == 4
-            && lower.as_bytes()[3].is_ascii_digit()
+    matches!(
+        lower.as_str(),
+        "con" | "prn" | "aux" | "nul" | "conin$" | "conout$"
+    ) || (lower.starts_with("com") || lower.starts_with("lpt"))
+        && lower.len() == 4
+        && lower.as_bytes()[3].is_ascii_digit()
 }
 
 pub fn can_open_attachment(path: &Path) -> bool {
@@ -525,6 +527,10 @@ mod tests {
             "NUL.jpg",
             "com1.txt",
             "lpt1.pdf",
+            "COM0.txt",
+            "lpt0.csv",
+            "CONIN$.txt",
+            "conout$.png",
         ] {
             assert!(!can_open_attachment(Path::new(name)), "{name}");
         }
