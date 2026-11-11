@@ -13403,7 +13403,7 @@ mod reaction_tests {
                 crate::saved::SavedMessage::new(
                     app.later_key(&chat),
                     message,
-                    chat.title.clone(),
+                    chat.name.clone(),
                     "Ada".into(),
                     "Kept for later.".into(),
                 ),
