@@ -1335,7 +1335,7 @@ const INFO_SIDEBAR: Shortcut = Shortcut {
     id: "info-sidebar",
     // Shared Postilaatikko/Solmu keymap: the info sidebar lives on
     // Cmd+Alt+I; Cmd+D is reserved for the groups toggle.
-    keys: &[(Modifiers::COMMAND | Modifiers::ALT, Key::I)],
+    keys: &[(COMMAND_ALT, Key::I)],
     label: Some("Ctrl+Alt+I"),
     description: Some("Show or hide the info sidebar"),
     menu: Some(MenuItem {
