@@ -2486,6 +2486,9 @@ struct View<'a> {
     hide_grouped_status: bool,
     covered_top: Option<f32>,
     show_timestamp: bool,
+    /// The neighbour-aware width the pre-pass settled for this row's own
+    /// plain-text bubble, frozen in the conversation's [`crate::run_widths::WidthBook`].
+    neighbour_width: Option<f32>,
     footer_right: Option<f32>,
     palette: Palette,
     locale: crate::i18n::Locale,
@@ -2880,6 +2883,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         covered_top: None,
         show_timestamp: true,
         footer_right: None,
+        neighbour_width: None,
         palette,
         locale: app.locale,
         chat,
@@ -3205,6 +3209,50 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                         ui.add_space(under);
                     }
                     top_of_history(ui, &palette, &conversation, chat, &mut actions);
+                    // Neighbour-aware widths for own plain-text bubbles: each
+                    // settles once per width cap, so an appended or prepended
+                    // message never resizes bubbles already on screen. Only
+                    // undecided messages are measured; the run tail always
+                    // walks in list order, which freezes older decisions and
+                    // lets a slightly wider arrival grow alone. Rule and
+                    // tolerance: crate::run_widths.
+                    let text_cap = own_text_cap(ui, &palette, selection.is_some());
+                    // The epoch covers the cap and the fonts: reinstalled
+                    // fonts change the metrics a width was measured under.
+                    conversation.width_book.retain_fingerprint(
+                        text_cap.to_bits()
+                            ^ crate::theme::font_generation().wrapping_mul(0x9E37_79B9),
+                    );
+                    // Taken out of the conversation so the immutable message
+                    // walk can settle new entries; put back below.
+                    let mut book = std::mem::take(&mut conversation.width_book);
+                    let mut run_tail: Option<f32> = None;
+                    let mut neighbour_widths: HashMap<String, f32> = HashMap::new();
+                    for (index, message) in conversation.messages.iter().enumerate() {
+                        if !neighbour_eligible(message) {
+                            run_tail = None;
+                            continue;
+                        }
+                        let settled = if let Some(frozen) = book.get(&message.id) {
+                            frozen
+                        } else {
+                            let neighbour = if index > 0
+                                && same_run(&conversation.messages[index - 1], message)
+                                && crate::util::day_key(conversation.messages[index - 1].timestamp)
+                                    == crate::util::day_key(message.timestamp)
+                            {
+                                run_tail
+                            } else {
+                                None
+                            };
+                            let natural =
+                                natural_text_width(ui, &view, message, text_cap).unwrap_or(0.0);
+                            book.settle(&message.id, natural, neighbour)
+                        };
+                        neighbour_widths.insert(message.id.clone(), settled);
+                        run_tail = Some(settled);
+                    }
+                    conversation.width_book = book;
                     let mut previous: Option<&Message> = None;
                     let mut day_separator_top = f32::NEG_INFINITY;
                     // The pin notices still to place, in time order. Each one
@@ -3418,6 +3466,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                 let band = selection.as_ref().map(|_| {
                                     (ui.painter().add(egui::Shape::Noop), ui.cursor().top())
                                 });
+                                let view = View {
+                                    neighbour_width: neighbour_widths.get(&message.id).copied(),
+                                    ..view
+                                };
                                 let response = if selection.is_some() {
                                     ui.horizontal_top(|ui| {
                                         ui.add_space(SELECT_GUTTER);
@@ -5492,6 +5544,7 @@ fn bubble_frame(
         let reserve = 0.0;
         let settled = album
             .map(|_| CARD_WIDTH.min(cap))
+            .or_else(|| view.neighbour_width.map(|width| width.min(cap)))
             .or_else(|| settled_width(ui, view, message, cap));
         let _slot = if let Some(messages) = album {
             for member in messages {
@@ -5854,6 +5907,34 @@ fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) ->
     } else {
         None
     }
+}
+
+/// The width cap an own plain-text bubble settles within: the same share
+/// and inset the row computes, without carousel or avatar allowances. The
+/// neighbour-aware pre-pass and the row itself must agree on it.
+fn own_text_cap(ui: &egui::Ui, palette: &Palette, selecting: bool) -> f32 {
+    let share = if palette.bubbles == theme::BubbleStyle::Messages {
+        MESSAGES_WIDTH_SHARE
+    } else {
+        WHATSAPP_WIDTH_SHARE
+    };
+    let available = ui.available_width() - if selecting { SELECT_GUTTER } else { 0.0 };
+    let max_width = (available * share).clamp(0.0, 560.0);
+    let inset = if palette.bubbles == theme::BubbleStyle::Messages {
+        MESSAGES_BUBBLE_MARGIN.sum().x
+    } else {
+        20.0
+    };
+    ((max_width - inset).min(available)).max(0.0)
+}
+
+/// Own plain-text bubbles join neighbour-aware widths; media, quotes,
+/// cards and forwarded messages keep the stepped grid.
+fn neighbour_eligible(message: &Message) -> bool {
+    message.from_me
+        && !message.forwarded
+        && message.quoted.is_none()
+        && matches!(message.content, Content::Text { preview: None, .. })
 }
 
 /// Shared 320/400/480/... content widths, with one narrower final viewport step.
@@ -6825,6 +6906,7 @@ pub(crate) fn list_menu(
         covered_top: None,
         show_timestamp: true,
         footer_right: None,
+        neighbour_width: None,
         palette: app.conversation_palette(),
         locale: app.locale,
         chat,
@@ -6908,6 +6990,7 @@ pub(crate) fn linked_bubble(
         covered_top: None,
         show_timestamp,
         footer_right: Some(footer_right),
+        neighbour_width: None,
         palette,
         locale: app.locale,
         chat,
@@ -12597,6 +12680,7 @@ mod tests {
             covered_top: None,
             show_timestamp: true,
             footer_right: None,
+            neighbour_width: None,
             transcriber: None,
             transcription_account: "test",
             palette: Palette::dark(),
