@@ -4272,28 +4272,44 @@ impl MediaBacklog {
     }
 
     fn park(&mut self, job: MediaJob) -> Option<(Option<usize>, ChatId, String)> {
-        if self
+        if let Some(index) = self
             .waiting
             .iter()
-            .any(|w| (&w.2, &w.3, w.1) == (&job.2, &job.3, job.1))
+            .position(|waiting| (&waiting.2, &waiting.3, waiting.1) == (&job.2, &job.3, job.1))
         {
-            return None;
-        }
-        if self.waiting.len() >= Self::LIMIT {
-            // Drop an automatic request before a click; if all are clicks, the new one fails.
-            if let Some(i) = self.waiting.iter().position(|w| !w.0) {
-                let (_, card, chat, message) = self.waiting.remove(i).expect("index in range");
-                self.waiting.push_back(job);
+            // A click upgrades an automatic request, including the permission
+            // to download media which automatic-download settings may forbid.
+            if !job.0 || self.waiting[index].0 {
+                return None;
+            }
+            self.waiting.remove(index);
+        } else if self.waiting.len() >= Self::LIMIT {
+            // Keep accepted automatic work in FIFO order; a new click may
+            // replace one automatic job, but never another accepted click.
+            if job.0
+                && let Some(index) = self.waiting.iter().rposition(|waiting| !waiting.0)
+            {
+                let (_, card, chat, message) = self.waiting.remove(index).expect("index in range");
+                self.insert(job);
                 return Some((card, chat, message));
             }
             return Some((job.1, job.2, job.3));
         }
+        self.insert(job);
+        None
+    }
+
+    fn insert(&mut self, job: MediaJob) {
         if job.0 {
-            self.waiting.push_front(job);
+            let index = self
+                .waiting
+                .iter()
+                .position(|waiting| !waiting.0)
+                .unwrap_or(self.waiting.len());
+            self.waiting.insert(index, job);
         } else {
             self.waiting.push_back(job);
         }
-        None
     }
 
     /// Moves waiting jobs into freed queue slots; returns those the worker can no longer take.
@@ -4678,16 +4694,53 @@ mod tests {
         assert!(backlog.submit(&tx, job("a", false)).is_none());
         // Queue is full: these wait instead of failing.
         assert!(backlog.submit(&tx, job("b", false)).is_none());
-        assert!(backlog.submit(&tx, job("b", false)).is_none(), "duplicate ignored");
+        assert!(
+            backlog.submit(&tx, job("b", false)).is_none(),
+            "duplicate ignored"
+        );
         assert!(backlog.submit(&tx, job("click", true)).is_none());
         assert_eq!(backlog.waiting.len(), 2);
         assert!(backlog.flush(&tx).is_empty());
         assert_eq!(rx.recv().unwrap().3, "a");
         assert!(backlog.flush(&tx).is_empty());
-        assert_eq!(rx.recv().unwrap().3, "click", "a click goes before automatic ones");
+        assert_eq!(
+            rx.recv().unwrap().3,
+            "click",
+            "a click goes before automatic ones"
+        );
         assert!(backlog.flush(&tx).is_empty());
         assert_eq!(rx.recv().unwrap().3, "b");
         assert!(backlog.waiting.is_empty());
+    }
+
+    #[test]
+    fn media_click_promotes_a_duplicate_and_preserves_click_fifo_at_capacity() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<MediaJob>(1);
+        let mut backlog = MediaBacklog::default();
+        let job = |message: &str, manual| (manual, None, "c".to_owned(), message.to_owned());
+        backlog.submit(&tx, job("in-flight", false));
+        backlog.submit(&tx, job("auto", false));
+        backlog.submit(&tx, job("first-click", true));
+        backlog.submit(&tx, job("auto", true));
+        backlog.submit(&tx, job("auto", false));
+        assert_eq!(backlog.waiting.len(), 2);
+        rx.recv().unwrap();
+        backlog.flush(&tx);
+        assert_eq!(rx.recv().unwrap().3, "first-click");
+        backlog.flush(&tx);
+        let upgraded = rx.recv().unwrap();
+        assert_eq!(upgraded.3, "auto");
+        assert!(upgraded.0, "a click retains manual download permission");
+        backlog.submit(&tx, job("in-flight", false));
+        for index in 0..MediaBacklog::LIMIT {
+            backlog.submit(&tx, job(&format!("auto-{index}"), false));
+        }
+        let refused = backlog.submit(&tx, job("overflow-auto", false)).unwrap();
+        assert_eq!(refused.2, "overflow-auto");
+        let displaced = backlog.submit(&tx, job("priority-click", true)).unwrap();
+        assert_eq!(displaced.2, format!("auto-{}", MediaBacklog::LIMIT - 1));
+        assert!(backlog.waiting.front().unwrap().0);
+        assert_eq!(backlog.waiting.len(), MediaBacklog::LIMIT);
     }
 
     #[test]
