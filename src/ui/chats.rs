@@ -4002,7 +4002,7 @@ mod tests {
             .filter_map(|(_, node)| node.label().or_else(|| node.value()))
             .collect();
         assert!(
-            labels.iter().any(|label| label == "Back to chats"),
+            labels.iter().any(|label| *label == "Back to chats"),
             "no way back in {labels:?}"
         );
     }
