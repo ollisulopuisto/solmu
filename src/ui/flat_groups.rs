@@ -4,7 +4,7 @@ use crate::{
     flat_groups::Member,
     model::{Action, Chat},
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
 pub struct State {
@@ -12,6 +12,9 @@ pub struct State {
     pub assigning: Option<(Member, Vec<u64>)>,
     pub undo: Option<(u64, Member)>,
     collapsed: HashSet<u64>,
+    /// Demo/test instrumentation: actual alias widgets built in the last frame.
+    #[cfg(any(test, feature = "demo"))]
+    pub built_rows: usize,
 }
 
 pub fn member(app: &App, chat: &Chat) -> Member {
@@ -23,31 +26,82 @@ pub fn member(app: &App, chat: &Chat) -> Member {
     }
 }
 
-/// Resolve all currently unlocked source identities of a linked row.
-fn identities(app: &App, chat: &Chat) -> Vec<Member> {
-    if chat.locked {
-        return vec![member(app, chat)];
-    }
-    let person = app
-        .settings
-        .beeper
-        .people
-        .iter()
-        .find(|p| p.members.iter().any(|m| m.matches(chat)));
-    match person {
-        Some(person) => app
+/// Build once per navigation/draw pass. No per-group full-chat scans.
+struct IdentityIndex {
+    linked: HashMap<crate::merged::Member, Vec<Member>>,
+}
+impl IdentityIndex {
+    fn new(app: &App) -> Self {
+        let available: HashMap<_, _> = app
             .chats
             .iter()
-            .filter(|c| !c.locked && person.members.iter().any(|m| m.matches(c)))
-            .map(|c| member(app, c))
-            .collect(),
-        None => vec![member(app, chat)],
+            .filter(|chat| !chat.locked)
+            .filter_map(|chat| crate::merged::Member::of(chat).map(|id| (id, member(app, chat))))
+            .collect();
+        let mut linked = HashMap::new();
+        for person in &app.settings.beeper.people {
+            let members: Vec<_> = person
+                .members
+                .iter()
+                .filter_map(|id| available.get(id).cloned())
+                .collect();
+            for id in &person.members {
+                // Existing lookup chose the first person containing an identity.
+                linked.entry(id.clone()).or_insert_with(|| members.clone());
+            }
+        }
+        Self { linked }
+    }
+    fn identities(&self, app: &App, chat: &Chat) -> Vec<Member> {
+        if !chat.locked
+            && let Some(id) = crate::merged::Member::of(chat)
+            && let Some(members) = self.linked.get(&id)
+        {
+            return members.clone();
+        }
+        vec![member(app, chat)]
     }
 }
+fn identities(app: &App, chat: &Chat) -> Vec<Member> {
+    IdentityIndex::new(app).identities(app, chat)
+}
+/// Shared ordered membership plan. Exact identities are indexed once, and
+/// membership is joined via the index instead of scanning chats per group.
+fn membership_rows(app: &App, chats: &[&Chat]) -> Vec<Vec<usize>> {
+    let identities = IdentityIndex::new(app);
+    let mut aliases: HashMap<Member, Vec<usize>> = HashMap::new();
+    for (index, chat) in chats.iter().enumerate() {
+        for key in identities.identities(app, chat) {
+            aliases.entry(key).or_default().push(index);
+        }
+    }
+    app.settings
+        .flat_groups
+        .items
+        .iter()
+        .map(|group| {
+            let mut rows: Vec<_> = group
+                .members
+                .iter()
+                .filter_map(|key| aliases.get(key))
+                .flatten()
+                .copied()
+                .collect();
+            rows.sort_unstable();
+            rows.dedup();
+            rows
+        })
+        .collect()
+}
+
 fn belongs(group: &crate::flat_groups::Group, keys: &[Member]) -> bool {
     keys.iter().any(|key| group.members.contains(key))
 }
 fn draw_row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
+    #[cfg(any(test, feature = "demo"))]
+    {
+        app.flat_group_ui.built_rows += 1;
+    }
     let response = super::chats::row(app, ui, chat);
     if app.scroll_chat_into_view.as_ref() == Some(&chat.id) && ui.is_enabled() {
         response.scroll_to_me(Some(egui::Align::Center));
@@ -99,30 +153,94 @@ pub fn navigation_chats(app: &App) -> Vec<&Chat> {
     {
         return chats;
     }
-    let mut ordered = Vec::new();
-    for group in &app.settings.flat_groups.items {
-        for chat in &chats {
-            if belongs(group, &identities(app, chat))
-                && !ordered
-                    .iter()
-                    .any(|existing: &&Chat| existing.id == chat.id)
-            {
-                ordered.push(*chat);
-            }
-        }
-    }
-    for chat in chats {
-        if !ordered.iter().any(|existing| existing.id == chat.id) {
-            ordered.push(chat);
+    let groups = membership_rows(app, &chats);
+    let mut ordered = Vec::with_capacity(chats.len());
+    let mut seen = HashSet::new();
+    for index in groups.into_iter().flatten().chain(0..chats.len()) {
+        if seen.insert(&chats[index].id) {
+            ordered.push(chats[index]);
         }
     }
     ordered
 }
 
+/// Reserve all alias geometry, but build only rows intersecting the viewport.
+/// This is one scroll area, not one nested scroll area per group.
+fn visible_range(
+    top: f32,
+    row_height: f32,
+    count: usize,
+    clip: egui::Rect,
+) -> std::ops::Range<usize> {
+    let first = ((clip.top() - top) / row_height).floor().max(0.0) as usize;
+    let end = ((clip.bottom() - top) / row_height).ceil().max(0.0) as usize;
+    first.min(count)..end.min(count).max(first.min(count))
+}
+fn virtual_aliases(app: &mut App, ui: &mut egui::Ui, chats: &[&Chat], salt: (&str, u64)) {
+    let height = super::chats::chat_row_height(app.settings.beeper.compact_list);
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height * chats.len() as f32),
+        egui::Sense::hover(),
+    );
+    if let Some(index) = app
+        .scroll_chat_into_view
+        .as_ref()
+        .and_then(|target| chats.iter().position(|chat| &chat.id == target))
+    {
+        let row = egui::Rect::from_min_size(
+            rect.min + egui::vec2(0.0, index as f32 * height),
+            egui::vec2(rect.width(), height),
+        );
+        ui.scroll_to_rect(row, Some(egui::Align::Center));
+        app.scroll_chat_into_view = None;
+    }
+    let range = visible_range(rect.top(), height, chats.len(), ui.clip_rect());
+    if range.is_empty() {
+        return;
+    }
+    let visible = egui::Rect::from_min_max(
+        rect.min + egui::vec2(0.0, range.start as f32 * height),
+        rect.max,
+    );
+    ui.scope_builder(
+        egui::UiBuilder::new().id_salt(salt).max_rect(visible),
+        |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for chat in &chats[range] {
+                ui.push_id(&chat.id, |ui| {
+                    draw_row(app, ui, chat);
+                });
+            }
+        },
+    );
+}
+
 pub fn list(app: &mut App, ui: &mut egui::Ui) {
+    #[cfg(any(test, feature = "demo"))]
+    {
+        app.flat_group_ui.built_rows = 0;
+    }
     let chats = app.beeper_display_chats();
-    let groups = app.settings.flat_groups.items.clone();
-    let keys: Vec<Vec<Member>> = chats.iter().map(|c| identities(app, c)).collect();
+    // Membership plan owns row indexes; do not clone every saved Member just
+    // to retain group heading metadata while widgets mutate App.
+    let groups: Vec<_> = app
+        .settings
+        .flat_groups
+        .items
+        .iter()
+        .map(|group| crate::flat_groups::Group {
+            id: group.id,
+            name: group.name.clone(),
+            members: Vec::new(),
+        })
+        .collect();
+    let identity_index = IdentityIndex::new(app);
+    let keys: Vec<Vec<Member>> = chats
+        .iter()
+        .map(|c| identity_index.identities(app, c))
+        .collect();
+    let rows = membership_rows(app, &chats.iter().collect::<Vec<_>>());
+    let grouped: HashSet<usize> = rows.iter().flatten().copied().collect();
     let mut changed = false;
     egui::ScrollArea::vertical()
         .id_salt("flat-group-list")
@@ -160,13 +278,8 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
                     }
                 });
             }
-            for group in &groups {
-                let included: Vec<_> = chats
-                    .iter()
-                    .zip(&keys)
-                    .filter(|(_, k)| belongs(group, k))
-                    .map(|(c, _)| c)
-                    .collect();
+            for (group, indices) in groups.iter().zip(&rows) {
+                let included: Vec<_> = indices.iter().map(|index| &chats[*index]).collect();
                 let unread = included.iter().filter(|c| c.looks_unread()).count();
                 if app
                     .scroll_chat_into_view
@@ -196,9 +309,10 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
                 }
                 if let Some(target) = response.dnd_release_payload::<Member>() {
                     // A stale drag from another account must not mutate the current view.
-                    if keys
-                        .iter()
-                        .any(|row| row.contains(target.as_ref()) && !belongs(group, row))
+                    if keys.iter().any(|row| row.contains(target.as_ref()))
+                        && !indices
+                            .iter()
+                            .any(|index| keys[*index].contains(target.as_ref()))
                         && app.settings.flat_groups.add(group.id, (*target).clone())
                     {
                         app.flat_group_ui.undo = Some((group.id, (*target).clone()));
@@ -221,19 +335,15 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
                 });
                 if !closed {
                     ui.push_id(("flat-group", group.id), |ui| {
-                        for chat in included {
-                            ui.push_id(&chat.id, |ui| {
-                                draw_row(app, ui, chat);
-                            });
-                        }
+                        virtual_aliases(app, ui, &included, ("flat-group", group.id));
                     });
                 }
             }
             let ungrouped: Vec<_> = chats
                 .iter()
-                .zip(&keys)
-                .filter(|(_, key)| !groups.iter().any(|g| belongs(g, key)))
-                .map(|(c, _)| c)
+                .enumerate()
+                .filter(|(index, _)| !grouped.contains(index))
+                .map(|(_, chat)| chat)
                 .collect();
             egui::CollapsingHeader::new(
                 crate::i18n::ngettext(
@@ -252,11 +362,7 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
                     .then_some(true),
             )
             .show(ui, |ui| {
-                for chat in ungrouped {
-                    ui.push_id(("ungrouped", &chat.id), |ui| {
-                        draw_row(app, ui, chat);
-                    });
-                }
+                virtual_aliases(app, ui, &ungrouped, ("ungrouped", 0));
             });
             ui.separator();
             ui.horizontal(|ui| {
@@ -345,6 +451,53 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn alias_virtual_range_skips_far_rows_and_keeps_partial_rows() {
+        let clip = egui::Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(300.0, 500.0));
+        assert_eq!(visible_range(0.0, 80.0, 1000, clip), 1..7);
+        assert_eq!(visible_range(1000.0, 80.0, 1000, clip), 0..0);
+        assert_eq!(visible_range(-100000.0, 80.0, 10, clip), 10..10);
+        assert_eq!(visible_range(100.0, 80.0, 0, clip), 0..0);
+    }
+    #[test]
+    fn membership_plan_matches_exact_linked_identities_without_group_scans() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        let mut a = Chat::new("a".into(), "A".into());
+        a.backend_origin = Some("origin".into());
+        a.backend_account = Some("one".into());
+        let mut b = a.clone();
+        b.id = "b".into();
+        b.backend_account = Some("two".into());
+        let mut locked = a.clone();
+        locked.id = "locked".into();
+        locked.locked = true;
+        app.settings.beeper.people.push(crate::merged::Person {
+            name: "A".into(),
+            members: vec![
+                crate::merged::Member::of(&a).unwrap(),
+                crate::merged::Member::of(&b).unwrap(),
+                crate::merged::Member::of(&locked).unwrap(),
+            ],
+            primary: None,
+        });
+        app.chats = vec![a, b, locked];
+        let group = app.settings.flat_groups.create("Work").unwrap();
+        app.settings
+            .flat_groups
+            .add(group, member(&app, &app.chats[0]));
+        let group = app.settings.flat_groups.create("Private").unwrap();
+        app.settings
+            .flat_groups
+            .add(group, member(&app, &app.chats[2]));
+        assert_eq!(
+            membership_rows(&app, &app.chats.iter().collect::<Vec<_>>()),
+            vec![vec![0, 1], vec![2]]
+        );
+    }
     #[test]
     fn linked_membership_and_unread_survive_representative_changes() {
         let root = tempfile::tempdir().unwrap();

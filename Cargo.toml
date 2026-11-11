@@ -310,3 +310,7 @@ opt-level = 2
 # Compiles the PO catalogs to Rust, leaving out unfinished entries. Ordinary
 # builds do not need gettext tools.
 fastframe-i18n = { git = "https://github.com/crmne/fastframe", tag = "v0.15.2", features = ["build"] }
+
+[[example]]
+name = "flat_group_review"
+required-features = ["demo"]

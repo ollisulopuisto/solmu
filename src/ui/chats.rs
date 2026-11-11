@@ -12,7 +12,7 @@ use super::labels;
 use super::widgets;
 
 // Roomier by default; retain the existing explicit compact-density choice.
-fn chat_row_height(compact: bool) -> f32 {
+pub(super) fn chat_row_height(compact: bool) -> f32 {
     if compact { 56.0 } else { 80.0 }
 }
 
