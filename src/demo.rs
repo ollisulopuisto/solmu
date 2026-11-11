@@ -2440,6 +2440,18 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "chat" | "" => {}
             "phone-menu" => phone_menu_sample(app),
             "link-menu" => link_menu_sample(app),
+            "supplied-preview" => {
+                phone_menu_sample(app);
+                let mapped = crate::backend::beeper::supplied_preview_demo();
+                let row = app
+                    .conversations
+                    .get_mut(SAMPLES[0].id)
+                    .unwrap()
+                    .message_mut("ada-link")
+                    .unwrap();
+                row.content = mapped.content;
+                row.thumbnail = mapped.thumbnail;
+            }
             "short-chat" => short_chat_sample(app),
             "chat-menu" => app.open_chat_menu = Some(app.chats[0].id.clone()),
             // Reply later / Read later: flagged rows carry the clock and
