@@ -237,6 +237,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                 super::titlebar_drag(ui, drag);
             }
             search_field(app, ui);
+            super::batch_actions::archive_bar(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
                 ui.set_min_height(36.0);
@@ -1584,7 +1585,11 @@ fn favorite_chip(
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(hover);
     if response.clicked() {
-        app.actions.push(Action::OpenChat(chat.id.clone()));
+        if ui.input(|input| input.modifiers.command) {
+            super::batch_actions::toggle_chat(app, &chat.id);
+        } else {
+            app.actions.push(Action::OpenChat(chat.id.clone()));
+        }
     }
     let menu_palette = palette;
     // The favorite item is translated, so its width counts in the reader's
@@ -2901,6 +2906,13 @@ fn compact_badge_center(avatar: Rect) -> egui::Pos2 {
 }
 
 fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette) {
+    if ui
+        .button(crate::i18n::gettext(app.locale, "Select for archive"))
+        .clicked()
+    {
+        super::batch_actions::toggle_chat(app, &chat.id);
+        ui.close();
+    }
     let locale = app.locale;
     if chat.looks_unread()
         && widgets::menu_item(

@@ -1558,6 +1558,125 @@ fn confirm_delete_messages(
     for_everyone: bool,
     selection: bool,
 ) {
+    // Beeper scopes come from the selected chat's actual capabilities, not
+    // the inherited WhatsApp age window. Missing support fails closed.
+    if app.chat(chat).is_some_and(|c| c.backend_account.is_some()) {
+        let Some(known) = app.chat(chat).cloned() else {
+            return;
+        };
+        let caps = &known.mutation_capabilities;
+        ui.heading(crate::i18n::gettext(app.locale, "Delete selected messages"));
+        let supported = if for_everyone {
+            matches!(caps.delete, Some(2))
+        } else {
+            caps.delete_for_me == Some(true)
+        };
+        for (label, scope, allowed) in [
+            ("Delete for me", false, caps.delete_for_me == Some(true)),
+            ("Delete for everyone", true, matches!(caps.delete, Some(2))),
+        ] {
+            if allowed && ui.radio(for_everyone == scope, label).clicked() {
+                app.dialog = Some(Dialog::ConfirmDeleteSelection {
+                    chat: chat.into(),
+                    messages: ids.to_vec(),
+                    for_everyone: scope,
+                });
+            }
+        }
+        if let Some(age) = caps.delete_max_age.filter(|_| for_everyone) {
+            ui.label(format!(
+                "Bridge delete-for-everyone age limit: {age} seconds"
+            ));
+        }
+        let failures: Vec<_> = ids
+            .iter()
+            .filter_map(|id| {
+                let message = app
+                    .conversations
+                    .get(chat)
+                    .and_then(|c| c.messages.iter().find(|m| &m.id == id));
+                match message {
+                    None => Some(format!("{id}: message unavailable")),
+                    Some(message) => caps
+                        .delete_refusal(
+                            for_everyone,
+                            message.from_me,
+                            message.timestamp,
+                            crate::util::now(),
+                        )
+                        .map(|why| format!("{id}: {why}")),
+                }
+            })
+            .collect();
+        for failure in &failures {
+            ui.label(failure);
+        }
+        if !supported || !failures.is_empty() {
+            ui.label(crate::i18n::gettext(
+                app.locale,
+                "Unsupported items: nothing will be sent. Change scope or selection explicitly.",
+            ));
+        }
+        let owner = app.account().id.0.clone();
+        let pending = app
+            .batch_ui
+            .results
+            .iter()
+            .any(|item| item.result.is_none());
+        ui.label(format!(
+            "Delete {} messages {}? This cannot be undone in Solmu.",
+            ids.len(),
+            if for_everyone {
+                "for everyone"
+            } else {
+                "for me"
+            }
+        ));
+        ui.horizontal(|ui| {
+            let confirm = if for_everyone {
+                "Delete for everyone"
+            } else {
+                "Delete for me"
+            };
+            if ui
+                .add_enabled(
+                    supported && failures.is_empty() && !pending && !ids.is_empty(),
+                    egui::Button::new(confirm).fill(app.palette.danger),
+                )
+                .clicked()
+            {
+                app.batch_ui.owner = owner;
+                let request = super::batch_actions::next_request();
+                app.batch_ui.request = Some(request);
+                app.batch_ui.results = ids
+                    .iter()
+                    .map(|id| super::batch_actions::Item {
+                        chat: chat.into(),
+                        message: Some(id.clone()),
+                        everyone: for_everyone,
+                        result: None,
+                    })
+                    .collect();
+                for id in ids {
+                    app.actions.push(Action::BatchDelete {
+                        request,
+                        chat: chat.into(),
+                        id: id.clone(),
+                        everyone: for_everyone,
+                    });
+                }
+                app.actions.push(Action::CancelSelection);
+                app.actions.push(Action::CloseDialog);
+            }
+            if ui
+                .button(crate::i18n::gettext(app.locale, "Cancel"))
+                .clicked()
+            {
+                app.actions.push(Action::CloseDialog);
+            }
+        });
+        return;
+    }
     let locale = app.locale;
     let heading = if for_everyone {
         crate::i18n::gettext(locale, "Delete for everyone?")

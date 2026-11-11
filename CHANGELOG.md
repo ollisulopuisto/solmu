@@ -1,3 +1,9 @@
+## Unreleased: scoped archive/delete batches
+
+- Archive multiple selected chats without deleting messages.
+- Explicit per-chat bridge-supported message deletion scope and age checks.
+- Unsupported-item preflight and request-correlated per-item outcomes, no auto retry.
+
 # Changelog
 
 Newest first. One `## <version>` section per release, bullets under it;

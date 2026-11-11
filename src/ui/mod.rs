@@ -1,6 +1,7 @@
 //! Window layout: panels, overlays, keyboard shortcuts.
 
 pub mod accounts;
+pub mod batch_actions;
 pub mod call_log;
 pub mod chats;
 pub mod conversation;
@@ -120,6 +121,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     update::show(app, ctx);
     picker::show(app, ctx);
     dialogs::show(app, ctx);
+    batch_actions::dialogs(app, ctx);
     image_preview::show(app, ctx);
     image_preview::show_sticker(app, ctx);
     image_editor::show(app, ctx);

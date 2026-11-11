@@ -124,6 +124,16 @@ pub struct CreatedPoll {
 
 #[derive(Debug)]
 pub enum Command {
+    BatchArchive {
+        request: u64,
+        chat: ChatId,
+    },
+    BatchDelete {
+        request: u64,
+        chat: ChatId,
+        id: String,
+        everyone: bool,
+    },
     RefreshPoll {
         chat: ChatId,
         message: String,
@@ -1104,6 +1114,14 @@ pub struct BeeperAccountInfo {
 
 #[derive(Debug)]
 pub enum Event {
+    MutationResult {
+        request: Option<u64>,
+        archived: Option<bool>,
+        chat: ChatId,
+        message: Option<String>,
+        everyone: bool,
+        result: Result<(), String>,
+    },
     BeeperAccounts {
         origin: String,
         accounts: Vec<BeeperAccountInfo>,

@@ -729,6 +729,7 @@ pub struct App {
     #[cfg(any(test, feature = "demo"))]
     pub open_list_menu: Option<(ChatId, String)>,
     /// Name typed in the label manager.
+    pub batch_ui: crate::ui::batch_actions::State,
     pub label_name: String,
     /// Colour the manager will use for the next label.
     pub label_color: String,
@@ -1612,6 +1613,7 @@ impl App {
             sidebar_visible: true,
             #[cfg(any(test, feature = "demo"))]
             open_list_menu: None,
+            batch_ui: Default::default(),
             label_name: String::new(),
             label_color: crate::archive::DEFAULT_COLOR.to_owned(),
             label_editing: None,
@@ -4232,6 +4234,30 @@ impl App {
 
     fn apply_backend_event(&mut self, event: Event, live: bool) {
         match event {
+            Event::MutationResult {
+                request,
+                archived,
+                chat,
+                message,
+                everyone,
+                result,
+            } => {
+                if let Some(archived) = archived.filter(|_| result.is_ok()) {
+                    self.silence_hide(&chat, archived);
+                }
+                if self.batch_ui.owner == self.account().id.0
+                    && request == self.batch_ui.request
+                    && request.is_some()
+                    && let Some(item) = self.batch_ui.results.iter_mut().find(|item| {
+                        item.chat == chat
+                            && item.message == message
+                            && item.everyone == everyone
+                            && item.result.is_none()
+                    })
+                {
+                    item.result = Some(result);
+                }
+            }
             Event::BeeperAccounts { origin, accounts } => {
                 self.beeper_accounts.insert(origin, accounts);
             }
@@ -9440,16 +9466,36 @@ impl App {
                     self.set_composer_cursor(ctx, 0);
                 }
             }
+            Action::BatchArchive { request, chat } => {
+                self.backend.send(Command::BatchArchive { request, chat })
+            }
+            Action::BatchDelete {
+                request,
+                chat,
+                id,
+                everyone,
+            } => self.backend.send(Command::BatchDelete {
+                request,
+                chat,
+                id,
+                everyone,
+            }),
             Action::DeleteForEveryone { chat, id } => {
-                if let Some(message) = self
-                    .conversations
-                    .get_mut(&chat)
-                    .and_then(|conversation| conversation.message_mut(&id))
+                // Beeper reports the outcome; never hide content optimistically.
+                if !self
+                    .chat(&chat)
+                    .is_some_and(|known| known.backend_account.is_some())
                 {
-                    message.content = Content::Revoked;
+                    if let Some(message) = self
+                        .conversations
+                        .get_mut(&chat)
+                        .and_then(|c| c.message_mut(&id))
+                    {
+                        message.content = Content::Revoked;
+                    }
+                    self.prune_selection();
+                    self.forget_star(&chat, &id);
                 }
-                self.prune_selection();
-                self.forget_star(&chat, &id);
                 self.backend.send(Command::Revoke { chat, id });
             }
             Action::DeleteForMe { chat, id } => {
@@ -10192,14 +10238,13 @@ impl App {
                 let beeper = self
                     .chat(&chat)
                     .is_some_and(|known| known.backend_account.is_some());
-                if let Some(known) = self.chat_mut(&chat) {
-                    known.archived = archived;
-                }
-                if beeper {
-                    self.silence_hide(&chat, archived);
-                }
-                if archived && self.open_chat.as_deref() == Some(chat.as_str()) {
-                    self.actions.push(Action::CloseChat);
+                if !beeper {
+                    if let Some(known) = self.chat_mut(&chat) {
+                        known.archived = archived;
+                    }
+                    if archived && self.open_chat.as_deref() == Some(chat.as_str()) {
+                        self.actions.push(Action::CloseChat);
+                    }
                 }
                 self.backend.send(Command::SetArchived(chat, archived));
             }
@@ -29229,6 +29274,17 @@ mod conversation_palette_tests {
         app.chats = vec![beeper_chat("chat-1")];
         app.apply(Action::SetMuted("chat-1".into(), Some(0)), &ctx);
         app.apply(Action::SetArchived("chat-1".into(), true), &ctx);
+        app.apply_backend_event(
+            Event::MutationResult {
+                request: None,
+                archived: Some(true),
+                chat: "chat-1".into(),
+                message: None,
+                everyone: false,
+                result: Ok(()),
+            },
+            true,
+        );
         let silence = app.settings.silenced.get("chat-1").copied().unwrap();
         assert!(silence.hidden);
         assert_eq!(silence.muted_until, Some(0));
@@ -29243,6 +29299,17 @@ mod conversation_palette_tests {
         assert!(chat.archived && chat.muted(crate::util::now()));
         // Undo takes Unarchive and Unmute; then the sync rules again.
         app.apply(Action::SetArchived("chat-1".into(), false), &ctx);
+        app.apply_backend_event(
+            Event::MutationResult {
+                request: None,
+                archived: Some(false),
+                chat: "chat-1".into(),
+                message: None,
+                everyone: false,
+                result: Ok(()),
+            },
+            true,
+        );
         app.apply(Action::SetMuted("chat-1".into(), None), &ctx);
         assert!(!app.settings.silenced.contains_key("chat-1"));
         app.apply_backend_event(Event::Chats(vec![beeper_chat("chat-1")]), false);
@@ -29275,6 +29342,17 @@ mod conversation_palette_tests {
         app.chats = vec![beeper_chat("chat-1")];
         app.apply(Action::SetMuted("chat-1".into(), Some(0)), &ctx);
         app.apply(Action::SetArchived("chat-1".into(), true), &ctx);
+        app.apply_backend_event(
+            Event::MutationResult {
+                request: None,
+                archived: Some(true),
+                chat: "chat-1".into(),
+                message: None,
+                everyone: false,
+                result: Ok(()),
+            },
+            true,
+        );
         // A new message arrives on the sync: unread, unmuted, unarchived as
         // far as the server knows. The promise still gates the notification.
         let mut incoming = beeper_chat("chat-1");

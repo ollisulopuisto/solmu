@@ -108,6 +108,46 @@ impl ChatKind {
     }
 }
 
+/// Live bridge-reported destructive capabilities. Missing is never permission.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MutationCapabilities {
+    pub archive: Option<bool>,
+    pub delete_for_me: Option<bool>,
+    pub delete: Option<i8>,
+    pub delete_max_age: Option<i64>,
+}
+impl MutationCapabilities {
+    pub fn delete_refusal(
+        &self,
+        everyone: bool,
+        from_me: bool,
+        timestamp: i64,
+        now: i64,
+    ) -> Option<&'static str> {
+        if !everyone {
+            return (self.delete_for_me != Some(true))
+                .then_some("Delete for me is not confirmed by this bridge");
+        }
+        if !matches!(self.delete, Some(2)) {
+            return Some("Delete for everyone is not confirmed by this bridge");
+        }
+        if !from_me {
+            return Some("Only your own messages can be deleted for everyone here");
+        }
+        if timestamp <= 0 || timestamp > now {
+            return Some("Message age could not be verified");
+        }
+        if self
+            .delete_max_age
+            .is_some_and(|limit| limit < 0 || now.saturating_sub(timestamp) > limit)
+        {
+            return Some("The bridge's delete age limit has passed");
+        }
+        None
+    }
+}
+
 /// A local chat label: a name, a colour, and nothing that leaves this computer.
 /// Not a WhatsApp Business label; Solmu neither reads nor syncs those.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -312,6 +352,7 @@ pub struct Chat {
     /// capabilities. Informational only: the API has no poll content or
     /// vote endpoint to use it with yet.
     pub poll_capability: Option<i8>,
+    pub mutation_capabilities: MutationCapabilities,
 }
 
 /// A group's permissions and admins, as its metadata says. Kept in the
@@ -410,6 +451,7 @@ impl Chat {
             backend_origin: None,
             backend_network: None,
             poll_capability: None,
+            mutation_capabilities: Default::default(),
         }
     }
 
@@ -2544,6 +2586,16 @@ pub fn forward_limit(frequently_forwarded: bool) -> usize {
 /// Actions queued by views and applied after drawing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    BatchArchive {
+        request: u64,
+        chat: ChatId,
+    },
+    BatchDelete {
+        request: u64,
+        chat: ChatId,
+        id: String,
+        everyone: bool,
+    },
     TranslateLocally(String),
     Open(Page),
     /// Opens settings, or closes them when they are already showing.
@@ -4285,5 +4337,27 @@ mod tests {
         assert_eq!(listed.links.len(), MEDIA_LIST_LIMIT, "cut to what is shown");
         assert!(listed.links_truncated, "600 addresses do not fit");
         assert!(!listed.media_truncated && !listed.docs_truncated);
+    }
+}
+
+#[cfg(test)]
+mod mutation_capability_tests {
+    use super::MutationCapabilities;
+    #[test]
+    fn scope_is_never_widened_and_unknown_or_partial_fails_closed() {
+        let mut caps = MutationCapabilities::default();
+        assert!(caps.delete_refusal(false, true, 10, 20).is_some());
+        assert!(caps.delete_refusal(true, true, 10, 20).is_some());
+        caps.delete_for_me = Some(true);
+        assert_eq!(caps.delete_refusal(false, false, 10, 20), None);
+        assert!(caps.delete_refusal(true, true, 10, 20).is_some());
+        caps.delete = Some(1);
+        assert!(caps.delete_refusal(true, true, 10, 20).is_some());
+        caps.delete = Some(2);
+        caps.delete_max_age = Some(5);
+        assert!(caps.delete_refusal(true, true, 10, 20).is_some());
+        assert_eq!(caps.delete_refusal(true, true, 18, 20), None);
+        assert!(caps.delete_refusal(true, false, 18, 20).is_some());
+        assert!(caps.delete_refusal(true, true, 0, 20).is_some());
     }
 }

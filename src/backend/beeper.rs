@@ -129,6 +129,8 @@ struct BeeperChat {
 /// polls are the one advertised capability the API gives no endpoint for.
 #[derive(Debug, Deserialize)]
 struct BeeperCapabilities {
+    #[serde(flatten)]
+    mutations: crate::model::MutationCapabilities,
     /// Network poll support: -2 rejected, -1 dropped, 0 unsupported,
     /// 1 partial, 2 full (per the Desktop API reference).
     #[serde(default)]
@@ -2349,6 +2351,11 @@ fn map_chat(c: &BeeperChat, network_label: &dyn Fn(&BeeperChat) -> String) -> Ch
     chat.muted_until = if c.is_muted { Some(0) } else { None };
     chat.read_only = c.is_read_only;
     chat.poll_capability = c.capabilities.as_ref().and_then(|caps| caps.poll);
+    chat.mutation_capabilities = c
+        .capabilities
+        .as_ref()
+        .map(|caps| caps.mutations.clone())
+        .unwrap_or_default();
     if let Some(participants) = &c.participants {
         chat.participants = participants.items.iter().map(|u| u.id.clone()).collect();
         // Members who never sent a loaded message have no other name
@@ -3505,35 +3512,33 @@ pub fn run(
                         Err(e) => emit(Event::Info(format!("Reminder change failed: {e}"))),
                     }
                 }
-                Command::SetArchived(chat, value) => {
-                    match api.post(
-                        &format!("/v1/chats/{}/archive", encode_segment(&chat)),
-                        serde_json::json!({"archived": value}),
-                    ) {
-                        // The archive POST echoes nothing: the chat's own
-                        // record answers. A local Silence promise holds the
-                        // archived state either way.
-                        Ok(()) => {
-                            match api.get_chat(&chat) {
-                                Ok(state) => {
-                                    if let Some(report) = Api::unconfirmed_state(
-                                        "isArchived",
-                                        value,
-                                        state.is_archived,
-                                        value,
-                                    ) {
-                                        emit(Event::Info(report));
-                                    }
-                                }
-                                Err(e) => emit(Event::Info(e)),
-                            }
-                            api.refresh_chat(&chat, &accounts, &emit);
+                command @ (Command::SetArchived(..) | Command::BatchArchive { .. }) => {
+                    let (chat, value, request) = match command {
+                        Command::SetArchived(chat, value) => (chat, value, None),
+                        Command::BatchArchive { request, chat } => (chat, true, Some(request)),
+                        _ => unreachable!(),
+                    };
+                    let result = api.get_chat(&chat).and_then(|state| {
+                        if state.capabilities.as_ref().and_then(|caps| caps.mutations.archive) != Some(true) {
+                            return Err("Archive capability unknown or unsupported; nothing sent".into());
                         }
-                        Err(e) => {
-                            emit(Event::Info(e));
-                            api.refresh_chat(&chat, &accounts, &emit);
-                        }
+                        api.post(&format!("/v1/chats/{}/archive", encode_segment(&chat)), serde_json::json!({"archived": value}))?;
+                        let shown = api.get_chat(&chat)?;
+                        if shown.is_archived != value { return Err("Archive request accepted, but state is not confirmed; check before retrying".into()); }
+                        Ok(())
+                    });
+                    emit(Event::MutationResult {
+                        request,
+                        archived: Some(value),
+                        chat: chat.clone(),
+                        message: None,
+                        everyone: false,
+                        result: result.clone(),
+                    });
+                    if let Err(error) = result {
+                        emit(Event::Info(error));
                     }
+                    api.refresh_chat(&chat, &accounts, &emit);
                     last_chat_refresh = Instant::now() - CHAT_REFRESH;
                 }
                 Command::SetPinned(chat, value) => {
@@ -3621,32 +3626,74 @@ pub fn run(
                         }),
                     }
                 }
-                Command::Revoke { chat, id } => {
-                    match api.mutate(
-                        reqwest::Method::DELETE,
-                        &format!(
-                            "/v1/chats/{}/messages/{}?forEveryone=true",
-                            encode_segment(&chat),
-                            encode_segment(&id)
-                        ),
-                        None,
-                    ) {
+                command @ (Command::Revoke { .. }
+                | Command::DeleteLocal { .. }
+                | Command::BatchDelete { .. }) => {
+                    let (chat, id, everyone, request) = match command {
+                        Command::Revoke { chat, id } => (chat, id, true, None),
+                        Command::DeleteLocal { chat, id } => (chat, id, false, None),
+                        Command::BatchDelete {
+                            request,
+                            chat,
+                            id,
+                            everyone,
+                        } => (chat, id, everyone, Some(request)),
+                        _ => unreachable!(),
+                    };
+                    let result = api.get_chat(&chat).and_then(|state| {
+                        let caps = state
+                            .capabilities
+                            .as_ref()
+                            .map(|caps| caps.mutations.clone())
+                            .unwrap_or_default();
+                        let message = api.get_message(&chat, &id)?;
+                        if message.id != id
+                            || (!message.chat_id.is_empty() && message.chat_id != chat)
+                        {
+                            return Err("Message identity changed; nothing sent".into());
+                        }
+                        if message.is_deleted
+                            || message.is_hidden
+                            || message.send_status.as_ref().is_some_and(|s| {
+                                matches!(s.status.as_str(), "pending" | "sending" | "failed")
+                            })
+                        {
+                            return Err(
+                                "Message is deleted, hidden or not final; nothing sent".into()
+                            );
+                        }
+                        let mapped = api.map_message(&message, &chat);
+                        if let Some(why) = caps.delete_refusal(
+                            everyone,
+                            mapped.from_me,
+                            mapped.timestamp,
+                            crate::util::now(),
+                        ) {
+                            return Err(format!("{why}; nothing sent"));
+                        }
+                        api.mutate(
+                            reqwest::Method::DELETE,
+                            &format!(
+                                "/v1/chats/{}/messages/{}?forEveryone={everyone}",
+                                encode_segment(&chat),
+                                encode_segment(&id)
+                            ),
+                            None,
+                        )
+                    });
+                    emit(Event::MutationResult {
+                        request,
+                        archived: None,
+                        chat: chat.clone(),
+                        message: Some(id.clone()),
+                        everyone,
+                        result: result.clone(),
+                    });
+                    match result {
                         Ok(()) => emit(Event::MessageDeleted { chat, id }),
-                        Err(e) => emit(Event::Info(format!("Delete failed: {e}"))),
-                    }
-                }
-                Command::DeleteLocal { chat, id } => {
-                    match api.mutate(
-                        reqwest::Method::DELETE,
-                        &format!(
-                            "/v1/chats/{}/messages/{}?forEveryone=false",
-                            encode_segment(&chat),
-                            encode_segment(&id)
-                        ),
-                        None,
-                    ) {
-                        Ok(()) => emit(Event::MessageDeleted { chat, id }),
-                        Err(e) => emit(Event::Info(format!("Delete failed: {e}"))),
+                        Err(error) => emit(Event::Info(format!(
+                            "Delete failed or uncertain: {error}. Check state before retrying."
+                        ))),
                     }
                 }
                 Command::React {
@@ -6660,8 +6707,11 @@ mod tests {
                                 HISTORY_JSON.to_string()
                             }
                         }
-                        ("GET", p) if p.contains("/messages/") => r#"{"id":"m/4","chatID":"work/chat","accountID":"local-whatsapp*ba*222","text":"updated fixture","isSender":true,"editedTimestamp":"2026-10-27T17:00:00Z","reactions":[{"participantID":"@me-work:beeper.local","reactionKey":"👍","emoji":true}]}"#.to_string(),
-                        ("GET", p) if p.starts_with("/v1/chats/") => r#"{"id":"work/chat","accountID":"local-whatsapp*ba*222","network":"WhatsApp","title":"Work fixture"}"#.to_string(),
+                        ("GET", p) if p.contains("/messages/") => {
+                            let id = p.split("/messages/").nth(1).unwrap_or("").replace("%2F", "/");
+                            serde_json::json!({"id":id,"chatID":"work/chat","accountID":"local-whatsapp*ba*222","timestamp":"2026-10-27T17:00:00Z","text":"updated fixture","isSender":true,"editedTimestamp":"2026-10-27T17:00:00Z","reactions":[{"participantID":"@me-work:beeper.local","reactionKey":"👍","emoji":true}]}).to_string()
+                        },
+                        ("GET", p) if p.starts_with("/v1/chats/") => r#"{"id":"work/chat","accountID":"local-whatsapp*ba*222","network":"WhatsApp","title":"Work fixture","isArchived":true,"capabilities":{"archive":true,"delete":2,"deleteForMe":true}}"#.to_string(),
                         ("POST", p) if p.ends_with("/messages") => r#"{"pendingMessageID":"pending-test"}"#.to_string(),
                         ("PATCH", p) if p.starts_with("/v1/chats/") => {
                             r#"{"id":"work/chat","isMuted":true,"isArchived":true,"isPinned":false}"#
@@ -8425,6 +8475,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(body_of(&m).0, "[poll]");
+    }
+
+    #[test]
+    fn destructive_capabilities_are_per_chat_and_missing_is_unknown() {
+        let wire: BeeperChat = serde_json::from_str(r#"{"id":"x","capabilities":{"archive":true,"delete":2,"deleteForMe":false,"deleteMaxAge":300}}"#).unwrap();
+        let mapped = map_chat(&wire, &|c| c.network.clone());
+        assert_eq!(mapped.mutation_capabilities.archive, Some(true));
+        assert_eq!(mapped.mutation_capabilities.delete_for_me, Some(false));
+        assert_eq!(mapped.mutation_capabilities.delete_max_age, Some(300));
+        let unknown: BeeperChat = serde_json::from_str(r#"{"id":"x"}"#).unwrap();
+        assert_eq!(
+            map_chat(&unknown, &|c| c.network.clone()).mutation_capabilities,
+            Default::default()
+        );
     }
 
     #[test]
