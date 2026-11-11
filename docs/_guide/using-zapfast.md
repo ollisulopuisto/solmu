@@ -18,6 +18,11 @@ to make Enter add a line and send with Ctrl+Enter (Command+Enter on macOS).
 like WhatsApp, and a message of nothing but emoji shows large.
 Paste text with Ctrl+V (Command+V on macOS) or Shift+Insert, as in other
 Linux applications.
+On macOS the field uses the system's text replacements (System Settings >
+Keyboard > Text Replacements): a shortcut expands to its phrase when you
+type a space, return, or punctuation after it, and just before the message
+sends. Changes made in System Settings apply when Solmu's window next
+gains focus.
 Mentions in a group are written with `@`. Choose **all** to mention
 everyone when the group's member list is available: the message shows `@all`,
 highlighted like any other mention.
