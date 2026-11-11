@@ -798,10 +798,20 @@ fn sections(app: &App) -> Vec<Section> {
         |settings| &mut settings.send_typing,
     );
     privacy.toggle(
+        translated(locale, "Automatically fetch link previews"),
+        translated(locale, "Off by default. Visible links contact websites directly, sharing your IP address and the requested URL. No proxy is used."),
+        |settings| &mut settings.auto_link_previews,
+    );
+    privacy.toggle(
         translated(locale, "Remove tracking parameters when opening, copying and fetching links"),
         translated(locale, "Off by default. Removes known tracking keys, keeps recognized signed URLs, and never changes messages. Some links may still need their original parameters."),
         |settings| &mut settings.remove_link_tracking,
     );
+    privacy.row(translated(locale, "Cached link previews"), translated(locale, "Kept in memory on this device only, until Solmu closes. Clearing also cancels pending requests."), move |ui, app| {
+        if ui.button(crate::i18n::gettext(locale, "Clear cached previews")).clicked() {
+            app.actions.push(Action::ClearLinkPreviews);
+        }
+    });
     app_lock_rows(app, &mut privacy);
     // The account values live on the phone: they are shown once fetched and
     // edited only while connected with a fresh snapshot.

@@ -414,6 +414,9 @@ pub struct App {
     pub local_ai: crate::backend::local_ai::State,
     pub dirs: AppDirs,
     pub settings: Settings,
+    pub link_previews: Option<crate::preview_worker::Worker>,
+    preview_context: Option<(String, Option<ChatId>, bool, bool, bool)>,
+    preview_sources: HashSet<(ChatId, String, String)>,
     /// Writes settings and the account roster on a thread of its own, so
     /// a save never stalls the window; flushed at exit and before a suspend.
     pub files: fastframe_file::Writer,
@@ -1481,6 +1484,9 @@ impl App {
             local_ai: Default::default(),
             dirs,
             settings,
+            link_previews: None,
+            preview_context: None,
+            preview_sources: HashSet::new(),
             locale,
             settings_dirty: false,
             last_settings_save: Instant::now(),
@@ -1901,6 +1907,11 @@ impl App {
 
     /// Drops App-owned pointers into the previous account's chats and media.
     fn clear_account_ui(&mut self) {
+        if let Some(worker) = &self.link_previews {
+            worker.cancel();
+        }
+        self.preview_context = None;
+        self.preview_sources.clear();
         self.discard_gif_thumbnails();
         self.gif_pending = false;
         self.invalidate_composer_undo();
@@ -9582,6 +9593,53 @@ impl App {
                 ctx.copy_text(self.link_action_url(&url));
                 self.toast("Copied");
             }
+            Action::LinkPreviewPreferences => {
+                self.apply(Action::Open(Page::Settings), ctx);
+                self.settings_search = "Privacy".into();
+            }
+            Action::ClearLinkPreviews => {
+                crate::image_cache::forget_prefix(ctx, "bytes://local-link-preview/");
+                if let Some(worker) = &self.link_previews {
+                    worker.clear();
+                }
+                self.preview_sources.clear();
+                self.toast("Cached previews cleared");
+            }
+            Action::FetchLinkPreview {
+                account,
+                chat,
+                message,
+                url,
+                automatic,
+                retry,
+            } => {
+                if account != self.account().id.0
+                    || !self.chat_view()
+                    || self.window_hidden
+                    || (automatic && (!self.settings.auto_link_previews || !self.window_focused))
+                    || !self.preview_chat_visible(&chat)
+                    || !self.preview_source_exists(&chat, &message, &url)
+                {
+                    return;
+                }
+                if !self.settings.proxy.trim().is_empty() {
+                    if !automatic {
+                        self.toast_error(
+                            "Link previews are unavailable while a proxy is configured",
+                        );
+                    }
+                    return;
+                }
+                self.sync_link_previews();
+                let request_url = self.link_action_url(&url);
+                let worker = self
+                    .link_previews
+                    .get_or_insert_with(crate::preview_worker::Worker::new);
+                if worker.request(&account, &request_url, retry) {
+                    self.preview_sources.insert((chat, message, url));
+                    ctx.request_repaint_after(Duration::from_millis(100));
+                }
+            }
             Action::CopyText(text) => {
                 ctx.copy_text(text);
                 self.toast("Copied");
@@ -11520,6 +11578,7 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::SettingsChanged => {
+                self.sync_link_previews();
                 self.mark_settings_dirty();
                 let address = self.settings.transcription_wyoming.trim().to_string();
                 if address != self.transcriber_address {
@@ -12257,6 +12316,53 @@ impl App {
         }
     }
 
+    fn preview_chat_visible(&self, chat: &str) -> bool {
+        if self.open_chat.as_deref() == Some(chat) {
+            return true;
+        }
+        let Some(open) = self.current_chat() else {
+            return false;
+        };
+        self.settings.beeper.people.iter().any(|person| {
+            person.members.iter().any(|member| member.matches(open))
+                && self.chat(chat).is_some_and(|source| {
+                    person.members.iter().any(|member| member.matches(source))
+                })
+        })
+    }
+
+    fn preview_source_exists(&self, chat: &str, message: &str, url: &str) -> bool {
+        self.chat(chat).is_some_and(|c| !c.locked)
+            && self.conversations.get(chat).and_then(|c| c.message(message))
+                .is_some_and(|message| matches!(&message.content,
+                    Content::Text { text, .. } if crate::markup::links(text).iter().any(|u| u == url)))
+    }
+
+    fn sync_link_previews(&mut self) {
+        let blocked = self.app_lock.is_locked()
+            || self.window_hidden
+            || !self.chat_view()
+            || !self.settings.proxy.trim().is_empty();
+        let context = (
+            self.account().id.0.clone(),
+            self.open_chat.clone(),
+            self.settings.auto_link_previews,
+            self.settings.remove_link_tracking,
+            blocked,
+        );
+        let missing = self
+            .preview_sources
+            .iter()
+            .any(|(chat, message, url)| !self.preview_source_exists(chat, message, url));
+        if self.preview_context.as_ref() != Some(&context) || missing {
+            if let Some(worker) = &self.link_previews {
+                worker.cancel();
+            }
+            self.preview_sources.clear();
+            self.preview_context = Some(context);
+        }
+    }
+
     /// Processes app state shared by windowed and headless modes.
     pub fn background_frame(&mut self, ctx: &egui::Context) {
         // Events are drained before frame_ui observes focus. Losing focus in
@@ -12289,6 +12395,7 @@ impl App {
         self.tick_audio(ctx);
         self.tick_video(ctx);
         self.apply_actions(ctx);
+        self.sync_link_previews();
         self.sync_prefetch();
         self.hold_media();
         self.follow_receipts();
@@ -12431,6 +12538,9 @@ impl App {
     /// window: media stops, a recording is discarded, the locked-chats folder
     /// closes, and notifications already on the desktop are withdrawn.
     pub fn lock_app(&mut self) {
+        if let Some(worker) = &self.link_previews {
+            worker.cancel();
+        }
         if self.settings.app_lock_hash.is_none() || self.app_lock.is_locked() {
             return;
         }
@@ -13160,6 +13270,7 @@ impl App {
         }
         crate::ui::show(self, ui);
         self.apply_actions(ctx);
+        self.sync_link_previews();
         // The old colours, if a change is being revealed, go over everything.
         self.theme_transition.paint(ctx);
         // Release the image caches of everything that scrolled away.
