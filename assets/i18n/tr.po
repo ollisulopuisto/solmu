@@ -3847,11 +3847,3 @@ msgstr "Enter ile gönder"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Evvelsi gün"
-
-#: src/ui/chats.rs
-msgid "Pinned"
-msgstr "Sabitlenenler"
-
-#: src/ui/chats.rs
-msgid "Other chats"
-msgstr "Diğer sohbetler"

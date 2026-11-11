@@ -3676,11 +3676,3 @@ msgstr ""
 #: src/ui/conversation.rs
 msgid "Playback speed 2x"
 msgstr ""
-
-#: src/ui/chats.rs
-msgid "Pinned"
-msgstr ""
-
-#: src/ui/chats.rs
-msgid "Other chats"
-msgstr ""

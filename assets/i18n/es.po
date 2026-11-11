@@ -3888,11 +3888,3 @@ msgstr "Velocidad de reproducción 2x"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Anteayer"
-
-#: src/ui/chats.rs
-msgid "Pinned"
-msgstr "Fijados"
-
-#: src/ui/chats.rs
-msgid "Other chats"
-msgstr "Otros chats"
