@@ -4324,6 +4324,8 @@ impl App {
                 {
                     let visible = record.visible.clone();
                     let resolved_id = message.id.clone();
+                    let has_attachment = message.content.media().is_some();
+                    let complete = complete && has_attachment;
                     if let Some(conversation) = self.conversations.get_mut(&member.chat) {
                         // Replace identity/content in the same slot. Do not add another row.
                         conversation
@@ -4333,6 +4335,13 @@ impl App {
                             conversation.messages.iter().position(|m| m.id == visible)
                         {
                             let mut message = *message;
+                            // Sparse pending echoes bind identity, not content. Preserve
+                            // the staged preview/caption until the actual attachment arrives.
+                            if !has_attachment {
+                                message.content = conversation.messages[index].content.clone();
+                                message.quoted = conversation.messages[index].quoted.clone();
+                                message.thumbnail = conversation.messages[index].thumbnail.clone();
+                            }
                             // Keep the dispatch position while the server's clock differs.
                             message.timestamp = conversation.messages[index].timestamp;
                             conversation.messages[index] = message;
@@ -7613,9 +7622,14 @@ impl App {
             // Keep inactive transcript caches small. A revisited conversation
             // fetches its page again from Beeper; no remote history is deleted.
             // Only the open chat is active; a recent chat refetches on return.
+            let unresolved: std::collections::HashSet<_> = self
+                .pending_media
+                .values()
+                .map(|record| record.job.member.chat.clone())
+                .collect();
             let mut kept = 0usize;
             self.conversations.retain(|chat, _| {
-                if chat == &id {
+                if chat == &id || unresolved.contains(chat) {
                     true
                 } else {
                     kept += 1;
@@ -7623,7 +7637,7 @@ impl App {
                 }
             });
             for (chat, conversation) in self.conversations.iter_mut() {
-                if chat != &id && conversation.messages.len() > 200 {
+                if chat != &id && !unresolved.contains(chat) && conversation.messages.len() > 200 {
                     let remove = conversation.messages.len() - 200;
                     conversation.messages.drain(..remove);
                     conversation.rows.clear();
@@ -8213,7 +8227,6 @@ impl App {
             return;
         }
         let view_once = self.pending_view_once;
-        self.pending_view_once = false;
         if !selected.is_empty()
             && self
                 .pending
@@ -8231,21 +8244,35 @@ impl App {
                     .is_none_or(|known| !known.can_send() || known.locked))
         {
             self.restore_text(&owner, caption);
-            self.toast_error("Destination unavailable, ambiguous or read-only; files kept.");
+            self.toast_error(
+                crate::i18n::gettext(
+                    self.locale,
+                    "Destination unavailable, ambiguous or read-only; files kept.",
+                )
+                .into_owned(),
+            );
             return;
         }
         if pending_member.is_some() && (view_once || !selected.is_empty()) {
             self.restore_text(&owner, caption);
             self.toast_error(
-                "Beeper attachments cannot carry view-once or selected mentions; files kept.",
+                crate::i18n::gettext(
+                    self.locale,
+                    "Beeper attachments cannot carry view-once or selected mentions; files kept.",
+                )
+                .into_owned(),
             );
             return;
         }
         if pending_member.is_some() && self.pending_media.len() + self.pending.len() > 128 {
             self.restore_text(&owner, caption);
-            self.toast_error("Too many pending media items; files kept.");
+            self.toast_error(
+                crate::i18n::gettext(self.locale, "Too many pending media items; files kept.")
+                    .into_owned(),
+            );
             return;
         }
+        self.pending_view_once = false;
         self.drafts.remove(&owner);
         self.draft_mentions.remove(&owner);
         self.store_draft(&owner, "");
@@ -8824,9 +8851,7 @@ impl App {
             _ => false,
         };
         if touches_pending {
-            self.toast_error(
-                "This media item has no confirmed message identity yet. Check its sending status.",
-            );
+            self.toast_error(crate::i18n::gettext(self.locale, "This media item has no confirmed message identity yet. Check its sending status.").into_owned());
             return;
         }
         let media_destination = crate::ui::merged::attachment_destination(self, ctx)
@@ -8885,7 +8910,13 @@ impl App {
                             job.member.matches(chat) && !chat.locked && chat.can_send()
                         });
                     if !exact {
-                        self.toast_error("Original destination is unavailable; not retried.");
+                        self.toast_error(
+                            crate::i18n::gettext(
+                                self.locale,
+                                "Original destination is unavailable; not retried.",
+                            )
+                            .into_owned(),
+                        );
                         return;
                     }
                     self.pending_media.get_mut(&local).unwrap().state =
@@ -14510,6 +14541,20 @@ mod tests {
                 .content,
             Content::Document { .. }
         ));
+        assert!(app.pending_media.contains_key(&local));
+        let real = app.conversations["pending-target"]
+            .message("final")
+            .unwrap()
+            .clone();
+        app.apply_backend_event(
+            Event::BeeperMediaResolved {
+                local: local.clone(),
+                member: app.pending_media[&local].job.member.clone(),
+                message: Box::new(real),
+                complete: true,
+            },
+            true,
+        );
         assert!(!app.pending_media.contains_key(&local));
     }
 
