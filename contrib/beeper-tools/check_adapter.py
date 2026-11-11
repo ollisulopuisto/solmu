@@ -13,6 +13,7 @@ import tempfile
 LIVE_MODULES = (
     'account.rs', 'categories.rs', 'backend.rs', 'backend/beeper.rs', 'backend/local_ai.rs', 'backend/local_files.rs', 'backend/linked_media.rs',
     'group_admin.rs', 'i18n.rs', 'mentions.rs', 'merged.rs', 'model.rs', 'suggest.rs', 'pending_media.rs',
+    'new_group.rs', 'paths.rs', 'safety.rs', 'scheduler.rs',
     'scheduler_client.rs',
 )
 
