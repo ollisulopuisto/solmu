@@ -55,6 +55,12 @@ impl WidthBook {
     /// settled width when both are close, keeping the larger natural width,
     /// and takes its own natural width otherwise. The result freezes; later
     /// calls return it unchanged.
+    /// Forget one message's width, e.g. after its text was edited or the
+    /// message left the chat; it settles again when next measured.
+    pub fn invalidate(&mut self, id: &str) {
+        self.decided.remove(id);
+    }
+
     pub fn settle(&mut self, id: &str, natural: f32, neighbour: Option<f32>) -> f32 {
         if let Some(width) = self.decided.get(id) {
             return *width;
@@ -70,6 +76,20 @@ impl WidthBook {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_invalidated_message_settles_again_at_its_new_width() {
+        let mut book = WidthBook::default();
+        book.retain_fingerprint(1);
+        assert_eq!(book.settle("a", 60.0, None), 60.0);
+        assert_eq!(
+            book.settle("a", 220.0, None),
+            60.0,
+            "frozen until invalidated"
+        );
+        book.invalidate("a");
+        assert_eq!(book.settle("a", 220.0, None), 220.0);
+    }
 
     #[test]
     fn neighbours_within_tolerance_share_the_larger_width() {

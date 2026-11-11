@@ -264,12 +264,20 @@ impl Conversation {
         for message in incoming {
             match positions.get(&message.id) {
                 Some(&index) => {
+                    let width_stale = self.messages[index].content != message.content
+                        || self.messages[index].quoted != message.quoted
+                        || self.messages[index].forwarded != message.forwarded;
                     let existing = &mut self.messages[index];
                     let media = existing
                         .content
                         .media()
                         .map(|media| (media.state.clone(), media.path.clone()));
                     *existing = message;
+                    if width_stale {
+                        // An edit replaced the text under the same id, so the
+                        // frozen bubble width is obsolete; settle again.
+                        self.width_book.invalidate(&existing.id);
+                    }
                     // Keep downloads in flight and files absent from a freshly
                     // classified copy. An incoming path takes precedence.
                     if let (Some((state, path)), Some(media)) =
@@ -5383,6 +5391,7 @@ impl App {
                 }
                 if let Some(conversation) = self.conversations.get_mut(&chat) {
                     conversation.messages.retain(|message| message.id != id);
+                    conversation.width_book.invalidate(&id);
                 }
                 if live && self.editing.as_deref() == Some(id.as_str()) {
                     self.editing = None;
@@ -7870,7 +7879,9 @@ impl App {
             for (chat, conversation) in self.conversations.iter_mut() {
                 if chat != &id && conversation.messages.len() > 200 {
                     let remove = conversation.messages.len() - 200;
-                    conversation.messages.drain(..remove);
+                    for trimmed in conversation.messages.drain(..remove) {
+                        conversation.width_book.invalidate(&trimmed.id);
+                    }
                     conversation.rows.clear();
                     conversation.complete = false;
                     conversation.requested = false;
@@ -8090,18 +8101,17 @@ impl App {
             let beeper = self
                 .chat(&chat)
                 .is_some_and(|chat| chat.backend_account.is_some());
-            if !beeper
-                && let Some(message) = self
-                    .conversations
-                    .get_mut(&chat)
-                    .and_then(|conversation| conversation.message_mut(&id))
-            {
-                message.content = Content::text(text.clone());
-                message.edited = true;
-                message.mentions = mention_refs(&mentions);
-                if mention_everyone {
-                    crate::mentions::push_everyone(&mut message.mentions);
+            if !beeper && let Some(conversation) = self.conversations.get_mut(&chat) {
+                if let Some(message) = conversation.message_mut(&id) {
+                    message.content = Content::text(text.clone());
+                    message.edited = true;
+                    message.mentions = mention_refs(&mentions);
+                    if mention_everyone {
+                        crate::mentions::push_everyone(&mut message.mentions);
+                    }
                 }
+                // The text changed under a frozen width; let it settle again.
+                conversation.width_book.invalidate(&id);
             }
             self.backend.send(Command::EditText {
                 chat,
