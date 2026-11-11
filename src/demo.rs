@@ -2452,6 +2452,37 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 row.content = mapped.content;
                 row.thumbnail = mapped.thumbnail;
             }
+            "local-preview" | "local-preview-ready" | "local-preview-image" => {
+                phone_menu_sample(app);
+                let row = app
+                    .conversations
+                    .get_mut(SAMPLES[0].id)
+                    .unwrap()
+                    .message_mut("ada-link")
+                    .unwrap();
+                row.content = Content::text(
+                    "A guide for the weekend: https://example.invalid/weekend?utm_source=chat#walk",
+                );
+                row.thumbnail = None;
+                if part != "local-preview" {
+                    let worker = crate::preview_worker::Worker::new();
+                    worker.seed_fixture(&app.account().id.0, "https://example.invalid/weekend?utm_source=chat#walk", crate::link_preview::Preview {
+                        title: Some("A slow weekend in Helsinki".into()),
+                        description: Some("Coffee, a waterfront walk and a few places worth a detour. A synthetic preview, stored locally, with no website request.".into()),
+                        image: if part == "local-preview-image" {
+                            let pixels = image::RgbaImage::from_fn(160,120,|x,y| image::Rgba(if y < 70 { [90,160,180,255] } else if x < 90 { [40,100,90,255] } else { [190,160,110,255] }));
+                            let mut bytes=std::io::Cursor::new(Vec::new());
+                            image::DynamicImage::ImageRgba8(pixels).write_to(&mut bytes,image::ImageFormat::Png).unwrap();
+                            Some(bytes.into_inner())
+                        } else {None}, no_store: false,
+                    });
+                    app.link_previews = Some(worker);
+                }
+            }
+            "preview-privacy" | "tracking-privacy" => {
+                app.page = Page::Settings;
+                app.settings_search = "Privacy".into();
+            }
             "short-chat" => short_chat_sample(app),
             "chat-menu" => app.open_chat_menu = Some(app.chats[0].id.clone()),
             // Reply later / Read later: flagged rows carry the clock and
@@ -5465,6 +5496,201 @@ mod tests {
         static ROOTS: std::cell::RefCell<Vec<tempfile::TempDir>> = const {
             std::cell::RefCell::new(Vec::new())
         };
+    }
+
+    #[test]
+    fn local_preview_consent_default_off_and_one_exact_link() {
+        let mut app = app();
+        apply_flags(&mut app, Some("local-preview"));
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        assert!(!app.settings.auto_link_previews);
+        assert!(!app.settings.remove_link_tracking);
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews.is_none(),
+            "drawing OFF must not create a worker"
+        );
+        let chat = sample_ids()[0].to_owned();
+        let url = "https://example.invalid/weekend?utm_source=chat#walk";
+        let rect = ctx
+            .data(|data| {
+                data.get_temp::<egui::Rect>(
+                    crate::ui::conversation::bubble_id(&chat, "ada-link")
+                        .with(("fetch-preview", url)),
+                )
+            })
+            .expect("per-link fetch button");
+        let pos = rect.center();
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(
+            !app.settings.auto_link_previews,
+            "one shot cannot enable automatic requests"
+        );
+        let worker = app
+            .link_previews
+            .as_ref()
+            .expect("clicked button creates worker");
+        assert!(
+            worker.status(&app.account().id.0, url).is_some(),
+            "clicked URL queued or cached; .invalid is rejected before networking"
+        );
+        assert!(
+            worker
+                .status(&app.account().id.0, "https://example.invalid/other")
+                .is_none()
+        );
+        app.actions
+            .push(crate::model::Action::LinkPreviewPreferences);
+        render(&mut app, &ctx);
+        assert_eq!(app.page, crate::model::Page::Settings);
+        assert_eq!(app.settings_search, "Privacy");
+        assert!(!app.settings.auto_link_previews);
+        app.actions.push(crate::model::Action::ClearLinkPreviews);
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews
+                .as_ref()
+                .unwrap()
+                .status(&app.account().id.0, url)
+                .is_none()
+        );
+    }
+    #[test]
+    fn local_preview_visibility_supplied_cards_and_tracking_action_boundaries() {
+        let mut app = app();
+        apply_flags(&mut app, Some("local-preview"));
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let chat = sample_ids()[0].to_owned();
+        let url = "https://example.invalid/weekend?utm_source=chat#walk";
+        let action = |chat: String, account: String| crate::model::Action::FetchLinkPreview {
+            account,
+            chat,
+            message: "ada-link".into(),
+            url: url.into(),
+            automatic: true,
+            retry: false,
+        };
+        app.actions
+            .push(action(chat.clone(), app.account().id.0.clone()));
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews.is_none(),
+            "automatic requests rejected while OFF"
+        );
+        app.settings.auto_link_previews = true;
+        app.page = crate::model::Page::Settings;
+        app.actions
+            .push(action(chat.clone(), app.account().id.0.clone()));
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews.is_none(),
+            "settings may not backfill messages"
+        );
+        app.page = crate::model::Page::Chats;
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .messages
+            .retain(|row| row.id == "ada-link");
+        let row = app
+            .conversations
+            .get_mut(&chat)
+            .unwrap()
+            .message_mut("ada-link")
+            .unwrap();
+        row.content = Content::Text {
+            text: url.into(),
+            preview: Some(crate::model::LinkPreview {
+                url: url.into(),
+                title: Some("Supplied".into()),
+                description: None,
+            }),
+        };
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews.is_none(),
+            "supplied card must not trigger website requests"
+        );
+        // The UI must use the same URL equivalence as the link list.
+        let row = app
+            .conversations
+            .get_mut(&chat)
+            .unwrap()
+            .message_mut("ada-link")
+            .unwrap();
+        row.content = Content::Text {
+            text: "https://example.invalid".into(),
+            preview: Some(crate::model::LinkPreview {
+                url: "https://example.invalid/".into(),
+                title: Some("Supplied".into()),
+                description: None,
+            }),
+        };
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews.is_none(),
+            "equivalent supplied URL must not fetch"
+        );
+        // Restore the original source before checking action boundaries below.
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .message_mut("ada-link")
+            .unwrap()
+            .content = Content::Text {
+            text: url.into(),
+            preview: None,
+        };
+        app.settings.auto_link_previews = false;
+        app.settings.remove_link_tracking = true;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.actions.push(crate::model::Action::CopyLink(url.into()));
+            app.actions.push(crate::model::Action::CopyText(url.into()));
+            app.background_frame(ui.ctx());
+        });
+        output.textures_delta.clear();
+        let copies: Vec<_> = output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(copies.contains(&"https://example.invalid/weekend#walk"));
+        assert!(copies.contains(&url), "message copy retains original bytes");
+        assert_eq!(
+            app.link_action_url("https://example.invalid/?sig=exact&utm_source=x"),
+            "https://example.invalid/?sig=exact&utm_source=x"
+        );
+        assert!(
+            matches!(&app.conversations.get(&chat).unwrap().message("ada-link").unwrap().content,Content::Text{text,..} if text==url)
+        );
     }
 
     pub(super) fn app() -> App {
@@ -11469,6 +11695,65 @@ mod tests {
             vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
         );
         assert_eq!(app.composer, "", "Enter sends");
+    }
+
+    #[test]
+    fn shift_enter_replaces_a_selection_with_a_line_break() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.focus_composer = true;
+        render(&mut app, &ctx);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("hello".into())]);
+        // Select "ell" through the composer editor's state, as a drag does.
+        let composer = egui::Id::new("composer-text");
+        let mut state = egui::TextEdit::load_state(&ctx, composer).unwrap_or_default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(1),
+                egui::text::CCursor::new(4),
+            )));
+        egui::TextEdit::store_state(&ctx, composer, state);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::SHIFT)],
+        );
+        assert_eq!(
+            app.composer, "h\no",
+            "the line break replaces the selection"
+        );
+        let cursor = egui::TextEdit::load_state(&ctx, composer)
+            .and_then(|state| state.cursor.char_range())
+            .expect("the composer keeps a cursor");
+        assert_eq!(
+            cursor.primary.index.0, 2,
+            "the cursor sits right after the new line"
+        );
+    }
+
+    #[test]
+    fn shift_enter_at_a_bare_cursor_breaks_the_line_there() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.focus_composer = true;
+        render(&mut app, &ctx);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("hello".into())]);
+        // A collapsed cursor inside the word, not a selection.
+        app.set_composer_cursor(&ctx, 1);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::SHIFT)],
+        );
+        assert_eq!(app.composer, "h\nello", "the break lands at the cursor");
+        let composer = egui::Id::new("composer-text");
+        let cursor = egui::TextEdit::load_state(&ctx, composer)
+            .and_then(|state| state.cursor.char_range())
+            .expect("the composer keeps a cursor");
+        assert_eq!(cursor.primary.index.0, 2, "the cursor follows the break");
     }
 
     #[test]
