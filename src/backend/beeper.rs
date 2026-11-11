@@ -1584,7 +1584,13 @@ impl Api {
                         expanded.push(copy);
                     }
                 }
-                Ok(_) => {
+                Ok(message) => {
+                    if !forwardable_text(&message) {
+                        item.state = State::FailedBeforeSend(
+                            "This source type has no supported text or attachment to forward"
+                                .into(),
+                        );
+                    }
                     item.planned = true;
                     expanded.push(item);
                 }
@@ -1635,7 +1641,9 @@ impl Api {
             {
                 return Err("Source message is no longer available; nothing submitted".into());
             }
-            if item.attachment.is_none() && item.text.lines().count() < 2 {
+            if item.attachment.is_none()
+                && (!forwardable_text(&message) || item.text.lines().count() < 2)
+            {
                 return Err("This message has no supported text or attachment to forward".into());
             }
             let mut payload = serde_json::json!({"text": item.text});
@@ -2291,6 +2299,14 @@ fn newest_content_message(items: Vec<BeeperMessage>) -> Option<BeeperMessage> {
                 )
         })
         .max_by_key(|m| unix(&Some(m.timestamp.clone())))
+}
+
+fn forwardable_text(message: &BeeperMessage) -> bool {
+    matches!(message.message_type.as_deref(), None | Some("TEXT"))
+        && message
+            .text
+            .as_ref()
+            .is_some_and(|text| !text.trim().is_empty())
 }
 
 fn body_of(m: &BeeperMessage) -> (String, bool) {
