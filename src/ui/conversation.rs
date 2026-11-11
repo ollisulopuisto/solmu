@@ -1038,6 +1038,36 @@ fn subtitle(app: &App, chat: &Chat) -> (String, Color32) {
 /// Byte position of a freshly typed standalone trigger immediately before
 /// the text cursor. Colons inside times and URLs, and `@` inside addresses,
 /// remain ordinary text.
+/// Expand a pending macOS text replacement at the composer cursor; returns
+/// true when a trigger was replaced. Used for keystrokes that reach the
+/// composer as key events, not text: the Enter that sends and the Enter
+/// combo that inserts a newline.
+fn expand_composer_replacement(app: &mut App, ctx: &egui::Context) -> bool {
+    let cursor = egui::TextEdit::load_state(ctx, egui::Id::new("composer-text"))
+        .and_then(|state| state.cursor.char_range())
+        .map(|range| range.primary.index.0)
+        .unwrap_or_else(|| app.composer.chars().count());
+    let cursor = cursor.min(app.composer.chars().count());
+    let byte = app
+        .composer
+        .char_indices()
+        .nth(cursor)
+        .map_or(app.composer.len(), |(at, _)| at);
+    let table = app
+        .text_replacements
+        .get_or_insert_with(crate::text_replace::system_replacements);
+    let expansion = crate::text_replace::expand_at(table, &app.composer, byte);
+    let Some((range, with)) = expansion else {
+        return false;
+    };
+    let cursor = crate::text_replace::cursor_after(&app.composer, byte, &range, &with);
+    app.composer.replace_range(range, &with);
+    app.set_composer_cursor(ctx, cursor);
+    app.emoji_start = None;
+    app.mention_start = None;
+    true
+}
+
 fn standalone_trigger(text: &str, cursor: usize, trigger: char) -> Option<usize> {
     let cursor = text
         .char_indices()
@@ -1595,14 +1625,26 @@ pub(crate) fn composer_with_capabilities(
             let id = egui::Id::new("composer-text");
             let has_focus = ui.memory(|memory| memory.has_focus(id));
             let enter_sends = app.settings.enter_sends;
-            let (typed_colon, typed_at) = ui.input(|input| {
+            let (typed_colon, typed_at, typed_text) = ui.input(|input| {
                 let typed = |needle: &str| {
                     input
                         .events
                         .iter()
                         .any(|event| matches!(event, egui::Event::Text(text) if text == needle))
                 };
-                (has_focus && typed(":"), has_focus && typed("@"))
+                let text: String = if has_focus {
+                    input
+                        .events
+                        .iter()
+                        .filter_map(|event| match event {
+                            egui::Event::Text(text) => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect()
+                } else {
+                    String::new()
+                };
+                (has_focus && typed(":"), has_focus && typed("@"), text)
             });
             if !app.pending.is_empty() {
                 pending_strip(app, ui);
@@ -1664,6 +1706,45 @@ pub(crate) fn composer_with_capabilities(
                     });
                     scheduled
                 });
+            // The Enter combo that inserts a newline (Shift+Enter by
+            // default, plain Enter when Enter does not send) never becomes a
+            // Text event either, so a pending trigger expands before the
+            // line break goes in.
+            let newline_key = has_focus
+                && ui.input_mut(|input| {
+                    let mut inserted = false;
+                    input.events.retain(|event| {
+                        if inserted {
+                            return true;
+                        }
+                        let is_newline = matches!(
+                            event,
+                            egui::Event::Key {
+                                key: Key::Enter,
+                                pressed: true,
+                                modifiers,
+                                ..
+                            } if !modifiers.alt
+                                && !modifiers.ctrl
+                                && (if enter_sends {
+                                    modifiers.shift && !modifiers.command
+                                } else {
+                                    !modifiers.shift && !modifiers.command
+                                })
+                        );
+                        inserted |= is_newline;
+                        !is_newline
+                    });
+                    inserted
+                });
+            if newline_key {
+                // A selection is replaced by the line break, as native text
+                // editing does; expansion only runs at a bare cursor.
+                if !app.replace_composer_selection(ui.ctx(), "\n") {
+                    expand_composer_replacement(app, ui.ctx());
+                    app.insert_in_composer(ui.ctx(), "\n");
+                }
+            }
             let mut send_click = false;
             let line_height = ui
                 .painter()
@@ -1943,6 +2024,19 @@ pub(crate) fn composer_with_capabilities(
                                         app.emoji_selected = 0;
                                     }
                                 }
+                                // macOS text replacements never reach an egui
+                                // canvas, so they are applied here: a
+                                // delimiter keystroke expands the trigger it
+                                // closes. Paste arrives as Event::Paste, not
+                                // Text, and is left alone, as the system
+                                // expander leaves it.
+                                if typed_text
+                                    .chars()
+                                    .next_back()
+                                    .is_some_and(crate::text_replace::is_delimiter)
+                                {
+                                    expand_composer_replacement(app, ui.ctx());
+                                }
                                 let cursor = output
                                     .cursor_range
                                     .map(|range| range.primary.index.0)
@@ -2040,6 +2134,13 @@ pub(crate) fn composer_with_capabilities(
             if (send_key || send_click)
                 && (!app.composer.trim().is_empty() || !app.pending.is_empty())
             {
+                // Enter reaches the composer as a key event, never a Text
+                // event, so a trigger at the cursor saw no delimiter:
+                // expand it before the text leaves. Clicking Send does not
+                // commit a trigger; pasted or unfinished text stays as is.
+                if send_key {
+                    expand_composer_replacement(app, ui.ctx());
+                }
                 let text = std::mem::take(&mut app.composer);
                 if app.pending.is_empty() {
                     app.actions.push(Action::SendText {

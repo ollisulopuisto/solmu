@@ -466,6 +466,10 @@ pub struct App {
     composer_mentions: Vec<ComposerMention>,
     /// Byte offset of the `:` starting the active emoji query.
     pub emoji_start: Option<usize>,
+    /// The user's text replacements (System Settings > Keyboard > Text
+    /// Replacements), loaded on first composer use and reloaded when the
+    /// window regains focus. None until loaded.
+    pub text_replacements: Option<Vec<crate::text_replace::Replacement>>,
     /// Keyboard-highlighted emoji in suggestions or the full picker.
     pub emoji_selected: usize,
     /// Byte offset of the `@` starting the active mention query.
@@ -1506,6 +1510,7 @@ impl App {
             beeper_search_state: None,
             composer_mentions: Vec::new(),
             emoji_start: None,
+            text_replacements: None,
             emoji_selected: 0,
             mention_start: None,
             mention_selected: 0,
@@ -13137,6 +13142,11 @@ impl App {
         {
             self.refocus_composer(ctx);
         }
+        // Text replacements may have changed in System Settings while Solmu
+        // was away; the composer reloads the table on its next use.
+        if regained_focus {
+            self.text_replacements = None;
+        }
         self.window_focused = focused;
         self.report_presence();
         if locked {
@@ -13164,8 +13174,33 @@ impl App {
         }
     }
 
+    /// Replaces the composer's selection with `text`; returns false when
+    /// there is no selection, leaving the cursor path to the caller.
+    pub(crate) fn replace_composer_selection(&mut self, ctx: &egui::Context, text: &str) -> bool {
+        let id = egui::Id::new("composer-text");
+        let Some(range) =
+            egui::TextEdit::load_state(ctx, id).and_then(|state| state.cursor.char_range())
+        else {
+            return false;
+        };
+        let [start, end] = range.sorted_cursors();
+        let (start, end) = (start.index.0, end.index.0);
+        if start == end {
+            return false;
+        }
+        let byte = |at: usize| {
+            self.composer
+                .char_indices()
+                .nth(at)
+                .map_or(self.composer.len(), |(byte, _)| byte)
+        };
+        self.composer.replace_range(byte(start)..byte(end), text);
+        self.set_composer_cursor(ctx, start + text.chars().count());
+        true
+    }
+
     /// Inserts text at the composer cursor or end.
-    fn insert_in_composer(&mut self, ctx: &egui::Context, text: &str) {
+    pub(crate) fn insert_in_composer(&mut self, ctx: &egui::Context, text: &str) {
         let id = egui::Id::new("composer-text");
         let at = egui::TextEdit::load_state(ctx, id)
             .and_then(|state| state.cursor.char_range())
@@ -13208,7 +13243,7 @@ impl App {
         }
     }
 
-    fn set_composer_cursor(&self, ctx: &egui::Context, at: usize) {
+    pub(crate) fn set_composer_cursor(&self, ctx: &egui::Context, at: usize) {
         let id = egui::Id::new("composer-text");
         let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
         state

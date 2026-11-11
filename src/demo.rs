@@ -11464,6 +11464,65 @@ mod tests {
     }
 
     #[test]
+    fn shift_enter_replaces_a_selection_with_a_line_break() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.focus_composer = true;
+        render(&mut app, &ctx);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("hello".into())]);
+        // Select "ell" through the composer editor's state, as a drag does.
+        let composer = egui::Id::new("composer-text");
+        let mut state = egui::TextEdit::load_state(&ctx, composer).unwrap_or_default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(1),
+                egui::text::CCursor::new(4),
+            )));
+        egui::TextEdit::store_state(&ctx, composer, state);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::SHIFT)],
+        );
+        assert_eq!(
+            app.composer, "h\no",
+            "the line break replaces the selection"
+        );
+        let cursor = egui::TextEdit::load_state(&ctx, composer)
+            .and_then(|state| state.cursor.char_range())
+            .expect("the composer keeps a cursor");
+        assert_eq!(
+            cursor.primary.index.0, 2,
+            "the cursor sits right after the new line"
+        );
+    }
+
+    #[test]
+    fn shift_enter_at_a_bare_cursor_breaks_the_line_there() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.focus_composer = true;
+        render(&mut app, &ctx);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("hello".into())]);
+        // A collapsed cursor inside the word, not a selection.
+        app.set_composer_cursor(&ctx, 1);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::SHIFT)],
+        );
+        assert_eq!(app.composer, "h\nello", "the break lands at the cursor");
+        let composer = egui::Id::new("composer-text");
+        let cursor = egui::TextEdit::load_state(&ctx, composer)
+            .and_then(|state| state.cursor.char_range())
+            .expect("the composer keeps a cursor");
+        assert_eq!(cursor.primary.index.0, 2, "the cursor follows the break");
+    }
+
+    #[test]
     fn shift_insert_pastes_the_clipboard_text() {
         let mut app = app();
         let ctx = egui::Context::default();
