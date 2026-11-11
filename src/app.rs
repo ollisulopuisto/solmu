@@ -265,6 +265,7 @@ impl Conversation {
             match positions.get(&message.id) {
                 Some(&index) => {
                     let width_stale = self.messages[index].content != message.content
+                        || self.messages[index].mentions != message.mentions
                         || self.messages[index].quoted != message.quoted
                         || self.messages[index].forwarded != message.forwarded;
                     let existing = &mut self.messages[index];
