@@ -2583,6 +2583,10 @@ pub(crate) fn reply_strip_id() -> egui::Id {
 struct View<'a> {
     /// Bubble owning link context menus, including album/carousel children.
     link_menu_owner: Option<egui::Id>,
+    preview_worker: Option<&'a crate::preview_worker::Worker>,
+    local_previews: bool,
+    auto_previews: bool,
+    clean_links: bool,
     sender_hue: Option<f32>,
     hide_grouped_status: bool,
     covered_top: Option<f32>,
@@ -2989,6 +2993,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         locale: app.locale,
         chat,
         me: app.me.as_deref(),
+        preview_worker: app.link_previews.as_ref(),
+        local_previews: !app.window_hidden,
+        auto_previews: app.settings.auto_link_previews && app.window_focused,
+        clean_links: app.settings.remove_link_tracking,
         transcriber: app.transcriber.as_ref(),
         transcription_account: &app.account().id.0,
         auto_download: app.account().settings.auto_download,
@@ -7012,6 +7020,10 @@ pub(crate) fn list_menu(
         locale: app.locale,
         chat,
         me: app.me.as_deref(),
+        preview_worker: app.link_previews.as_ref(),
+        local_previews: false,
+        auto_previews: false,
+        clean_links: app.settings.remove_link_tracking,
         transcriber: app.transcriber.as_ref(),
         transcription_account: &app.account().id.0,
         auto_download: app.settings.auto_download,
@@ -7096,6 +7108,10 @@ pub(crate) fn linked_bubble(
         locale: app.locale,
         chat,
         me: app.me.as_deref(),
+        preview_worker: app.link_previews.as_ref(),
+        local_previews: !app.window_hidden,
+        auto_previews: app.settings.auto_link_previews && app.window_focused,
+        clean_links: app.settings.remove_link_tracking,
         transcriber: app.transcriber.as_ref(),
         transcription_account: &app.account().id.0,
         auto_download: app.account().settings.auto_download,
@@ -7998,7 +8014,7 @@ fn content(
             }
             // Text and cards use the same discrete width grid. Fill the
             // settled width rather than shrinking back to the glyph bounds.
-            rich_body(
+            let inline = rich_body(
                 ui,
                 view,
                 message,
@@ -8007,7 +8023,12 @@ fn content(
                 Some(reserve),
                 Some(width),
                 actions,
-            )
+            );
+            if local_link_previews(ui, view, message, text, preview.as_ref(), width, actions) {
+                None
+            } else {
+                inline
+            }
         }
         Content::Image {
             caption,
@@ -9638,6 +9659,119 @@ fn rich_body(
             rect.right_bottom(),
         )
     })
+}
+
+/// Local cards never alter the message, outgoing content or supplied previews.
+/// Merely measuring an off-screen bubble must not grant a website request.
+fn local_link_previews(
+    ui: &mut egui::Ui,
+    view: &View<'_>,
+    message: &Message,
+    text: &str,
+    supplied: Option<&LinkPreview>,
+    width: f32,
+    actions: &mut Vec<Action>,
+) -> bool {
+    if !view.local_previews || view.selecting {
+        return false;
+    }
+    let mut drawn = false;
+    for url in markup::links(text)
+        .into_iter()
+        .filter(|url| url.starts_with("https://"))
+    {
+        if supplied.is_some_and(|card| card.url == url) {
+            continue;
+        }
+        drawn = true;
+        let request_url = if view.clean_links {
+            crate::link_policy::without_tracking(&url)
+        } else {
+            url.clone()
+        };
+        let state = view
+            .preview_worker
+            .and_then(|worker| worker.status(view.transcription_account, &request_url));
+        let action = |automatic, retry| Action::FetchLinkPreview {
+            account: view.transcription_account.to_owned(),
+            chat: message.chat.clone(),
+            message: message.id.clone(),
+            url: url.clone(),
+            automatic,
+            retry,
+        };
+        let requested = state.is_some();
+        ui.add_space(5.0);
+        ui.push_id(("local-preview", &url), |ui| {
+            ui.set_max_width(width);
+            match state {
+                Some(crate::preview_worker::Status::Ready(preview)) => {
+                    let host = reqwest::Url::parse(&url).ok().and_then(|u| u.host_str().map(str::to_owned)).unwrap_or_default();
+                    let response = Frame::new()
+                        .fill(view.palette.window.gamma_multiply(0.35))
+                        .corner_radius(CornerRadius::same(6))
+                        .inner_margin(Margin::same(8))
+                        .show(ui, |ui| {
+                            ui.set_width((width - 16.0).max(1.0));
+                            ui.horizontal(|ui| {
+                                if let Some(bytes) = &preview.image {
+                                    use std::hash::{Hash, Hasher};
+                                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                                    (view.transcription_account, &url, bytes).hash(&mut hash);
+                                    let uri = format!("bytes://local-link-preview/{:x}.png", hash.finish());
+                                    if ui.is_rect_visible(ui.max_rect()) {
+                                        crate::image_cache::include(ui.ctx(), &uri, bytes);
+                                    }
+                                    ui.add(egui::Image::new(uri).fit_to_exact_size(Vec2::splat(64.0)).corner_radius(4.0));
+                                }
+                                ui.vertical(|ui| {
+                                    if let Some(title) = &preview.title {
+                                        let line = widgets::line(ui, title, theme::semibold(13.5), view.palette.text, ui.available_width(), 2);
+                                        let (rect, _) = ui.allocate_exact_size(line.size(), Sense::hover());
+                                        line.paint(ui, rect.min, view.palette.text);
+                                    }
+                                    if let Some(description) = &preview.description {
+                                        let line = widgets::line(ui, description, theme::regular(12.5), view.palette.secondary, ui.available_width(), 2);
+                                        let (rect, _) = ui.allocate_exact_size(line.size(), Sense::hover());
+                                        line.paint(ui, rect.min, view.palette.secondary);
+                                    }
+                                    theme::text(ui, &host, theme::regular(12.0), view.palette.dim);
+                                });
+                            });
+                        }).response;
+                    if ui.interact(response.rect, ui.id().with("open"), Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(&url).clicked() {
+                        actions.push(Action::OpenUrl(url.clone()));
+                    }
+                }
+                Some(crate::preview_worker::Status::Loading) => {
+                    ui.horizontal(|ui| { ui.spinner(); ui.label("Fetching preview..."); });
+                    ui.ctx().request_repaint_after(Duration::from_millis(100));
+                }
+                Some(crate::preview_worker::Status::Failed) => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Preview unavailable");
+                        if ui.small_button("Retry preview").on_hover_text(&url).clicked() {
+                            actions.push(action(false, true));
+                        }
+                    });
+                }
+                None => {
+                    let response = ui.small_button("Fetch preview").on_hover_text(format!(
+                        "Contacts this website directly, sharing your IP address and this URL:\n{request_url}"));
+                    ui.ctx().data_mut(|data| data.insert_temp(
+                        bubble_id(&message.chat, &message.id).with(("fetch-preview", &url)), response.rect));
+                    if response.clicked() || (view.auto_previews && ui.is_rect_visible(response.rect)) {
+                        actions.push(action(!response.clicked(), false));
+                    }
+                }
+            }
+            if requested && !view.auto_previews && ui.small_button("Automatic previews in Preferences > Privacy").clicked() {
+                actions.push(Action::LinkPreviewPreferences);
+            }
+        });
+    }
+    drawn
 }
 
 /// Link preview with image, title, and description.
@@ -12782,6 +12916,10 @@ mod tests {
             show_timestamp: true,
             footer_right: None,
             neighbour_width: None,
+            preview_worker: None,
+            local_previews: false,
+            auto_previews: false,
+            clean_links: false,
             transcriber: None,
             transcription_account: "test",
             palette: Palette::dark(),

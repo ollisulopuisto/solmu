@@ -28,6 +28,7 @@ pub mod i18n;
 pub mod image_cache;
 pub mod image_preview;
 pub mod link_policy;
+pub mod link_preview;
 mod linked_read;
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -41,6 +42,7 @@ pub mod new_group;
 pub mod notify;
 pub mod opener;
 pub mod paths;
+pub mod preview_worker;
 pub mod privacy;
 pub mod proxy;
 pub mod read_api;

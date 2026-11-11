@@ -494,6 +494,8 @@ pub struct Settings {
     /// Download attachments when they enter view instead of on click.
     #[serde(alias = "auto_download_images")]
     pub auto_download: bool,
+    /// Local website requests are opt-in, separate from supplied message cards.
+    pub auto_link_previews: bool,
     /// Applies only to explicit link actions, never stored messages.
     pub remove_link_tracking: bool,
     /// Show the default doodle wallpaper behind conversations.
@@ -626,6 +628,7 @@ impl Default for Settings {
             send_read_receipts: true,
             send_typing: true,
             auto_download: true,
+            auto_link_previews: false,
             remove_link_tracking: false,
             show_wallpaper: true,
             wallpaper_color: WallpaperColor::Theme,

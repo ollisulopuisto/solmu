@@ -2826,6 +2826,16 @@ pub enum Action {
     OpenUrl(String),
     /// A URL copy, distinct from copying original message text.
     CopyLink(String),
+    FetchLinkPreview {
+        account: String,
+        chat: ChatId,
+        message: String,
+        url: String,
+        automatic: bool,
+        retry: bool,
+    },
+    ClearLinkPreviews,
+    LinkPreviewPreferences,
     CopyText(String),
     CopyImage(PathBuf),
     /// Closes the toast at this index. Only errors wait to be dismissed.
