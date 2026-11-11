@@ -14799,6 +14799,82 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_history_never_inherits_a_retired_temporary_preview_path() {
+        for (temporary, cached) in [(true, false), (false, false), (true, true)] {
+            let mut app = app();
+            let local = seed_pending_media(&mut app);
+            let dir = tempfile::tempdir().unwrap();
+            let owned = dir.path().join("preview.pdf");
+            let cache = dir.path().join("download.pdf");
+            std::fs::write(&owned, b"preview").unwrap();
+            std::fs::write(&cache, b"download").unwrap();
+            if temporary {
+                crate::backend::beeper::register_temp_upload(&owned);
+            }
+            let record = app.pending_media.get_mut(&local).unwrap();
+            record.job.temporary = temporary;
+            if let crate::pending_media::Payload::File { path, .. } = &mut record.job.payload {
+                *path = owned.clone();
+            }
+            let member = record.job.member.clone();
+            let media = app
+                .conversations
+                .get_mut("pending-target")
+                .unwrap()
+                .messages[0]
+                .content
+                .media_mut()
+                .unwrap();
+            media.path = Some(if cached { cache.clone() } else { owned.clone() });
+            let mut full = app.conversations["pending-target"].messages[0].clone();
+            full.id = "final".into();
+            full.content.media_mut().unwrap().path = None;
+            let mut sparse = full.clone();
+            sparse.content = Content::Text {
+                text: "[message]".into(),
+                preview: None,
+            };
+            app.apply_backend_event(
+                Event::BeeperMediaResolved {
+                    local: local.clone(),
+                    member: member.clone(),
+                    message: Box::new(sparse),
+                    complete: true,
+                },
+                true,
+            );
+            app.apply_backend_event(
+                Event::Messages {
+                    chat: member.chat,
+                    messages: vec![full],
+                    older: false,
+                    complete: false,
+                },
+                true,
+            );
+            assert!(!app.pending_media.contains_key(&local));
+            let path = &app.conversations["pending-target"]
+                .message("final")
+                .unwrap()
+                .content
+                .media()
+                .unwrap()
+                .path;
+            if temporary && !cached {
+                assert!(
+                    path.is_none(),
+                    "retired temporary path cannot reach remote attachment"
+                );
+            } else {
+                assert_eq!(path.as_ref(), Some(if cached { &cache } else { &owned }));
+            }
+            crate::backend::beeper::flush_temp_cleanup();
+            assert_eq!(owned.exists(), !temporary);
+            assert!(cache.exists());
+        }
+    }
+
+    #[test]
     fn pending_media_refusal_preserves_view_once_and_staged_photo() {
         let mut app = app();
         let (backend, mut commands) = Backend::recording();
