@@ -14157,6 +14157,10 @@ mod tests {
                 .message_mut("ada-link")
                 .unwrap()
                 .content = Content::text(text);
+            // Direct fixture edits bypass the app's normal message updates.
+            // Do not carry the previous case's frozen width into new text.
+            app.conversations.get_mut(&chat).unwrap().width_book = Default::default();
+            app.conversations.get_mut(&chat).unwrap().rows.clear();
             render(&mut app, &ctx);
             let hits = ctx
                 .data(|data| data.get_temp::<Vec<(Rect, String)>>(id.with("web-link-hits")))
