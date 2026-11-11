@@ -49,3 +49,30 @@ jobs:
               "$url"
             echo "curl_exit=$?"
           done
+      - name: Alternate resolver answers and TLS-valid pinned fetch
+        shell: bash
+        run: |
+          set +e
+          # Fixed domains, fixed resolvers; do not change /etc/resolv.conf or
+          # global DNS. curl --resolve preserves URL hostname, Host and SNI.
+          for host in archive.ubuntu.com security.ubuntu.com azure.archive.ubuntu.com; do
+            for resolver in 1.1.1.1 8.8.8.8; do
+              echo "=== DNS $host via $resolver ==="
+              answer=$(timeout 5 dig +time=2 +tries=1 +short A "$host" "@$resolver" 2>&1)
+              echo "$answer"
+              ip=$(printf '%s\n' "$answer" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+              if [ -z "$ip" ]; then
+                echo 'No IPv4 answer; no fetch'
+                continue
+              fi
+              suite=noble
+              if [ "$host" = security.ubuntu.com ]; then suite=noble-security; fi
+              echo "=== TLS-valid fetch $host at $ip ==="
+              curl --silent --show-error --output /dev/null \
+                --connect-timeout 5 --max-time 10 \
+                --resolve "$host:443:$ip" \
+                --write-out 'http=%{http_code} remote=%{remote_ip} dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} first_byte=%{time_starttransfer} total=%{time_total}\n' \
+                "https://$host/ubuntu/dists/$suite/InRelease"
+              echo "curl_exit=$?"
+            done
+          done
