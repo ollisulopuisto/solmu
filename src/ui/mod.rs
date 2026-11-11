@@ -672,7 +672,7 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
     let has_error = app
         .toasts
         .iter()
-        .any(|toast| toast.kind == ToastKind::Error);
+        .any(|toast| matches!(toast.kind, ToastKind::Error | ToastKind::Undo(_)));
     let mut actions = Vec::new();
     // Stay clear of the composer: an error waiting to be dismissed must not
     // cover the send button.
@@ -689,6 +689,12 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
             ui.spacing_mut().item_spacing.y = 8.0;
             for (index, toast) in app.toasts.iter().enumerate() {
                 let error = toast.kind == ToastKind::Error;
+                let undo = matches!(toast.kind, ToastKind::Undo(_));
+                let lifetime = if undo {
+                    crate::app::UNDO_TOAST_LIFETIME.as_secs_f32()
+                } else {
+                    lifetime
+                };
                 // Errors appear at once: fading in needs frames that an idle
                 // window does not draw.
                 let alpha = if error {
@@ -719,7 +725,12 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
                             palette.text,
                             (ctx.content_rect().width() - 150.0).clamp(80.0, 360.0),
                         );
-                        let buttons = if error { 2.0 * 26.0 + 12.0 } else { 0.0 };
+                        // An error carries two buttons, an Undo toast one wide one.
+                        let buttons = if error || undo {
+                            2.0 * 26.0 + 12.0
+                        } else {
+                            0.0
+                        };
                         let text = widgets::line(
                             ui,
                             &toast.message,
@@ -744,6 +755,19 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
                             ui.ctx().data_mut(|data| {
                                 data.insert_temp(toast_close_id(index).with("text"), rect);
                             });
+                            if let ToastKind::Undo(added) = &toast.kind {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .button(crate::i18n::gettext(app.locale, "Undo"))
+                                            .clicked()
+                                        {
+                                            actions.push(Action::UndoLinks(added.clone()));
+                                        }
+                                    },
+                                );
+                            }
                             if error {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
