@@ -302,6 +302,9 @@ impl Account {
             crate::backend::beeper::BeeperConfig::from_env()
                 .expect("Beeper session or environment config"),
         );
+        backend.send(crate::backend::Command::BeeperResumeForwards(
+            legacy.beeper.forwarded_messages.clone(),
+        ));
         Ok(Self::new(id, dirs, settings, backend))
     }
 

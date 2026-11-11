@@ -3299,13 +3299,6 @@ pub fn run(
     let mut last_receipt_refresh = Instant::now();
     let mut pending_sends: Vec<(ChatId, String, Instant)> = Vec::new();
     let mut forward_pending = HashMap::new();
-    for mark in crate::composed_forward::unresolved_marks(&dirs.settings_file(), &api.base_url) {
-        forward_pending.insert(
-            (mark.member.chat.clone(), mark.message.clone()),
-            mark.member.account,
-        );
-        pending_sends.push((mark.member.chat, mark.message, Instant::now()));
-    }
     let mut pending_storage: Option<(u64, bool)> = None;
     // Set by Command::Resumed: after a wake every poll timer is due at once,
     // so a link the server dropped during sleep is noticed on the next tick.
@@ -3643,6 +3636,15 @@ pub fn run(
                             more: true,
                             silent: false,
                         });
+                    }
+                }
+                Command::BeeperResumeForwards(marks) => {
+                    for mark in crate::composed_forward::unresolved_marks(marks, &api.base_url) {
+                        let key = (mark.member.chat.clone(), mark.message.clone());
+                        if !forward_pending.contains_key(&key) {
+                            forward_pending.insert(key, mark.member.account);
+                            pending_sends.push((mark.member.chat, mark.message, Instant::now()));
+                        }
                     }
                 }
                 Command::BeeperForward {
@@ -5500,9 +5502,13 @@ mod tests {
                 serde_json::json!({"beeper":{"forwarded_messages":[mark]}}).to_string(),
             )
             .unwrap();
-            let restored = crate::composed_forward::unresolved_marks(&path, &api.base_url);
+            let saved: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let marks: Vec<crate::composed_forward::ForwardedMessage> =
+                serde_json::from_value(saved["beeper"]["forwarded_messages"].clone()).unwrap();
+            let restored = crate::composed_forward::unresolved_marks(marks.clone(), &api.base_url);
             assert_eq!(restored.len(), 1);
-            assert!(crate::composed_forward::unresolved_marks(&path, "foreign-origin").is_empty());
+            assert!(crate::composed_forward::unresolved_marks(marks, "foreign-origin").is_empty());
             let events = Mutex::new(Vec::new());
             assert!(!poll_forward_mark(
                 &api,

@@ -151,28 +151,8 @@ fn pending_by_default() -> bool {
     true
 }
 
-pub fn unresolved_marks(path: &std::path::Path, origin: &str) -> Vec<ForwardedMessage> {
-    use std::io::Read;
-    let Ok(file) = std::fs::File::open(path) else {
-        return Vec::new();
-    };
-    let mut bytes = Vec::new();
-    if file
-        .take(8 * 1024 * 1024 + 1)
-        .read_to_end(&mut bytes)
-        .is_err()
-        || bytes.len() > 8 * 1024 * 1024
-    {
-        return Vec::new();
-    }
-    let Ok(settings) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return Vec::new();
-    };
-    settings
-        .pointer("/beeper/forwarded_messages")
-        .cloned()
-        .and_then(|v| serde_json::from_value::<Vec<ForwardedMessage>>(v).ok())
-        .unwrap_or_default()
+pub fn unresolved_marks(marks: Vec<ForwardedMessage>, origin: &str) -> Vec<ForwardedMessage> {
+    marks
         .into_iter()
         .filter(|m| {
             m.pending

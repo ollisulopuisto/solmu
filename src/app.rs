@@ -1268,9 +1268,11 @@ impl std::ops::DerefMut for App {
 impl App {
     pub fn connect_beeper_session(&mut self, cfg: crate::backend::beeper::BeeperConfig) {
         crate::backend::beeper::BeeperConfig::set_session(&cfg);
+        let forward_marks = self.settings.beeper.forwarded_messages.clone();
         let waker = self.waker.clone();
         let account = &mut self.accounts[self.active];
         let replacement = Backend::spawn_beeper(account.dirs.clone(), waker, cfg);
+        replacement.send(Command::BeeperResumeForwards(forward_marks));
         let mut previous = std::mem::replace(&mut account.backend, replacement);
         std::thread::spawn(move || previous.shutdown());
         account.link = LinkStatus::Connecting;
