@@ -838,3 +838,28 @@ Native CI at b041035 passed 1959 tests and failed one old combined draft test be
 ### Link suggestions, first slice
 
 Added `src/suggest.rs` (pure matcher with tests), `Chat.handles` filled from the other participant's phone number and username, per-pair dismissals in `beeper.dismissed_links`, a Contact info card, a collapsed Filters row and an Undo toast (`ToastKind::Undo`). The portable adapter harness passes with suggest.rs staged; the UI is first compiled in CI.
+
+## Export alternate-stream names - November 10, 2026
+
+PR #272 follow-up: normalize colon to underscore before reserved-DOS-stem replacement so `CON.pdf:payload` becomes `attachment.pdf_payload` and ordinary filenames cannot select NTFS streams either. Four new regression cases; the old code failed on the first case, 242 other portable tests passed. Linux portable adapter tests rerun after repair; real Windows/NTFS not exercised. No merge or release build.
+
+
+## Media download queue backpressure - November 11, 2026
+
+Owner Instinct, branch `fix/media-queue-busy`, separate from avatar work.
+Applied the supplied media-backlog patch to main c1ff292. Requests rejected by
+the eight-slot worker queue wait in a bounded 256-entry backlog and retry on
+control-loop ticks; explicit clicks go before automatic work. Review repair:
+a click upgrades a queued automatic duplicate (including its manual-download
+permission), clicks keep FIFO order, and new automatic overflow cannot evict
+older accepted work. A full backlog may still reject work explicitly; a dead
+worker reports failures. No unbounded queue or automatic resend is introduced.
+Portable production-source regressions run locally; real Telegram/WhatsApp
+media downloads and native GUI remain unverified. No merge or release build.
+
+Review scope clarification: the current UI disables controls for items already
+marked Downloading, including waiting automatic requests. They cannot be clicked
+to promote them. Priority applies to new explicit requests reaching the backend;
+manual upgrades are a backend safeguard, not a new user-visible promotion flow.
+The PR description/changelog now make this limitation explicit. A waiting versus
+active UI model is outside this queue-full repair.
