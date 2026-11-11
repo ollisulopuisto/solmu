@@ -170,6 +170,11 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             let (modifiers, key_code) = READ_LATER.keys[0];
             key(modifiers, key_code, read_later);
         }
+        // Cmd+Alt+I is consumed before plain Cmd+I: consume_key also matches
+        // when the event carries extra modifiers, so Reply later would
+        // otherwise swallow the info-sidebar chord.
+        let (modifiers, key_code) = INFO_SIDEBAR.keys[0];
+        key(modifiers, key_code, Action::ToggleInfoSidebar);
         if let Some(reply_later) = reply_later {
             let (modifiers, key_code) = REPLY_LATER.keys[0];
             key(modifiers, key_code, reply_later);
@@ -196,8 +201,6 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
         let (modifiers, key_code) = SIDEBAR.keys[0];
         key(modifiers, key_code, Action::ToggleSidebar);
-        let (modifiers, key_code) = INFO_SIDEBAR.keys[0];
-        key(modifiers, key_code, Action::ToggleInfoSidebar);
         let (modifiers, key_code) = SETTINGS.keys[0];
         key(modifiers, key_code, Action::ToggleSettings);
         let (modifiers, key_code) = QUIT.keys[0];
@@ -1330,13 +1333,15 @@ const SIDEBAR: Shortcut = Shortcut {
 };
 const INFO_SIDEBAR: Shortcut = Shortcut {
     id: "info-sidebar",
-    keys: &[(Modifiers::COMMAND, Key::D)],
-    label: Some("Ctrl+D"),
+    // Shared Postilaatikko/Solmu keymap: the info sidebar lives on
+    // Cmd+Alt+I; Cmd+D is reserved for the groups toggle.
+    keys: &[(Modifiers::COMMAND | Modifiers::ALT, Key::I)],
+    label: Some("Ctrl+Alt+I"),
     description: Some("Show or hide the info sidebar"),
     menu: Some(MenuItem {
         id: "info-sidebar",
         text: "Toggle Info Sidebar",
-        accelerator: "Super+KeyD",
+        accelerator: "Super+Alt+KeyI",
     }),
 };
 const SETTINGS: Shortcut = Shortcut {
@@ -1874,7 +1879,7 @@ mod tests {
             ),
             ("Ctrl+C", "Copy the selected messages"),
             ("Ctrl+B", "Collapse or expand the chat list"),
-            ("Ctrl+D", "Show or hide the info sidebar"),
+            ("Ctrl+Alt+I", "Show or hide the info sidebar"),
             (
                 "Ctrl+End",
                 "Jump to the newest message (when the input is empty)",
@@ -2569,21 +2574,43 @@ mod tests {
     }
 
     #[test]
-    fn command_d_opens_info_not_the_chat_list_or_reply_later() {
+    fn command_alt_i_opens_info_and_command_d_is_free_for_groups() {
         let (_root, mut app, ids) = app_with_chats(1);
         app.open_chat = Some(ids[0].clone());
         let ctx = egui::Context::default();
-        assert!(!press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
+        // The shared keymap moves the info sidebar to Cmd+Alt+I and reserves
+        // Cmd+D for the groups toggle, so Cmd+D no longer opens info.
+        assert!(press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
+        assert!(
+            app.actions.is_empty(),
+            "Cmd+D stays unbound until the groups toggle lands"
+        );
+        // The extra Alt must not leak the press into plain Cmd+I (Reply
+        // later): the info binding is consumed before that one.
+        assert!(!press(
+            &mut app,
+            &ctx,
+            Key::I,
+            Modifiers::COMMAND | Modifiers::ALT
+        ));
         assert!(matches!(
             app.actions.as_slice(),
             [Action::ToggleInfoSidebar]
         ));
-        assert!(app.sidebar_visible, "Cmd+D does not toggle the left list");
+        assert!(app.sidebar_visible, "Cmd+Alt+I does not toggle the left list");
+        assert_eq!(
+            INFO_SIDEBAR.keys,
+            &[(Modifiers::COMMAND | Modifiers::ALT, Key::I)]
+        );
         assert_eq!(REPLY_LATER.keys, &[(Modifiers::COMMAND, Key::I)]);
         assert_eq!(SIDEBAR.keys, &[(Modifiers::COMMAND, Key::B)]);
         assert_eq!(
             menu_accelerator(Modifiers::COMMAND, Key::D).as_deref(),
-            Some("Super+KeyD")
+            None
+        );
+        assert_eq!(
+            menu_accelerator(Modifiers::COMMAND | Modifiers::ALT, Key::I).as_deref(),
+            Some("Super+Alt+KeyI")
         );
     }
 

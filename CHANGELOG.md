@@ -9,6 +9,8 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- The info sidebar moves from Cmd-D to Cmd-Option-I under the shared Postilaatikko/Solmu keymap; Cmd-D is reserved for the upcoming groups toggle. The shortcuts dialog and the macOS menu show the new chord.
+
 - Cmd-R now quote-replies to the latest loaded incoming message in ordinary chats too, preserving the draft and focusing the composer through the existing Reply action. Cmd-L opens the existing Forward dialog for the selected messages, or the latest forwardable message. Beeper forwarding itself remains unsupported until the separate composed re-send feature is implemented.
 
 - Linked chats use the default network's profile picture, then the other linked networks in their saved order. Initials appear only when none has a picture.
