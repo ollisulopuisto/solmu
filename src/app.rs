@@ -4512,9 +4512,9 @@ impl App {
                         }
                         // The gallery worker reports plain-English strings;
                         // translate them here, where the locale is known.
-                        Err(error) => self.toast_error(
-                            crate::i18n::gettext(self.locale, &error).into_owned(),
-                        ),
+                        Err(error) => {
+                            self.toast_error(crate::i18n::gettext(self.locale, &error).into_owned())
+                        }
                     }
                 }
             }
