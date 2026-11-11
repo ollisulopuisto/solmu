@@ -32,6 +32,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         && app.picker.is_none()
         && app.reaction_target.is_none()
         && app.recording.is_none()
+        && app.image_preview.is_none()
         && !egui::Popup::is_any_open(ctx)
     {
         let networks = app.beeper_browse_networks();
@@ -1059,24 +1060,8 @@ fn forward_action(app: &App) -> Option<Action> {
             })
         });
     }
-    let candidates = linked_person(app, chat).map(|person| {
-        person
-            .members
-            .iter()
-            .filter(|member| {
-                app.chats
-                    .iter()
-                    .filter(|known| known.id == member.chat)
-                    .count()
-                    == 1
-                    && app.chats.iter().any(|known| {
-                        member.matches(known)
-                            && !known.locked
-                            && known.backend_origin == chat.backend_origin
-                    })
-            })
-            .collect::<Vec<_>>()
-    });
+    let candidates =
+        linked_person(app, chat).map(|person| super::merged::valid_members(app, person, chat));
     let latest = app
         .conversations
         .iter()

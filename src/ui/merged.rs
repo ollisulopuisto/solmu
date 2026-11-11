@@ -135,7 +135,7 @@ pub(crate) fn attachment_destination(
     Ok(Some(destination.chat.clone()))
 }
 
-fn valid_members(app: &App, person: &Person, chat: &Chat) -> Vec<Member> {
+pub(super) fn valid_members(app: &App, person: &Person, chat: &Chat) -> Vec<Member> {
     person
         .members
         .iter()

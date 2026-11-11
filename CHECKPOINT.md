@@ -885,3 +885,6 @@ linked-view ownership predicate with merged::show (duplicate IDs/group-kind
 fallbacks keep ordinary Cmd-R). Regressions include those edge cases. Local
 native test compilation was attempted but exceeded the available command window
 while building dependencies; no passing native result claimed.
+Own adversarial pass also keeps the new message shortcuts out of the image
+viewer and uses the linked view's exact valid-members filter for Forward,
+including direct-chat, unlocked, same-origin and unique-ID constraints.
