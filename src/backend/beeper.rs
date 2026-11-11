@@ -4873,25 +4873,48 @@ fn poll_forward_mark(
             s.status == "SUCCESS"
                 || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
         });
-        if confirmed && !wire.id.is_empty() {
-            emit(Event::BeeperForwardResolved {
+        let mapped = api.map_message(&wire, chat);
+        let failed = matches!(mapped.status, Delivery::Failed);
+        if confirmed {
+            emit(Event::BeeperSendConfirmed {
                 origin: api.base_url.clone(),
                 account: account.into(),
                 chat: chat.clone(),
-                pending: pending.into(),
-                final_id: wire.id.clone(),
             });
-            emit(Event::Messages {
-                chat: chat.clone(),
-                messages: vec![api.map_message(&wire, chat)],
-                older: false,
-                complete: false,
-            });
+            if !wire.id.is_empty() {
+                emit(Event::BeeperForwardResolved {
+                    origin: api.base_url.clone(),
+                    account: account.into(),
+                    chat: chat.clone(),
+                    pending: pending.into(),
+                    final_id: wire.id.clone(),
+                });
+            }
+        }
+        if failed {
+            emit(Event::Info(
+                "Beeper reports that a message failed to send".into(),
+            ));
+        }
+        emit(Event::Messages {
+            chat: chat.clone(),
+            messages: vec![mapped],
+            older: false,
+            complete: false,
+        });
+        if confirmed || failed {
             return false;
         }
     }
     // Timeout never prunes persisted identity: a later startup resolves it.
-    elapsed < Duration::from_secs(60)
+    if elapsed >= Duration::from_secs(60) {
+        emit(Event::Info(
+            "Beeper forward confirmation timed out; check history before retrying".into(),
+        ));
+        false
+    } else {
+        true
+    }
 }
 
 fn poll_pending_send(
@@ -5515,6 +5538,30 @@ mod tests {
                 confirmed,
                 "{status}"
             );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn composed_forward_feedback_rejects_foreign_message_identity() {
+        for (chat, account, sender) in [
+            ("foreign", "signal", true),
+            ("target", "foreign", true),
+            ("target", "signal", false),
+        ] {
+            let body = serde_json::json!({"id":"final", "chatID":chat, "accountID":account, "isSender":sender, "sendStatus":{"status":"SUCCESS"}}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let events = Mutex::new(Vec::new());
+            assert!(poll_forward_mark(
+                &api,
+                &"target".into(),
+                "pending",
+                "signal",
+                Duration::ZERO,
+                &|e| events.lock().unwrap().push(e)
+            ));
+            assert!(events.into_inner().unwrap().is_empty());
             server.join().unwrap();
         }
     }
