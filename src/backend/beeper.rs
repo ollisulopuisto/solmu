@@ -5556,7 +5556,7 @@ mod tests {
                 events
                     .iter()
                     .any(|e| matches!(e, Event::BeeperForwardResolved { .. })),
-                confirmed,
+                confirmed || failed,
                 "{status}"
             );
             server.join().unwrap();
