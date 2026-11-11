@@ -2411,19 +2411,31 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     for_everyone: true,
                 });
             }
-            "archive-review" => {
+            "archive-review" | "archived-selection" => {
                 let ids: Vec<_> = app
                     .chats
                     .iter_mut()
                     .take(3)
                     .map(|chat| {
                         chat.mutation_capabilities.archive = Some(true);
+                        if part == "archived-selection" {
+                            chat.archived = true;
+                        }
                         chat.id.clone()
                     })
                     .collect();
                 app.batch_ui.owner = app.account().id.0.clone();
                 app.batch_ui.selected_chats = ids;
-                app.batch_ui.reviewing_archive = true;
+                app.batch_ui.reviewing_archive = part == "archive-review";
+                if part == "archived-selection" {
+                    app.show_archived = true;
+                    app.batch_ui.results = vec![crate::ui::batch_actions::Item {
+                        chat: app.batch_ui.selected_chats[0].clone(),
+                        message: None,
+                        everyone: false,
+                        result: Some(Ok(())),
+                    }];
+                }
             }
             "history-date" => history_date_sample(app),
             "card-widths" => card_widths_sample(app),

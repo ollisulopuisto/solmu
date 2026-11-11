@@ -7386,12 +7386,15 @@ fn context_menu(
             for_everyone: true,
         }));
     }
-    if widgets::menu_item(
-        ui,
-        &palette,
-        Some(Icon::EyeOff),
-        &crate::i18n::gettext(view.locale, "Delete for me"),
-    ) {
+    if (view.chat.backend_account.is_none()
+        || view.chat.mutation_capabilities.delete_for_me == Some(true))
+        && widgets::menu_item(
+            ui,
+            &palette,
+            Some(Icon::EyeOff),
+            &crate::i18n::gettext(view.locale, "Delete for me"),
+        )
+    {
         actions.push(Action::ShowDialog(Dialog::ConfirmDeleteMessage {
             chat: view.chat.id.clone(),
             message: message.id.clone(),

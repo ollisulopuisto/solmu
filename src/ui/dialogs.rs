@@ -1572,8 +1572,16 @@ fn confirm_delete_messages(
             caps.delete_for_me == Some(true)
         };
         for (label, scope, allowed) in [
-            ("Delete for me", false, caps.delete_for_me == Some(true)),
-            ("Delete for everyone", true, matches!(caps.delete, Some(2))),
+            (
+                crate::i18n::gettext(app.locale, "Delete for me"),
+                false,
+                caps.delete_for_me == Some(true),
+            ),
+            (
+                crate::i18n::gettext(app.locale, "Delete for everyone"),
+                true,
+                matches!(caps.delete, Some(2)),
+            ),
         ] {
             if allowed && ui.radio(for_everyone == scope, label).clicked() {
                 app.dialog = Some(Dialog::ConfirmDeleteSelection {
@@ -1584,9 +1592,13 @@ fn confirm_delete_messages(
             }
         }
         if let Some(age) = caps.delete_max_age.filter(|_| for_everyone) {
-            ui.label(format!(
-                "Bridge delete-for-everyone age limit: {age} seconds"
-            ));
+            ui.label(
+                crate::i18n::gettext(
+                    app.locale,
+                    "Bridge delete-for-everyone age limit: {age} seconds",
+                )
+                .replace("{age}", &age.to_string()),
+            );
         }
         let failures: Vec<_> = ids
             .iter()
@@ -1596,7 +1608,10 @@ fn confirm_delete_messages(
                     .get(chat)
                     .and_then(|c| c.messages.iter().find(|m| &m.id == id));
                 match message {
-                    None => Some(format!("{id}: message unavailable")),
+                    None => Some(
+                        crate::i18n::gettext(app.locale, "{id}: message unavailable")
+                            .replace("{id}", id),
+                    ),
                     Some(message)
                         if message.chat != chat
                             || matches!(message.content, crate::model::Content::Revoked)
@@ -1605,7 +1620,13 @@ fn confirm_delete_messages(
                                 crate::model::Delivery::Pending | crate::model::Delivery::Failed
                             ) =>
                     {
-                        Some(format!("{id}: message is unavailable or not final"))
+                        Some(
+                            crate::i18n::gettext(
+                                app.locale,
+                                "{id}: message is unavailable or not final",
+                            )
+                            .replace("{id}", id),
+                        )
                     }
                     Some(message) => caps
                         .delete_refusal(
@@ -1614,7 +1635,12 @@ fn confirm_delete_messages(
                             message.timestamp,
                             crate::util::now(),
                         )
-                        .map(|why| format!("{id}: {why}")),
+                        .map(|why| {
+                            format!(
+                                "{id}: {}",
+                                super::batch_actions::refusal_text(app.locale, why)
+                            )
+                        }),
                 }
             })
             .collect();
@@ -1633,20 +1659,27 @@ fn confirm_delete_messages(
             .results
             .iter()
             .any(|item| item.result.is_none());
-        ui.label(format!(
-            "Delete {} messages {}? This cannot be undone in Solmu.",
-            ids.len(),
-            if for_everyone {
-                "for everyone"
-            } else {
-                "for me"
-            }
-        ));
+        let prompt = if for_everyone {
+            crate::i18n::ngettext(
+                app.locale,
+                "Delete {count} message for everyone? This cannot be undone in Solmu.",
+                "Delete {count} messages for everyone? This cannot be undone in Solmu.",
+                ids.len() as u32,
+            )
+        } else {
+            crate::i18n::ngettext(
+                app.locale,
+                "Delete {count} message for me? This cannot be undone in Solmu.",
+                "Delete {count} messages for me? This cannot be undone in Solmu.",
+                ids.len() as u32,
+            )
+        };
+        ui.label(prompt.replace("{count}", &ids.len().to_string()));
         ui.horizontal(|ui| {
             let confirm = if for_everyone {
-                "Delete for everyone"
+                crate::i18n::gettext(app.locale, "Delete for everyone")
             } else {
-                "Delete for me"
+                crate::i18n::gettext(app.locale, "Delete for me")
             };
             if ui
                 .add_enabled(

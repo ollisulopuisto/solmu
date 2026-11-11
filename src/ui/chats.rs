@@ -214,6 +214,7 @@ fn search_keyboard(app: &mut App, ui: &egui::Ui) {
 fn header(app: &mut App, ui: &mut egui::Ui) {
     if app.show_starred || app.show_archived || app.locked_folder_open() {
         legacy_header(app, ui);
+        super::batch_actions::archive_bar(app, ui);
         return;
     }
     let palette = app.palette;

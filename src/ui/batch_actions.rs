@@ -1,6 +1,7 @@
 //! Explicit destructive batch review and per-item outcomes. No automatic retries.
 use crate::{
     app::App,
+    i18n::{Locale, gettext, ngettext},
     model::{Action, Chat, ChatId},
 };
 
@@ -54,10 +55,15 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
     }
     if !app.batch_ui.selected_chats.is_empty() {
         ui.horizontal_wrapped(|ui| {
-            ui.label(format!(
-                "{} chats selected",
-                app.batch_ui.selected_chats.len()
-            ));
+            ui.label(
+                ngettext(
+                    app.locale,
+                    "{count} chat selected",
+                    "{count} chats selected",
+                    app.batch_ui.selected_chats.len() as u32,
+                )
+                .replace("{count}", &app.batch_ui.selected_chats.len().to_string()),
+            );
             if ui
                 .button(crate::i18n::gettext(app.locale, "Archive selected…"))
                 .clicked()
@@ -74,16 +80,21 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
     }
     for item in &app.batch_ui.results {
         let status = match &item.result {
-            None => "Awaiting result; do not retry".to_owned(),
-            Some(Ok(())) => "Accepted".to_owned(),
-            Some(Err(error)) => {
-                format!("Failed or uncertain: {error}. Check state before any manual retry.")
-            }
+            None => gettext(app.locale, "Awaiting result; do not retry").into_owned(),
+            Some(Ok(())) => gettext(app.locale, "Accepted").into_owned(),
+            Some(Err(error)) => gettext(
+                app.locale,
+                "Failed or uncertain: {error}. Check state before any manual retry.",
+            )
+            .replace("{error}", error),
         };
         ui.label(format!(
             "{} {}: {status}",
             item.chat,
-            item.message.as_deref().unwrap_or("archive")
+            item.message
+                .as_deref()
+                .map(str::to_owned)
+                .unwrap_or_else(|| gettext(app.locale, "archive").into_owned())
         ));
     }
     if !app.batch_ui.results.is_empty()
@@ -117,10 +128,14 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
     let refusals: Vec<_> = ids
         .iter()
         .filter_map(|id| match app.chat(id) {
-            None => Some(format!("{id}: chat unavailable")),
-            Some(chat) => {
-                archive_refusal(chat).map(|why| format!("{}: {why}", app.chat_title(chat)))
-            }
+            None => Some(gettext(app.locale, "{id}: chat unavailable").replace("{id}", id)),
+            Some(chat) => archive_refusal(chat).map(|why| {
+                format!(
+                    "{}: {}",
+                    app.chat_title(chat),
+                    refusal_text(app.locale, why)
+                )
+            }),
         })
         .collect();
     let pending = app
@@ -129,7 +144,15 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
         .iter()
         .any(|item| item.result.is_none());
     egui::Modal::new(egui::Id::new("batch-archive-review")).show(ctx, |ui| {
-        ui.heading(format!("Archive {} chats?", ids.len()));
+        ui.heading(
+            ngettext(
+                app.locale,
+                "Archive {count} chat?",
+                "Archive {count} chats?",
+                ids.len() as u32,
+            )
+            .replace("{count}", &ids.len().to_string()),
+        );
         ui.label(crate::i18n::gettext(
             app.locale,
             "They remain available in Archived. Messages are not deleted.",
@@ -185,4 +208,35 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
             }
         });
     });
+}
+
+/// Keep refusal literals visible to gettext extraction, without translating backend logic.
+pub fn refusal_text(locale: Locale, reason: &str) -> String {
+    match reason {
+        "Archive support not confirmed by this chat's bridge" => gettext(
+            locale,
+            "Archive support not confirmed by this chat's bridge",
+        )
+        .into_owned(),
+        "Delete for me is not confirmed by this bridge" => {
+            gettext(locale, "Delete for me is not confirmed by this bridge").into_owned()
+        }
+        "Delete for everyone is not confirmed by this bridge" => gettext(
+            locale,
+            "Delete for everyone is not confirmed by this bridge",
+        )
+        .into_owned(),
+        "Only your own messages can be deleted for everyone here" => gettext(
+            locale,
+            "Only your own messages can be deleted for everyone here",
+        )
+        .into_owned(),
+        "Message age could not be verified" => {
+            gettext(locale, "Message age could not be verified").into_owned()
+        }
+        "The bridge's delete age limit has passed" => {
+            gettext(locale, "The bridge's delete age limit has passed").into_owned()
+        }
+        _ => reason.to_owned(),
+    }
 }
