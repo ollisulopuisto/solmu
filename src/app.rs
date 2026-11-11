@@ -414,6 +414,9 @@ pub struct App {
     pub local_ai: crate::backend::local_ai::State,
     pub dirs: AppDirs,
     pub settings: Settings,
+    pub link_previews: Option<crate::preview_worker::Worker>,
+    preview_context: Option<(String, Option<ChatId>, bool, bool, bool)>,
+    preview_sources: HashSet<(ChatId, String, String)>,
     /// Writes settings and the account roster on a thread of its own, so
     /// a save never stalls the window; flushed at exit and before a suspend.
     pub files: fastframe_file::Writer,
@@ -466,6 +469,10 @@ pub struct App {
     composer_mentions: Vec<ComposerMention>,
     /// Byte offset of the `:` starting the active emoji query.
     pub emoji_start: Option<usize>,
+    /// The user's text replacements (System Settings > Keyboard > Text
+    /// Replacements), loaded on first composer use and reloaded when the
+    /// window regains focus. None until loaded.
+    pub text_replacements: Option<Vec<crate::text_replace::Replacement>>,
     /// Keyboard-highlighted emoji in suggestions or the full picker.
     pub emoji_selected: usize,
     /// Byte offset of the `@` starting the active mention query.
@@ -1477,6 +1484,9 @@ impl App {
             local_ai: Default::default(),
             dirs,
             settings,
+            link_previews: None,
+            preview_context: None,
+            preview_sources: HashSet::new(),
             locale,
             settings_dirty: false,
             last_settings_save: Instant::now(),
@@ -1506,6 +1516,7 @@ impl App {
             beeper_search_state: None,
             composer_mentions: Vec::new(),
             emoji_start: None,
+            text_replacements: None,
             emoji_selected: 0,
             mention_start: None,
             mention_selected: 0,
@@ -1896,6 +1907,11 @@ impl App {
 
     /// Drops App-owned pointers into the previous account's chats and media.
     fn clear_account_ui(&mut self) {
+        if let Some(worker) = &self.link_previews {
+            worker.cancel();
+        }
+        self.preview_context = None;
+        self.preview_sources.clear();
         self.discard_gif_thumbnails();
         self.gif_pending = false;
         self.invalidate_composer_undo();
@@ -9562,6 +9578,7 @@ impl App {
                 }
             }
             Action::OpenUrl(url) => {
+                let url = self.link_action_url(&url);
                 if let Some(code) = crate::safety::group_invite_code(&url) {
                     self.invite = Some(crate::model::GroupInvite {
                         code: code.clone(),
@@ -9573,6 +9590,57 @@ impl App {
                     ctx.open_url(egui::OpenUrl::new_tab(url));
                 } else {
                     self.toast_error("This link type cannot be opened from Solmu");
+                }
+            }
+            Action::CopyLink(url) => {
+                ctx.copy_text(self.link_action_url(&url));
+                self.toast("Copied");
+            }
+            Action::LinkPreviewPreferences => {
+                self.apply(Action::Open(Page::Settings), ctx);
+                self.settings_search = "Privacy".into();
+            }
+            Action::ClearLinkPreviews => {
+                crate::image_cache::forget_prefix(ctx, "bytes://local-link-preview/");
+                if let Some(worker) = &self.link_previews {
+                    worker.clear();
+                }
+                self.preview_sources.clear();
+                self.toast("Cached previews cleared");
+            }
+            Action::FetchLinkPreview {
+                account,
+                chat,
+                message,
+                url,
+                automatic,
+                retry,
+            } => {
+                if account != self.account().id.0
+                    || !self.chat_view()
+                    || self.window_hidden
+                    || (automatic && (!self.settings.auto_link_previews || !self.window_focused))
+                    || !self.preview_chat_visible(&chat)
+                    || !self.preview_source_exists(&chat, &message, &url)
+                {
+                    return;
+                }
+                if !self.settings.proxy.trim().is_empty() {
+                    if !automatic {
+                        self.toast_error(
+                            "Link previews are unavailable while a proxy is configured",
+                        );
+                    }
+                    return;
+                }
+                self.sync_link_previews();
+                let request_url = self.link_action_url(&url);
+                let worker = self
+                    .link_previews
+                    .get_or_insert_with(crate::preview_worker::Worker::new);
+                if worker.request(&account, &request_url, retry) {
+                    self.preview_sources.insert((chat, message, url));
+                    ctx.request_repaint_after(Duration::from_millis(100));
                 }
             }
             Action::CopyText(text) => {
@@ -11571,6 +11639,7 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::SettingsChanged => {
+                self.sync_link_previews();
                 self.mark_settings_dirty();
                 let address = self.settings.transcription_wyoming.trim().to_string();
                 if address != self.transcriber_address {
@@ -12300,6 +12369,61 @@ impl App {
         }
     }
 
+    pub fn link_action_url(&self, url: &str) -> String {
+        if self.settings.remove_link_tracking {
+            crate::link_policy::without_tracking(url)
+        } else {
+            url.to_owned()
+        }
+    }
+
+    fn preview_chat_visible(&self, chat: &str) -> bool {
+        if self.open_chat.as_deref() == Some(chat) {
+            return true;
+        }
+        let Some(open) = self.current_chat() else {
+            return false;
+        };
+        self.settings.beeper.people.iter().any(|person| {
+            person.members.iter().any(|member| member.matches(open))
+                && self.chat(chat).is_some_and(|source| {
+                    person.members.iter().any(|member| member.matches(source))
+                })
+        })
+    }
+
+    fn preview_source_exists(&self, chat: &str, message: &str, url: &str) -> bool {
+        self.chat(chat).is_some_and(|c| !c.locked)
+            && self.conversations.get(chat).and_then(|c| c.message(message))
+                .is_some_and(|message| matches!(&message.content,
+                    Content::Text { text, .. } if crate::markup::links(text).iter().any(|u| u == url)))
+    }
+
+    fn sync_link_previews(&mut self) {
+        let blocked = self.app_lock.is_locked()
+            || self.window_hidden
+            || !self.chat_view()
+            || !self.settings.proxy.trim().is_empty();
+        let context = (
+            self.account().id.0.clone(),
+            self.open_chat.clone(),
+            self.settings.auto_link_previews,
+            self.settings.remove_link_tracking,
+            blocked,
+        );
+        let missing = self
+            .preview_sources
+            .iter()
+            .any(|(chat, message, url)| !self.preview_source_exists(chat, message, url));
+        if self.preview_context.as_ref() != Some(&context) || missing {
+            if let Some(worker) = &self.link_previews {
+                worker.cancel();
+            }
+            self.preview_sources.clear();
+            self.preview_context = Some(context);
+        }
+    }
+
     /// Processes app state shared by windowed and headless modes.
     pub fn background_frame(&mut self, ctx: &egui::Context) {
         // Events are drained before frame_ui observes focus. Losing focus in
@@ -12332,6 +12456,7 @@ impl App {
         self.tick_audio(ctx);
         self.tick_video(ctx);
         self.apply_actions(ctx);
+        self.sync_link_previews();
         self.sync_prefetch();
         self.hold_media();
         self.follow_receipts();
@@ -12474,6 +12599,9 @@ impl App {
     /// window: media stops, a recording is discarded, the locked-chats folder
     /// closes, and notifications already on the desktop are withdrawn.
     pub fn lock_app(&mut self) {
+        if let Some(worker) = &self.link_previews {
+            worker.cancel();
+        }
         if self.settings.app_lock_hash.is_none() || self.app_lock.is_locked() {
             return;
         }
@@ -13185,6 +13313,11 @@ impl App {
         {
             self.refocus_composer(ctx);
         }
+        // Text replacements may have changed in System Settings while Solmu
+        // was away; the composer reloads the table on its next use.
+        if regained_focus {
+            self.text_replacements = None;
+        }
         self.window_focused = focused;
         self.report_presence();
         if locked {
@@ -13198,6 +13331,7 @@ impl App {
         }
         crate::ui::show(self, ui);
         self.apply_actions(ctx);
+        self.sync_link_previews();
         // The old colours, if a change is being revealed, go over everything.
         self.theme_transition.paint(ctx);
         // Release the image caches of everything that scrolled away.
@@ -13212,8 +13346,33 @@ impl App {
         }
     }
 
+    /// Replaces the composer's selection with `text`; returns false when
+    /// there is no selection, leaving the cursor path to the caller.
+    pub(crate) fn replace_composer_selection(&mut self, ctx: &egui::Context, text: &str) -> bool {
+        let id = egui::Id::new("composer-text");
+        let Some(range) =
+            egui::TextEdit::load_state(ctx, id).and_then(|state| state.cursor.char_range())
+        else {
+            return false;
+        };
+        let [start, end] = range.sorted_cursors();
+        let (start, end) = (start.index.0, end.index.0);
+        if start == end {
+            return false;
+        }
+        let byte = |at: usize| {
+            self.composer
+                .char_indices()
+                .nth(at)
+                .map_or(self.composer.len(), |(byte, _)| byte)
+        };
+        self.composer.replace_range(byte(start)..byte(end), text);
+        self.set_composer_cursor(ctx, start + text.chars().count());
+        true
+    }
+
     /// Inserts text at the composer cursor or end.
-    fn insert_in_composer(&mut self, ctx: &egui::Context, text: &str) {
+    pub(crate) fn insert_in_composer(&mut self, ctx: &egui::Context, text: &str) {
         let id = egui::Id::new("composer-text");
         let at = egui::TextEdit::load_state(ctx, id)
             .and_then(|state| state.cursor.char_range())
@@ -13256,7 +13415,7 @@ impl App {
         }
     }
 
-    fn set_composer_cursor(&self, ctx: &egui::Context, at: usize) {
+    pub(crate) fn set_composer_cursor(&self, ctx: &egui::Context, at: usize) {
         let id = egui::Id::new("composer-text");
         let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
         state
@@ -30862,5 +31021,46 @@ mod linked_attachment_tests {
         crate::backend::beeper::flush_temp_cleanup();
         assert!(!path.exists());
         assert!(!late.exists());
+    }
+}
+
+#[cfg(test)]
+mod link_tracking_tests {
+    use super::*;
+    #[test]
+    fn link_tracking_is_opt_in_and_never_changes_message_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(directory.path()), Settings::default());
+        let ctx = egui::Context::default();
+        let original = "https://example.com/a?q=stay%20exact&utm_source=chat#part";
+        assert!(!app.settings.remove_link_tracking);
+        assert_eq!(app.link_action_url(original), original);
+        app.settings.remove_link_tracking = true;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.actions.extend([
+                Action::CopyLink(original.into()),
+                Action::CopyText(original.into()),
+                Action::OpenUrl(original.into()),
+            ]);
+            app.background_frame(ui.ctx());
+        });
+        output.textures_delta.clear();
+        let mut copies = Vec::new();
+        let mut opened = Vec::new();
+        for command in &output.platform_output.commands {
+            match command {
+                egui::OutputCommand::CopyText(text) => copies.push(text.as_str()),
+                egui::OutputCommand::OpenUrl(url) => opened.push(url.url.as_str()),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            copies,
+            ["https://example.com/a?q=stay%20exact#part", original]
+        );
+        assert_eq!(opened, ["https://example.com/a?q=stay%20exact#part"]);
+        let signed = "https://example.com/a?utm_source=chat&X-Amz-Signature=exact#part";
+        assert_eq!(app.link_action_url(signed), signed);
+        assert!(!Settings::default().remove_link_tracking);
     }
 }

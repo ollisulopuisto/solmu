@@ -2121,6 +2121,11 @@ fn plain_rich_text(raw: &str) -> String {
         "h2",
         "h3",
         "tr",
+        "del",
+        "s",
+        "strike",
+        "code",
+        "pre",
     ];
     let looks_html = lower.match_indices('<').any(|(start, _)| {
         let tail = lower[start + 1..].trim_start_matches('/');
@@ -2153,6 +2158,31 @@ fn plain_rich_text(raw: &str) -> String {
     let mut blocked: Option<String> = None;
     let mut link: Option<String> = None;
     let mut link_label: Option<usize> = None;
+    // Semantic styles survive as the WhatsApp-style markup the renderer
+    // already parses: markers are emitted where the tags sit, so properly
+    // nested HTML styles correctly, and overlapping tags style by their
+    // spans. Raw HTML is never emitted.
+    let mut in_pre = false;
+    let mut quote_depth: usize = 0;
+    // Styles covering the current text position, oldest first. Markers
+    // materialize lazily, at the first text char they cover, and close at
+    // line ends because the renderer parses styles per line. A line or
+    // pair without styled text never sees a marker at all.
+    let mut styles: Vec<char> = Vec::new();
+    // The prefix of `styles` whose markers are emitted on this line.
+    let mut emitted: Vec<char> = Vec::new();
+    // Inside inline code, backticks and backslashes are escaped so code
+    // content cannot close its own span.
+    let mut in_code = false;
+    // Fenced content buffers so a content line that would collide with
+    // the fence gets the backslash escape the renderer resolves.
+    let mut pre_content = String::new();
+    // Set when a style marker just closed: a zero-width space before a
+    // following alphanumeric keeps the marker a closer at the renderer's
+    // word-boundary rules without a visible character. The hint fires
+    // only while the closed marker is still the last emitted char, so
+    // neutral tags in between break nothing.
+    let mut pending_boundary: Option<char> = None;
     while !rest.is_empty() {
         if rest.starts_with('<') {
             // A quoted > is an attribute value, not the end of a tag.
@@ -2192,6 +2222,121 @@ fn plain_rich_text(raw: &str) -> String {
                         blocked = Some(name);
                     }
                 } else if blocked.is_none() {
+                    if !in_pre {
+                        let marker = match name.as_str() {
+                            "strong" | "b" => Some('*'),
+                            "em" | "i" => Some('_'),
+                            "del" | "s" | "strike" => Some('~'),
+                            "code" => Some('`'),
+                            _ => None,
+                        };
+                        if let Some(marker) = marker {
+                            if closing {
+                                match styles.iter().rposition(|open| *open == marker) {
+                                    // The style never covered text: no
+                                    // marker pair is emitted at all.
+                                    Some(at) if at >= emitted.len() => {
+                                        styles.remove(at);
+                                    }
+                                    Some(at) => {
+                                        styles.remove(at);
+                                        emitted.remove(at);
+                                        out.push(marker);
+                                        pending_boundary = Some(marker);
+                                    }
+                                    // A close for a marker that never
+                                    // opened stays a literal character.
+                                    None => out.push(marker),
+                                }
+                                if marker == '`' {
+                                    in_code = false;
+                                }
+                            } else {
+                                styles.push(marker);
+                                if marker == '`' {
+                                    in_code = true;
+                                }
+                            }
+                        }
+                    }
+                    if name == "pre" {
+                        if closing {
+                            if in_pre {
+                                in_pre = false;
+                                // Escape a content line that would collide
+                                // with the fence: the backslash goes right
+                                // before the backticks, so the renderer
+                                // resolves it and any indentation survives.
+                                let trimmed = pre_content.trim_end_matches('\n');
+                                for (n, line) in trimmed.split('\n').enumerate() {
+                                    if n > 0 {
+                                        out.push('\n');
+                                    }
+                                    if line.trim() == "```" {
+                                        let at = line.find("```").unwrap_or(0);
+                                        out.push_str(&line[..at]);
+                                        out.push('\\');
+                                        out.push_str(&line[at..]);
+                                    } else {
+                                        out.push_str(line);
+                                    }
+                                }
+                                pre_content.clear();
+                                if !out.ends_with('\n') {
+                                    out.push('\n');
+                                }
+                                out.push_str("```\n");
+                                // Styles suspended for the block re-emit
+                                // lazily at the next text char.
+                            }
+                        } else if !in_pre {
+                            in_pre = true;
+                            pre_content.clear();
+                            // Styles emitted on this line close before the
+                            // fence line; they re-emit lazily after it.
+                            for marker in emitted.iter().rev() {
+                                out.push(*marker);
+                            }
+                            emitted.clear();
+                            if !out.ends_with('\n') {
+                                out.push('\n');
+                            }
+                            out.push_str("```\n");
+                        }
+                    }
+                    if name == "blockquote" && !in_pre {
+                        if closing {
+                            quote_depth = quote_depth.saturating_sub(1);
+                            // An empty trailing quote line adds nothing.
+                            if out.ends_with("> ") {
+                                out.truncate(out.len() - 2);
+                            }
+                            let broke = !out.ends_with('\n');
+                            if broke {
+                                for marker in emitted.iter().rev() {
+                                    out.push(*marker);
+                                }
+                                emitted.clear();
+                                out.push('\n');
+                            }
+                            // Text after a nested quote still belongs to
+                            // the outer one: its bar stays.
+                            if quote_depth > 0 && !out.ends_with("> ") {
+                                out.push_str("> ");
+                            }
+                        } else {
+                            let broke = !out.ends_with('\n') && !out.ends_with("> ");
+                            if broke {
+                                for marker in emitted.iter().rev() {
+                                    out.push(*marker);
+                                }
+                                emitted.clear();
+                                out.push('\n');
+                            }
+                            quote_depth += 1;
+                            out.push_str("> ");
+                        }
+                    }
                     if name == "a" {
                         if closing {
                             let label_start = link_label.take();
@@ -2199,13 +2344,15 @@ fn plain_rich_text(raw: &str) -> String {
                                 // A matrix.to mention link already carries the
                                 // person's name as its text; the raw URL is noise.
                                 if !url.starts_with("https://matrix.to/#/@") {
+                                    // Entities in the attribute decode here,
+                                    // where the URL is emitted.
+                                    let url = decode_entities(&url);
                                     // A link whose text already is the address -
                                     // a pasted URL the bridge marked up - keeps
                                     // just the text; repeating the address in
                                     // parentheses would show such links twice.
                                     let shows_address = label_start.is_some_and(|start| {
-                                        let label = decode_entities(&out[start..]);
-                                        let label = label.trim();
+                                        let label = out[start..].trim();
                                         label == url
                                             || label.trim_end_matches('/')
                                                 == url.trim_end_matches('/')
@@ -2232,10 +2379,18 @@ fn plain_rich_text(raw: &str) -> String {
                     }
                     if matches!(
                         name.as_str(),
-                        "br" | "p" | "div" | "li" | "blockquote" | "tr" | "h1" | "h2" | "h3"
+                        "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3"
                     ) {
-                        if !out.ends_with('\n') {
+                        let broke = !out.ends_with('\n') && !out.ends_with("> ");
+                        if broke {
+                            for marker in emitted.iter().rev() {
+                                out.push(*marker);
+                            }
+                            emitted.clear();
                             out.push('\n');
+                        }
+                        if quote_depth > 0 && !in_pre && !out.ends_with("> ") {
+                            out.push_str("> ");
                         }
                         if name == "li" && !closing {
                             out.push_str("• ");
@@ -2246,13 +2401,67 @@ fn plain_rich_text(raw: &str) -> String {
                 continue;
             }
         }
-        let ch = rest.chars().next().unwrap();
-        if blocked.is_none() {
+        // A text run up to the next tag. Entities decode here, before
+        // the code escaping sees the text, so an entity-encoded backtick
+        // or fence line cannot slip past the escaping.
+        let end = rest.find('<').unwrap_or(rest.len());
+        let (taken, run) = if end == 0 {
+            // A '<' that opens no known tag is literal text.
+            let ch = rest.chars().next().unwrap();
+            (ch.len_utf8(), ch.to_string())
+        } else {
+            (end, decode_entities(&rest[..end]))
+        };
+        rest = &rest[taken..];
+        if blocked.is_some() {
+            continue;
+        }
+        for ch in run.chars() {
+            if in_pre {
+                pre_content.push(ch);
+                continue;
+            }
+            if ch == '\n' {
+                // A break closes the styles emitted on this line; they
+                // re-emit lazily at the next text char.
+                pending_boundary = None;
+                for marker in emitted.iter().rev() {
+                    out.push(*marker);
+                }
+                emitted.clear();
+                out.push('\n');
+                if quote_depth > 0 {
+                    out.push_str("> ");
+                }
+                continue;
+            }
+            // Markers covering this char materialize now: after a break,
+            // after a neutral tag, wherever the text actually is. A
+            // style that opens mid-word gets the zero-width boundary
+            // hint so the renderer accepts the marker.
+            while emitted.len() < styles.len() {
+                let marker = styles[emitted.len()];
+                if out.ends_with(char::is_alphanumeric) {
+                    out.push('\u{200B}');
+                }
+                out.push(marker);
+                emitted.push(marker);
+            }
+            if let Some(closed) = pending_boundary.take()
+                && ch.is_alphanumeric()
+                && out.ends_with(closed)
+            {
+                out.push('\u{200B}');
+            }
+            if in_code && matches!(ch, '`' | '\\') {
+                out.push('\\');
+            }
             out.push(ch);
         }
-        rest = &rest[ch.len_utf8()..];
     }
-    decode_entities(&out).trim().to_owned()
+    // Text runs and URLs decode at emission, so `out` is already decoded:
+    // a second pass would misdecode literal entity-looking text.
+    out.trim().to_owned()
 }
 
 /// A message with nothing to show: no text, no attachment, and a type that
@@ -5906,6 +6115,252 @@ mod tests {
         );
     }
 
+    /// Bridge-labelled fixture matrix: the normalized-HTML shapes each
+    /// network's bridge is expected to deliver through Beeper's `text`
+    /// field, plus the raw/plain/Markdown fallbacks seen when a bridge does
+    /// no conversion at all. Each expectation is the WhatsApp-style markup
+    /// string the renderer (`crate::markup`) turns back into styled spans.
+    /// These prove parser behaviour only; only live captures per bridge
+    /// prove every bridge really sends these shapes.
+    #[test]
+    fn rich_text_style_fixture_matrix() {
+        let fixtures: &[(&str, &str, &str)] = &[
+            // WhatsApp: *bold*, _italic_, ~strike~, `mono` arrive as tags.
+            ("whatsapp bold", "<p><strong>bold</strong></p>", "*bold*"),
+            ("whatsapp bold b", "<p><b>bold</b></p>", "*bold*"),
+            ("whatsapp italics", "<p><em>italics</em></p>", "_italics_"),
+            ("whatsapp italics i", "<p><i>italics</i></p>", "_italics_"),
+            (
+                "whatsapp overstrike",
+                "<p><del>overstrike</del></p>",
+                "~overstrike~",
+            ),
+            ("telegram strike s", "<p><s>gone</s></p>", "~gone~"),
+            (
+                "signal strike strike",
+                "<p><strike>gone</strike></p>",
+                "~gone~",
+            ),
+            (
+                "inline code",
+                "<p>run <code>make test</code> now</p>",
+                "run `make test` now",
+            ),
+            (
+                "pre block",
+                "<pre>line one\nline two</pre>",
+                "```\nline one\nline two\n```",
+            ),
+            (
+                "pre wrapping code",
+                "<pre><code>fn main() {}</code></pre>",
+                "```\nfn main() {}\n```",
+            ),
+            ("blockquote", "<blockquote>quoted</blockquote>", "> quoted"),
+            (
+                "blockquote paragraphs",
+                "<blockquote><p>one</p><p>two</p></blockquote>",
+                "> one\n> two",
+            ),
+            (
+                "blockquote raw newline",
+                "<blockquote>one\ntwo</blockquote>",
+                "> one\n> two",
+            ),
+            (
+                "nested bold italic",
+                "<p><strong>bold <em>both</em></strong></p>",
+                "*bold _both_*",
+            ),
+            (
+                "styled entities",
+                "<p><strong>a &amp; b</strong></p>",
+                "*a & b*",
+            ),
+            (
+                "bullet list",
+                "<ul><li>one</li><li>two</li></ul>",
+                "\u{2022} one\n\u{2022} two",
+            ),
+            (
+                "numbered list keeps bullets",
+                "<ol><li>one</li><li>two</li></ol>",
+                "\u{2022} one\n\u{2022} two",
+            ),
+            (
+                "styled link label",
+                r#"<a href="https://example.com/page"><strong>Fixture</strong></a>"#,
+                "*Fixture* (https://example.com/page)",
+            ),
+            // Raw fallbacks: no tags, so the field passes through untouched
+            // and the renderer applies WhatsApp rules as it always has.
+            (
+                "raw whatsapp markers",
+                "*bold* _italics_ ~overstrike~",
+                "*bold* _italics_ ~overstrike~",
+            ),
+            ("raw bullet list", "* one\n* two", "* one\n* two"),
+            (
+                "markdown fallback stays literal",
+                "**bold** and __italic__",
+                "**bold** and __italic__",
+            ),
+            (
+                "entity-escaped tags stay literal",
+                "&lt;del&gt;literal&lt;/del&gt;",
+                "<del>literal</del>",
+            ),
+            // A style that starts or ends mid-word gets a zero-width
+            // boundary hint: the renderer's markers only open and close at
+            // word boundaries, so a bare `a*b*c` would stay literal.
+            (
+                "bold mid-word",
+                "<p>a<strong>b</strong>c</p>",
+                "a\u{200B}*b*\u{200B}c",
+            ),
+            (
+                "bold ending before a digit",
+                "<p><strong>x</strong>2</p>",
+                "*x*\u{200B}2",
+            ),
+            // The renderer parses styles per line, so a style spanning a
+            // break closes at the line end and reopens on the next line.
+            (
+                "bold across a break",
+                "<p><strong>one<br>two</strong></p>",
+                "*one*\n*two*",
+            ),
+            (
+                "bold across a raw newline",
+                "<p><strong>one\ntwo</strong></p>",
+                "*one*\n*two*",
+            ),
+            // Code content that carries backticks or fence lines is
+            // backslash-escaped so it cannot close its own span or block.
+            (
+                "inline code with backticks",
+                "<p><code>foo`bar`baz</code></p>",
+                "`foo\\`bar\\`baz`",
+            ),
+            (
+                "inline code with a backslash",
+                "<p><code>a\\b</code></p>",
+                "`a\\\\b`",
+            ),
+            (
+                "pre holding a fence line",
+                "<pre>first\n```\nsecond</pre>",
+                "```\nfirst\n\\```\nsecond\n```",
+            ),
+            // A native backslash line keeps its bytes: only an exact
+            // fence line is escaped.
+            (
+                "pre holding a backslash line",
+                "<pre>\\home\\user</pre>",
+                "```\n\\home\\user\n```",
+            ),
+            // Entities decode before escaping, so an entity-encoded
+            // backtick or fence line cannot slip past it.
+            (
+                "entity backtick in code",
+                "<p><code>foo&#96;bar</code></p>",
+                "`foo\\`bar`",
+            ),
+            (
+                "entity fence in pre",
+                "<pre>a\n&#96;&#96;&#96;\nb</pre>",
+                "```\na\n\\```\nb\n```",
+            ),
+            // The escape sits right before the backticks so the renderer
+            // resolves it while the indentation survives.
+            (
+                "indented fence in pre",
+                "<pre>  ```</pre>",
+                "```\n  \\```\n```",
+            ),
+            // A neutral tag between a close and the next word keeps the
+            // boundary hint; an empty style never emits a marker pair.
+            (
+                "neutral span keeps the boundary",
+                "<strong>a</strong><span>b</span>",
+                "*a*\u{200B}b",
+            ),
+            (
+                "empty styled line stays clean",
+                "<strong><br>word</strong>",
+                "*word*",
+            ),
+            (
+                "empty style pair vanishes",
+                "<p><strong></strong>b</p>",
+                "b",
+            ),
+            // Nested quotes keep the outer bar once the inner quote ends.
+            (
+                "nested blockquotes keep the outer bar",
+                "<blockquote>outer<blockquote>inner</blockquote>tail</blockquote>",
+                "> outer\n> inner\n> tail",
+            ),
+        ];
+        for (label, raw, expected) in fixtures {
+            assert_eq!(&plain_rich_text(raw), expected, "{label}");
+        }
+    }
+
+    /// The exact shapes behind the 2026-11-11 WhatsApp self-chat report:
+    /// "*bold*", "_italics_", "~overstrike~" and a "* " bullet list
+    /// arrived as unstyled plain text, overstrike as literal "<del>" tags.
+    #[test]
+    fn whatsapp_self_message_styles_survive() {
+        let raw = "<p><strong>bold</strong></p><p><em>italics</em></p><p><del>overstrike</del></p><ul><li>one</li><li>two</li></ul>";
+        assert_eq!(
+            plain_rich_text(raw),
+            "*bold*\n_italics_\n~overstrike~\n\u{2022} one\n\u{2022} two"
+        );
+    }
+
+    /// Styling must never become an injection channel: blocked elements stay
+    /// dropped, unsafe URLs stay label-only, event attributes never reach the
+    /// output, and the mapper never emits raw HTML of its own.
+    #[test]
+    fn rich_text_styles_stay_safe() {
+        assert_eq!(
+            plain_rich_text("<p>a</p><script>alert(1)</script><p><strong>b</strong></p>"),
+            "a\n*b*"
+        );
+        assert_eq!(
+            plain_rich_text("<style>* { color: red }</style><p><em>x</em></p>"),
+            "_x_"
+        );
+        assert_eq!(
+            plain_rich_text(r#"<a href="https://example.com" onclick="alert(1)">x</a>"#),
+            "x (https://example.com)"
+        );
+        assert_eq!(
+            plain_rich_text(r#"<del><a href="javascript:alert(1)">x</a></del>"#),
+            "~x~"
+        );
+        // An unknown tag stays literal text; styles around it still apply.
+        assert_eq!(
+            plain_rich_text("<strong>a</strong> <foo>bar</foo>"),
+            "*a* <foo>bar</foo>"
+        );
+    }
+
+    /// Malformed and crossing tags degrade to literal marker characters the
+    /// renderer leaves unstyled, never to panics or raw HTML.
+    #[test]
+    fn rich_text_malformed_tags_degrade_safely() {
+        assert_eq!(plain_rich_text("<strong>bold"), "*bold");
+        // Overlapping styles style by their spans: a is bold, b is bold
+        // and italic, c is italic; boundary hints keep the markers parsing.
+        assert_eq!(
+            plain_rich_text("<b>a<i>b</b>c</i>"),
+            "*a\u{200B}_b*\u{200B}c_"
+        );
+        assert_eq!(plain_rich_text("<strong>ok</strong> <del"), "*ok* <del");
+    }
+
     #[test]
     fn dropped_command_channel_stops_connected_control_worker() {
         let (base_url, _, stop) = start_stub();
@@ -7346,10 +7801,11 @@ mod tests {
     }
 
     #[test]
-    fn rich_html_is_text_only_and_opaque_names_are_not_presented_as_names() {
+    fn rich_html_stays_safe_and_opaque_names_are_not_presented_as_names() {
+        // Styles survive as renderer markup; scripts and raw HTML never do.
         assert_eq!(
             plain_rich_text("<p>Hi &amp; welcome</p><br><p>Next <b>bold</b></p>"),
-            "Hi & welcome\nNext bold"
+            "Hi & welcome\nNext *bold*"
         );
         assert_eq!(
             plain_rich_text(

@@ -52,6 +52,7 @@ jobs:
         run: |
           python3 .github/scripts/test-ci-scope.py
           python3 .github/scripts/test-ci-workflows.py
+          python3 .github/scripts/test-install-ubuntu-build-deps.py
       - name: Select changed inputs
         id: scope
         env:
@@ -117,8 +118,7 @@ jobs:
           components: rustfmt, clippy
       - name: GUI build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpipewire-0.3-dev clang libclang-dev cmake perl
+          sudo python3 .github/scripts/install-ubuntu-build-deps.py             libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev             libpipewire-0.3-dev clang libclang-dev cmake perl
       # After the toolchain, so the cache key follows the pinned rustc. The
       # key carries no job name, so each job sets its own generation. Saves
       # only on pushes to main; pull requests restore.
@@ -154,8 +154,7 @@ jobs:
       - name: GUI build dependencies
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpipewire-0.3-dev clang libclang-dev cmake perl
+          sudo python3 .github/scripts/install-ubuntu-build-deps.py             libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev             libpipewire-0.3-dev clang libclang-dev cmake perl
       - uses: jdx/mr-boxington-action@v1
         with:
           cache-generation: test-v1
