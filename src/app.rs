@@ -29982,15 +29982,37 @@ mod linked_attachment_tests {
             &ctx,
         );
         let sent: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok()).collect();
-        assert!(sent.iter().any(
-            |c| matches!(c, Command::SendImage { chat, caption: Some(caption), .. }
-            if chat == "default" && caption == "Synthetic caption")
+        let jobs: Vec<_> = sent
+            .iter()
+            .filter_map(|c| match c {
+                Command::BeeperMedia(job) => Some(job),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(jobs.len(), 2);
+        assert!(jobs.iter().all(|job| job.member.chat == "default"
+            && job.member.account == "signal"
+            && job.member.origin == "local"));
+        assert!(matches!(
+            jobs[0].payload,
+            crate::pending_media::Payload::Picture { .. }
         ));
+        assert_eq!(jobs[0].caption.as_deref(), Some("Synthetic caption"));
         assert!(
-            sent.iter()
-                .any(|c| matches!(c, Command::SendFiles { chat, .. } if chat == "default"))
+            matches!(&jobs[1].payload, crate::pending_media::Payload::File { path, document: false } if path == std::path::Path::new("synthetic.pdf"))
         );
-        assert!(!sent.iter().any(|c| matches!(c, Command::SendImage { chat, .. } | Command::SendFiles { chat, .. } if chat == "visible")));
+        assert!(jobs[1].caption.is_none());
+        assert!(
+            !sent
+                .iter()
+                .any(|c| matches!(c, Command::SendImage { .. } | Command::SendFiles { .. }))
+        );
+        assert_eq!(app.conversations["default"].messages.len(), 2);
+        assert!(
+            app.conversations
+                .get("visible")
+                .is_none_or(|c| c.messages.is_empty())
+        );
         assert_eq!(app.open_chat.as_deref(), Some("visible"));
         assert_eq!(
             app.drafts.get("default").map(String::as_str),
@@ -30025,8 +30047,10 @@ mod linked_attachment_tests {
         assert_eq!(app.pending.len(), 1);
         assert_eq!(app.composer, "Keep caption");
         assert!(
-            !std::iter::from_fn(|| commands.try_recv().ok())
-                .any(|c| matches!(c, Command::SendImage { .. } | Command::SendFiles { .. }))
+            !std::iter::from_fn(|| commands.try_recv().ok()).any(|c| matches!(
+                c,
+                Command::SendImage { .. } | Command::SendFiles { .. } | Command::BeeperMedia(_)
+            ))
         );
         app.chats[0].locked = true;
         assert!(crate::ui::merged::attachment_destination(&app, &ctx).is_err());
@@ -30063,7 +30087,7 @@ mod linked_attachment_tests {
         assert_eq!(app.composer, "Returned caption");
         assert!(
             !std::iter::from_fn(|| commands.try_recv().ok())
-                .any(|c| matches!(c, Command::SendFiles { .. }))
+                .any(|c| matches!(c, Command::SendFiles { .. } | Command::BeeperMedia(_)))
         );
         app.settings.beeper.people[0].primary =
             Some(app.settings.beeper.people[0].members[1].clone());
@@ -30199,9 +30223,20 @@ mod linked_attachment_tests {
             },
             &ctx,
         );
-        assert!(std::iter::from_fn(|| picked.try_recv().ok()).any(
-            |c| matches!(c, Command::SendFiles { chat, documents: true, .. } if chat == "default")
-        ));
+        let jobs: Vec<_> = std::iter::from_fn(|| picked.try_recv().ok())
+            .filter_map(|c| match c {
+                Command::BeeperMedia(job) => Some(job),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].member.chat, "default");
+        assert_eq!(jobs[0].member.account, "signal");
+        assert_eq!(jobs[0].member.origin, "local");
+        assert!(
+            matches!(&jobs[0].payload, crate::pending_media::Payload::File { path, document: true } if path == std::path::Path::new("synthetic.pdf"))
+        );
+        assert_eq!(app.conversations["default"].messages.len(), 1);
         assert!(commands.try_recv().is_err());
     }
     fn send_staged(app: &mut App, ctx: &egui::Context, destination: &str) {
