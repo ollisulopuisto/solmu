@@ -14567,6 +14567,77 @@ mod tests {
     }
 
     #[test]
+    fn pending_media_confirmed_preview_retires_on_exact_full_history_refresh() {
+        let mut app = app();
+        let local = seed_pending_media(&mut app);
+        let member = app.pending_media[&local].job.member.clone();
+        let mut full = app.conversations["pending-target"].messages[0].clone();
+        full.id = "final".into();
+        full.status = Delivery::Sent;
+        let mut sparse = full.clone();
+        sparse.content = Content::Text {
+            text: "[message]".into(),
+            preview: None,
+        };
+        app.apply_backend_event(
+            Event::BeeperMediaResolved {
+                local: local.clone(),
+                member: member.clone(),
+                message: Box::new(sparse),
+                complete: true,
+            },
+            true,
+        );
+        assert_eq!(
+            app.pending_media[&local].state,
+            crate::pending_media::State::Confirmed
+        );
+        // Foreign identity cannot retire the original job even with a matching ID.
+        app.chats
+            .iter_mut()
+            .find(|c| c.id == member.chat)
+            .unwrap()
+            .backend_account = Some("foreign".into());
+        app.apply_backend_event(
+            Event::Messages {
+                chat: member.chat.clone(),
+                messages: vec![full.clone()],
+                older: false,
+                complete: false,
+            },
+            true,
+        );
+        assert!(app.pending_media.contains_key(&local));
+        app.chats
+            .iter_mut()
+            .find(|c| c.id == member.chat)
+            .unwrap()
+            .backend_account = Some(member.account.clone());
+        let mut incoming = full.clone();
+        incoming.from_me = false;
+        app.apply_backend_event(
+            Event::Messages {
+                chat: member.chat.clone(),
+                messages: vec![incoming],
+                older: false,
+                complete: false,
+            },
+            true,
+        );
+        assert!(app.pending_media.contains_key(&local));
+        app.apply_backend_event(
+            Event::Messages {
+                chat: member.chat,
+                messages: vec![full],
+                older: false,
+                complete: false,
+            },
+            true,
+        );
+        assert!(!app.pending_media.contains_key(&local));
+    }
+
+    #[test]
     fn pending_media_refusal_preserves_view_once_and_staged_photo() {
         let mut app = app();
         let (backend, mut commands) = Backend::recording();
