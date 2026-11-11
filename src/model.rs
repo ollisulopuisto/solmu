@@ -312,6 +312,9 @@ pub struct Chat {
     /// capabilities. Informational only: the API has no poll content or
     /// vote endpoint to use it with yet.
     pub poll_capability: Option<i8>,
+    /// The other person's phone numbers and usernames in a direct chat, as the
+    /// network reports them. Used only to suggest links on this computer.
+    pub handles: Vec<String>,
 }
 
 /// A group's permissions and admins, as its metadata says. Kept in the
@@ -410,6 +413,7 @@ impl Chat {
             backend_origin: None,
             backend_network: None,
             poll_capability: None,
+            handles: Vec::new(),
         }
     }
 
@@ -2503,6 +2507,9 @@ pub struct InviteInfo {
 pub enum ToastKind {
     Info,
     Error,
+    /// An info toast with an Undo button; holds the chats that link added,
+    /// so undoing it leaves every other link alone.
+    Undo(Vec<crate::merged::Member>),
 }
 
 /// Info toasts fade after a few seconds; errors stay until dismissed so they
@@ -2806,6 +2813,9 @@ pub enum Action {
     CopyImage(PathBuf),
     /// Closes the toast at this index. Only errors wait to be dismissed.
     DismissToast(usize),
+    /// Puts the people list back as it was before a link suggestion was
+    /// accepted, from the Undo toast: takes only those chats back out.
+    UndoLinks(Vec<crate::merged::Member>),
     /// Starts a reply to a message in the open chat.
     Reply(String),
     /// Opens the group sender's direct chat with this message quoted.
@@ -3008,6 +3018,11 @@ pub enum Action {
     SetChatFilter(ChatFilter),
     /// Picks the label the chat list shows; `None` shows every chat.
     SelectLabel(Option<String>),
+    /// Shows one automatic category in the chat list; `None` shows every chat.
+    SelectAutoCategory(Option<crate::categories::AutoCategory>),
+    /// Moves a chat to a category for good, or back to the automatic rules
+    /// with `None`. Local only.
+    SetChatCategory(ChatId, Option<crate::categories::AutoCategory>),
     /// Replaces the labels worn by one chat.
     SetChatLabels {
         chat: ChatId,

@@ -9,17 +9,22 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
-- Cmd-R now quote-replies to the latest loaded incoming message in ordinary chats too, preserving the draft and focusing the composer through the existing Reply action. Cmd-L opens the existing Forward dialog for the selected messages, or the latest forwardable message. Beeper forwarding itself remains unsupported until the separate composed re-send feature is implemented.
+## v0.24.21
 
+- Link suggestions: when two one-to-one chats on different networks have the same full name or the same phone number or username, Contact info shows a "Same person?" card with Link and Not the same person, and Filters lists them under "Link suggestions". Linking can be undone for a few seconds, and a dismissed pair is not suggested again. Nothing is linked automatically and nothing leaves your computer.
+
+## v0.24.20
+
+- Cmd-R now quote-replies to the latest loaded incoming message in ordinary chats too, preserving the draft and focusing the composer through the existing Reply action. Cmd-L opens the existing Forward dialog for the selected messages, or the latest forwardable message. Beeper forwarding itself remains unsupported until the separate composed re-send feature is implemented.
 - Linked chats use the default network's profile picture, then the other linked networks in their saved order. Initials appear only when none has a picture.
 - Accept Beeper send confirmation when a pending message resolves to its final message ID. Successful sends no longer get a false 60-second warning solely because the ID changed. Unknown confirmations are not called pending; nothing is automatically resent.
-
-
 - Telegram and other media downloads wait in a bounded backlog when the worker queue is full, instead of failing immediately. Downloads start as slots free; exceeding the backlog limit or losing the worker still reports an error. New explicit requests go before automatic backlog work, but the current UI cannot promote an automatic download already shown as Downloading.
 
 - Exported attachment names cannot select NTFS alternate data streams through a colon in the original filename.
 
 - Saving an attachment whose name Windows reserves for a device (CON, NUL, COM1, ...) now keeps its extension: `CON.pdf` is saved as `attachment.pdf`, not `attachment`.
+- Automatic chat categories, first slice. Filters now has an Automatic category choice: People (one-to-one chats active in the last 7 days), Quiet people (idle 7 to 30 days), Long quiet (idle 30 days or more) and Notifications (channels and read-only chats). Groups stay in Groups. A chat's menu has Move to… to put a one-to-one chat in a category for good; the rules never re-sort it, and Sort automatically hands it back. The categories are opt-in filters: the default list, its order and its counts are unchanged, nothing is marked read, and nothing leaves this computer. While you search, the names of Quiet people chats fade a little and Long quiet chats fade more, in the chat rows and the message results, never below readable contrast. Your labels remain the tags. See docs/chat-categories.md.
+
 ## v0.24.19
 
 - Telegram and other videos that Beeper sends without a file type no longer save as `.bin`. Solmu now takes the type from the file name, the server's content type or the file's first bytes, so they open in the player and your system viewer.
