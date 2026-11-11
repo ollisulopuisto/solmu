@@ -201,7 +201,24 @@ struct BeeperMessage {
     linked_message_id: Option<String>,
     #[serde(default)]
     reactions: Vec<BeeperReaction>,
+    #[serde(default)]
+    links: Vec<BeeperLinkPreview>,
 }
+
+/// Supplied metadata only. Image URLs are deliberately not downloaded here.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BeeperLinkPreview {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: String,
+    #[serde(rename = "originalURL", default)]
+    original_url: Option<String>,
+    #[serde(default)]
+    summary: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct BeeperReaction {
     #[serde(rename = "participantID")]
@@ -2671,6 +2688,64 @@ fn delivery_of(m: &BeeperMessage) -> Delivery {
     }
 }
 
+/// Synthetic wire fixture exercises the real mapper for offline review captures.
+#[cfg(any(test, feature = "demo"))]
+pub(crate) fn supplied_preview_demo(chat: &str) -> Message {
+    let wire: BeeperMessage = serde_json::from_value(serde_json::json!({
+        "id":"ada-link", "chatID": chat,
+        "senderID": chat,
+        "text":"Summer plans (https://example.com/trips?utm_source=chat#july)",
+        "links":[{"title":"Summer plans", "summary":"A few ideas for the long summer evenings.", "url":"https://example.com/trips", "originalURL":"https://example.com/trips?utm_source=chat#july", "img":"https://example.com/not-fetched.jpg"}]
+    })).expect("synthetic preview wire fixture");
+    map_message(&wire, chat)
+}
+
+#[cfg(test)]
+thread_local! {
+    static SUPPLIED_PREVIEW_BODY_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Associate supplied metadata only with a link actually present in the body.
+/// Keep that original destination for opening/copying: a resolved or canonical
+/// metadata URL is not permission to change where the message sends the user.
+fn supplied_link_preview(message: &BeeperMessage, body: &str) -> Option<crate::model::LinkPreview> {
+    if message.links.is_empty() {
+        return None;
+    }
+    fn label(value: Option<&str>, max: usize) -> Option<String> {
+        let text: String = value?
+            .chars()
+            .filter(|ch| !ch.is_control() || ch.is_whitespace())
+            .take(max)
+            .collect();
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!text.is_empty()).then_some(text)
+    }
+    #[cfg(test)]
+    SUPPLIED_PREVIEW_BODY_PARSES.with(|count| count.set(count.get() + 1));
+    for original in crate::markup::links(body) {
+        let Some(valid) = crate::safety::preview_url(&original) else {
+            continue;
+        };
+        let Some(preview) = message.links.iter().take(16).find(|preview| {
+            let source = preview.original_url.as_deref().unwrap_or(&preview.url);
+            crate::safety::preview_url(source).as_ref() == Some(&valid)
+        }) else {
+            continue;
+        };
+        let title = label(preview.title.as_deref(), 240);
+        let description = label(preview.summary.as_deref(), 600);
+        if title.is_some() || description.is_some() {
+            return Some(crate::model::LinkPreview {
+                url: original,
+                title,
+                description,
+            });
+        }
+    }
+    None
+}
+
 fn map_message(m: &BeeperMessage, fallback_chat: &str) -> Message {
     let (body, _labelled) = body_of(m);
     let status = delivery_of(m);
@@ -2697,9 +2772,9 @@ fn map_message(m: &BeeperMessage, fallback_chat: &str) -> Message {
         from_me: m.is_sender.unwrap_or(false),
         timestamp: unix(&Some(m.timestamp.clone())),
         history_order: None,
-        content: attachment_content(m).unwrap_or(Content::Text {
+        content: attachment_content(m).unwrap_or_else(|| Content::Text {
+            preview: supplied_link_preview(m, &body),
             text: body,
-            preview: None,
         }),
         status,
         delivered_at: None,
@@ -5339,6 +5414,135 @@ mod tests {
     //! They pin the demo's contract: multiple accounts on one network stay
     //! distinguishable, background startup/polling causes NO mutating HTTP
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
+
+    #[test]
+    fn supplied_preview_parsing_only_runs_for_text_with_metadata() {
+        for (attachment, metadata, expected_parses) in [
+            (false, false, 0),
+            (true, false, 0),
+            (true, true, 0),
+            (false, true, 1),
+        ] {
+            let mut raw = serde_json::json!({
+                "id":"parse-gate", "text":"https://example.org/story"
+            });
+            if metadata {
+                raw["links"] = serde_json::json!([{
+                    "url":"https://example.org/story", "title":"Story"
+                }]);
+            }
+            if attachment {
+                raw["attachments"] = serde_json::json!([{
+                    "type":"img", "id":"mxc://example/image", "mimeType":"image/png"
+                }]);
+            }
+            let wire: BeeperMessage = serde_json::from_value(raw).unwrap();
+            SUPPLIED_PREVIEW_BODY_PARSES.with(|count| count.set(0));
+            let message = map_message(&wire, "chat");
+            assert_eq!(
+                SUPPLIED_PREVIEW_BODY_PARSES.with(|count| count.get()),
+                expected_parses,
+                "attachment={attachment}, metadata={metadata}"
+            );
+            if attachment {
+                assert!(matches!(message.content, Content::Image { .. }));
+            } else {
+                let Content::Text { text, preview } = message.content else {
+                    panic!("text")
+                };
+                assert_eq!(text, "https://example.org/story");
+                assert_eq!(preview.is_some(), metadata);
+            }
+        }
+    }
+
+    #[test]
+    fn supplied_previews_are_bound_to_original_message_links_without_fetching() {
+        let raw = serde_json::json!({
+            "id":"preview", "text":"A title (https://example.org/news?utm_source=chat#part)",
+            "links":[{"title":"  Article\nheadline  ", "summary":"Short description", "url":"https://redirected.example/article", "originalURL":"https://example.org/news?utm_source=chat#part", "img":"http://127.0.0.1/private", "favicon":"file:///secret"}]
+        });
+        let wire: BeeperMessage = serde_json::from_value(raw.clone()).unwrap();
+        let message = map_message(&wire, "chat");
+        let Content::Text {
+            text,
+            preview: Some(preview),
+        } = message.content
+        else {
+            panic!("supplied preview");
+        };
+        assert_eq!(
+            text,
+            "A title (https://example.org/news?utm_source=chat#part)"
+        );
+        assert_eq!(preview.url, "https://example.org/news?utm_source=chat#part");
+        assert_eq!(preview.title.as_deref(), Some("Article headline"));
+        assert_eq!(preview.description.as_deref(), Some("Short description"));
+        assert!(
+            message.thumbnail.is_none(),
+            "supplied remote image URLs must never cause a network fetch"
+        );
+        for url in [
+            "file:///secret",
+            "https://unrelated.example/",
+            "javascript:alert(1)",
+        ] {
+            let mut raw = raw.clone();
+            raw["links"][0]["originalURL"] = url.into();
+            let wire: BeeperMessage = serde_json::from_value(raw).unwrap();
+            assert!(matches!(
+                map_message(&wire, "chat").content,
+                Content::Text { preview: None, .. }
+            ));
+        }
+        let wire: BeeperMessage =
+            serde_json::from_str(r#"{"id":"plain","text":"https://example.org/"}"#).unwrap();
+        assert!(matches!(
+            map_message(&wire, "chat").content,
+            Content::Text { preview: None, .. }
+        ));
+    }
+
+    #[test]
+    fn supplied_original_url_is_authoritative_over_resolved_url() {
+        let raw = serde_json::json!({"id":"preview", "text":"https://example.org/story", "links":[{"originalURL":"https://unrelated.example/redirect", "url":"https://example.org/story", "title":"Wrong article"}]});
+        let wire: BeeperMessage = serde_json::from_value(raw.clone()).unwrap();
+        assert!(matches!(
+            map_message(&wire, "chat").content,
+            Content::Text { preview: None, .. }
+        ));
+        let mut raw = raw;
+        raw["links"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("originalURL");
+        let wire: BeeperMessage = serde_json::from_value(raw).unwrap();
+        assert!(matches!(
+            map_message(&wire, "chat").content,
+            Content::Text {
+                preview: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn supplied_preview_chooses_body_link_order_and_bounds_metadata() {
+        let wire: BeeperMessage = serde_json::from_value(serde_json::json!({"id":"multi", "text":"https://first.example/ then https://second.example/", "links":[
+            {"url":"https://second.example/", "title":"second"},
+            {"url":"https://first.example/", "title":"x".repeat(2000), "summary":"y".repeat(3000)}
+        ]})).unwrap();
+        let Content::Text {
+            preview: Some(preview),
+            ..
+        } = map_message(&wire, "chat").content
+        else {
+            panic!()
+        };
+        assert_eq!(preview.url, "https://first.example/");
+        assert_eq!(preview.title.unwrap().len(), 240);
+        assert_eq!(preview.description.unwrap().len(), 600);
+    }
 
     #[test]
     fn own_user_and_opaque_ids_never_become_handles() {

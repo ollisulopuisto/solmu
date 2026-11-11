@@ -2440,6 +2440,18 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "chat" | "" => {}
             "phone-menu" => phone_menu_sample(app),
             "link-menu" => link_menu_sample(app),
+            "supplied-preview" => {
+                phone_menu_sample(app);
+                let mapped = crate::backend::beeper::supplied_preview_demo(SAMPLES[0].id);
+                let row = app
+                    .conversations
+                    .get_mut(SAMPLES[0].id)
+                    .unwrap()
+                    .message_mut("ada-link")
+                    .unwrap();
+                row.content = mapped.content;
+                row.thumbnail = mapped.thumbnail;
+            }
             "local-preview" | "local-preview-ready" | "local-preview-image" => {
                 phone_menu_sample(app);
                 let row = app

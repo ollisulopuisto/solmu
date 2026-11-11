@@ -641,7 +641,7 @@ pub struct MentionRef {
     pub id: String,
 }
 
-/// Link metadata attached by WhatsApp.
+/// Link metadata supplied with a message. Rendering it does not fetch the site.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LinkPreview {
     pub url: String,
