@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn the_query_matches_text_sender_and_chat() {
-        let list = vec![entry("c1", &msg("m1", "c1"), "Lunch tomorrow?")];
+        let list = [entry("c1", &msg("m1", "c1"), "Lunch tomorrow?")];
         assert!(list[0].matches_query("lunch"));
         assert!(list[0].matches_query("ADA"));
         assert!(list[0].matches_query("chat c1"));
