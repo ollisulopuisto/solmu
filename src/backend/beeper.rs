@@ -2480,7 +2480,7 @@ fn delivery_of(m: &BeeperMessage) -> Delivery {
 }
 
 /// Synthetic wire fixture exercises the real mapper for offline review captures.
-#[cfg(feature = "demo")]
+#[cfg(any(test, feature = "demo"))]
 pub(crate) fn supplied_preview_demo() -> Message {
     let wire: BeeperMessage = serde_json::from_value(serde_json::json!({
         "id":"ada-link", "chatID": crate::demo::sample_ids()[0],
