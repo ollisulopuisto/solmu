@@ -70,7 +70,7 @@ jobs:
               echo "=== TLS-valid fetch $host at $ip ==="
               curl --silent --show-error --output /dev/null \
                 --connect-timeout 5 --max-time 10 \
-                --resolve "$host:443:$ip" \
+                --noproxy '*' --resolve "$host:443:$ip" \
                 --write-out 'http=%{http_code} remote=%{remote_ip} dns=%{time_namelookup} connect=%{time_connect} tls=%{time_appconnect} first_byte=%{time_starttransfer} total=%{time_total}\n' \
                 "https://$host/ubuntu/dists/$suite/InRelease"
               echo "curl_exit=$?"
