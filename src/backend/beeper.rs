@@ -1802,7 +1802,11 @@ impl Api {
             discard_temp_upload(path);
         }
         match result {
-            Ok(accepted) if accepted.chat == job.member.chat && !accepted.pending_id.is_empty() => {
+            Ok(mut accepted)
+                if (accepted.chat.is_empty() || accepted.chat == job.member.chat)
+                    && !accepted.pending_id.is_empty() =>
+            {
+                accepted.chat = job.member.chat.clone();
                 Ok(accepted)
             }
             Ok(_) => Err(State::Unknown(
@@ -4708,10 +4712,13 @@ fn poll_media_send(
         && wire.is_sender == Some(true)
     {
         let message = api.map_message(&wire, &member.chat);
-        let complete = wire.send_status.as_ref().is_some_and(|s| {
-            s.status == "SUCCESS"
-                || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
-        });
+        // A sparse echo can confirm delivery without carrying the attachment
+        // yet. Keep polling so the local preview is not discarded prematurely.
+        let complete = message.content.media().is_some()
+            && wire.send_status.as_ref().is_some_and(|s| {
+                s.status == "SUCCESS"
+                    || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
+            });
         emit(Event::BeeperMediaResolved {
             local: local.to_owned(),
             member: member.clone(),
@@ -5260,7 +5267,7 @@ mod tests {
             ("signal", false, false),
             ("signal", true, true),
         ] {
-            let body = serde_json::json!({"id":"final","chatID":"target","accountID":account,"isSender":sender,"sendStatus":{"status":"SUCCESS"}}).to_string();
+            let body = serde_json::json!({"id":"final","chatID":"target","accountID":account,"isSender":sender,"attachments":[{"type":"audio","id":"asset","isVoiceNote":true,"duration":1}],"sendStatus":{"status":"SUCCESS"}}).to_string();
             let (api, server) =
                 pending_media_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
             let member = pending_media_job(&api.base_url, std::path::Path::new("unused")).member;
