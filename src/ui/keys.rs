@@ -13,6 +13,12 @@ fn jump_keys_reach_chat(editing_text: bool, composer_focused: bool, composer_emp
 
 /// Routes keyboard commands to actions, respecting overlays and text focus.
 pub fn handle(app: &mut App, ctx: &egui::Context) {
+    if app.flat_group_ui.assigning.is_some() {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            app.flat_group_ui.assigning = None;
+        }
+        return;
+    }
     if app.picture_edit.is_some() {
         editor_keys(app, ctx);
         return;
@@ -201,6 +207,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
         let (modifiers, key_code) = SIDEBAR.keys[0];
         key(modifiers, key_code, Action::ToggleSidebar);
+        let (modifiers, key_code) = FLAT_GROUPS.keys[0];
+        key(modifiers, key_code, Action::ToggleFlatGroups);
         let (modifiers, key_code) = SETTINGS.keys[0];
         key(modifiers, key_code, Action::ToggleSettings);
         let (modifiers, key_code) = QUIT.keys[0];
@@ -1331,6 +1339,18 @@ const SIDEBAR: Shortcut = Shortcut {
         accelerator: "Super+KeyB",
     }),
 };
+// Approved group toggle; the info sidebar moves to Cmd-Option-I in #281.
+const FLAT_GROUPS: Shortcut = Shortcut {
+    id: "flat-groups",
+    keys: &[(Modifiers::COMMAND, Key::D)],
+    label: Some("Ctrl+D"),
+    description: Some("Switch Latest and Groups"),
+    menu: Some(MenuItem {
+        id: "flat-groups",
+        text: "Switch Latest and Groups",
+        accelerator: "Super+KeyD",
+    }),
+};
 const INFO_SIDEBAR: Shortcut = Shortcut {
     id: "info-sidebar",
     // Shared Postilaatikko/Solmu keymap: the info sidebar lives on
@@ -1557,6 +1577,7 @@ pub static REGISTRY: &[Row] = &[
     Row::Help("Ctrl+C", "Copy the selected messages"),
     Row::Binding(&SIDEBAR),
     Row::Binding(&INFO_SIDEBAR),
+    Row::Binding(&FLAT_GROUPS),
     Row::Help(
         "Ctrl+End",
         "Jump to the newest message (when the input is empty)",
