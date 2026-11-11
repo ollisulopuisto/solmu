@@ -3856,3 +3856,35 @@ msgstr "Enter envia"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Anteontem"
+
+#. rail destination
+msgid "Saved"
+msgstr "Salvos"
+
+#. saved list title
+msgid "Saved messages"
+msgstr "Mensagens salvas"
+
+#. message context menu item
+msgid "Save for later"
+msgstr "Salvar para depois"
+
+#. message context menu item
+msgid "Remove from Saved"
+msgstr "Remover dos Salvos"
+
+#. saved list search hint
+msgid "Search saved messages"
+msgstr "Pesquisar mensagens salvas"
+
+#. saved list empty state title
+msgid "No saved messages"
+msgstr "Nenhuma mensagem salva"
+
+#. saved list empty state hint
+msgid "Right-click a message and choose Save for later to keep it here."
+msgstr "Clique com o botão direito em uma mensagem e escolha Salvar para depois para mantê-la aqui."
+
+#. saved row when the source message is gone
+msgid "Original message unavailable"
+msgstr "Mensagem original indisponível"

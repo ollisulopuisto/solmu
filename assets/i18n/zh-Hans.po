@@ -3748,3 +3748,35 @@ msgstr "回车发送"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "前天"
+
+#. rail destination
+msgid "Saved"
+msgstr "已保存"
+
+#. saved list title
+msgid "Saved messages"
+msgstr "已保存的消息"
+
+#. message context menu item
+msgid "Save for later"
+msgstr "稍后保存"
+
+#. message context menu item
+msgid "Remove from Saved"
+msgstr "从已保存中移除"
+
+#. saved list search hint
+msgid "Search saved messages"
+msgstr "搜索已保存的消息"
+
+#. saved list empty state title
+msgid "No saved messages"
+msgstr "没有已保存的消息"
+
+#. saved list empty state hint
+msgid "Right-click a message and choose Save for later to keep it here."
+msgstr "右键点击消息并选择“稍后保存”，将其保留在这里。"
+
+#. saved row when the source message is gone
+msgid "Original message unavailable"
+msgstr "原始消息不可用"

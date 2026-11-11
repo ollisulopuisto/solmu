@@ -3878,3 +3878,35 @@ msgstr "Enter отправляет"
 #. Conversation calendar-day separator, two days before today.
 msgid "Day before yesterday"
 msgstr "Позавчера"
+
+#. rail destination
+msgid "Saved"
+msgstr "Сохранённые"
+
+#. saved list title
+msgid "Saved messages"
+msgstr "Сохранённые сообщения"
+
+#. message context menu item
+msgid "Save for later"
+msgstr "Сохранить на потом"
+
+#. message context menu item
+msgid "Remove from Saved"
+msgstr "Убрать из сохранённых"
+
+#. saved list search hint
+msgid "Search saved messages"
+msgstr "Поиск сохранённых сообщений"
+
+#. saved list empty state title
+msgid "No saved messages"
+msgstr "Нет сохранённых сообщений"
+
+#. saved list empty state hint
+msgid "Right-click a message and choose Save for later to keep it here."
+msgstr "Щёлкните сообщение правой кнопкой мыши и выберите «Сохранить на потом», чтобы оно осталось здесь."
+
+#. saved row when the source message is gone
+msgid "Original message unavailable"
+msgstr "Исходное сообщение недоступно"

@@ -6868,6 +6868,8 @@ fn message_menu_labels(locale: crate::i18n::Locale) -> Vec<String> {
         gettext(locale, "Pin message"),
         gettext(locale, "Unpin message"),
         gettext(locale, "Forward"),
+        gettext(locale, "Save for later"),
+        gettext(locale, "Remove from Saved"),
         gettext(locale, "Open in the viewer"),
         gettext(locale, "Transcription language…"),
         gettext(locale, "Playback speed 1x"),
