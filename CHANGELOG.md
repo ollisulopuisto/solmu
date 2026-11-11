@@ -10,6 +10,7 @@ version in Cargo.toml is bumped.
 ## Unreleased
 
 
+- Linked chats use the default network's profile picture, then the other linked networks in their saved order. Initials appear only when none has a picture.
 - Accept Beeper send confirmation when a pending message resolves to its final message ID. Successful sends no longer get a false 60-second warning solely because the ID changed. Unknown confirmations are not called pending; nothing is automatically resent.
 
 
