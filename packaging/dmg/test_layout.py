@@ -127,5 +127,65 @@ class Contract(unittest.TestCase):
             layout.restyle(Path("missing.dmg"), "Test.app", Path("missing.png"))
 
 
+class CaptureContract(unittest.TestCase):
+    def test_success_detaches_and_removes_directory(self):
+        self._capture_case()
+
+    def test_screenshot_failure_still_detaches(self):
+        self._capture_case(screenshot_failure=True)
+
+    def test_failed_detach_keeps_recoverable_mount(self):
+        self._capture_case(detach_failure=True)
+
+    def _capture_case(self, screenshot_failure=False, detach_failure=False):
+        capture_spec = importlib.util.spec_from_file_location(
+            "capture_contract", HERE / "capture.py"
+        )
+        evidence = importlib.util.module_from_spec(capture_spec)
+        capture_spec.loader.exec_module(evidence)
+        with tempfile.TemporaryDirectory() as td:
+            directory = Path(td) / "evidence"
+            directory.mkdir()
+            calls = []
+
+            def fake_run(command, **_kwargs):
+                calls.append(command)
+                return subprocess.CompletedProcess(
+                    command, 1 if detach_failure and command[1] == "detach" else 0
+                )
+
+            def fake_capture(mount, work):
+                self.assertEqual(mount, directory / "volume")
+                self.assertEqual(work, directory)
+                if screenshot_failure:
+                    raise RuntimeError("capture failed")
+
+            with (
+                mock.patch.object(
+                    evidence.tempfile, "mkdtemp", return_value=str(directory)
+                ),
+                mock.patch.object(evidence.subprocess, "run", side_effect=fake_run),
+                mock.patch.object(evidence, "capture", side_effect=fake_capture),
+                mock.patch.object(evidence.time, "sleep"),
+                mock.patch("builtins.print") as output,
+            ):
+                if screenshot_failure:
+                    with self.assertRaisesRegex(RuntimeError, "capture failed"):
+                        evidence.capture_image(Path(td) / "test.dmg")
+                else:
+                    evidence.capture_image(Path(td) / "test.dmg")
+            detach_calls = [c for c in calls if c[1] == "detach"]
+            self.assertEqual(len(detach_calls), 3 if detach_failure else 1)
+            self.assertEqual(directory.exists(), detach_failure)
+            if detach_failure:
+                self.assertTrue(
+                    any(
+                        "evidence mount retained at" in str(c)
+                        and str(directory / "volume") in str(c)
+                        for c in output.call_args_list
+                    )
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
