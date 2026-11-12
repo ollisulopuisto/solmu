@@ -407,6 +407,9 @@ pub fn layout_balanced(
     )
 }
 
+/// Cache key: text, body size, wrap width, font generation.
+type BreaksKey = (String, u32, u32, u32);
+
 /// The balancer's breaks for this text at this width, cached: body layout
 /// runs every frame while the text, fonts and width rarely change.
 fn balanced_breaks(
@@ -415,17 +418,15 @@ fn balanced_breaks(
     size: f32,
     max_width: f32,
 ) -> Arc<Vec<crate::wrap::LineBreak>> {
-    let key = (
+    let key: BreaksKey = (
         built.job.text.clone(),
         size.to_bits(),
         max_width.to_bits(),
         crate::theme::font_generation(),
     );
-    static CACHE: std::sync::OnceLock<
-        std::sync::Mutex<
-            std::collections::HashMap<(String, u32, u32, u32), Arc<Vec<crate::wrap::LineBreak>>>,
-        >,
-    > = std::sync::OnceLock::new();
+    type Cache =
+        std::sync::Mutex<std::collections::HashMap<BreaksKey, Arc<Vec<crate::wrap::LineBreak>>>>;
+    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     if let Some(breaks) = cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key) {
         return breaks.clone();
@@ -477,7 +478,7 @@ fn insert_breaks(
     let mut shift = vec![0usize; n_chars + 1];
     let mut total = 0;
     let mut insertion = insertions.iter().peekable();
-    for i in 0..=n_chars {
+    for (i, slot) in shift.iter_mut().enumerate() {
         while let Some((at, inserted)) = insertion.peek() {
             if *at == i {
                 total += inserted.len();
@@ -486,7 +487,7 @@ fn insert_breaks(
                 break;
             }
         }
-        shift[i] = total;
+        *slot = total;
     }
     let mut new_text = String::with_capacity(text.len() + total);
     let mut insertion = insertions.iter().peekable();
@@ -501,7 +502,7 @@ fn insert_breaks(
         }
         new_text.push(ch);
     }
-    while let Some((_, inserted)) = insertion.next() {
+    for (_, inserted) in insertion {
         new_text.push_str(inserted);
     }
     // New byte offset of a new character index.
