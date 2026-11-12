@@ -2542,9 +2542,20 @@ fn plain_rich_text(raw: &str) -> String {
                                     // parentheses would show such links twice.
                                     let shows_address = label_start.is_some_and(|start| {
                                         let label = out[start..].trim();
+                                        let bare = url
+                                            .strip_prefix("https://")
+                                            .or_else(|| url.strip_prefix("http://"))
+                                            .unwrap_or(&url);
+                                        // A bridge auto-link of a bare name
+                                        // (`<a href="http://widths.rs">widths.rs</a>`
+                                        // inside `run_widths.rs`) shows its address
+                                        // too: keep the text and let the renderer
+                                        // decide whether it is a link.
                                         label == url
                                             || label.trim_end_matches('/')
                                                 == url.trim_end_matches('/')
+                                            || label.trim_end_matches('/')
+                                                == bare.trim_end_matches('/')
                                     });
                                     if !shows_address {
                                         out.push_str(" (");
@@ -10854,6 +10865,26 @@ mod tests {
         assert_eq!(
             plain_rich_text(r#"<a href="https://example.com/page">this</a>"#),
             "this (https://example.com/page)"
+        );
+    }
+
+    #[test]
+    fn a_bridge_autolink_of_a_file_name_is_not_repeated_as_an_address() {
+        // The reported case: "run_widths.rs" arrived with `widths.rs` marked
+        // up as an anchor to http://widths.rs. The address is only the label
+        // with a scheme, so the text stays and the renderer decides.
+        assert_eq!(
+            plain_rich_text(r#"run_<a href="http://widths.rs">widths.rs</a>"#),
+            "run_widths.rs"
+        );
+        assert_eq!(
+            plain_rich_text(r#"<a href="https://example.com">example.com</a>"#),
+            "example.com"
+        );
+        // A different label still shows where the link goes.
+        assert_eq!(
+            plain_rich_text(r#"<a href="http://example.com/x">see</a>"#),
+            "see (http://example.com/x)"
         );
     }
 

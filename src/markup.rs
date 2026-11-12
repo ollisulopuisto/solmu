@@ -648,6 +648,7 @@ fn link_and_mention(span: Span, mentions: &[Mention]) -> Vec<Span> {
             // Links start with a letter or digit. Skip punctuation runs.
             if bytes[i].is_ascii_alphanumeric()
                 && let Some((end, url)) = link_at(text, i)
+                && !bare_after_word_character(text, i, &text[i..end])
             {
                 push_plain(&mut out, &span, &text[plain_start..i]);
                 out.push(Span {
@@ -822,6 +823,18 @@ fn link_at(text: &str, at: usize) -> Option<(usize, String)> {
         return Some((end, format!("https://{token}")));
     }
     None
+}
+
+/// A bare name (no scheme, no `www.`) right after an underscore is part of a
+/// longer identifier such as `run_widths.rs`, not an address. Explicit
+/// `http(s)://` and `www.` links still work after one.
+fn bare_after_word_character(text: &str, at: usize, token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    let explicit = lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("www.")
+        || lower.starts_with("mailto:");
+    !explicit && text[..at].ends_with('_')
 }
 
 /// Whether a token is a hostname without a scheme.
@@ -1393,6 +1406,26 @@ mod tests {
         );
         let spans = parse("(see https://example.com)", &[]);
         assert_eq!(spans.last().map(|span| span.text.as_str()), Some(")"));
+    }
+
+    #[test]
+    fn code_names_are_not_linked_after_an_underscore() {
+        let links = |text: &str| -> Vec<String> {
+            parse(text, &[])
+                .into_iter()
+                .filter_map(|span| span.link)
+                .collect()
+        };
+        assert!(links("run_widths.rs").is_empty());
+        assert!(links("see run_widths.rs and main.py, util.js, notes.md, x.sh").is_empty());
+        assert!(links("my_site.com").is_empty());
+        // Explicit links and ordinary bare domains keep working.
+        assert_eq!(
+            links("run_ https://widths.rs/x"),
+            vec!["https://widths.rs/x"]
+        );
+        assert_eq!(links("_www.example.com"), vec!["https://www.example.com"]);
+        assert_eq!(links("go to example.com"), vec!["https://example.com"]);
     }
 
     #[test]
