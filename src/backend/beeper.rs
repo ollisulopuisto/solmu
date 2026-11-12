@@ -10444,7 +10444,12 @@ mod tests {
             item("r1", "REACTION", None, "2026-11-03T09:48:00Z"),
         ];
         assert_eq!(newest_content_message(reaction_newest).unwrap().id, "m1");
-        let literal = vec![item("m2", "TEXT", Some("[message]"), "2026-11-03T09:49:00Z")];
+        let literal = vec![item(
+            "m2",
+            "TEXT",
+            Some("[message]"),
+            "2026-11-03T09:49:00Z",
+        )];
         let found = newest_content_message(literal).unwrap();
         assert_eq!(body_of(&found).0, "[message]");
         assert!(!body_of(&found).1, "typed text is not a label");

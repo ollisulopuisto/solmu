@@ -32124,7 +32124,10 @@ mod chat_row_follows_messages_tests {
         two_chats(&mut app);
         preview(&mut app, "peter", 300, "first");
         preview(&mut app, "peter", 300, "second");
-        assert_eq!(app.chat("peter").unwrap().last.as_ref().unwrap().summary, "second");
+        assert_eq!(
+            app.chat("peter").unwrap().last.as_ref().unwrap().summary,
+            "second"
+        );
     }
 
     /// Older data never rewinds a row.
