@@ -2542,6 +2542,12 @@ fn plain_rich_text(raw: &str) -> String {
                                     // parentheses would show such links twice.
                                     let shows_address = label_start.is_some_and(|start| {
                                         let label = out[start..].trim();
+                                        // The word the label sits in: the renderer
+                                        // judges `run_widths.rs` as a whole.
+                                        let word_start = out[..start]
+                                            .rfind(char::is_whitespace)
+                                            .map_or(0, |at| at + 1);
+                                        let word = &out[word_start..];
                                         let bare = url
                                             .strip_prefix("https://")
                                             .or_else(|| url.strip_prefix("http://"))
@@ -2558,7 +2564,7 @@ fn plain_rich_text(raw: &str) -> String {
                                         let same_as_bare = label.trim_end_matches('/')
                                             == bare.trim_end_matches('/')
                                             && (!url.starts_with("http://")
-                                                || crate::markup::links(label).is_empty());
+                                                || crate::markup::links(word).is_empty());
                                         label == url
                                             || label.trim_end_matches('/')
                                                 == url.trim_end_matches('/')
