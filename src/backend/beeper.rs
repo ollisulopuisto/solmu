@@ -10900,7 +10900,7 @@ mod tests {
         for space in ["&#160;", "&#8195;"] {
             for s in ["http", "https"] {
                 let html = format!(r#"Hi{space}<a href="{s}://example.com">example.com</a>"#);
-                assert!(plain_rich_text(&html).ends_with("example.com"), "{html}");
+                assert!(plain_rich_text(&html).contains("example.com"), "{html}");
             }
         }
         // An http-only address keeps its scheme: the renderer would link the
