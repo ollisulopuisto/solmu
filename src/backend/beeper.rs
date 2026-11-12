@@ -3278,12 +3278,7 @@ const SEARCH_JUMP_MAX_PAGES: usize = 400;
 /// batches instead of one event per page.
 const SEARCH_JUMP_FLUSH_PAGES: usize = 25;
 
-fn flush_jump_pages(
-    emit: &dyn Fn(Event),
-    chat: &str,
-    pending: &mut Vec<Message>,
-    complete: bool,
-) {
+fn flush_jump_pages(emit: &dyn Fn(Event), chat: &str, pending: &mut Vec<Message>, complete: bool) {
     if pending.is_empty() {
         return;
     }
