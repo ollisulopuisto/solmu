@@ -201,6 +201,44 @@ fn virtual_aliases(app: &mut App, ui: &mut egui::Ui, chats: &[&Chat], salt: (&st
     );
 }
 
+/// A static 16-point divider. It accepts a drop but never a click,
+/// so a group's heading cannot collapse or focus the list.
+fn section_header(
+    ui: &mut egui::Ui,
+    name: &str,
+    palette: &crate::theme::Palette,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), egui::Sense::hover());
+    let painter = ui.painter();
+    let label = painter.layout_no_wrap(
+        name.to_owned(),
+        crate::theme::regular(11.0),
+        palette.secondary,
+    );
+    let at = egui::pos2(rect.left() + 16.0, rect.center().y - label.size().y * 0.5);
+    let gap = egui::Rect::from_min_size(
+        egui::pos2(at.x - 6.0, rect.top()),
+        egui::vec2(label.size().x + 12.0, rect.height()),
+    );
+    let stroke = egui::Stroke::new(1.0, palette.dim);
+    painter.line_segment(
+        [rect.left_center(), egui::pos2(gap.left(), rect.center().y)],
+        stroke,
+    );
+    if gap.right() < rect.right() {
+        painter.line_segment(
+            [
+                egui::pos2(gap.right(), rect.center().y),
+                rect.right_center(),
+            ],
+            stroke,
+        );
+    }
+    painter.galley(at, label, palette.secondary);
+    response
+}
+
 pub fn list(app: &mut App, ui: &mut egui::Ui) {
     #[cfg(any(test, feature = "demo"))]
     {
@@ -234,11 +272,7 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
             for (group, indices) in groups.iter().zip(&rows) {
                 let included: Vec<_> = indices.iter().map(|index| &chats[*index]).collect();
                 let heading = &group.name;
-                let response = ui.add_sized(
-                    [ui.available_width(), 36.0],
-                    egui::Label::new(egui::RichText::new(heading).strong())
-                        .sense(egui::Sense::hover()),
-                );
+                let response = section_header(ui, heading, &app.palette);
                 if let Some(target) = response.dnd_release_payload::<Member>() {
                     // A stale drag from another account must not mutate the current view.
                     if keys.iter().any(|row| row.contains(target.as_ref()))
@@ -283,14 +317,7 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
                 .filter(|(index, _)| !grouped.contains(index))
                 .map(|(_, chat)| chat)
                 .collect();
-            {
-                ui.add_sized(
-                    [ui.available_width(), 36.0],
-                    egui::Label::new(
-                        egui::RichText::new(crate::i18n::gettext(app.locale, "Other")).strong(),
-                    ),
-                );
-            }
+            section_header(ui, &crate::i18n::gettext(app.locale, "Other"), &app.palette);
             virtual_aliases(app, ui, &ungrouped, ("other", 0));
             ui.separator();
             ui.horizontal(|ui| {
@@ -375,6 +402,19 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn divider_header_is_dense_and_does_not_offer_clicks() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let palette = crate::theme::Palette::dark();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let response = section_header(ui, "Work", &palette);
+            assert_eq!(response.rect.height(), 16.0);
+            assert_eq!(response.sense, egui::Sense::hover());
+        });
+        out.textures_delta.clear();
+    }
+
     #[test]
     fn alias_virtual_range_skips_far_rows_and_keeps_partial_rows() {
         let clip = egui::Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(300.0, 500.0));

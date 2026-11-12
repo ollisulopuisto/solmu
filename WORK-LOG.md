@@ -96,3 +96,10 @@ type/favorite filters. Captures refreshed and visually inspected in both themes.
 Updated obsolete favorite/draft ordering tests to the approved latest-first
 Recent semantics, preserving legacy favorites-filter ordering. Native demo
 build now passes after local shared-library setup; full tests remain on CI.
+
+
+Maintainer picked sketch A for group headers: static 16-point thin dividers
+with 11-point labels. Implemented the same treatment for Other, preserving
+single-home row order and drop targets, with no click or collapse action.
+Added a geometry/non-click regression (compile-red before helper, check-green
+after). Refreshed native dark/light captures; no B/C/D sketch code shipped.
