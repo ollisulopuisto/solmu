@@ -9,6 +9,7 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- The shrug ¯\_(ツ)_/¯ keeps its underscores in a bubble: an underscore next to a bracket, slash or backslash is not emphasis. Text Replacements stored as `\U00af`-style escape text now insert the characters, not the escape text.
 - Settings no longer shows an About button inside the About section. The button only reopened the About dialog over the section that was already on screen; the dialog remains available from the macOS menu. The section gains a whatsapp-rust chip so the protocol library link the dialog shows only on macOS stays reachable on every platform.
 - Emoji-only messages of up to three emoji draw without a bubble, like stickers: one emoji largest, two or three big, and in group chats under a floating sender name. A message quoting another, carrying a link preview, or mixing text with emoji keeps its bubble.
 - Latest/Groups list views with local-only many-to-many membership.

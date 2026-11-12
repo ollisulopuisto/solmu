@@ -128,11 +128,60 @@ pub fn parse_replacements(input: &str) -> Vec<Replacement> {
         if let (Some(replace), Some(with)) = (field("replace"), field("with")) {
             table.push(Replacement {
                 replace: replace.to_owned(),
-                with: with.to_owned(),
+                with: decode_literal_unicode(with),
             });
         }
     }
     table
+}
+
+/// Decodes `\Uhhhh` sequences (and UTF-16 surrogate pairs of them) that are
+/// still in a replacement after the plist's own escapes were read. An entry
+/// that was stored as escape text rather than as the characters reads back as
+/// `\U00af\_(\U30c4)_/\U00af`; inserted as is, the composer would show that
+/// text instead of the shrug. Any other backslash stays: `\_` is part of the
+/// shrug.
+fn decode_literal_unicode(text: &str) -> String {
+    fn quad(chars: &[char], at: usize) -> Option<u32> {
+        let hex: String = chars.get(at..at + 4)?.iter().collect();
+        if hex.len() == 4 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            u32::from_str_radix(&hex, 16).ok()
+        } else {
+            None
+        }
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\'
+            && chars.get(i + 1) == Some(&'U')
+            && let Some(code) = quad(&chars, i + 2)
+        {
+            let mut next = i + 6;
+            let decoded = if (0xD800..0xDC00).contains(&code) {
+                let low = (chars.get(next) == Some(&'\\')
+                    && chars.get(next + 1) == Some(&'U'))
+                .then(|| quad(&chars, next + 2))
+                .flatten()
+                .filter(|low| (0xDC00..0xE000).contains(low));
+                low.and_then(|low| {
+                    next += 6;
+                    char::from_u32(0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00))
+                })
+            } else {
+                char::from_u32(code)
+            };
+            if let Some(character) = decoded {
+                out.push(character);
+                i = next;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 /// Old-style plist value: arrays, dictionaries and atoms (quoted or bare).
@@ -357,6 +406,29 @@ mod tests {
     fn parse_typical_defaults_output() {
         let input = "(\n        {\n        on = 1;\n        replace = omw;\n        with = \"On my way!\";\n    },\n        {\n        on = 1;\n        replace = \"shrug,,\";\n        with = \"\\U00af\\\\_(\\U30c4)_/\\U00af\";\n    }\n)\n";
         assert_eq!(parse_replacements(input), table());
+    }
+
+    #[test]
+    fn a_doubly_escaped_shrug_still_reads_as_the_shrug() {
+        // The reported composer text: the entry came back from `defaults` with
+        // its backslashes doubled, so one read leaves `\U00af\_(\U30c4)_/\U00af`.
+        let input = concat!(
+            "({ on = 1; replace = \"shrug,,\"; ",
+            "with = \"\\\\U00af\\\\_(\\\\U30c4)_/\\\\U00af\"; })"
+        );
+        assert_eq!(
+            parse_replacements(input),
+            vec![Replacement {
+                replace: "shrug,,".into(),
+                with: "¯\\_(ツ)_/¯".into(),
+            }]
+        );
+        // Plain text with other backslashes, and a lone `\U`, is left alone.
+        assert_eq!(
+            decode_literal_unicode("a\\_b \\Uzzzz \\U00"),
+            "a\\_b \\Uzzzz \\U00"
+        );
+        assert_eq!(decode_literal_unicode("\\Ud83d\\Ude00"), "😀");
     }
 
     #[test]

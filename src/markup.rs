@@ -566,7 +566,20 @@ fn unescape_code(chars: &[char]) -> String {
     out
 }
 
+/// A bracket, slash or backslash. An underscore against one is text, not
+/// emphasis: the shrug `¯\_(ツ)_/¯` keeps its underscores.
+fn blocks_underscore(c: char) -> bool {
+    matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '\\' | '/')
+}
+
 fn is_opener(chars: &[char], i: usize) -> bool {
+    if chars[i] == '_'
+        && chars
+            .get(i + 1)
+            .is_some_and(|next| blocks_underscore(*next))
+    {
+        return false;
+    }
     let before_ok = i == 0 || !chars[i - 1].is_alphanumeric();
     let after_ok = chars
         .get(i + 1)
@@ -575,6 +588,9 @@ fn is_opener(chars: &[char], i: usize) -> bool {
 }
 
 fn is_closer(chars: &[char], i: usize) -> bool {
+    if chars[i] == '_' && i > 0 && blocks_underscore(chars[i - 1]) {
+        return false;
+    }
     let before_ok = i > 0 && !chars[i - 1].is_whitespace() && chars[i - 1] != chars[i];
     let after_ok = chars.get(i + 1).is_none_or(|next| !next.is_alphanumeric());
     before_ok && after_ok
@@ -1310,6 +1326,26 @@ mod tests {
         assert_eq!(mono[0].text, "a\\");
         // A native zero-width space away from markers survives.
         assert_eq!(plain("a\u{200B}b", &[]), "a\u{200B}b");
+    }
+
+    #[test]
+    fn the_shrug_keeps_its_underscores_and_backslash() {
+        let shrug = "¯\\_(ツ)_/¯";
+        assert_eq!(plain(shrug, &[]), shrug);
+        assert!(parse(shrug, &[]).iter().all(|span| !span.italic));
+        let sentence = format!("well {shrug} ok");
+        assert_eq!(plain(&sentence, &[]), sentence);
+        // Emphasis around words still works, also in brackets and before
+        // punctuation; a bracket against the underscore is not emphasis.
+        assert!(parse("_note_", &[]).iter().any(|span| span.italic));
+        assert!(
+            parse("(_note_)", &[])
+                .iter()
+                .any(|span| span.italic && span.text == "note")
+        );
+        assert!(parse("_wow!_", &[]).iter().any(|span| span.italic));
+        assert_eq!(plain("_(x)_", &[]), "_(x)_");
+        assert!(parse("_(x)_", &[]).iter().all(|span| !span.italic));
     }
 
     #[test]
