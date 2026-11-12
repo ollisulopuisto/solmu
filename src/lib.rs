@@ -25,14 +25,13 @@ pub mod energy;
 pub mod flat_groups;
 pub mod geo;
 pub mod group_admin;
+mod hyphenate;
 pub mod i18n;
 pub mod image_cache;
 pub mod image_preview;
 pub mod link_policy;
 pub mod link_preview;
 mod linked_read;
-mod hyphenate;
-mod wrap;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod markup;
@@ -76,6 +75,7 @@ pub mod video;
 pub mod voice;
 pub mod wallpaper;
 pub mod whatsnew;
+mod wrap;
 
 pub mod merged;
 pub mod suggest;

@@ -19174,7 +19174,9 @@ mod tests {
             vec![egui::Event::PointerMoved(from), press(from, true)],
             vec![egui::Event::PointerMoved(below), egui::Event::PointerGone],
         ];
-        frames.extend((0..14).map(|_| vec![egui::Event::PointerMoved(below)]));
+        // Balanced layout shifts message heights, so keep sweeping well
+        // past the old fixed distance to settle past the next message.
+        frames.extend((0..40).map(|_| vec![egui::Event::PointerMoved(below)]));
         frames.push(vec![press(below, false)]);
         frames.push(vec![egui::Event::Copy]);
         frames.push(vec![]);
@@ -24115,16 +24117,18 @@ mod card_width_tests {
                         rect("text-medium-two").width(),
                         "a near-equal later neighbour joins the frozen wider width"
                     );
-                    assert!(
-                        rect("text-long").width() > rect("text-medium").width() + 10.0,
-                        "a much longer text keeps its own width: {:?} vs {:?}",
+                    assert_eq!(
+                        rect("text-long").width(),
+                        rect("text-medium").width(),
+                        "a longer text within one extra line joins the frozen width: {:?} vs {:?}",
                         rect("text-long"),
                         rect("text-medium")
                     );
                     assert!(
-                        rect("text-long").width() < 420.0,
-                        "natural width stays under the old400pt step: {:?}",
-                        rect("text-long")
+                        rect("text-long").height() > rect("text-medium").height(),
+                        "the join costs the longer text its extra line: {:?} vs {:?}",
+                        rect("text-long"),
+                        rect("text-medium")
                     );
                     assert!((default - 340.0).abs() < 1.0, "320pt content plus margins");
                     assert!(

@@ -9857,18 +9857,12 @@ fn rich_body(
     let message_number = crate::i18n::gettext(view.locale, "Message");
     let copy_number = crate::i18n::gettext(view.locale, "Copy number");
     let menu_labels = [message_number.as_ref(), copy_number.as_ref()];
-    for (range, url) in &laid.links {
+    for (link_index, (range, url)) in laid.links.iter().enumerate() {
         let Some(phone) = url.strip_prefix("tel:") else {
             continue;
         };
         let number = phone.strip_prefix('+').unwrap_or(phone);
-        let copy_text: String = laid
-            .galley
-            .text()
-            .chars()
-            .skip(range.start)
-            .take(range.len())
-            .collect();
+        let copy_text = laid.link_copy_text(link_index);
         for (row, bounds) in crate::bidi::char_bounds_by_row(&laid.galley, range.start, range.end) {
             let link = ui
                 .interact(

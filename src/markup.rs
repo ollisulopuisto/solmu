@@ -37,6 +37,9 @@ pub struct Text {
     placements: Vec<String>,
     /// Character ranges linked to web addresses.
     pub links: Vec<(Range<usize>, String)>,
+    /// The link ranges in `unbroken_text` coordinates: what copy should
+    /// read. Equals `links` for a greedy layout.
+    copy_links: Vec<(Range<usize>, String)>,
     /// Whether the message is emoji-only and should use a larger size.
     pub big: bool,
     accessible_text: String,
@@ -66,6 +69,17 @@ impl Text {
         self.unbroken
             .as_deref()
             .unwrap_or_else(|| self.galley.text())
+    }
+
+    /// The text a link covers, read from the unbroken text: what copying
+    /// the link puts on the clipboard. Indexed like `links`.
+    pub fn link_copy_text(&self, index: usize) -> String {
+        let (range, _) = &self.copy_links[index];
+        self.unbroken_text()
+            .chars()
+            .skip(range.start)
+            .take(range.len())
+            .collect()
     }
 }
 
@@ -118,14 +132,21 @@ pub fn layout(
         ui,
         build(ui, text, mentions, style, max_width, grow_emoji),
         None,
+        None,
     )
 }
 
-fn finish(ui: &egui::Ui, built: Built, unbroken: Option<String>) -> Text {
+fn finish(
+    ui: &egui::Ui,
+    built: Built,
+    unbroken: Option<String>,
+    copy_links: Option<Vec<(Range<usize>, String)>>,
+) -> Text {
     let galley = bidi::layout_job(ui, built.job);
     Text {
         galley,
         placements: built.placements,
+        copy_links: copy_links.unwrap_or_else(|| built.links.clone()),
         links: built.links,
         big: built.big,
         accessible_text: built.accessible_text,
@@ -383,13 +404,14 @@ pub fn layout_balanced(
     let built = build(ui, text, mentions, style, max_width, grow_emoji);
     if built.big || max_width <= 0.0 {
         // Emoji-only text never balances; a zero cap leaves nothing to do.
-        return finish(ui, built, None);
+        return finish(ui, built, None, None);
     }
     let breaks = balanced_breaks(ui, &built, style.size, max_width);
     if breaks.is_empty() {
-        return finish(ui, built, None);
+        return finish(ui, built, None, None);
     }
     let unbroken = built.job.text.clone();
+    let copy_links = built.links.clone();
     let (mut job, links) = insert_breaks(built.job, &built.links, &breaks);
     // Breaks are hard newlines now; keep egui from re-wrapping a line that
     // shaped a hair wider than the balancer measured.
@@ -404,6 +426,7 @@ pub fn layout_balanced(
             accessible_text: built.accessible_text,
         },
         Some(unbroken),
+        Some(copy_links),
     )
 }
 
@@ -523,9 +546,15 @@ fn insert_breaks(
         );
         section.byte_range = range.start.into()..range.end.into();
     }
+    // Links are character ranges (sections above are bytes), so they keep
+    // character coordinates out of the shift table.
     let links = links
         .iter()
-        .map(|(range, url)| (map_range(range.start, range.end), url.clone()))
+        .map(|(range, url)| {
+            let start = range.start + shift[range.start.min(n_chars)];
+            let end = range.end + shift[range.end.min(n_chars)];
+            (start..end, url.clone())
+        })
         .collect();
     job.text = new_text;
     (job, links)
