@@ -34,11 +34,14 @@ The adapter can also use an existing Beeper Desktop/Server API directly. That is
 
 ## Features
 
+See [ROADMAP.md](ROADMAP.md) for ideas that are not built yet.
+
 - **Local flat groups.** Latest/Groups views, many-to-many local membership, additive drag with Undo and deduplicated unread counts. [Details and limits](docs/flat-groups.md).
 - **Multi-network chat lists.** Account/network filters, unread and unreplied views, plus a persistent Reply Later queue.
 - **Chat tabs and linked conversations.** Keep several chats open, or manually group related chats across accounts while preserving their source identity.
 - **Reading and replying.** Message history, quoted replies, avatars, unread badges, text search and supported media/file handling through the Beeper API.
 - **Search with limits shown.** Loaded-history search is distinct from API search. API searches fetch a bounded page and can be partial; linked-view API search targets the selected member rather than every linked source.
+- **Archive and deletion batches.** Explicit bridge-supported scopes and per-item outcomes. [Limits and checks](docs/archive-delete-batches.md).
 - **Draft safety.** Failed and uncertain sends are surfaced instead of blindly retried. Inspect history before retrying an uncertain send.
 - **Desktop controls.** Keyboard shortcuts, light/dark themes, app lock and macOS background/window behavior.
 

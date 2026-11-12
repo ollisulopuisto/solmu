@@ -124,6 +124,18 @@ pub struct CreatedPoll {
 
 #[derive(Debug)]
 pub enum Command {
+    BatchArchive {
+        request: u64,
+        expected: crate::merged::Member,
+        chat: ChatId,
+    },
+    BatchDelete {
+        request: u64,
+        expected: crate::merged::Member,
+        chat: ChatId,
+        id: String,
+        everyone: bool,
+    },
     BeeperMedia(crate::pending_media::Job),
     RefreshPoll {
         chat: ChatId,
@@ -1114,6 +1126,14 @@ pub struct BeeperAccountInfo {
 
 #[derive(Debug)]
 pub enum Event {
+    MutationResult {
+        request: Option<u64>,
+        archived: Option<bool>,
+        chat: ChatId,
+        message: Option<String>,
+        everyone: bool,
+        result: Result<(), String>,
+    },
     BeeperMediaProgress {
         local: String,
         member: crate::merged::Member,
