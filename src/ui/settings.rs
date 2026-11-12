@@ -924,7 +924,7 @@ fn sections(app: &App) -> Vec<Section> {
             translated(locale, "Allow App Nap"),
             translated(
                 locale,
-                "Saves battery by letting macOS pause Solmu in the background. While off, messaging and the connection keep working without delay.",
+                "Saves battery by letting macOS pause Solmu even while its window is open. While off, Solmu stays awake only while a window is shown; hidden or minimized, macOS may pause it and new messages can arrive late.",
             ),
             move |ui, app| {
                 let mut allow = app.settings.allow_app_nap;

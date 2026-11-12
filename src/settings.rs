@@ -577,8 +577,9 @@ pub struct Settings {
     /// Offer Touch ID on the lock screen. After the next successful
     /// password unlock, the password is kept in the OS keychain for it.
     pub app_lock_touch_id: bool,
-    /// Let macOS put Solmu into App Nap. Off, Solmu holds a power
-    /// assertion so messaging keeps working from the background.
+    /// Let macOS put Solmu into App Nap at any time. Off, Solmu holds a power
+    /// assertion only while a window is shown; hidden or minimized, macOS may
+    /// pause it.
     pub allow_app_nap: bool,
     /// Last window width in logical pixels (points at zoom 1), remembered
     /// across restarts; see [`fastframe_shell::window::Geometry`]. `None`
