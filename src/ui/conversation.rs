@@ -5701,7 +5701,9 @@ fn bubble_frame(
             _ => None,
         });
         let _slot = if let Some((width, height, rgba)) = pasted_preview {
-            let id = ui.id().with(("pending-preview", &message.id));
+            let id = ui
+                .id()
+                .with(("pending-preview", &pending.unwrap().job.local));
             let texture = ui
                 .ctx()
                 .data_mut(|data| data.get_temp::<egui::TextureHandle>(id))
@@ -5711,7 +5713,7 @@ fn bubble_frame(
                         rgba,
                     );
                     let texture = ui.ctx().load_texture(
-                        format!("pending-{}", message.id),
+                        format!("pending-{}", pending.unwrap().job.local),
                         image,
                         Default::default(),
                     );
