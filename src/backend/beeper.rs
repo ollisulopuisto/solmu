@@ -1231,7 +1231,9 @@ impl Api {
                 // The contact's photo is gone and the chat has none of its
                 // own: forget the borrowed source so it stops resolving. A
                 // chat-owned source and participant-id sources stay.
-                None if borrowed.remove(&wire.id) => {
+                // An inventory that leaves `participants` out says nothing about
+                // the contact's photo, so only a present list can retire it.
+                None if wire.participants.is_some() && borrowed.remove(&wire.id) => {
                     sources.remove(&wire.id);
                 }
                 None => {}
@@ -5906,6 +5908,24 @@ mod tests {
         assert!(!sources.contains_key("chat-1"), "borrowed source dropped");
         // Participant-id sources are not touched by this.
         assert!(sources.contains_key("@me:beeper.local"));
+    }
+
+    #[test]
+    fn an_inventory_without_participants_keeps_the_borrowed_avatar() {
+        let api = Api::new(&BeeperConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let label = |c: &BeeperChat| c.network.clone();
+        api.map_chat(&avatar_chat("single", None), &label);
+        let mut partial = avatar_chat("single", None);
+        partial.participants = None;
+        api.map_chat(&partial, &label);
+        assert_eq!(
+            api.avatar_sources.lock().unwrap().get("chat-1").map(String::as_str),
+            Some("file:///tea.png")
+        );
     }
 
     #[test]
