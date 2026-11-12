@@ -5391,7 +5391,21 @@ fn bubbleless(palette: &Palette, message: &Message) -> bool {
         &message.content,
         Content::Sticker { .. } | Content::Video { note: true, .. }
     ) || matches!(&message.content, Content::Interactive { card: Some(card), .. } if !card.carousel.is_empty())
+        || free_emoji(message)
         || bare_picture(palette, message)
+}
+
+/// Up to three emoji alone drop the bubble like a sticker, enlarged by
+/// markup's emoji scale. A quote, a link preview, the forwarded label or
+/// mixed text keeps it.
+fn free_emoji(message: &Message) -> bool {
+    message.quoted.is_none()
+        && !message.forwarded
+        && matches!(
+            &message.content,
+            Content::Text { text, preview: None }
+                if crate::emoji::only_emoji(text).is_some_and(|count| count <= 3)
+        )
 }
 
 /// Whether `messages[index]` ends its run: the next message is from the other
@@ -6149,11 +6163,14 @@ fn stepped_text_width(natural: f32, cap: f32) -> f32 {
     ((natural / CARD_WIDTH_STEP).ceil().max(1.0) * CARD_WIDTH_STEP).min(cap.max(0.0))
 }
 
-/// Widest wrapped body-text row. Metadata sits outside the bubble.
-fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
-    let palette = view.palette;
-    let text = match &message.content {
-        Content::Text { text, .. } | Content::Interactive { text, .. } => text,
+/// Body text and the emoji growth the renderer uses for it, for width
+/// measurement. Text bodies draw a standalone emoji enlarged (see
+/// `rich_body`), so measuring them at body size settles the bubble too
+/// narrow and wraps a sticker-like message. Captions always draw at body
+/// size.
+fn body_for_measurement(content: &Content) -> Option<(&str, bool)> {
+    match content {
+        Content::Text { text, .. } | Content::Interactive { text, .. } => Some((text, true)),
         Content::Image {
             caption: Some(caption),
             ..
@@ -6165,9 +6182,15 @@ fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f3
         | Content::Document {
             caption: Some(caption),
             ..
-        } => caption,
-        _ => return None,
-    };
+        } => Some((caption, false)),
+        _ => None,
+    }
+}
+
+/// Widest wrapped body-text row. Metadata sits outside the bubble.
+fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
+    let palette = view.palette;
+    let (text, grow) = body_for_measurement(&message.content)?;
     let style = markup::Style {
         size: BODY_SIZE,
         color: palette.text,
@@ -6175,7 +6198,7 @@ fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f3
         link: palette.link,
         mention: palette.accent,
     };
-    let laid = markup::layout(ui, text, &mentions_of(view, message), &style, cap);
+    let laid = markup::layout(ui, text, &mentions_of(view, message), &style, cap, grow);
     let widest = laid
         .galley
         .rows
@@ -8122,7 +8145,17 @@ fn content(
         Content::Interactive { text, card } => {
             let Some(card) = card else {
                 let span = message.quoted.is_some().then_some(width);
-                return rich_body(ui, view, message, text, width, Some(reserve), span, actions);
+                return rich_body(
+                    ui,
+                    view,
+                    message,
+                    text,
+                    width,
+                    Some(reserve),
+                    span,
+                    actions,
+                    true,
+                );
             };
             if !card.carousel.is_empty() {
                 carousel(ui, view, message, card, width, actions);
@@ -8149,6 +8182,7 @@ fn content(
                 Some(reserve),
                 Some(width),
                 actions,
+                true,
             )
         }
         Content::Text { text, preview } => {
@@ -8166,6 +8200,7 @@ fn content(
                 Some(reserve),
                 Some(width),
                 actions,
+                true,
             );
             if local_link_previews(ui, view, message, text, preview.as_ref(), width, actions) {
                 None
@@ -8206,6 +8241,7 @@ fn content(
                     Some(reserve),
                     Some(wrap),
                     actions,
+                    false,
                 )
             }
         }
@@ -8245,6 +8281,7 @@ fn content(
                     Some(reserve),
                     Some(wrap),
                     actions,
+                    false,
                 )
             })
         }
@@ -8291,6 +8328,7 @@ fn content(
                     Some(reserve),
                     Some(width),
                     actions,
+                    false,
                 )
             })
         }
@@ -8672,6 +8710,7 @@ fn carousel(
             None,
             Some(width),
             actions,
+            true,
         );
         ui.add_space(4.0);
     }
@@ -8729,6 +8768,7 @@ fn carousel(
                                                 None,
                                                 Some(card_width),
                                                 actions,
+                                                true,
                                             );
                                         }
                                         interactive_buttons(
@@ -8925,6 +8965,7 @@ fn album_content(
                 None,
                 Some(width),
                 actions,
+                false,
             );
         } else if let Some(copy_rows) = view.copy_rows {
             copy_rows
@@ -9535,6 +9576,7 @@ fn rich_body(
     reserve: Option<f32>,
     span: Option<f32>,
     actions: &mut Vec<Action>,
+    grow_emoji: bool,
 ) -> Option<Rect> {
     let palette = view.palette;
     let mentions = mentions_of(view, message);
@@ -9545,7 +9587,7 @@ fn rich_body(
         link: palette.link,
         mention: palette.accent,
     };
-    let laid = markup::layout(ui, text, &mentions, &style, width);
+    let laid = markup::layout(ui, text, &mentions, &style, width, grow_emoji);
     let rtl = crate::bidi::message_rtl(text);
     let last_row = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
     // Right-aligned text ends at the block's edge. Like official WhatsApp,
@@ -12125,6 +12167,45 @@ mod tests {
     }
 
     #[test]
+    fn width_measurement_uses_the_renderers_emoji_growth() {
+        // A standalone-emoji text body draws enlarged in rich_body, so its
+        // settled width must be measured with the same growth; measuring at
+        // body size wraps a sticker-like message unexpectedly.
+        let text_body = Content::Text {
+            text: "🎉".into(),
+            preview: None,
+        };
+        let (text, grow) = body_for_measurement(&text_body).unwrap();
+        assert_eq!(text, "🎉");
+        assert!(grow, "text bodies measure with emoji growth");
+
+        let interactive_body = Content::Interactive {
+            text: "🎉".into(),
+            card: None,
+        };
+        let (_, grow) = body_for_measurement(&interactive_body).unwrap();
+        assert!(grow, "interactive bodies measure with emoji growth");
+
+        // Captions stay body size even when they are a single emoji.
+        let captioned_image = Content::Image {
+            caption: Some("🎉".into()),
+            media: media(None, None),
+            motion: None,
+        };
+        let (caption, grow) = body_for_measurement(&captioned_image).unwrap();
+        assert_eq!(caption, "🎉");
+        assert!(!grow, "captions measure at body size");
+
+        // Media without a caption has no body width to measure.
+        let bare_image = Content::Image {
+            caption: None,
+            media: media(None, None),
+            motion: None,
+        };
+        assert!(body_for_measurement(&bare_image).is_none());
+    }
+
+    #[test]
     fn header_controls_use_equal_cells_on_a_single_baseline() {
         let ctx = egui::Context::default();
         let palette = crate::theme::Palette::dark();
@@ -13640,6 +13721,56 @@ mod reaction_tests {
         });
         assert!(!bare_picture(&messages, &quoting));
         assert!(!bare_picture(&messages, &with_reactions(Vec::new())));
+    }
+
+    /// One to three emoji alone draw without a bubble, like a sticker, in
+    /// either direction; four or more, mixed text, a link preview or a
+    /// quote keep it. markup::emoji_scale enlarges the same range.
+    #[test]
+    fn pure_emoji_messages_drop_the_bubble() {
+        let palette = Palette::dark();
+        let emoji = |text: &str| Message {
+            content: Content::text(text),
+            ..with_reactions(Vec::new())
+        };
+        assert!(bubbleless(&palette, &emoji("\u{1F4A3}")));
+        assert!(bubbleless(
+            &palette,
+            &emoji("\u{1F602} \u{1F64F} \u{1F44D}")
+        ));
+        let mut own = emoji("\u{1F4A3}");
+        own.from_me = true;
+        assert!(bubbleless(&palette, &own));
+        assert!(!bubbleless(
+            &palette,
+            &emoji("\u{1F602}\u{1F602}\u{1F602}\u{1F602}")
+        ));
+        assert!(!bubbleless(&palette, &emoji("ok \u{1F602}")));
+        let mut linked = emoji("\u{1F4A3}");
+        linked.content = Content::Text {
+            text: "\u{1F4A3}".into(),
+            preview: Some(crate::model::LinkPreview {
+                url: "https://example.com".into(),
+                title: None,
+                description: None,
+            }),
+        };
+        assert!(!bubbleless(&palette, &linked));
+        let mut quoting = emoji("\u{1F4A3}");
+        quoting.quoted = Some(crate::model::Quoted {
+            labelled: None,
+            chat: None,
+            id: "q".into(),
+            sender: "a@s.whatsapp.net".into(),
+            sender_name: None,
+            summary: "hi".into(),
+            mentions: Vec::new(),
+        });
+        assert!(!bubbleless(&palette, &quoting));
+        // The forwarded label needs a surface behind it.
+        let mut forwarded = emoji("\u{1F4A3}");
+        forwarded.forwarded = true;
+        assert!(!bubbleless(&palette, &forwarded));
     }
 
     #[test]

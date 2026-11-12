@@ -15,7 +15,9 @@ undo history. Saved drafts remain available when you return to their chat.
 Enter sends and Shift+Enter adds a line. Turn off **Enter sends** in Settings
 to make Enter add a line and send with Ctrl+Enter (Command+Enter on macOS).
 `*bold*`, `_italic_`, `~strike~`, and ```` ```monospace ```` ```` format
-like WhatsApp, and a message of nothing but emoji shows large.
+like WhatsApp, and a message of nothing but emoji shows large. Up to three
+emoji alone show without a bubble, like a sticker; more emoji, mixed text,
+a link preview, or a quoted message keep the bubble.
 Paste text with Ctrl+V (Command+V on macOS) or Shift+Insert, as in other
 Linux applications.
 On macOS the field uses the system's text replacements (System Settings >

@@ -263,6 +263,9 @@ jobs:
           # Transcription settings: the local-service fields and the
           # delete control, found by the settings search.
           shot settings-transcription-960x780 960x780 settings-search=Transcription,transcript
+          # The messages run page: the two-emoji message draws free, without
+          # a balloon, between its bubbled neighbours.
+          shot chat-bubbles-1180x780 1180x780 bubbles,messages
           # The About section, found by the settings search: shortcuts,
           # source and protocol library chips without a second About dialog.
           shot settings-about-960x780 960x780 settings-search=About
