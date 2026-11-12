@@ -5795,16 +5795,13 @@ fn bubble_frame(
             && let Some((error, retryable)) = record.state.failure()
         {
             let heading = if retryable {
-                "Not submitted"
+                crate::i18n::gettext(view.locale, "Not submitted")
             } else {
-                "Check history"
+                crate::i18n::gettext(view.locale, "Check history")
             };
             ui.horizontal_wrapped(|ui| {
                 theme::icon(ui, Icon::CircleAlert, 14.0, palette.danger);
-                ui.label(format!(
-                    "{}: {error}",
-                    crate::i18n::gettext(view.locale, heading)
-                ));
+                ui.label(format!("{heading}: {error}"));
                 if retryable
                     && ui
                         .button(crate::i18n::gettext(view.locale, "Retry"))
