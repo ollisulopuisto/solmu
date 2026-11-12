@@ -5586,6 +5586,16 @@ fn poll_newer(
                         c.newest = next.clone().or(c.newest.clone());
                     }
                 }
+                // Eligibility is decided here on the wire type, exactly as the
+                // inventory does, so reactions, system notices and empty
+                // events never become the chat row's preview.
+                let preview = newest_content_message(page.items.clone()).map(|p| {
+                    let (body, labelled) = body_of(&p);
+                    (
+                        unix(&Some(p.timestamp.clone())),
+                        Chat::last_preview(&p, body, labelled),
+                    )
+                });
                 let mut messages: Vec<Message> = page
                     .items
                     .iter()
@@ -5608,6 +5618,13 @@ fn poll_newer(
                         older: false,
                         complete: false,
                     });
+                    if let Some((activity, last)) = preview {
+                        emit(Event::ChatPreview {
+                            chat: chat.clone(),
+                            activity,
+                            last,
+                        });
+                    }
                     for message in incoming {
                         emit(Event::Incoming {
                             chat: chat.clone(),
@@ -10405,6 +10422,32 @@ mod tests {
             plain_rich_text(r#"<a href="https://example.com/page">this</a>"#),
             "this (https://example.com/page)"
         );
+    }
+
+    /// The live row preview picks by wire type, never by the text shown: a
+    /// reaction event has no preview, a message whose text is literally
+    /// "[message]" does.
+    #[test]
+    fn live_preview_eligibility_follows_the_wire_type_not_the_label() {
+        let item = |id: &str, kind: &str, text: Option<&str>, at: &str| -> BeeperMessage {
+            let mut value = serde_json::json!({
+                "id": id, "chatID": "c1", "accountID": "a1", "senderID": "s",
+                "sortKey": "1", "timestamp": at, "isSender": true, "type": kind
+            });
+            if let Some(text) = text {
+                value["text"] = serde_json::json!(text);
+            }
+            serde_json::from_value(value).unwrap()
+        };
+        let reaction_newest = vec![
+            item("m1", "TEXT", Some("real"), "2026-11-03T09:47:00Z"),
+            item("r1", "REACTION", None, "2026-11-03T09:48:00Z"),
+        ];
+        assert_eq!(newest_content_message(reaction_newest).unwrap().id, "m1");
+        let literal = vec![item("m2", "TEXT", Some("[message]"), "2026-11-03T09:49:00Z")];
+        let found = newest_content_message(literal).unwrap();
+        assert_eq!(body_of(&found).0, "[message]");
+        assert!(!body_of(&found).1, "typed text is not a label");
     }
 
     #[test]

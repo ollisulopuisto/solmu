@@ -5007,21 +5007,6 @@ impl App {
                     .collect();
                 let incoming_ids: std::collections::HashSet<String> =
                     messages.iter().map(|message| message.id.clone()).collect();
-                // The chat row's preview and order come from the inventory, which
-                // refreshes once a minute. Live messages must move the row now,
-                // or a chat you just wrote in sits under older ones.
-                let newest_live = (!older)
-                    .then(|| {
-                        messages
-                            .iter()
-                            .filter(|m| {
-                                let summary = m.content.summary();
-                                !summary.is_empty() && summary != "[message]"
-                            })
-                            .max_by_key(|m| m.timestamp)
-                            .cloned()
-                    })
-                    .flatten();
                 // `conversations` comes through DerefMut, so its entry borrow
                 // covers all of `self`; keep quote-fetch bookkeeping outside it.
                 let (was_empty, bare, still_unresolved) = {
@@ -5134,9 +5119,6 @@ impl App {
                         refs: still_unresolved,
                     });
                 }
-                if let Some(message) = newest_live {
-                    self.follow_message_in_chat_row(&chat, &message);
-                }
                 // A message that arrives while the viewer is open joins its album.
                 if !older {
                     self.refresh_viewer_album(&chat);
@@ -5247,6 +5229,22 @@ impl App {
                 }
             }
             Event::Incoming { chat, message } => self.maybe_notify(&chat, &message),
+            Event::ChatPreview {
+                chat,
+                activity,
+                last,
+            } => {
+                // The inventory refreshes once a minute; a message new to the
+                // forward poll must move its row now. Late or older data never
+                // rewinds it. Equal seconds are accepted because this event
+                // only carries messages the poll had not seen before.
+                if let Some(row) = self.chat_mut(&chat)
+                    && activity >= row.last_activity
+                {
+                    row.last_activity = activity;
+                    row.last = Some(last);
+                }
+            }
             Event::Picked {
                 chat,
                 paths,
@@ -6551,27 +6549,6 @@ impl App {
                 .restore(member);
             self.beeper_history_errors.remove(&chat.id);
         }
-    }
-
-    /// Moves a chat row's preview, time and order to a message newer than the
-    /// row shows. Only newer messages count, so late history never rewinds it.
-    fn follow_message_in_chat_row(&mut self, chat: &str, message: &crate::model::Message) {
-        let Some(row) = self.chat_mut(chat) else {
-            return;
-        };
-        if message.timestamp < row.last_activity {
-            return;
-        }
-        row.last_activity = message.timestamp;
-        row.last = Some(crate::model::LastMessage {
-            from_me: message.from_me,
-            sender: message.sender.clone(),
-            sender_name: message.sender_name.clone(),
-            summary: message.content.summary(),
-            full: message.content.full_summary(),
-            labelled: message.content.labelled(),
-            status: message.status,
-        });
     }
 
     fn handle_chat_updated(&mut self, chat: Chat, live: bool) {
@@ -32089,45 +32066,23 @@ mod link_tracking_tests {
 #[cfg(test)]
 mod chat_row_follows_messages_tests {
     use super::*;
-    use crate::model::{Content, Delivery, Message};
+    use crate::model::{Delivery, LastMessage};
 
     fn app() -> App {
         let root = std::env::temp_dir().join(format!("solmu-rowfollow-{}", std::process::id()));
         App::headless(AppDirs::under(&root), Settings::default()).0
     }
 
-    fn message(chat: &str, id: &str, text: &str, timestamp: i64, from_me: bool) -> Message {
-        Message {
-            id: id.into(),
-            chat: chat.into(),
-            sender: chat.into(),
-            sender_name: None,
+    fn last(text: &str, from_me: bool) -> LastMessage {
+        LastMessage {
             from_me,
-            timestamp,
-            content: Content::text(text),
+            sender: "s".into(),
+            sender_name: None,
+            summary: text.into(),
+            full: text.into(),
+            labelled: false,
             status: Delivery::Sent,
-            delivered_at: None,
-            read_at: None,
-            quoted: None,
-            reactions: Vec::new(),
-            history_order: None,
-            edited: false,
-            mentions: Vec::new(),
-            forwarded: false,
-            thumbnail: None,
         }
-    }
-
-    fn deliver(app: &mut App, chat: &str, messages: Vec<Message>, older: bool) {
-        app.apply_backend_event(
-            Event::Messages {
-                chat: chat.into(),
-                messages,
-                older,
-                complete: false,
-            },
-            true,
-        );
     }
 
     fn two_chats(app: &mut App) {
@@ -32138,54 +32093,73 @@ mod chat_row_follows_messages_tests {
         app.chats = vec![peter, other];
     }
 
-    /// The chat list only refreshes once a minute, so a message you just
-    /// wrote must move its row by itself.
+    fn preview(app: &mut App, chat: &str, activity: i64, text: &str) {
+        app.apply_backend_event(
+            Event::ChatPreview {
+                chat: chat.into(),
+                activity,
+                last: last(text, true),
+            },
+            true,
+        );
+    }
+
+    /// The chat list only refreshes once a minute, so a message just
+    /// written must move its row by itself.
     #[test]
-    fn a_newer_live_message_moves_the_row_preview_and_time() {
+    fn a_newer_live_preview_moves_the_row_text_and_time() {
         let mut app = app();
         two_chats(&mut app);
-        deliver(&mut app, "peter", vec![message("peter", "m1", "jaa vai niin", 300, true)], false);
+        preview(&mut app, "peter", 300, "jaa vai niin");
         let row = app.chat("peter").unwrap();
         assert_eq!(row.last_activity, 300);
-        let last = row.last.as_ref().expect("preview set");
-        assert_eq!(last.summary, "jaa vai niin");
-        assert!(last.from_me);
+        let shown = row.last.as_ref().expect("preview set");
+        assert_eq!(shown.summary, "jaa vai niin");
+        assert!(shown.from_me);
     }
 
     #[test]
-    fn the_newest_message_of_a_batch_wins() {
+    fn the_same_second_replaces_the_preview_from_the_forward_poll() {
         let mut app = app();
         two_chats(&mut app);
-        deliver(
-            &mut app,
-            "peter",
-            vec![
-                message("peter", "m2", "second", 310, true),
-                message("peter", "m1", "first", 305, true),
-            ],
-            false,
-        );
+        preview(&mut app, "peter", 300, "first");
+        preview(&mut app, "peter", 300, "second");
         assert_eq!(app.chat("peter").unwrap().last.as_ref().unwrap().summary, "second");
-        assert_eq!(app.chat("peter").unwrap().last_activity, 310);
     }
 
-    /// Older history pages and stale echoes never rewind a row.
+    /// Older data never rewinds a row.
     #[test]
-    fn older_history_and_older_messages_leave_the_row_alone() {
+    fn an_older_preview_leaves_the_row_alone() {
         let mut app = app();
         two_chats(&mut app);
-        deliver(&mut app, "other", vec![message("other", "h1", "old page", 500, false)], true);
-        assert_eq!(app.chat("other").unwrap().last_activity, 200);
-        deliver(&mut app, "other", vec![message("other", "h2", "stale", 150, false)], false);
+        preview(&mut app, "other", 150, "stale");
         assert_eq!(app.chat("other").unwrap().last_activity, 200);
         assert!(app.chat("other").unwrap().last.is_none());
     }
 
     #[test]
-    fn a_message_for_an_unknown_chat_does_not_invent_a_row() {
+    fn a_preview_for_an_unknown_chat_does_not_invent_a_row() {
         let mut app = app();
         two_chats(&mut app);
-        deliver(&mut app, "ghost", vec![message("ghost", "g1", "hi", 900, false)], false);
+        preview(&mut app, "ghost", 900, "hi");
         assert_eq!(app.chats.len(), 2);
+    }
+
+    /// Plain message events (history pages, receipt refreshes that re-return
+    /// old messages) never touch the row.
+    #[test]
+    fn message_events_alone_do_not_change_the_row() {
+        let mut app = app();
+        two_chats(&mut app);
+        app.apply_backend_event(
+            Event::Messages {
+                chat: "peter".into(),
+                messages: Vec::new(),
+                older: false,
+                complete: false,
+            },
+            true,
+        );
+        assert_eq!(app.chat("peter").unwrap().last_activity, 100);
     }
 }
