@@ -3768,8 +3768,17 @@ pub fn run(
     let mut refresh_after_wake = false;
     // Downloads the worker's queue had no room for wait here, not fail.
     let mut media_backlog = MediaBacklog::default();
+    // A viewer-album request waits for a busy gallery worker instead of failing.
+    let mut gallery_backlog = GalleryBacklog::default();
 
     loop {
+        if let Some((chat, around, _)) = gallery_backlog.flush(&gallery_tx) {
+            emit(Event::BeeperViewerMedia {
+                chat,
+                around,
+                result: Err("Media history is busy; try the arrow again".into()),
+            });
+        }
         for (card, chat, message) in media_backlog.flush(&media_tx) {
             emit(Event::Media {
                 card,
@@ -4838,11 +4847,9 @@ pub fn run(
                     around,
                     fresh,
                 } => {
-                    if let Err(error) = gallery_tx.try_send((chat, around, fresh)) {
-                        let (chat, around, _) = match error {
-                            std::sync::mpsc::TrySendError::Full(request)
-                            | std::sync::mpsc::TrySendError::Disconnected(request) => request,
-                        };
+                    if let Some((chat, around, _)) =
+                        gallery_backlog.submit(&gallery_tx, (chat, around, fresh))
+                    {
                         emit(Event::BeeperViewerMedia {
                             chat,
                             around,
@@ -5121,6 +5128,56 @@ fn run_chat_search_cached(
 }
 
 type MediaJob = (bool, Option<usize>, ChatId, String);
+
+type GalleryRequest = (ChatId, Option<String>, bool);
+
+/// One viewer-album request waits here when the gallery worker is mid-fetch,
+/// instead of failing with "Media history is busy". The newest request wins,
+/// and a parked `fresh` stays set so a dropped reset is never lost.
+#[derive(Default)]
+struct GalleryBacklog {
+    waiting: Option<GalleryRequest>,
+}
+
+impl GalleryBacklog {
+    /// Sends now if the worker has room, otherwise parks. Hands the request
+    /// back only when the worker is gone.
+    fn submit(
+        &mut self,
+        tx: &std::sync::mpsc::SyncSender<GalleryRequest>,
+        request: GalleryRequest,
+    ) -> Option<GalleryRequest> {
+        let request = match self.waiting.take() {
+            Some((_, _, fresh)) => (request.0, request.1, request.2 || fresh),
+            None => request,
+        };
+        self.send(tx, request)
+    }
+
+    fn flush(
+        &mut self,
+        tx: &std::sync::mpsc::SyncSender<GalleryRequest>,
+    ) -> Option<GalleryRequest> {
+        let request = self.waiting.take()?;
+        self.send(tx, request)
+    }
+
+    fn send(
+        &mut self,
+        tx: &std::sync::mpsc::SyncSender<GalleryRequest>,
+        request: GalleryRequest,
+    ) -> Option<GalleryRequest> {
+        use std::sync::mpsc::TrySendError;
+        match tx.try_send(request) {
+            Ok(()) => None,
+            Err(TrySendError::Full(request)) => {
+                self.waiting = Some(request);
+                None
+            }
+            Err(TrySendError::Disconnected(request)) => Some(request),
+        }
+    }
+}
 
 /// Download requests the bounded worker queue had no room for. Without it a
 /// screenful of auto-downloading videos filled the queue and every overflow
@@ -5917,6 +5974,33 @@ mod tests {
         assert_eq!(displaced.2, format!("auto-{}", MediaBacklog::LIMIT - 1));
         assert!(backlog.waiting.front().unwrap().0);
         assert_eq!(backlog.waiting.len(), MediaBacklog::LIMIT);
+    }
+
+    #[test]
+    fn gallery_backlog_parks_while_the_worker_is_busy_and_sends_when_free() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<GalleryRequest>(1);
+        let mut backlog = GalleryBacklog::default();
+        let req = |m: &str, fresh| ("chat".to_string(), Some(m.to_string()), fresh);
+        assert!(backlog.submit(&tx, req("a", true)).is_none()); // fills the queue
+        // The worker is busy: these must park, not fail.
+        assert!(backlog.submit(&tx, req("b", true)).is_none());
+        assert!(backlog.submit(&tx, req("c", false)).is_none());
+        assert!(backlog.flush(&tx).is_none()); // still full, stays parked
+        assert_eq!(rx.recv().unwrap().1.as_deref(), Some("a"));
+        assert!(backlog.flush(&tx).is_none());
+        // The newest request won and kept the dropped one's reset.
+        assert_eq!(rx.recv().unwrap(), req("c", true));
+        assert!(backlog.flush(&tx).is_none());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn gallery_backlog_reports_only_a_dead_worker() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<GalleryRequest>(1);
+        drop(rx);
+        let mut backlog = GalleryBacklog::default();
+        let request = ("chat".to_string(), None, false);
+        assert_eq!(backlog.submit(&tx, request.clone()), Some(request));
     }
 
     #[test]
