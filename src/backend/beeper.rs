@@ -368,6 +368,10 @@ struct Api {
     /// (a reaction event, say), keyed by chat and the placeholder preview id.
     preview_fallbacks: PreviewFallbacks,
     avatar_sources: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+    /// Chat ids whose avatar source is a participant's picture borrowed for a
+    /// direct chat, not the chat's own. Only these may be dropped when the
+    /// participant's picture goes away.
+    borrowed_avatar_chats: std::sync::Arc<std::sync::Mutex<HashSet<String>>>,
 }
 
 fn encode_segment(s: &str) -> String {
@@ -976,6 +980,7 @@ impl Api {
             own_ids: Default::default(),
             preview_fallbacks: Default::default(),
             avatar_sources: Default::default(),
+            borrowed_avatar_chats: Default::default(),
             read_only: std::env::var("BEEPER_READONLY")
                 .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "yes")),
         })
@@ -1194,6 +1199,10 @@ impl Api {
         if let Ok(mut sources) = self.avatar_sources.lock() {
             if let Some(url) = &wire.image_url {
                 remember_avatar(&mut sources, &wire.id, url);
+                // The chat now owns its picture; it is no longer borrowed.
+                if let Ok(mut borrowed) = self.borrowed_avatar_chats.lock() {
+                    borrowed.remove(&wire.id);
+                }
             }
             if let Some(participants) = &wire.participants {
                 for user in &participants.items {
@@ -1208,6 +1217,29 @@ impl Api {
             .lock()
             .ok()
             .and_then(|ids| ids.get(&wire.account_id).cloned());
+        // A direct chat often carries no avatar of its own; the other person's
+        // picture is on their participant record, keyed by their user id, which
+        // the chat id never reaches.
+        if let (Ok(mut sources), Ok(mut borrowed)) = (
+            self.avatar_sources.lock(),
+            self.borrowed_avatar_chats.lock(),
+        ) {
+            match direct_chat_avatar(wire, own.as_deref()) {
+                Some(url) => {
+                    remember_avatar(&mut sources, &wire.id, url);
+                    borrowed.insert(wire.id.clone());
+                }
+                // The contact's photo is gone and the chat has none of its
+                // own: forget the borrowed source so it stops resolving. A
+                // chat-owned source and participant-id sources stay.
+                // An inventory that leaves `participants` out says nothing about
+                // the contact's photo, so only a present list can retire it.
+                None if wire.participants.is_some() && borrowed.remove(&wire.id) => {
+                    sources.remove(&wire.id);
+                }
+                None => {}
+            }
+        }
         let mut chat = map_chat_for(wire, label, own.as_deref());
         chat.backend_origin = Some(self.base_url.clone());
         if chat.last.is_none()
@@ -2069,6 +2101,26 @@ fn unix(ts: &Option<String>) -> i64 {
         .and_then(|s| jiff::Timestamp::from_str(s).ok())
         .map(|t| t.as_second())
         .unwrap_or(0)
+}
+
+/// The picture a direct chat should show when the chat has none of its own:
+/// the other participant's. Groups never borrow a member's picture, and a
+/// direct chat with several other candidates is left alone.
+fn direct_chat_avatar<'a>(wire: &'a BeeperChat, own: Option<&str>) -> Option<&'a str> {
+    if wire.chat_type != "single" || wire.image_url.as_deref().is_some_and(|u| !u.is_empty()) {
+        return None;
+    }
+    let mut others = wire
+        .participants
+        .as_ref()?
+        .items
+        .iter()
+        .filter(|user| Some(user.id.as_str()) != own && user.is_self != Some(true));
+    let other = others.next()?;
+    if others.next().is_some() {
+        return None;
+    }
+    other.image_url.as_deref().filter(|url| !url.is_empty())
 }
 
 // Source hints are disposable, not an unlimited participant directory.
@@ -5864,6 +5916,121 @@ mod tests {
         assert_eq!(preview.url, "https://first.example/");
         assert_eq!(preview.title.unwrap().len(), 240);
         assert_eq!(preview.description.unwrap().len(), 600);
+    }
+
+    fn avatar_chat(kind: &str, chat_img: Option<&str>) -> BeeperChat {
+        let mut value = serde_json::json!({
+            "id": "chat-1", "accountID": "a", "network": "WhatsApp", "title": "Tea", "type": kind,
+            "participants": {"items": [
+                {"id": "@me:beeper.local", "isSelf": true, "imgURL": "file:///me.png"},
+                {"id": "tea", "fullName": "Tea", "imgURL": "file:///tea.png"}
+            ]}
+        });
+        if let Some(img) = chat_img {
+            value["imgURL"] = serde_json::json!(img);
+        }
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn a_direct_chat_without_its_own_avatar_shows_the_other_persons() {
+        let api = Api::new(&BeeperConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            token: "fixture".into(),
+        })
+        .unwrap();
+        api.map_chat(&avatar_chat("single", None), &|c| c.network.clone());
+        let sources = api.avatar_sources.lock().unwrap();
+        assert_eq!(
+            sources.get("chat-1").map(String::as_str),
+            Some("file:///tea.png")
+        );
+    }
+
+    #[test]
+    fn a_borrowed_avatar_goes_when_the_contact_photo_is_removed() {
+        let api = Api::new(&BeeperConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let label = |c: &BeeperChat| c.network.clone();
+        api.map_chat(&avatar_chat("single", None), &label);
+        assert!(api.avatar_sources.lock().unwrap().contains_key("chat-1"));
+        // The next inventory reports the participant without a picture.
+        let mut gone = avatar_chat("single", None);
+        for user in &mut gone.participants.as_mut().unwrap().items {
+            if user.id == "tea" {
+                user.image_url = None;
+            }
+        }
+        api.map_chat(&gone, &label);
+        let sources = api.avatar_sources.lock().unwrap();
+        assert!(!sources.contains_key("chat-1"), "borrowed source dropped");
+        // Participant-id sources are not touched by this.
+        assert!(sources.contains_key("@me:beeper.local"));
+    }
+
+    #[test]
+    fn an_inventory_without_participants_keeps_the_borrowed_avatar() {
+        let api = Api::new(&BeeperConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let label = |c: &BeeperChat| c.network.clone();
+        api.map_chat(&avatar_chat("single", None), &label);
+        let mut partial = avatar_chat("single", None);
+        partial.participants = None;
+        api.map_chat(&partial, &label);
+        assert_eq!(
+            api.avatar_sources
+                .lock()
+                .unwrap()
+                .get("chat-1")
+                .map(String::as_str),
+            Some("file:///tea.png")
+        );
+    }
+
+    #[test]
+    fn a_chat_owned_avatar_is_not_dropped_by_the_borrow_cleanup() {
+        let api = Api::new(&BeeperConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let label = |c: &BeeperChat| c.network.clone();
+        api.map_chat(&avatar_chat("single", Some("file:///chat.png")), &label);
+        let mut no_photo = avatar_chat("single", Some("file:///chat.png"));
+        for user in &mut no_photo.participants.as_mut().unwrap().items {
+            user.image_url = None;
+        }
+        api.map_chat(&no_photo, &label);
+        assert_eq!(
+            api.avatar_sources
+                .lock()
+                .unwrap()
+                .get("chat-1")
+                .map(String::as_str),
+            Some("file:///chat.png")
+        );
+    }
+
+    #[test]
+    fn the_chats_own_avatar_wins_and_groups_never_borrow_a_members() {
+        fn own(wire: &BeeperChat) -> Option<&str> {
+            direct_chat_avatar(wire, Some("@me:beeper.local"))
+        }
+        assert_eq!(own(&avatar_chat("single", None)), Some("file:///tea.png"));
+        assert_eq!(own(&avatar_chat("single", Some("file:///chat.png"))), None);
+        assert_eq!(own(&avatar_chat("group", None)), None);
+        let mut two = avatar_chat("single", None);
+        two.participants.as_mut().unwrap().items.push(
+            serde_json::from_value(serde_json::json!({"id": "x", "imgURL": "file:///x.png"}))
+                .unwrap(),
+        );
+        assert_eq!(own(&two), None, "ambiguous: more than one other person");
     }
 
     #[test]
