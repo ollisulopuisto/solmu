@@ -2551,11 +2551,18 @@ fn plain_rich_text(raw: &str) -> String {
                                         // inside `run_widths.rs`) shows its address
                                         // too: keep the text and let the renderer
                                         // decide whether it is a link.
+                                        // The renderer links a bare name as
+                                        // https://, so an `http://` address
+                                        // stays visible unless the label will
+                                        // not be linked at all.
+                                        let same_as_bare = label.trim_end_matches('/')
+                                            == bare.trim_end_matches('/')
+                                            && (!url.starts_with("http://")
+                                                || crate::markup::links(label).is_empty());
                                         label == url
                                             || label.trim_end_matches('/')
                                                 == url.trim_end_matches('/')
-                                            || label.trim_end_matches('/')
-                                                == bare.trim_end_matches('/')
+                                            || same_as_bare
                                     });
                                     if !shows_address {
                                         out.push_str(" (");
@@ -10880,6 +10887,12 @@ mod tests {
         assert_eq!(
             plain_rich_text(r#"<a href="https://example.com">example.com</a>"#),
             "example.com"
+        );
+        // An http-only address keeps its scheme: the renderer would link the
+        // bare label as https.
+        assert_eq!(
+            plain_rich_text(r#"<a href="http://example.com">example.com</a>"#),
+            "example.com (http://example.com)"
         );
         // A different label still shows where the link goes.
         assert_eq!(
