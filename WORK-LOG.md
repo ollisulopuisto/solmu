@@ -41,3 +41,19 @@ Approved scope: hide the misleading photo View once toggle on Beeper chats. No s
 - No draft state is cleared or downgraded. The existing backend refusal is unchanged.
 - Red-green: compiled the unchanged production visibility leaf as a standalone Rust test module. The Beeper test failed with the old predicate and both tests passed after the guard. This does not claim full native test-suite execution.
 - Native demo build passed on Linux. Full native test compilation exceeds this environment's 2 GB memory; final CI and macOS/live-network interaction remain unverified.
+
+
+## 2026-11-13 - Failure-only media send status
+
+Branch ui/send-status, separate from group redesign. Sending/Accepted/Confirmed
+media records paint no pending-status text. NotSubmitted paints an alert with
+detail and Retry. Unknown paints an alert with Check history and the detail,
+without a blind Retry because the original POST may have been accepted. Normal
+sent/delivered/read receipts are unchanged. No send transport changes.
+
+Red-green: a standalone test compiling the unchanged production State failed
+for the absent failure presentation method; with the method it passes all five
+states. cargo check --locked --lib passes. Full native tests and screenshot are
+pending; no macOS/live-network verification claimed. Self-review checked that
+Unknown cannot gain a duplicate-send path and that #322's media preview hunk
+and #323/#324's contrast/line-wrap hunks are untouched.
