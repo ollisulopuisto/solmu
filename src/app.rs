@@ -12848,6 +12848,10 @@ impl App {
             self.window_focused = false;
         }
         self.report_presence();
+        // A shown window keeps Solmu awake; hidden or minimized, macOS may nap it.
+        crate::energy::set_window_visible(
+            !self.window_hidden && ctx.input(|input| input.viewport().minimized) != Some(true),
+        );
         self.handle_power();
         self.handle_tray();
         #[cfg(target_os = "macos")]

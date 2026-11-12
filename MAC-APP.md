@@ -53,10 +53,11 @@ keychain only after the next successful password unlock; turning the setting
 off or changing the password forgets it. Every unlock still runs the same
 PBKDF2 verifier - Touch ID fills the password, it never skips the check.
 
-Solmu holds an NSProcessInfo activity from start, so macOS does not put it
-into App Nap and messaging plus the managed connection keep working in the
-background (idle system sleep stays allowed). Settings > System > "Allow App
-Nap" trades that for battery savings.
+Solmu holds an NSProcessInfo activity while a window is shown, so macOS does
+not put it into App Nap for someone looking at it (idle system sleep stays
+allowed). With the window hidden to the tray or minimized the activity is
+released and macOS may pause Solmu, so new messages can arrive late. Settings >
+System > "Allow App Nap" lifts the activity in the foreground too.
 
 ## Closing and reopening the window
 
