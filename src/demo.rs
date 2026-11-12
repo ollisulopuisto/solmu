@@ -21336,9 +21336,22 @@ mod tests {
         let send = ctx.read_response(id).unwrap().rect;
         let right = pill.right() - send.right();
         let bottom = pill.bottom() - send.bottom();
+        let top = send.top() - pill.top();
         assert!(
-            (right - bottom).abs() <= 1.0,
-            "send is {right} from the right and {bottom} from the bottom"
+            (right - bottom).abs() <= 1.0 && (right - top).abs() <= 1.0,
+            "send is {right} from the right, {top} from the top and {bottom} from the bottom"
+        );
+        // It clears the border by more than the old two points, so a hover
+        // growth of five percent cannot reach it.
+        assert!(
+            right >= 4.0 && top >= 4.0 && bottom >= 4.0,
+            "send is {right}/{top}/{bottom} from the right/top/bottom"
+        );
+        let field_middle = (pill.top() + pill.bottom()) / 2.0;
+        assert!(
+            (send.center().y - field_middle).abs() <= 1.0,
+            "send's centre is {} off the field's centre line",
+            send.center().y - field_middle
         );
         // The plus mirrors it in the left end, and emoji stays close by.
         let rect = |stop| {
