@@ -1759,7 +1759,10 @@ pub(crate) fn composer_with_capabilities(
             let line = (line_height + COMPOSER_PADDING)
                 .round()
                 .max(COMPOSER_CONTROL);
-            let button_width = line;
+            // The send (or record) circle is smaller than the row by a gap on
+            // each side, so it never touches the field's border, even grown on
+            // hover; the same gap is left to its right.
+            let button_width = (line - 2.0 * SEND_BUTTON_GAP).max(0.0);
             let view_once = super::view_once::visible(
                 app.editing.is_some(),
                 chat.backend_account.is_some() || chat.backend_origin.is_some(),
@@ -1846,7 +1849,7 @@ pub(crate) fn composer_with_capabilities(
                 }
                 // The send button closes the row, flush with the field's end.
                 let field_width =
-                    (ui.available_width() - button_width - view_once_width - extras_width - ui.spacing().item_spacing.x).max(0.0);
+                    (ui.available_width() - button_width - SEND_BUTTON_GAP - view_once_width - extras_width - ui.spacing().item_spacing.x).max(0.0);
                 // The ink is centred on the controls, not the line box: the
                 // span from a capital's top to a descender's bottom sits as far
                 // from the field's top as from its bottom. Inter's box leaves
@@ -2083,44 +2086,49 @@ pub(crate) fn composer_with_capabilities(
                 } else {
                     (palette.surface, palette.surface_hover, palette.dim)
                 };
-                last_line(ui, line, |ui| if !ready && app.editing.is_none() && attachments {
-                    // An empty composer changes the send button to record.
-                    if theme::circle_button(
-                        ui,
-                        Icon::Mic,
-                        button_width,
-                        fill,
-                        hover,
-                        palette.secondary,
-                        "Record a voice message",
-                    )
-                    .tab_stop(Stop::Send)
-                    .clicked()
-                    {
-                        app.actions.push(Action::StartRecording);
-                    }
-                } else {
-                    let icon_kind = if app.editing.is_some() {
-                        Icon::Check
+                last_line(ui, line, |ui| {
+                    // The gap after the circle is the only space in this group.
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    if !ready && app.editing.is_none() && attachments {
+                        // An empty composer changes the send button to record.
+                        if theme::circle_button(
+                            ui,
+                            Icon::Mic,
+                            button_width,
+                            fill,
+                            hover,
+                            palette.secondary,
+                            "Record a voice message",
+                        )
+                        .tab_stop(Stop::Send)
+                        .clicked()
+                        {
+                            app.actions.push(Action::StartRecording);
+                        }
                     } else {
-                        Icon::Send
-                    };
-                    let send_response = ui
-                        .add_enabled_ui(ready, |ui| {
-                            theme::circle_button(ui, icon_kind, button_width, fill, hover, icon, "Send (right-click or hold: send later)")
-                                .tab_stop(Stop::Send)
-                        })
-                        .inner;
-                    if send_response.clicked() {
-                        send_click = true;
+                        let icon_kind = if app.editing.is_some() {
+                            Icon::Check
+                        } else {
+                            Icon::Send
+                        };
+                        let send_response = ui
+                            .add_enabled_ui(ready, |ui| {
+                                theme::circle_button(ui, icon_kind, button_width, fill, hover, icon, "Send (right-click or hold: send later)")
+                                    .tab_stop(Stop::Send)
+                            })
+                            .inner;
+                        if send_response.clicked() {
+                            send_click = true;
+                        }
+                        // Right-click or a long press schedules instead of
+                        // sending; an ordinary click is untouched.
+                        if app.editing.is_none()
+                            && (send_response.secondary_clicked() || send_response.long_touched())
+                        {
+                            app.actions.push(Action::ShowDialog(Dialog::SendLater));
+                        }
                     }
-                    // Right-click or a long press schedules instead of
-                    // sending; an ordinary click is untouched.
-                    if app.editing.is_none()
-                        && (send_response.secondary_clicked() || send_response.long_touched())
-                    {
-                        app.actions.push(Action::ShowDialog(Dialog::SendLater));
-                    }
+                    ui.add_space(SEND_BUTTON_GAP);
                 });
             },
                     );
@@ -2276,6 +2284,10 @@ const COMPOSER_PADDING: f32 = 14.0;
 const COMPOSER_CONTROL: f32 = 36.0;
 /// Space between the composer's rounded field and the buttons at its ends.
 const COMPOSER_INSET: i8 = 2;
+/// Gap between the send circle and the field's inner edge at the top, bottom
+/// and right, beyond `COMPOSER_INSET`. The circle is the row's height minus
+/// twice this, centred on the row's centre line.
+const SEND_BUTTON_GAP: f32 = 3.0;
 /// Space between the plus and emoji buttons' hit areas. Each area pads its
 /// 22-point icon by six points a side, so this leaves eight between the
 /// icons, a pair.
