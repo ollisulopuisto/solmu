@@ -811,6 +811,7 @@ fn primary_font() -> fastframe_fonts::Primary {
 /// for the scripts it lacks, hinted as the desktop asks. Inter also draws
 /// the [`tabular`] timers.
 fn install_fonts(ctx: &egui::Context) {
+    FONT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     let primary = primary_font();
     let mut fonts = fastframe_fonts::FontSetup::default()
         .primary(primary)
@@ -881,6 +882,15 @@ pub fn follow_text_rendering(wake: impl Fn() + Send + 'static) {
     if let Err(error) = watched {
         log::debug!("not following the desktop's font settings: {error}");
     }
+}
+
+/// Counts every font reinstall: width caches keyed on font metrics include
+/// the generation in their epoch, so new metrics never reuse old decisions.
+static FONT_GENERATION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The current font generation; a font change is a new layout epoch.
+pub fn font_generation() -> u32 {
+    FONT_GENERATION.load(std::sync::atomic::Ordering::Acquire)
 }
 
 /// Reinstalls the fonts when the desktop's text rendering changed since the
@@ -1658,6 +1668,15 @@ pub fn titlebar_inset(ctx: &egui::Context) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reinstalling_fonts_bumps_the_generation() {
+        let ctx = egui::Context::default();
+        let before = super::font_generation();
+        super::install_fonts(&ctx);
+        // Other tests reinstall fonts too, so only the bump itself is pinned.
+        assert!(super::font_generation() > before);
+    }
+
     use super::*;
 
     /// Timers count in Inter's tabular figures whatever face draws the

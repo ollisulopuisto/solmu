@@ -2358,8 +2358,8 @@ fn card_widths_sample(app: &mut App) {
         Content::text("Thanks!"),
     ));
     for (id, text) in [
-        ("text-medium", "The final notes are ready."),
-        ("text-medium-two", "The final notes are ready!"),
+        ("text-medium", "The final notes are ready!!!"),
+        ("text-medium-two", "The final notes are ready."),
         (
             "text-long",
             "The revised document is ready for review today.",
@@ -2381,6 +2381,23 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
     };
     for part in page.split(',').map(str::trim) {
         match part {
+            "flat-groups" => {
+                let work = app.settings.flat_groups.create("Work").unwrap();
+                let friends = app.settings.flat_groups.create("Friends").unwrap();
+                let keys: Vec<_> = app
+                    .chats
+                    .iter()
+                    .take(4)
+                    .map(|chat| crate::ui::flat_groups::member(app, chat))
+                    .collect();
+                for target in &keys {
+                    app.settings.flat_groups.add(work, target.clone());
+                }
+                for target in keys.iter().take(2) {
+                    app.settings.flat_groups.add(friends, target.clone());
+                }
+                app.settings.flat_groups.grouped_view = true;
+            }
             "history-date" => history_date_sample(app),
             "card-widths" => card_widths_sample(app),
             "minute-gutter" => minute_gutter_sample(app),
@@ -2439,6 +2456,50 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "mentions" => mentions_sample(app),
             "chat" | "" => {}
             "phone-menu" => phone_menu_sample(app),
+            "link-menu" => link_menu_sample(app),
+            "supplied-preview" => {
+                phone_menu_sample(app);
+                let mapped = crate::backend::beeper::supplied_preview_demo(SAMPLES[0].id);
+                let row = app
+                    .conversations
+                    .get_mut(SAMPLES[0].id)
+                    .unwrap()
+                    .message_mut("ada-link")
+                    .unwrap();
+                row.content = mapped.content;
+                row.thumbnail = mapped.thumbnail;
+            }
+            "local-preview" | "local-preview-ready" | "local-preview-image" => {
+                phone_menu_sample(app);
+                let row = app
+                    .conversations
+                    .get_mut(SAMPLES[0].id)
+                    .unwrap()
+                    .message_mut("ada-link")
+                    .unwrap();
+                row.content = Content::text(
+                    "A guide for the weekend: https://example.invalid/weekend?utm_source=chat#walk",
+                );
+                row.thumbnail = None;
+                if part != "local-preview" {
+                    let worker = crate::preview_worker::Worker::new();
+                    worker.seed_fixture(&app.account().id.0, "https://example.invalid/weekend?utm_source=chat#walk", crate::link_preview::Preview {
+                        title: Some("A slow weekend in Helsinki".into()),
+                        description: Some("Coffee, a waterfront walk and a few places worth a detour. A synthetic preview, stored locally, with no website request.".into()),
+                        image: if part == "local-preview-image" {
+                            let pixels = image::RgbaImage::from_fn(160,120,|x,y| image::Rgba(if y < 70 { [90,160,180,255] } else if x < 90 { [40,100,90,255] } else { [190,160,110,255] }));
+                            let mut bytes=std::io::Cursor::new(Vec::new());
+                            image::DynamicImage::ImageRgba8(pixels).write_to(&mut bytes,image::ImageFormat::Png).unwrap();
+                            Some(bytes.into_inner())
+                        } else {None}, no_store: false,
+                    });
+                    app.link_previews = Some(worker);
+                }
+            }
+            "preview-privacy" | "tracking-privacy" => {
+                app.page = Page::Settings;
+                app.settings_search = "Privacy".into();
+            }
             "short-chat" => short_chat_sample(app),
             "chat-menu" => app.open_chat_menu = Some(app.chats[0].id.clone()),
             // Reply later / Read later: flagged rows carry the clock and
@@ -3176,6 +3237,69 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 if part == "group-info-saving" {
                     app.group_saving.insert(group.to_owned());
                 }
+            }
+            "pending-media" | "pending-media-failed" | "pending-media-unknown" => {
+                let target = SAMPLES[0].id;
+                app.open_chat = Some(target.into());
+                let chat = app.chats.iter_mut().find(|chat| chat.id == target).unwrap();
+                chat.backend_origin = Some("https://synthetic.invalid".into());
+                chat.backend_account = Some("synthetic".into());
+                let member = crate::merged::Member::of(chat).unwrap();
+                let mut pixels = Vec::new();
+                for y in 0..120 {
+                    for x in 0..200 {
+                        pixels.extend_from_slice(&[40 + x as u8 / 2, 80 + y as u8, 140, 255]);
+                    }
+                }
+                app.stage(crate::app::Pending::Picture {
+                    width: 200,
+                    height: 120,
+                    rgba: std::sync::Arc::new(pixels),
+                    texture: None,
+                });
+                let staged = app.pending.pop().unwrap();
+                app.dispatch_pending_media(
+                    member,
+                    staged,
+                    Some("Synthetic attachment preview".into()),
+                    None,
+                );
+                for record in app.pending_media.values_mut() {
+                    record.state = match part {
+                        "pending-media-failed" => {
+                            crate::pending_media::State::NotSubmitted("Asset upload failed".into())
+                        }
+                        "pending-media-unknown" => {
+                            crate::pending_media::State::Unknown("Send response timed out".into())
+                        }
+                        _ => crate::pending_media::State::Sending,
+                    };
+                }
+                let local_states: Vec<_> = app
+                    .pending_media
+                    .values()
+                    .map(|r| {
+                        (
+                            r.job.member.chat.clone(),
+                            r.visible.clone(),
+                            match r.state {
+                                crate::pending_media::State::NotSubmitted(_) => Delivery::Failed,
+                                crate::pending_media::State::Unknown(_) => Delivery::Unknown,
+                                _ => Delivery::Pending,
+                            },
+                        )
+                    })
+                    .collect();
+                for (chat, id, status) in local_states {
+                    if let Some(message) = app
+                        .conversations
+                        .get_mut(&chat)
+                        .and_then(|c| c.message_mut(&id))
+                    {
+                        message.status = status;
+                    }
+                }
+                app.scroll_to_bottom = true;
             }
             "forward-progress" => {
                 apply_flags(app, Some("forward"));
@@ -4275,6 +4399,19 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             }
         }
     }
+}
+
+/// Synthetic link fixture for screenshots and pointer regression tests.
+fn link_menu_sample(app: &mut App) {
+    phone_menu_sample(app);
+    app.conversations
+        .get_mut(SAMPLES[0].id)
+        .unwrap()
+        .message_mut("ada-link")
+        .unwrap()
+        .content = Content::text(
+        "Summer plans (https://example.com/trips?from=chat&view=full#july)\nhttps://example.org/details?mode=exact#map",
+    );
 }
 
 const PHONE_MENU_SAMPLE: &str = "Call +1 (555) 010-2040 to arrange the pickup.";
@@ -5439,6 +5576,201 @@ mod tests {
         static ROOTS: std::cell::RefCell<Vec<tempfile::TempDir>> = const {
             std::cell::RefCell::new(Vec::new())
         };
+    }
+
+    #[test]
+    fn local_preview_consent_default_off_and_one_exact_link() {
+        let mut app = app();
+        apply_flags(&mut app, Some("local-preview"));
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        assert!(!app.settings.auto_link_previews);
+        assert!(!app.settings.remove_link_tracking);
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews.is_none(),
+            "drawing OFF must not create a worker"
+        );
+        let chat = sample_ids()[0].to_owned();
+        let url = "https://example.invalid/weekend?utm_source=chat#walk";
+        let rect = ctx
+            .data(|data| {
+                data.get_temp::<egui::Rect>(
+                    crate::ui::conversation::bubble_id(&chat, "ada-link")
+                        .with(("fetch-preview", url)),
+                )
+            })
+            .expect("per-link fetch button");
+        let pos = rect.center();
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(
+            !app.settings.auto_link_previews,
+            "one shot cannot enable automatic requests"
+        );
+        let worker = app
+            .link_previews
+            .as_ref()
+            .expect("clicked button creates worker");
+        assert!(
+            worker.status(&app.account().id.0, url).is_some(),
+            "clicked URL queued or cached; .invalid is rejected before networking"
+        );
+        assert!(
+            worker
+                .status(&app.account().id.0, "https://example.invalid/other")
+                .is_none()
+        );
+        app.actions
+            .push(crate::model::Action::LinkPreviewPreferences);
+        render(&mut app, &ctx);
+        assert_eq!(app.page, crate::model::Page::Settings);
+        assert_eq!(app.settings_search, "Privacy");
+        assert!(!app.settings.auto_link_previews);
+        app.actions.push(crate::model::Action::ClearLinkPreviews);
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews
+                .as_ref()
+                .unwrap()
+                .status(&app.account().id.0, url)
+                .is_none()
+        );
+    }
+    #[test]
+    fn local_preview_visibility_supplied_cards_and_tracking_action_boundaries() {
+        let mut app = app();
+        apply_flags(&mut app, Some("local-preview"));
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let chat = sample_ids()[0].to_owned();
+        let url = "https://example.invalid/weekend?utm_source=chat#walk";
+        let action = |chat: String, account: String| crate::model::Action::FetchLinkPreview {
+            account,
+            chat,
+            message: "ada-link".into(),
+            url: url.into(),
+            automatic: true,
+            retry: false,
+        };
+        app.actions
+            .push(action(chat.clone(), app.account().id.0.clone()));
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews.is_none(),
+            "automatic requests rejected while OFF"
+        );
+        app.settings.auto_link_previews = true;
+        app.page = crate::model::Page::Settings;
+        app.actions
+            .push(action(chat.clone(), app.account().id.0.clone()));
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews.is_none(),
+            "settings may not backfill messages"
+        );
+        app.page = crate::model::Page::Chats;
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .messages
+            .retain(|row| row.id == "ada-link");
+        let row = app
+            .conversations
+            .get_mut(&chat)
+            .unwrap()
+            .message_mut("ada-link")
+            .unwrap();
+        row.content = Content::Text {
+            text: url.into(),
+            preview: Some(crate::model::LinkPreview {
+                url: url.into(),
+                title: Some("Supplied".into()),
+                description: None,
+            }),
+        };
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews.is_none(),
+            "supplied card must not trigger website requests"
+        );
+        // The UI must use the same URL equivalence as the link list.
+        let row = app
+            .conversations
+            .get_mut(&chat)
+            .unwrap()
+            .message_mut("ada-link")
+            .unwrap();
+        row.content = Content::Text {
+            text: "https://example.invalid".into(),
+            preview: Some(crate::model::LinkPreview {
+                url: "https://example.invalid/".into(),
+                title: Some("Supplied".into()),
+                description: None,
+            }),
+        };
+        render(&mut app, &ctx);
+        assert!(
+            app.link_previews.is_none(),
+            "equivalent supplied URL must not fetch"
+        );
+        // Restore the original source before checking action boundaries below.
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .message_mut("ada-link")
+            .unwrap()
+            .content = Content::Text {
+            text: url.into(),
+            preview: None,
+        };
+        app.settings.auto_link_previews = false;
+        app.settings.remove_link_tracking = true;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.actions.push(crate::model::Action::CopyLink(url.into()));
+            app.actions.push(crate::model::Action::CopyText(url.into()));
+            app.background_frame(ui.ctx());
+        });
+        output.textures_delta.clear();
+        let copies: Vec<_> = output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(copies.contains(&"https://example.invalid/weekend#walk"));
+        assert!(copies.contains(&url), "message copy retains original bytes");
+        assert_eq!(
+            app.link_action_url("https://example.invalid/?sig=exact&utm_source=x"),
+            "https://example.invalid/?sig=exact&utm_source=x"
+        );
+        assert!(
+            matches!(&app.conversations.get(&chat).unwrap().message("ada-link").unwrap().content,Content::Text{text,..} if text==url)
+        );
     }
 
     pub(super) fn app() -> App {
@@ -11446,6 +11778,65 @@ mod tests {
     }
 
     #[test]
+    fn shift_enter_replaces_a_selection_with_a_line_break() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.focus_composer = true;
+        render(&mut app, &ctx);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("hello".into())]);
+        // Select "ell" through the composer editor's state, as a drag does.
+        let composer = egui::Id::new("composer-text");
+        let mut state = egui::TextEdit::load_state(&ctx, composer).unwrap_or_default();
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(1),
+                egui::text::CCursor::new(4),
+            )));
+        egui::TextEdit::store_state(&ctx, composer, state);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::SHIFT)],
+        );
+        assert_eq!(
+            app.composer, "h\no",
+            "the line break replaces the selection"
+        );
+        let cursor = egui::TextEdit::load_state(&ctx, composer)
+            .and_then(|state| state.cursor.char_range())
+            .expect("the composer keeps a cursor");
+        assert_eq!(
+            cursor.primary.index.0, 2,
+            "the cursor sits right after the new line"
+        );
+    }
+
+    #[test]
+    fn shift_enter_at_a_bare_cursor_breaks_the_line_there() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.focus_composer = true;
+        render(&mut app, &ctx);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("hello".into())]);
+        // A collapsed cursor inside the word, not a selection.
+        app.set_composer_cursor(&ctx, 1);
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::SHIFT)],
+        );
+        assert_eq!(app.composer, "h\nello", "the break lands at the cursor");
+        let composer = egui::Id::new("composer-text");
+        let cursor = egui::TextEdit::load_state(&ctx, composer)
+            .and_then(|state| state.cursor.char_range())
+            .expect("the composer keeps a cursor");
+        assert_eq!(cursor.primary.index.0, 2, "the cursor follows the break");
+    }
+
+    #[test]
     fn shift_insert_pastes_the_clipboard_text() {
         let mut app = app();
         let ctx = egui::Context::default();
@@ -13984,6 +14375,296 @@ mod tests {
         assert!(ctx.memory(|memory| memory.has_focus(egui::Id::new("composer-text"))));
     }
 
+    fn link_popup_labels(app: &mut App, ctx: &egui::Context, id: egui::Id) -> Vec<String> {
+        render(app, ctx);
+        let menu = ctx
+            .data(|data| data.get_temp::<egui::Rect>(id.with("menu-rect")))
+            .unwrap();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1180.0, 780.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.frame_ui(ui),
+        );
+        output.textures_delta.clear();
+        output
+            .platform_output
+            .accesskit_update
+            .unwrap()
+            .nodes
+            .into_iter()
+            .filter_map(|(_, node)| {
+                let bounds = node.bounds()?;
+                let scale = ctx.pixels_per_point() as f64;
+                let center = egui::pos2(
+                    ((bounds.x0 + bounds.x1) / (2.0 * scale)) as f32,
+                    ((bounds.y0 + bounds.y1) / (2.0 * scale)) as f32,
+                );
+                menu.contains(center)
+                    .then(|| node.label().or_else(|| node.value()).map(str::to_owned))
+                    .flatten()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn album_caption_and_carousel_links_use_the_owning_popup() {
+        for carousel in [false, true] {
+            let mut app = app();
+            let expected = "https://example.org/exact?q=second#caption";
+            let message = if carousel {
+                carousel_sample(&mut app, 2);
+                let row = &mut app.conversations.get_mut(SAMPLES[0].id).unwrap().messages[0];
+                let Content::Interactive {
+                    card: Some(card), ..
+                } = &mut row.content
+                else {
+                    panic!()
+                };
+                card.body = "Parent body https://example.com/parent".into();
+                card.carousel[0].body = format!("First child ({expected})");
+                card.carousel[1].body = format!("Second child ({expected})");
+                "interactive-card"
+            } else {
+                media_album_sample(&mut app, true);
+                let rows = &mut app.conversations.get_mut(SAMPLES[0].id).unwrap().messages;
+                for (index, row) in rows.iter_mut().enumerate() {
+                    if let Content::Image { caption, .. } = &mut row.content {
+                        *caption = Some(if index == 1 {
+                            format!("Second caption ({expected})")
+                        } else {
+                            format!("Photo {index}")
+                        });
+                    }
+                }
+                "album-0"
+            };
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            render(&mut app, &ctx);
+            let owner = crate::ui::conversation::bubble_id(SAMPLES[0].id, message);
+            let hits = ctx
+                .data(|data| {
+                    data.get_temp::<Vec<(egui::Rect, String)>>(owner.with("web-link-hits"))
+                })
+                .unwrap_or_default();
+            let links: Vec<_> = hits.iter().filter(|(_, url)| url == expected).collect();
+            assert!(
+                !links.is_empty(),
+                "child link hits must reach the parent popup, carousel={carousel}"
+            );
+            if carousel {
+                assert!(links.len() >= 2, "each visible child contributes hits");
+            }
+            for (rect, _) in links {
+                let pos = rect.center();
+                let button = |pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![egui::Event::PointerMoved(pos), button(true)],
+                );
+                frame_with(&mut app, &ctx, vec![button(false)]);
+                assert!(egui::Popup::is_id_open(&ctx, owner.with("popup")));
+                assert_eq!(
+                    ctx.data(|data| data.get_temp::<String>(owner.with("link-menu-target")))
+                        .as_deref(),
+                    Some(expected)
+                );
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hyperlink_secondary_click_is_scoped_and_keeps_exact_destination() {
+        use egui::{Event, Modifiers, PointerButton, Pos2, Rect};
+        let mut app = app();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        app.attach(&ctx);
+        let chat = sample_ids()[0].to_owned();
+        // This fixture tests every visual link row. Keep the message fully in
+        // view instead of inheriting scroll/height changes from unrelated media.
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .messages
+            .retain(|message| message.id == "ada-link");
+        let id = crate::ui::conversation::bubble_id(&chat, "ada-link");
+        let first = "https://example.com/trips?from=chat&view=full#july";
+        let second = "https://example.org/details?mode=exact#map";
+        let cases = [
+            format!("Summer plans ({first})\n{second}"),
+            format!("{first} {second}"),
+            format!(
+                "{} ({first})\n{second}",
+                "A long named hyperlink that wraps across the bubble ".repeat(8)
+            ),
+        ];
+        for (case, text) in cases.into_iter().enumerate() {
+            app.conversations
+                .get_mut(&chat)
+                .unwrap()
+                .message_mut("ada-link")
+                .unwrap()
+                .content = Content::text(text);
+            // Direct fixture edits bypass the app's normal message updates.
+            // Do not carry the previous case's frozen width into new text.
+            app.conversations.get_mut(&chat).unwrap().width_book = Default::default();
+            app.conversations.get_mut(&chat).unwrap().rows.clear();
+            render(&mut app, &ctx);
+            let hits = ctx
+                .data(|data| data.get_temp::<Vec<(Rect, String)>>(id.with("web-link-hits")))
+                .unwrap();
+            assert!(hits.iter().any(|(_, url)| url == second));
+            if case == 2 {
+                assert!(hits.iter().filter(|(_, url)| url == first).count() > 1);
+            }
+            // Every visual row of each link owns its target, including a wrapped title.
+            for (hit_index, (_, expected)) in hits.iter().enumerate() {
+                // Closing a popup and measuring selected text may move rows.
+                // Keep the expected destination, but read current geometry.
+                render(&mut app, &ctx);
+                let current_hits = ctx
+                    .data(|data| data.get_temp::<Vec<(Rect, String)>>(id.with("web-link-hits")))
+                    .unwrap();
+                let (rect, target) = &current_hits[hit_index];
+                assert_eq!(target, expected, "settling must not change the link target");
+                let pos = rect.center();
+                let button = |pressed| Event::PointerButton {
+                    pos,
+                    button: PointerButton::Secondary,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                };
+                frame_with(&mut app, &ctx, vec![Event::PointerMoved(pos), button(true)]);
+                frame_with(&mut app, &ctx, vec![button(false)]);
+                assert!(egui::Popup::is_id_open(&ctx, id.with("popup")));
+                assert_eq!(
+                    ctx.data(|data| data.get_temp::<String>(id.with("link-menu-target")))
+                        .as_ref(),
+                    Some(expected)
+                );
+                let labels = link_popup_labels(&mut app, &ctx, id);
+                assert!(
+                    labels.iter().any(|label| label == "Open link"),
+                    "{labels:?}"
+                );
+                assert!(labels.iter().any(|label| label == "Copy link"));
+                assert!(
+                    !labels
+                        .iter()
+                        .any(|label| ["Forward", "Delete", "Copy URL to clipboard"]
+                            .contains(&label.as_str())),
+                    "{labels:?}"
+                );
+                // Moving over a different link while open must not retarget the actions.
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![Event::PointerMoved(Pos2::new(500.0, 300.0))],
+                );
+                assert_eq!(
+                    ctx.data(|data| data.get_temp::<String>(id.with("link-menu-target")))
+                        .as_ref(),
+                    Some(expected)
+                );
+                // Find and click the real accessible Copy link control.
+                let mut copy = None;
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            egui::vec2(1180.0, 780.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.frame_ui(ui),
+                );
+                if let Some(tree) = output.platform_output.accesskit_update.take() {
+                    for (_, node) in tree.nodes {
+                        if node.label() == Some("Copy link")
+                            && let Some(bounds) = node.bounds()
+                        {
+                            let scale = ctx.pixels_per_point() as f64;
+                            copy = Some(Pos2::new(
+                                ((bounds.x0 + bounds.x1) / (2.0 * scale)) as f32,
+                                ((bounds.y0 + bounds.y1) / (2.0 * scale)) as f32,
+                            ));
+                        }
+                    }
+                }
+                output.textures_delta.clear();
+                let pos = copy.expect("Copy link accessible bounds");
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![
+                        Event::PointerMoved(pos),
+                        Event::PointerButton {
+                            pos,
+                            button: PointerButton::Primary,
+                            pressed: true,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ],
+                );
+                let copied = copied_text(
+                    &mut app,
+                    &ctx,
+                    Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Modifiers::NONE,
+                    },
+                );
+                assert_eq!(copied.as_slice(), std::slice::from_ref(expected));
+                assert!(!egui::Popup::is_id_open(&ctx, id.with("popup")));
+                render(&mut app, &ctx);
+            }
+            // A blank point on the same row must get the ordinary message menu.
+            let rect = ctx.read_response(id).unwrap().rect;
+            let pos = egui::pos2(rect.right() + 10.0, rect.center().y);
+            let button = |pressed| Event::PointerButton {
+                pos,
+                button: PointerButton::Secondary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            frame_with(&mut app, &ctx, vec![Event::PointerMoved(pos), button(true)]);
+            frame_with(&mut app, &ctx, vec![button(false)]);
+            assert!(egui::Popup::is_id_open(&ctx, id.with("popup")));
+            assert!(
+                ctx.data(|data| data.get_temp::<String>(id.with("link-menu-target")))
+                    .is_none()
+            );
+            let labels = link_popup_labels(&mut app, &ctx, id);
+            assert!(labels.iter().any(|label| label == "Reply"), "{labels:?}");
+            assert!(!labels.iter().any(|label| label == "Open link"));
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![key(egui::Key::Escape, Modifiers::NONE)],
+            );
+            assert!(!egui::Popup::is_id_open(&ctx, id.with("popup")));
+        }
+    }
+
     #[test]
     fn right_click_anywhere_on_a_message_opens_its_menu() {
         let mut app = app();
@@ -14074,6 +14755,9 @@ mod tests {
         // A click in the bubble's margin, beside its time: the text and
         // media inside take clicks for themselves.
         let click = |app: &mut App, message: &str, modifiers: egui::Modifiers| {
+            // Selection changes bubble widths/heights. Settle that layout
+            // before reading the next click target, never reuse its old rect.
+            render(app, &ctx);
             let id = crate::ui::conversation::bubble_id(&chat, message);
             let rect = ctx
                 .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
@@ -23285,19 +23969,72 @@ mod card_width_tests {
                     );
                 }
                 if width > 1000.0 {
-                    assert!((rect("card-plain").width() - 100.0).abs() < 1.0);
-                    assert!((rect("text-medium").width() - 260.0).abs() < 1.0);
-                    assert!((rect("text-medium-two").width() - 260.0).abs() < 1.0);
-                    assert!((rect("text-long").width() - 420.0).abs() < 1.0);
+                    // Own text bubbles settle at their natural content width
+                    // and near-equal neighbours join the larger one; only the
+                    // incoming rows keep the stepped grid.
+                    assert!(
+                        rect("card-plain").width() < 100.0,
+                        "short own text takes its natural width, not the80pt step: {:?}",
+                        rect("card-plain")
+                    );
+                    // The join, not a coincidence: the two texts measure a
+                    // few points apart naturally (guarded below), yet the
+                    // rendered bubbles take exactly one width, the frozen
+                    // larger one.
+                    let mut narrower = 0.0;
+                    let mut wider = 0.0;
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        let font = crate::theme::regular(crate::ui::widgets::MESSAGE_TEXT_SIZE);
+                        let painter = ui.painter();
+                        narrower = painter
+                            .layout_no_wrap(
+                                "The final notes are ready.".to_owned(),
+                                font.clone(),
+                                egui::Color32::BLACK,
+                            )
+                            .size()
+                            .x;
+                        wider = painter
+                            .layout_no_wrap(
+                                "The final notes are ready!!!".to_owned(),
+                                font,
+                                egui::Color32::BLACK,
+                            )
+                            .size()
+                            .x;
+                    });
+                    output.textures_delta.clear();
+                    assert!(
+                        wider - narrower >= 3.0 && wider - narrower <= 16.0,
+                        "the fixture's natural widths differ measurably but stay within the join tolerance: {narrower} vs {wider}"
+                    );
+                    // The wider text leads the run; the narrower arrival
+                    // joins its frozen width, so both render exactly equal.
+                    assert_eq!(
+                        rect("text-medium").width(),
+                        rect("text-medium-two").width(),
+                        "a near-equal later neighbour joins the frozen wider width"
+                    );
+                    assert!(
+                        rect("text-long").width() > rect("text-medium").width() + 10.0,
+                        "a much longer text keeps its own width: {:?} vs {:?}",
+                        rect("text-long"),
+                        rect("text-medium")
+                    );
+                    assert!(
+                        rect("text-long").width() < 420.0,
+                        "natural width stays under the old400pt step: {:?}",
+                        rect("text-long")
+                    );
                     assert!((default - 340.0).abs() < 1.0, "320pt content plus margins");
                     assert!(
                         (rect("card-wider").width() - 420.0).abs() < 1.0,
-                        "long reply uses the400pt content step: {:?}",
+                        "incoming long reply keeps the400pt content step: {:?}",
                         rect("card-wider")
                     );
                     assert!(
                         (rect("card-wider-preview").width() - 420.0).abs() < 1.0,
-                        "different body lengths share the400pt step: {:?}",
+                        "incoming previews keep the400pt step: {:?}",
                         rect("card-wider-preview")
                     );
                 } else {

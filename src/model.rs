@@ -641,12 +641,41 @@ pub struct MentionRef {
     pub id: String,
 }
 
-/// Link metadata attached by WhatsApp.
+/// Link metadata supplied with a message. Rendering it does not fetch the site.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LinkPreview {
     pub url: String,
     pub title: Option<String>,
     pub description: Option<String>,
+}
+
+impl LinkPreview {
+    /// Match the same canonical address used by Content::web_links, without
+    /// changing the original click/copy target or merging distinct queries.
+    pub fn covers_url(&self, url: &str) -> bool {
+        let normalise =
+            |value: &str| crate::safety::preview_url(value).unwrap_or_else(|| value.to_owned());
+        normalise(&self.url) == normalise(url)
+    }
+}
+
+#[cfg(test)]
+mod local_preview_identity_tests {
+    use super::LinkPreview;
+    #[test]
+    fn supplied_card_equivalence_keeps_distinct_links_separate() {
+        let card = LinkPreview {
+            url: "https://example.com/".into(),
+            title: None,
+            description: None,
+        };
+        assert!(card.covers_url("https://example.com"));
+        assert!(card.covers_url("HTTPS://EXAMPLE.COM:443/"));
+        assert!(!card.covers_url("https://example.com/other"));
+        assert!(!card.covers_url("https://example.com/?query=exact"));
+        assert!(!card.covers_url("http://example.com/"));
+        assert_eq!(card.url, "https://example.com/");
+    }
 }
 
 impl Message {
@@ -2566,6 +2595,7 @@ pub fn forward_limit(frequently_forwarded: bool) -> usize {
 /// Actions queued by views and applied after drawing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    RetryPendingMedia(String),
     TranslateLocally(String),
     Open(Page),
     /// Opens settings, or closes them when they are already showing.
@@ -2824,6 +2854,18 @@ pub enum Action {
         files: Vec<(PathBuf, String)>,
     },
     OpenUrl(String),
+    /// A URL copy, distinct from copying original message text.
+    CopyLink(String),
+    FetchLinkPreview {
+        account: String,
+        chat: ChatId,
+        message: String,
+        url: String,
+        automatic: bool,
+        retry: bool,
+    },
+    ClearLinkPreviews,
+    LinkPreviewPreferences,
     CopyText(String),
     CopyImage(PathBuf),
     /// Closes the toast at this index. Only errors wait to be dismissed.
@@ -3030,6 +3072,7 @@ pub enum Action {
     ShowDialog(Dialog),
     CloseDialog,
     ToggleSidebar,
+    ToggleFlatGroups,
     SetChatFilter(ChatFilter),
     /// Picks the label the chat list shows; `None` shows every chat.
     SelectLabel(Option<String>),

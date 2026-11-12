@@ -479,6 +479,7 @@ pub struct Settings {
     /// Beeper chats with a local Silence promise, keyed by chat id.
     #[serde(default)]
     pub silenced: BTreeMap<String, Silence>,
+    pub flat_groups: crate::flat_groups::Groups,
     pub sidebar_width: f32,
     /// Width of the search pane beside the open chat.
     pub search_pane_width: f32,
@@ -494,6 +495,10 @@ pub struct Settings {
     /// Download attachments when they enter view instead of on click.
     #[serde(alias = "auto_download_images")]
     pub auto_download: bool,
+    /// Local website requests are opt-in, separate from supplied message cards.
+    pub auto_link_previews: bool,
+    /// Applies only to explicit link actions, never stored messages.
+    pub remove_link_tracking: bool,
     /// Show the default doodle wallpaper behind conversations.
     pub show_wallpaper: bool,
     /// Colour selected in the wallpaper picker.
@@ -617,6 +622,7 @@ impl Default for Settings {
             system_theme_cache: None,
             zoom: 1.0,
             beeper: BeeperPreferences::default(),
+            flat_groups: Default::default(),
             sidebar_width: 300.0,
             search_pane_width: 380.0,
             info_pane_width: 380.0,
@@ -624,6 +630,8 @@ impl Default for Settings {
             send_read_receipts: true,
             send_typing: true,
             auto_download: true,
+            auto_link_previews: false,
+            remove_link_tracking: false,
             show_wallpaper: true,
             wallpaper_color: WallpaperColor::Theme,
             dark_wallpaper_color: WallpaperColor::Theme,
@@ -910,6 +918,7 @@ pub struct AccountSettings {
     pub send_typing: bool,
     #[serde(alias = "auto_download_images")]
     pub auto_download: bool,
+
     pub last_chat: Option<String>,
     /// Recently opened chats, most recent last; `last_chat` is the open
     /// one. The field name stays for file compatibility: it was the tab
@@ -943,6 +952,7 @@ impl Default for AccountSettings {
             send_read_receipts: true,
             send_typing: true,
             auto_download: true,
+
             last_chat: None,
             open_tabs: Vec::new(),
             notifications: true,

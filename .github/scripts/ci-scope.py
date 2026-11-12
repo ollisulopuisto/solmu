@@ -15,7 +15,9 @@ import subprocess
 
 # Workflow/selector edits always keep every check family.
 FULL_TRIGGER = {'.github/workflows/ci.yml', '.github/scripts/ci-scope.py',
-                '.github/scripts/test-ci-scope.py', '.github/scripts/test-ci-workflows.py'}
+                '.github/scripts/test-ci-scope.py', '.github/scripts/test-ci-workflows.py',
+                '.github/scripts/install-ubuntu-build-deps.py',
+                '.github/scripts/test-install-ubuntu-build-deps.py'}
 
 
 def ignored(path):
@@ -64,7 +66,7 @@ def classify(paths, full=False):
             flags['portable'] = flags['native'] = True
         elif path.startswith('harness/'):
             flags['portable'] = True
-        elif path in ('.github/workflows/ci.yml', '.github/scripts/ci-scope.py', '.github/scripts/test-ci-scope.py', '.github/scripts/test-ci-workflows.py'):
+        elif path in FULL_TRIGGER:
             flags.update(dict.fromkeys(flags, True))
         elif path.startswith('.github/') or path in ('.gitignore', '.gitattributes', 'LICENSE', 'THIRD-PARTY-NOTICES.md'):
             continue
