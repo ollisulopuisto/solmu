@@ -6,12 +6,35 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use crate::model::StickerPack;
 
 /// The same emoji with or without its presentation selector compares equal.
 fn plain(emoji: &str) -> String {
     emoji.chars().filter(|c| *c != '\u{fe0f}').collect()
+}
+
+/// An emoji with its matching fields ready: the name lowercased once, not
+/// on every search keystroke.
+struct NamedEmoji {
+    name: String,
+    shortcodes: Vec<&'static str>,
+    plain: String,
+}
+
+/// Every known emoji, indexed once for the app's lifetime.
+fn named_index() -> &'static [NamedEmoji] {
+    static INDEX: OnceLock<Vec<NamedEmoji>> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        emojis::iter()
+            .map(|emoji| NamedEmoji {
+                name: emoji.name().to_lowercase(),
+                shortcodes: emoji.shortcodes().collect(),
+                plain: plain(emoji.as_str()),
+            })
+            .collect()
+    })
 }
 
 /// Emojis a search term names: the emoji itself, or every emoji whose name
@@ -26,11 +49,11 @@ fn named_emojis(word: &str) -> HashSet<String> {
     if word.chars().count() < 2 {
         return found;
     }
-    for emoji in emojis::iter() {
-        let named = emoji.name().to_lowercase().contains(&word)
-            || emoji.shortcodes().any(|code| code.contains(&word));
+    for emoji in named_index() {
+        let named =
+            emoji.name.contains(&word) || emoji.shortcodes.iter().any(|code| code.contains(&word));
         if named {
-            found.insert(plain(emoji.as_str()));
+            found.insert(emoji.plain.clone());
         }
     }
     found
@@ -124,6 +147,7 @@ mod tests {
             ("/packs/Ducks/1.webp", vec!["🦆", "😂"]),
             ("/recent/frog.webp", vec!["🐸"]),
             ("/received/cat.webp", vec!["🐱"]),
+            ("/received/poop.webp", vec!["💩"]),
         ]
         .into_iter()
         .map(|(path, emojis)| {
@@ -145,7 +169,10 @@ mod tests {
             pack("Ducks", &["/packs/Ducks/1.webp", "/packs/Ducks/2.webp"]),
             pack("Bom dia", &["/packs/Bom dia/1.webp"]),
         ];
-        let received = [PathBuf::from("/received/cat.webp")];
+        let received = [
+            PathBuf::from("/received/cat.webp"),
+            PathBuf::from("/received/poop.webp"),
+        ];
         search(
             &Library {
                 recent: &recent,
@@ -190,5 +217,13 @@ mod tests {
     #[test]
     fn a_sticker_only_in_received_is_found() {
         assert_eq!(library_search("🐱"), vec!["/received/cat.webp"]);
+    }
+
+    /// "poop" is a shortcode for 💩 but absent from its name ("pile of
+    /// poo"): the match has to come from the indexed shortcodes, not the
+    /// lowercased name.
+    #[test]
+    fn a_shortcode_word_finds_the_emoji_it_abbreviates() {
+        assert_eq!(library_search("poop"), vec!["/received/poop.webp"]);
     }
 }
