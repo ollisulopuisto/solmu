@@ -217,7 +217,6 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
         super::batch_actions::archive_bar(app, ui);
         return;
     }
-    let palette = app.palette;
     Frame::new()
         .inner_margin(Margin::symmetric(14, 8))
         .show(ui, |ui| {
@@ -239,29 +238,27 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             }
             search_field(app, ui);
             super::batch_actions::archive_bar(app, ui);
-            super::flat_groups::toggle(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
-                ui.set_min_height(36.0);
-                theme::text(
-                    ui,
-                    crate::i18n::gettext(app.locale, "Chats").as_ref(),
-                    theme::bold(20.0),
-                    palette.text,
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let width = queue_width(ui.available_width());
-                    ui.allocate_ui_with_layout(
-                        vec2(width, 36.0),
-                        Layout::left_to_right(Align::Center),
-                        |ui| facet_row(app, ui),
+                let width = (ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0;
+                for mode in crate::model::ListMode::EVERY {
+                    let response = ui.add_sized(
+                        [width, 36.0],
+                        egui::Button::selectable(app.list_mode == mode, mode.label(app.locale)),
                     );
-                });
+                    if response.clicked() {
+                        app.actions.push(Action::SetListMode(mode));
+                    }
+                }
             });
             ui.ctx()
                 .data_mut(|data| data.insert_temp(header_row_id(), row.response.rect));
             ui.add_space(6.0);
-            scope_row(app, ui);
+            if app.global_search {
+                ui.label(egui::RichText::new("Search all chats and messages").small());
+            } else {
+                scope_row(app, ui);
+            }
             let count = app.outside_scope_matches();
             if count > 0
                 && ui
@@ -2101,7 +2098,7 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
         results(app, ui);
         return;
     }
-    if app.settings.flat_groups.grouped_view && !app.show_archived {
+    if !app.show_archived {
         super::flat_groups::list(app, ui);
         return;
     }
@@ -3444,28 +3441,14 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
     {
         app.actions.push(Action::MarkUnread(chat.id.clone()));
     }
-    // Local later flags, one chat at a time: the chat's state decides
-    // the label, and nothing leaves this computer. Any chat can be
-    // marked - Beeper chats by backend member, others by app account.
-    {
-        let queued_reply = app.reply_later_contains(chat);
-        let reply_label = if queued_reply {
-            crate::i18n::gettext(locale, "Clear reply later")
-        } else {
-            crate::i18n::gettext(locale, "Reply later")
-        };
-        if widgets::menu_item(ui, palette, Some(Icon::Clock), reply_label.as_ref()) {
-            app.actions.push(Action::ToggleReplyLater(chat.id.clone()));
-        }
-        let queued_read = app.read_later_contains(chat);
-        let read_label = if queued_read {
-            crate::i18n::gettext(locale, "Clear read later")
-        } else {
-            crate::i18n::gettext(locale, "Read later")
-        };
-        if widgets::menu_item(ui, palette, Some(Icon::ListChecks), read_label.as_ref()) {
-            app.actions.push(Action::ToggleReadLater(chat.id.clone()));
-        }
+    let queued = app.reply_later_contains(chat) || app.read_later_contains(chat);
+    let label = if queued {
+        "Clear deal with later"
+    } else {
+        "Deal with later"
+    };
+    if widgets::menu_item(ui, palette, Some(Icon::Clock), label) {
+        app.actions.push(Action::ToggleDealLater(chat.id.clone()));
     }
     // Move a one-to-one chat out of its automatic category for good. The
     // move is local, and the rules never re-sort a chat placed this way.
@@ -3745,34 +3728,24 @@ fn sound_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &Chat) 
     });
 }
 
-/// Mute, with WhatsApp's choices of how long, in a submenu of its own.
+/// Exactly two mute durations. Beeper timed mutes are local to this app.
 fn mute_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &Chat, now: i64) {
-    let locale = app.locale;
-    if chat.backend_account.is_some() {
-        if widgets::menu_item(ui, palette, Some(Icon::BellOff), "Mute indefinitely") {
-            app.actions.push(Action::SetMuted(chat.id.clone(), Some(0)));
+    let tomorrow = crate::util::next_mute_morning(now);
+    let items = ["Mute until tomorrow", "Mute forever"];
+    widgets::submenu(ui, palette, Icon::BellOff, "Mute", &items, |ui| {
+        if chat.backend_account.is_some() {
+            ui.small("Timed mute applies only in Solmu.");
         }
-        return;
-    }
-    let options = [
-        (
-            crate::i18n::gettext(locale, "8 hours"),
-            Some(now + 8 * 3600),
-        ),
-        (
-            crate::i18n::gettext(locale, "1 week"),
-            Some(now + 7 * 86_400),
-        ),
-        (crate::i18n::gettext(locale, "Always"), Some(0)),
-    ];
-    let items: Vec<&str> = options.iter().map(|(label, _)| label.as_ref()).collect();
-    let label = crate::i18n::gettext(locale, "Mute");
-    widgets::submenu(ui, palette, Icon::BellOff, &label, &items, |ui| {
-        for (label, until) in &options {
-            if widgets::menu_item(ui, palette, None, label.as_ref()) {
-                app.actions.push(Action::SetMuted(chat.id.clone(), *until));
-                ui.close();
-            }
+        if let Some(end) = tomorrow
+            && widgets::menu_item(ui, palette, None, items[0])
+        {
+            app.actions
+                .push(Action::SetMuted(chat.id.clone(), Some(end)));
+            ui.close();
+        }
+        if widgets::menu_item(ui, palette, None, items[1]) {
+            app.actions.push(Action::SetMuted(chat.id.clone(), Some(0)));
+            ui.close();
         }
     });
 }

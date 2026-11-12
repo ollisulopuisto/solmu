@@ -49,27 +49,41 @@ impl Groups {
         Some(id)
     }
 
-    /// Add only. Existing membership in other groups is never moved.
+    /// Move an exact identity to one group. Unknown targets change nothing.
     pub fn add(&mut self, id: u64, member: Member) -> bool {
-        let Some(group) = self.items.iter_mut().find(|g| g.id == id) else {
-            return false;
-        };
-        if group.members.contains(&member) {
+        if !self.items.iter().any(|g| g.id == id) {
             return false;
         }
-        group.members.push(member);
-        true
+        let before = self.items.clone();
+        for group in &mut self.items {
+            group.members.retain(|m| m != &member);
+        }
+        self.items
+            .iter_mut()
+            .find(|g| g.id == id)
+            .unwrap()
+            .members
+            .push(member);
+        self.items != before
     }
 
-    /// Preserve source assignments when an unchanged linked row is applied.
+    /// One home for a linked person, including every source identity.
     pub fn assign_linked(&mut self, target: &Member, sources: &[Member], selected: &[u64]) {
+        let selected = selected
+            .first()
+            .copied()
+            .filter(|id| self.items.iter().any(|g| g.id == *id));
         for group in &mut self.items {
-            if selected.contains(&group.id) {
-                if !group.members.iter().any(|member| sources.contains(member)) {
-                    group.members.push(target.clone());
+            group
+                .members
+                .retain(|m| m != target && !sources.contains(m));
+            if Some(group.id) == selected {
+                group.members.push(target.clone());
+                for member in sources {
+                    if !group.members.contains(member) {
+                        group.members.push(member.clone());
+                    }
                 }
-            } else {
-                group.members.retain(|member| !sources.contains(member));
             }
         }
     }
@@ -102,7 +116,7 @@ mod tests {
         }
     }
     #[test]
-    fn many_groups_do_not_copy_or_move_chats() {
+    fn assigning_moves_to_one_group() {
         let mut groups = Groups::default();
         let a = groups.create("Work").unwrap();
         let b = groups.create("Family").unwrap();
@@ -110,6 +124,7 @@ mod tests {
         assert!(groups.add(a, chat.clone()));
         assert!(!groups.add(a, chat.clone()));
         assert!(groups.add(b, chat.clone()));
+        assert!(groups.items[0].members.is_empty());
         assert_eq!(groups.unread_total([&chat, &chat]), 1);
         groups.delete(a);
         assert_eq!(groups.items[0].members, vec![chat]);
@@ -122,11 +137,11 @@ mod tests {
         let b = member("two");
         groups.add(id, a.clone());
         groups.assign_linked(&b, &[a.clone(), b.clone()], &[id]);
-        assert_eq!(groups.items[0].members, vec![a.clone()]);
+        assert_eq!(groups.items[0].members, vec![b.clone(), a.clone()]);
         groups.assign_linked(&b, &[a.clone(), b.clone()], &[]);
         assert!(groups.items[0].members.is_empty());
         groups.assign_linked(&b, &[a.clone(), b.clone()], &[id]);
-        assert_eq!(groups.items[0].members, vec![b]);
+        assert_eq!(groups.items[0].members, vec![b, a]);
     }
 
     #[test]

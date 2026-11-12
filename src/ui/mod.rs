@@ -192,7 +192,15 @@ fn main_view(app: &mut App, ui: &mut egui::Ui, list_only: bool) {
             );
             match app.page {
                 Page::Settings => settings::show(app, ui),
-                Page::Chats => conversation::show(app, ui),
+                Page::Chats => {
+                    let global_search = app.global_search;
+                    ui.scope(|ui| {
+                        if global_search {
+                            ui.set_opacity(0.38);
+                        }
+                        conversation::show(app, ui);
+                    });
+                }
                 Page::Wallpaper => settings::wallpaper_show(app, ui),
             }
         });

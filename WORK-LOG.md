@@ -64,3 +64,25 @@ but assumed accepted streams are blocking when using read timeouts. Explicitly
 set accepted fixture sockets blocking so a preconnected or newly accepted
 socket waits for request data rather than being closed on WouldBlock. This
 changes test infrastructure only, not Beeper transport or send-status behavior.
+## 2026-11-13 - Final group redesign
+
+Branch feat/group-modes implements the approved consolidated sheet: Recent,
+Focus, Needs me; static group sections; one group per chat; Other last; merged
+manual later mark; next-local-08:00/forever mute; widening find and names-only
+switcher. Beeper timed mute is local because the bridge has no duration API.
+Old multi-memberships use the first saved section, with single-home assignment
+on edits. No hide/collapse/group-focus controls remain.
+
+Self-review caught retained old group toggle shortcuts, stale keyboard tests,
+global-search network filtering, mode restore retaining the old queue, and
+missing expiry repaint scheduling; addressed before push. Existing #322/#323
+conversation changes and line-wrap work are untouched. #286 overlaps app/model/
+keys/chats and may need a later rebase.
+
+Validation: cargo check --locked --lib and --tests passed. Standalone assignment
+probe fails on the unchanged baseline and passes on this branch; production
+next-08:00 probe passes midnight/exact-08:00/DST cases. Initial production edits
+preceded tests, so strict red-first is not claimed for the whole feature.
+Full test linking/native demo code generation exceeds the local 120-second
+execution limit; no test-suite or pixel-verification pass claimed. CI and
+runtime capture remain required. No merge or release claimed.

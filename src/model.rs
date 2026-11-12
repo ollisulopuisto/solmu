@@ -187,6 +187,51 @@ pub enum ListFilter {
     Label(String),
 }
 
+/// The chat list's primary mode: which chats the list is for, before any
+/// scope (type, network, label) narrows it. Groups arrange every mode's
+/// list as sections; a mode never hides a chat's section membership.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ListMode {
+    /// Everything, latest first: the full list.
+    #[default]
+    Recent,
+    /// Favourites and pinned chats, plus whatever Needs me holds.
+    Focus,
+    /// Unread and manually marked chats only, and never a muted chat.
+    NeedsMe,
+}
+
+impl ListMode {
+    pub const EVERY: [Self; 3] = [Self::Recent, Self::Focus, Self::NeedsMe];
+
+    pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
+        use crate::i18n::gettext;
+        match self {
+            Self::Recent => gettext(locale, "Recent"),
+            Self::Focus => gettext(locale, "Focus"),
+            Self::NeedsMe => gettext(locale, "Needs me"),
+        }
+    }
+
+    /// The text settings store; anything unknown reads as Recent.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Recent => "recent",
+            Self::Focus => "focus",
+            Self::NeedsMe => "needs-me",
+        }
+    }
+
+    pub fn parse(key: &str) -> Option<Self> {
+        match key {
+            "recent" => Some(Self::Recent),
+            "focus" => Some(Self::Focus),
+            "needs-me" => Some(Self::NeedsMe),
+            _ => None,
+        }
+    }
+}
+
 impl ListFilter {
     const LABEL: &'static str = "label:";
 
@@ -3127,6 +3172,7 @@ pub enum Action {
     MoveFavorite(ChatId, usize),
     /// Flags a chat to reply to later, or clears the flag. Local only:
     /// person-level, persisted in settings, never sent anywhere.
+    ToggleDealLater(ChatId),
     ToggleReplyLater(ChatId),
     /// Flags a chat to read later, or clears the flag. Local only:
     /// person-level, persisted in settings, never sent anywhere.
@@ -3136,6 +3182,11 @@ pub enum Action {
     ToggleSidebar,
     ToggleFlatGroups,
     SetChatFilter(ChatFilter),
+    /// Picks the chat list's mode (Recent, Focus or Needs me).
+    SetListMode(ListMode),
+    /// Widens an in-chat find to every chat: the query moves to the chat
+    /// list's search field, which then searches all chats.
+    FindEverywhere,
     /// Picks the label the chat list shows; `None` shows every chat.
     SelectLabel(Option<String>),
     /// Shows one automatic category in the chat list; `None` shows every chat.

@@ -10,8 +10,6 @@ use std::collections::{HashMap, HashSet};
 pub struct State {
     pub name: String,
     pub assigning: Option<(Member, Vec<u64>)>,
-    pub undo: Option<(u64, Member)>,
-    collapsed: HashSet<u64>,
     /// Demo/test instrumentation: actual alias widgets built in the last frame.
     #[cfg(any(test, feature = "demo"))]
     pub built_rows: usize,
@@ -75,6 +73,7 @@ fn membership_rows(app: &App, chats: &[&Chat]) -> Vec<Vec<usize>> {
             aliases.entry(key).or_default().push(index);
         }
     }
+    let mut seen = HashSet::new();
     app.settings
         .flat_groups
         .items
@@ -89,6 +88,7 @@ fn membership_rows(app: &App, chats: &[&Chat]) -> Vec<Vec<usize>> {
                 .collect();
             rows.sort_unstable();
             rows.dedup();
+            rows.retain(|index| seen.insert(*index));
             rows
         })
         .collect()
@@ -126,26 +126,11 @@ pub fn assign(app: &mut App, chat: &Chat) {
     app.flat_group_ui.assigning = Some((target, selected));
 }
 
-pub fn toggle(app: &mut App, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
-        let grouped = app.settings.flat_groups.grouped_view;
-        for (name, mode) in [
-            (crate::i18n::gettext(app.locale, "Latest"), false),
-            (crate::i18n::gettext(app.locale, "Groups"), true),
-        ] {
-            if ui.selectable_label(grouped == mode, name).clicked() && grouped != mode {
-                app.actions.push(Action::ToggleFlatGroups);
-            }
-        }
-    });
-}
-
 /// Keyboard order follows group order, then Ungrouped, deduplicating aliases.
-/// Collapsed sections are expanded by list() when their chat is requested.
+/// Headers are static and never change the navigation order.
 pub fn navigation_chats(app: &App) -> Vec<&Chat> {
     let chats = app.visible_chats();
-    if !app.settings.flat_groups.grouped_view
-        || app.show_archived
+    if app.show_archived
         || app.show_starred
         || app.locked_folder_open()
         || app.secret_code_matched()
@@ -246,77 +231,31 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .id_salt("flat-group-list")
         .show(ui, |ui| {
-            ui.label(crate::i18n::gettext(
-                app.locale,
-                "Local only. No parent groups or subgroups.",
-            ));
-            let unread: Vec<_> = chats
-                .iter()
-                .zip(&keys)
-                .filter(|(c, _)| c.looks_unread())
-                .filter_map(|(_, k)| k.first())
-                .collect();
-            let count = app.settings.flat_groups.unread_total(unread);
-            ui.label(
-                crate::i18n::ngettext(
-                    app.locale,
-                    "{count} unread chat",
-                    "{count} unread chats",
-                    count as u32,
-                )
-                .replace("{count}", &count.to_string()),
-            );
-            if let Some((id, target)) = app.flat_group_ui.undo.clone() {
-                ui.horizontal(|ui| {
-                    ui.label(crate::i18n::gettext(app.locale, "Added to group"));
-                    if ui
-                        .button(crate::i18n::gettext(app.locale, "Undo"))
-                        .clicked()
-                    {
-                        app.settings.flat_groups.remove(id, &target);
-                        app.flat_group_ui.undo = None;
-                        changed = true;
-                    }
-                });
-            }
             for (group, indices) in groups.iter().zip(&rows) {
                 let included: Vec<_> = indices.iter().map(|index| &chats[*index]).collect();
-                let unread = included.iter().filter(|c| c.looks_unread()).count();
-                if app
-                    .scroll_chat_into_view
-                    .as_ref()
-                    .is_some_and(|id| included.iter().any(|chat| &chat.id == id))
-                {
-                    app.flat_group_ui.collapsed.remove(&group.id);
-                }
-                let closed = app.flat_group_ui.collapsed.contains(&group.id);
-                let counts = crate::i18n::gettext(app.locale, "{chats} chats / {unread} unread")
-                    .replace("{chats}", &included.len().to_string())
-                    .replace("{unread}", &unread.to_string());
-                let heading = format!(
-                    "{} {}   {}",
-                    if closed { "+" } else { "−" },
-                    group.name,
-                    counts
+                let heading = &group.name;
+                let response = ui.add_sized(
+                    [ui.available_width(), 36.0],
+                    egui::Label::new(egui::RichText::new(heading).strong())
+                        .sense(egui::Sense::hover()),
                 );
-                let response =
-                    ui.add_sized([ui.available_width(), 36.0], egui::Button::new(heading));
-                if response.clicked() {
-                    if closed {
-                        app.flat_group_ui.collapsed.remove(&group.id);
-                    } else {
-                        app.flat_group_ui.collapsed.insert(group.id);
-                    }
-                }
                 if let Some(target) = response.dnd_release_payload::<Member>() {
                     // A stale drag from another account must not mutate the current view.
                     if keys.iter().any(|row| row.contains(target.as_ref()))
                         && !indices
                             .iter()
                             .any(|index| keys[*index].contains(target.as_ref()))
-                        && app.settings.flat_groups.add(group.id, (*target).clone())
                     {
-                        app.flat_group_ui.undo = Some((group.id, (*target).clone()));
+                        let sources = keys
+                            .iter()
+                            .find(|row| row.contains(target.as_ref()))
+                            .cloned()
+                            .unwrap_or_default();
+                        app.settings.flat_groups.assign_linked(
+                            target.as_ref(),
+                            &sources,
+                            &[group.id],
+                        );
                         changed = true;
                     }
                 }
@@ -334,11 +273,9 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
                         ui.close();
                     }
                 });
-                if !closed {
-                    ui.push_id(("flat-group", group.id), |ui| {
-                        virtual_aliases(app, ui, &included, ("flat-group", group.id));
-                    });
-                }
+                ui.push_id(("flat-group", group.id), |ui| {
+                    virtual_aliases(app, ui, &included, ("flat-group", group.id));
+                });
             }
             let ungrouped: Vec<_> = chats
                 .iter()
@@ -346,25 +283,13 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
                 .filter(|(index, _)| !grouped.contains(index))
                 .map(|(_, chat)| chat)
                 .collect();
-            egui::CollapsingHeader::new(
-                crate::i18n::ngettext(
-                    app.locale,
-                    "Ungrouped · {count} chat",
-                    "Ungrouped · {count} chats",
-                    ungrouped.len() as u32,
-                )
-                .replace("{count}", &ungrouped.len().to_string()),
-            )
-            .id_salt("flat-ungrouped")
-            .open(
-                app.scroll_chat_into_view
-                    .as_ref()
-                    .is_some_and(|id| ungrouped.iter().any(|chat| &chat.id == id))
-                    .then_some(true),
-            )
-            .show(ui, |ui| {
-                virtual_aliases(app, ui, &ungrouped, ("ungrouped", 0));
-            });
+            {
+                ui.add_sized(
+                    [ui.available_width(), 36.0],
+                    egui::Label::new(egui::RichText::new("Other").strong()),
+                );
+            }
+            virtual_aliases(app, ui, &ungrouped, ("other", 0));
             ui.separator();
             ui.horizontal(|ui| {
                 ui.add(
@@ -407,17 +332,14 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
         ui.heading(crate::i18n::gettext(app.locale, "Assign groups"));
         ui.label(crate::i18n::gettext(
             app.locale,
-            "Same chat in several groups. No copied history.",
+            "Choose one group. Chat history stays where it is.",
         ));
+        let mut home = selected.first().copied();
+        ui.radio_value(&mut home, None, "Other");
         for group in &app.settings.flat_groups.items {
-            let mut checked = selected.contains(&group.id);
-            if ui.checkbox(&mut checked, &group.name).changed() {
-                selected.retain(|id| id != &group.id);
-                if checked {
-                    selected.push(group.id);
-                }
-            }
+            ui.radio_value(&mut home, Some(group.id), &group.name);
         }
+        selected = home.into_iter().collect();
         if app.settings.flat_groups.items.is_empty() {
             ui.label(crate::i18n::gettext(
                 app.locale,
@@ -434,7 +356,6 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
         });
     });
     if apply {
-        app.flat_group_ui.undo = None;
         let targets = app
             .chats
             .iter()
@@ -551,7 +472,6 @@ mod tests {
         let work = member(&app, &app.chats[1]);
         app.settings.flat_groups.add(group, work);
         app.settings.flat_groups.grouped_view = true;
-        app.flat_group_ui.collapsed.insert(group);
         assert_eq!(
             navigation_chats(&app)
                 .iter()
@@ -570,7 +490,6 @@ mod tests {
                 "keyboard target must be drawn and reveal request consumed"
             );
         }
-        assert!(!app.flat_group_ui.collapsed.contains(&group));
         app.scroll_chat_into_view = Some("work".into());
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.disable();

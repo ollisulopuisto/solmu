@@ -1,11 +1,11 @@
 //! Ctrl+K: recent chats without a query; matching chat names first, then
-//! fuzzy keyword matches in indexed/loaded message text when typing.
+//! chat names only when typing.
 
 use egui::{Key, Modifiers, Sense, vec2};
 
 use super::{theme, widgets};
 use crate::app::App;
-use crate::model::{Action, ChatId, Message};
+use crate::model::{Action, ChatId};
 
 /// One rendered row: a recent chat.
 pub struct SwitcherEntry {
@@ -95,44 +95,6 @@ fn keyword_match(text: &str, query: &str) -> bool {
     })
 }
 
-/// Existing index results plus locally loaded text, filtered to visible chats.
-/// Beeper's remote index is literal-word search, so typo matches outside loaded
-/// history are not guaranteed. No separate index or message copy is created.
-fn message_entries(app: &App) -> Vec<Message> {
-    let query = crate::util::search_key(app.jump_query.trim());
-    if query.is_empty() {
-        return Vec::new();
-    }
-    let allowed: std::collections::HashSet<_> = app
-        .chats
-        .iter()
-        .filter(|chat| !chat.locked)
-        .map(|chat| chat.id.clone())
-        .collect();
-    let mut seen = std::collections::HashSet::new();
-    let mut messages: Vec<_> = app
-        .jump_hits
-        .iter()
-        .chain(
-            app.conversations
-                .values()
-                .flat_map(|conversation| conversation.messages.iter()),
-        )
-        .filter(|message| allowed.contains(&message.chat))
-        .filter(|message| keyword_match(&message.content.summary(), &query))
-        .filter(|message| seen.insert((message.chat.clone(), message.id.clone())))
-        .cloned()
-        .collect();
-    messages.sort_by_key(|message| {
-        (
-            !crate::util::search_key(&message.content.summary()).contains(&query),
-            std::cmp::Reverse(message.timestamp),
-        )
-    });
-    messages.truncate(40);
-    messages
-}
-
 /// Where the highlight starts: the chat after the current one, wrapping,
 /// so Enter alone alternates the two most recent chats. Falls back to the
 /// first row when the current chat is not in the list.
@@ -166,8 +128,7 @@ fn execute(app: &mut App, id: &ChatId) {
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let entries = entries(app, &app.jump_query);
-    let messages = message_entries(app);
-    let count = entries.len() + messages.len();
+    let count = entries.len();
     if count == 0 {
         app.jump_selected = 0;
     } else if app.jump_selected >= count {
@@ -189,12 +150,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     } else {
         None
     };
-    let message_chosen = (enter && app.jump_selected >= entries.len())
-        .then(|| messages.get(app.jump_selected - entries.len()).cloned())
-        .flatten();
-
     let width = ui.available_width();
-    let hint = crate::i18n::gettext(app.locale, "Chats and message text");
+    let hint = crate::i18n::gettext(app.locale, "Chat names");
     let search = widgets::search_field(
         ui,
         &palette,
@@ -208,8 +165,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     if search.changed() {
         app.jump_selected = 0;
-        app.actions
-            .push(Action::SwitcherSearch(app.jump_query.trim().into()));
     }
 
     ui.add_space(6.0);
@@ -223,7 +178,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let mut clicked = None;
-    let mut clicked_message = None;
     egui::ScrollArea::vertical()
         .id_salt("jump-to-chat-rows")
         .max_height((ui.ctx().content_rect().height() - 280.0).clamp(120.0, 380.0))
@@ -277,42 +231,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     clicked = Some(entry.id.clone());
                 }
             }
-            if !messages.is_empty() {
-                ui.separator();
-                ui.small("Message text");
-                for (offset, message) in messages.iter().enumerate() {
-                    let selected = app.jump_selected == entries.len() + offset;
-                    let title = app
-                        .chat(&message.chat)
-                        .map(|chat| app.chat_title(chat))
-                        .unwrap_or_default();
-                    let label = format!(
-                        "{} · {}\n{}",
-                        title,
-                        crate::util::moment_stamp(app.locale, message.timestamp),
-                        message.content.summary()
-                    );
-                    let response = ui.add(
-                        egui::Button::selectable(selected, label)
-                            .wrap()
-                            .min_size(vec2(ui.available_width(), 64.0)),
-                    );
-                    if selected && (up || down) {
-                        response.scroll_to_me(Some(egui::Align::Center));
-                    }
-                    if response.clicked() {
-                        clicked_message = Some(message.clone());
-                    }
-                }
-            }
         });
-    if let Some(message) = clicked_message.or(message_chosen) {
-        app.actions.push(Action::CloseDialog);
-        app.actions.push(Action::OpenMessage {
-            chat: message.chat,
-            message: message.id,
-        });
-    }
     if let Some(id) = clicked.or(chosen) {
         execute(app, &id);
     }
@@ -361,53 +280,13 @@ mod tests {
     }
 
     #[test]
-    fn message_matches_are_deduplicated_and_exclude_locked_and_unknown_chats() {
+    fn message_only_matches_do_not_enter_the_name_switcher() {
         let (_root, mut app) = app();
         chat(&mut app, "public", "Ada", "WhatsApp");
-        chat(&mut app, "secret", "Secret", "WhatsApp");
-        app.chats[1].locked = true;
-        app.jump_query = "cofe".into();
-        for id in ["public", "public", "secret", "unknown"] {
-            let mut message = crate::archive::tests::message(id, "match", 1000, false);
-            message.content = crate::model::Content::text("Let's have coffee");
-            app.jump_hits.push(message);
-        }
-        let messages = message_entries(&app);
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].chat, "public");
-    }
-
-    #[test]
-    fn enter_on_message_match_uses_the_history_loading_navigation_path() {
-        let (_root, mut app) = app();
-        chat(&mut app, "public", "Ada", "WhatsApp");
-        app.jump_query = "coffee".into();
-        let mut message = crate::archive::tests::message("public", "old-hit", 1000, false);
+        let mut message = crate::archive::tests::message("public", "hit", 1000, false);
         message.content = crate::model::Content::text("coffee");
         app.jump_hits.push(message);
-        let ctx = egui::Context::default();
-        crate::theme::install(&ctx);
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    vec2(800.0, 800.0),
-                )),
-                events: vec![egui::Event::Key {
-                    key: Key::Enter,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: Modifiers::NONE,
-                }],
-                ..Default::default()
-            },
-            |ui| show(&mut app, ui),
-        );
-        output.textures_delta.clear();
-        assert!(
-            matches!(app.actions.as_slice(), [Action::CloseDialog, Action::OpenMessage {chat, message}] if chat == "public" && message == "old-hit")
-        );
+        assert!(entries(&app, "coffee").is_empty());
     }
 
     #[test]

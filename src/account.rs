@@ -121,6 +121,8 @@ pub struct Account {
     pub scheduled_messages: Option<Vec<crate::scheduler::ScheduledMessage>>,
     pub show_archived: bool,
     pub chat_filter: ChatFilter,
+    /// The chat list's mode (Recent, Focus or Needs me); Recent by default.
+    pub list_mode: crate::model::ListMode,
     pub category_filter: Option<ChatFilter>,
     pub favorites_only: bool,
     /// The chip the Calls page's history shows.
@@ -181,6 +183,12 @@ impl Account {
         });
         let favorites_only = settings.favorites_only || chat_filter == ChatFilter::Favorites;
         let chat_filter = settings.chat_queue.unwrap_or(chat_filter);
+        let list_mode = settings.list_mode.unwrap_or_else(|| match chat_filter {
+            ChatFilter::Unread | ChatFilter::ReplyLater | ChatFilter::ReadLater => {
+                crate::model::ListMode::NeedsMe
+            }
+            _ => crate::model::ListMode::Recent,
+        });
         Self {
             batch_ui: Default::default(),
             id,
@@ -256,17 +264,8 @@ impl Account {
             send_later_draft_backup: None,
             scheduled_messages: None,
             show_archived: false,
-            chat_filter: if matches!(
-                chat_filter,
-                ChatFilter::Private
-                    | ChatFilter::Groups
-                    | ChatFilter::Channels
-                    | ChatFilter::Favorites
-            ) {
-                ChatFilter::All
-            } else {
-                chat_filter
-            },
+            chat_filter: ChatFilter::All,
+            list_mode,
             category_filter,
             favorites_only,
             labels: Vec::new(),

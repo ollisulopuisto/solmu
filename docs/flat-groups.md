@@ -1,25 +1,32 @@
-# Local flat groups
+# Chat list modes and local groups
 
-Latest and Groups are two views of the same chats. Cmd-D switches views, using
-shared-keymap PR #281 (which moves chat info to Cmd-Option-I).
+Recent is the full list, latest activity first. Focus includes favorites, pins
+and Needs me. Needs me includes unread chats and the Deal with later mark,
+excluding every muted chat. Existing read/reply-later marks count as that same
+mark, and clearing Deal with later clears both old marks.
 
-Create a group in Groups. Right-click a chat and choose Assign groups, select
-any number of groups, then Apply. Cancel changes nothing. Drag a chat onto a
-group header to add it without changing its other memberships. The Undo button
-removes only that added membership. Right-click a group header to delete the
-group. This deletes no chat, history or remote data.
+Every mode uses static section headers. Headers do not collapse or filter the
+list. Other is always last. Each chat has one home. Old settings with several
+memberships display the first saved group only until reassigned. Assign groups
+uses a single choice; dragging to a header moves the chat and all its linked
+source identities. Deleting a group deletes no chat or history.
 
-Membership is saved in local settings, keyed by local account, backend origin,
-bridge account and chat. It is not a Beeper label, folder or remote group.
-There are no parents or subgroups. Aliases open the original chat, so read state
-is shared. The total unread-chat count counts each chat once even when it appears
-in several groups. Existing search, queue, network and account filters still
-apply; archived and locked chats stay behind their existing views.
+Membership stays in local settings and is keyed by local account, backend
+origin, bridge account and chat. It does not change remote labels or folders.
+At most 100 groups are kept, with names up to 80 characters.
 
-The old label commands are not used: the Beeper adapter does not implement them.
-This feature shares the local-only label concept, but uses the existing settings
-save path so bridge refreshes do not erase memberships. No migration from remote
-labels is implied. At most 100 groups are kept, with names up to 80 characters.
+Mute offers next 08:00 local time or forever. Beeper's bridge supports only a
+boolean mute, so timed mute is explicitly local to Solmu. It clears an old
+remote forever mute and persists the local deadline over bridge refreshes.
+Expiry restores unread chats to Needs me without another user action.
 
-Validation: standalone membership tests, native cargo check and library clippy.
-Native visual capture, full suite and Mac keyboard/drag acceptance are pending.
+Cmd-F searches the open chat. A second press widens to all chats, carries the
+query, leaves the global scope banner and dims the conversation. Cmd-Option-F
+and Cmd-Shift-F open global search directly. Cmd-K searches chat names only.
+The old Cmd-D Latest/Groups toggle is retired.
+
+Validation: cargo check --lib and --tests pass. Isolated production probes
+cover one-home assignment (old implementation fails) and local 08:00 across
+midnight and daylight-saving change. Full native tests and screenshots remain
+pending because test executable code generation exceeds the local execution
+limit. macOS keyboard/drag and live bridge behavior need CI/runtime validation.
