@@ -20155,7 +20155,10 @@ mod tests {
         app.start_hidden();
         assert!(!app.window_shown(&ctx), "--start-hidden has no window yet");
         app.hide_intent = false;
-        assert!(app.window_shown(&ctx), "attaching a window resets the intent");
+        assert!(
+            app.window_shown(&ctx),
+            "attaching a window resets the intent"
+        );
         app.window_hidden = true;
         assert!(!app.window_shown(&ctx));
     }
