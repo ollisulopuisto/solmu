@@ -6147,11 +6147,14 @@ fn stepped_text_width(natural: f32, cap: f32) -> f32 {
     ((natural / CARD_WIDTH_STEP).ceil().max(1.0) * CARD_WIDTH_STEP).min(cap.max(0.0))
 }
 
-/// Widest wrapped body-text row. Metadata sits outside the bubble.
-fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
-    let palette = view.palette;
-    let text = match &message.content {
-        Content::Text { text, .. } | Content::Interactive { text, .. } => text,
+/// Body text and the emoji growth the renderer uses for it, for width
+/// measurement. Text bodies draw a standalone emoji enlarged (see
+/// `rich_body`), so measuring them at body size settles the bubble too
+/// narrow and wraps a sticker-like message. Captions always draw at body
+/// size.
+fn body_for_measurement(content: &Content) -> Option<(&str, bool)> {
+    match content {
+        Content::Text { text, .. } | Content::Interactive { text, .. } => Some((text, true)),
         Content::Image {
             caption: Some(caption),
             ..
@@ -6163,9 +6166,15 @@ fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f3
         | Content::Document {
             caption: Some(caption),
             ..
-        } => caption,
-        _ => return None,
-    };
+        } => Some((caption, false)),
+        _ => None,
+    }
+}
+
+/// Widest wrapped body-text row. Metadata sits outside the bubble.
+fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
+    let palette = view.palette;
+    let (text, grow) = body_for_measurement(&message.content)?;
     let style = markup::Style {
         size: BODY_SIZE,
         color: palette.text,
@@ -6173,7 +6182,7 @@ fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f3
         link: palette.link,
         mention: palette.accent,
     };
-    let laid = markup::layout(ui, text, &mentions_of(view, message), &style, cap, false);
+    let laid = markup::layout(ui, text, &mentions_of(view, message), &style, cap, grow);
     let widest = laid
         .galley
         .rows
@@ -12088,6 +12097,45 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn width_measurement_uses_the_renderers_emoji_growth() {
+        // A standalone-emoji text body draws enlarged in rich_body, so its
+        // settled width must be measured with the same growth; measuring at
+        // body size wraps a sticker-like message unexpectedly.
+        let text_body = Content::Text {
+            text: "🎉".into(),
+            preview: None,
+        };
+        let (text, grow) = body_for_measurement(&text_body).unwrap();
+        assert_eq!(text, "🎉");
+        assert!(grow, "text bodies measure with emoji growth");
+
+        let interactive_body = Content::Interactive {
+            text: "🎉".into(),
+            card: None,
+        };
+        let (_, grow) = body_for_measurement(&interactive_body).unwrap();
+        assert!(grow, "interactive bodies measure with emoji growth");
+
+        // Captions stay body size even when they are a single emoji.
+        let captioned_image = Content::Image {
+            caption: Some("🎉".into()),
+            media: media(None, None),
+            motion: None,
+        };
+        let (caption, grow) = body_for_measurement(&captioned_image).unwrap();
+        assert_eq!(caption, "🎉");
+        assert!(!grow, "captions measure at body size");
+
+        // Media without a caption has no body width to measure.
+        let bare_image = Content::Image {
+            caption: None,
+            media: media(None, None),
+            motion: None,
+        };
+        assert!(body_for_measurement(&bare_image).is_none());
     }
 
     #[test]
