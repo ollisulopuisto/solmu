@@ -12,7 +12,7 @@ import tempfile
 # from src/ so a copied harness snapshot cannot hide an active-source regression.
 LIVE_MODULES = (
     'account.rs', 'categories.rs', 'backend.rs', 'backend/beeper.rs', 'backend/beeper/gallery.rs', 'backend/local_ai.rs', 'backend/local_files.rs', 'backend/linked_media.rs',
-    'composed_forward.rs', 'group_admin.rs', 'i18n.rs', 'mentions.rs', 'merged.rs', 'model.rs', 'suggest.rs',
+    'composed_forward.rs', 'group_admin.rs', 'i18n.rs', 'mentions.rs', 'merged.rs', 'model.rs', 'suggest.rs', 'pending_media.rs',
     'new_group.rs', 'paths.rs', 'run_widths.rs', 'safety.rs', 'scheduler.rs',
     'text_replace.rs',
     'scheduler_client.rs',
