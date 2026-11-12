@@ -8169,9 +8169,15 @@ mod tests {
             );
             let events = events.into_inner().unwrap();
             assert!(!keep, "past the deadline polling always ends");
-            let toasted = events.iter().any(|e| matches!(e, Event::Info(text) if text.contains("60 seconds")));
+            let toasted = events
+                .iter()
+                .any(|e| matches!(e, Event::Info(text) if text.contains("60 seconds")));
             assert_eq!(toasted, !expect_done);
-            assert!(!events.iter().any(|e| matches!(e, Event::BeeperSendConfirmed { .. })));
+            assert!(
+                !events
+                    .iter()
+                    .any(|e| matches!(e, Event::BeeperSendConfirmed { .. }))
+            );
             worker.join().unwrap();
         }
     }
