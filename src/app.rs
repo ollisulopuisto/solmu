@@ -11335,9 +11335,13 @@ impl App {
                 let queued = self.reply_later_contains(chat);
                 let member = self.later_key(chat);
                 self.toggle_reply_later_member(member);
-                if !queued {
-                    self.toast(crate::i18n::gettext(self.locale, "Marked to reply later"));
-                }
+                // Repeated Cmd+I must not stack a toast per press: the newest
+                // mark or clear replaces the earlier one.
+                let marked = crate::i18n::gettext(self.locale, "Marked to reply later");
+                let removed = crate::i18n::gettext(self.locale, "Removed from reply later");
+                self.toasts
+                    .retain(|toast| toast.message != marked && toast.message != removed);
+                self.toast(if queued { removed } else { marked });
             }
             Action::SelectAutoCategory(category) => {
                 if self.locked_folder {
@@ -31001,12 +31005,22 @@ mod conversation_palette_tests {
         assert_eq!(app.settings.beeper.reply_later.len(), 1);
         app.apply(Action::ToggleReadLater("chat-1".into()), &ctx);
         assert!(app.read_later_contains(&app.chats[0]));
-        // Clearing one flag keeps the other, and clearing stays quiet.
+        // Clearing one flag keeps the other, and says it was removed. The
+        // message replaces the earlier "Marked" toast rather than stacking.
         let toasts = app.toasts.len();
+        let last = |app: &App| app.toasts.last().map(|toast| toast.message.clone());
         app.apply(Action::ToggleReplyLater("chat-1".into()), &ctx);
         assert!(!app.reply_later_contains(&app.chats[0]));
         assert!(app.read_later_contains(&app.chats[0]));
         assert_eq!(app.toasts.len(), toasts);
+        assert_eq!(last(&app).as_deref(), Some("Removed from reply later"));
+        // Repeated toggles alternate the message and never stack per press.
+        app.apply(Action::ToggleReplyLater("chat-1".into()), &ctx);
+        assert_eq!(app.toasts.len(), toasts);
+        assert_eq!(last(&app).as_deref(), Some("Marked to reply later"));
+        app.apply(Action::ToggleReplyLater("chat-1".into()), &ctx);
+        assert_eq!(app.toasts.len(), toasts);
+        assert_eq!(last(&app).as_deref(), Some("Removed from reply later"));
         assert!(app.settings.beeper.reply_later.is_empty());
         assert_eq!(app.settings.beeper.read_later.len(), 1);
     }
