@@ -1275,6 +1275,15 @@ pub enum Event {
         paths: Vec<PathBuf>,
         documents: bool,
     },
+    /// The chat row's newest previewable message, as the worker's own
+    /// eligibility rules (the ones the inventory uses) chose it. Sent only for
+    /// messages that are new to the forward poll, never for receipt refreshes
+    /// that re-return old ones.
+    ChatPreview {
+        chat: ChatId,
+        activity: i64,
+        last: crate::model::LastMessage,
+    },
     /// Live incoming message for desktop notification.
     Incoming {
         chat: ChatId,
