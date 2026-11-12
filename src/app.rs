@@ -2859,16 +2859,9 @@ impl App {
     /// The label the active account's chat list showed when it was last
     /// used, which waits for the account's labels to arrive.
     fn remembered_label(&self) -> Option<String> {
-        match self
-            .account()
-            .settings
-            .list_filter
-            .as_deref()
-            .and_then(crate::model::ListFilter::parse)
-        {
-            Some(crate::model::ListFilter::Label(label)) => Some(label),
-            _ => None,
-        }
+        // There is no longer a visible label-scope control in the list.
+        // Saved labels must not silently narrow a newly opened account.
+        None
     }
 
     /// Why a label name cannot be used, if it cannot. `except` is the label
@@ -4123,7 +4116,7 @@ impl App {
         // order at the top of the list.
         chats.sort_by(|a, b| {
             if self.list_mode == crate::model::ListMode::Recent
-                && self.chat_filter == ChatFilter::All
+                && self.chat_filter != ChatFilter::Favorites
                 && !self.favorites_only
                 && self.search.trim().is_empty()
             {
@@ -20890,7 +20883,7 @@ mod tests {
     /// The chip or label the list showed comes back at the next start, with
     /// its account (#380).
     #[test]
-    fn the_list_filter_survives_a_restart() {
+    fn retired_scopes_do_not_silently_restore_after_restart() {
         let ctx = egui::Context::default();
         let restart = |settings: crate::settings::AccountSettings| {
             let root = tempfile::tempdir().unwrap();
@@ -20919,14 +20912,14 @@ mod tests {
         );
         let (again, _root) = restart(app.account().settings.clone());
         assert_eq!(again.chat_filter, ChatFilter::All);
-        assert_eq!(again.category_filter, Some(ChatFilter::Groups));
+        assert_eq!(again.category_filter, None);
         assert!(again.label_filter.is_none());
 
         app.labels = vec![label("label-1", "Work")];
         app.apply(Action::SelectLabel(Some("label-1".into())), &ctx);
         let (mut again, _root) = restart(app.account().settings.clone());
         assert_eq!(again.chat_filter, ChatFilter::All);
-        assert_eq!(again.label_filter.as_deref(), Some("label-1"));
+        assert_eq!(again.label_filter, None);
 
         // The label is deleted elsewhere: the list shows every chat, now
         // and at the next start.
