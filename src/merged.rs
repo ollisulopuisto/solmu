@@ -110,23 +110,30 @@ pub fn row_near_view(
 ) -> bool {
     top + height >= view_top - overscan && top <= view_bottom + overscan
 }
-/// ASCII case-insensitive contains. Byte-scans without allocating when the
-/// candidate text is ASCII. Non-ASCII text can lowercase to ASCII (U+212A
-/// KELVIN SIGN -> "k", U+0130 -> "i" + combining dot above), which a byte
-/// scan of the original bytes would miss, so those candidates are lowercased
-/// first, preserving the pre-optimization semantics.
-fn ascii_case_contains(text: &str, query: &str) -> bool {
-    let q = query.as_bytes();
-    if text.is_ascii() {
-        text.as_bytes()
-            .windows(q.len())
-            .any(|w| w.eq_ignore_ascii_case(q))
-    } else {
-        text.to_lowercase()
-            .as_bytes()
-            .windows(q.len())
-            .any(|w| w.eq_ignore_ascii_case(q))
+/// ASCII case-insensitive contains over raw bytes: a memchr first-byte skip
+/// (both case variants of the query's first byte) with an
+/// `eq_ignore_ascii_case` tail check. No allocation. The caller lowercases
+/// non-ASCII candidates first: they can fold onto ASCII (U+212A KELVIN SIGN
+/// -> "k", U+0130 -> "i" + combining dot above), which a byte scan of the
+/// original bytes would miss.
+fn ascii_case_contains(text: &[u8], q: &[u8]) -> bool {
+    let (first, rest) = (q[0], &q[1..]);
+    let lo = first.to_ascii_lowercase();
+    let hi = first.to_ascii_uppercase();
+    let mut offset = 0usize;
+    while offset + q.len() <= text.len() {
+        match memchr::memchr2(lo, hi, &text[offset..text.len() - rest.len()]) {
+            Some(i) => {
+                let start = offset + i;
+                if text[start + 1..start + q.len()].eq_ignore_ascii_case(rest) {
+                    return true;
+                }
+                offset = start + 1;
+            }
+            None => return false,
+        }
     }
+    false
 }
 
 /// Literal case-insensitive search of already-loaded data. No remote query.
@@ -143,9 +150,14 @@ pub fn search_matches(body: &str, query: &str, network: &str, sender: &str) -> b
     // 3. Short-circuit across `[body, network, sender]` sequentially to avoid
     //    redundant checks and allocations once a match is found.
     if query.is_ascii() {
-        [body, network, sender]
-            .into_iter()
-            .any(|value| ascii_case_contains(value, query))
+        let q = query.as_bytes();
+        [body, network, sender].into_iter().any(|value| {
+            if value.is_ascii() {
+                ascii_case_contains(value.as_bytes(), q)
+            } else {
+                ascii_case_contains(value.to_lowercase().as_bytes(), q)
+            }
+        })
     } else {
         let query_lower = query.to_lowercase();
         [body, network, sender]
@@ -456,6 +468,24 @@ mod tests {
         assert!(!search_matches("Kernel", "z", "Net", "pal"));
         // Non-ASCII text that does not lowercase onto the query still misses.
         assert!(!search_matches("Hyvää yötä", "k", "Net", "pal"));
+    }
+    #[test]
+    fn loaded_search_fast_path_edges() {
+        // Query longer than the candidate.
+        assert!(!search_matches("hi", "high", "Net", "pal"));
+        // Match at the very start and very end of the candidate.
+        assert!(search_matches("laptop", "laptop", "Net", "pal"));
+        assert!(search_matches("xxlaptop", "laptop", "Net", "pal"));
+        // Single-character query.
+        assert!(search_matches("abc", "b", "Net", "pal"));
+        assert!(!search_matches("abc", "d", "Net", "pal"));
+        // Repeated first-byte false starts before the real match.
+        assert!(search_matches("kkkkkkkelvin", "kelvin", "Net", "pal"));
+        assert!(!search_matches("kkkkkkkelvi", "kelvinx", "Net", "pal"));
+        // Uppercase ASCII query.
+        assert!(search_matches("kernel", "KERNEL", "Net", "pal"));
+        // Non-letter first byte.
+        assert!(search_matches("a-b", "-B", "Net", "pal"));
     }
     #[test]
     fn borrowed_timeline_preserves_sources_without_copying_payloads() {
