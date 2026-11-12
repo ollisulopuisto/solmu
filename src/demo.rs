@@ -2381,6 +2381,81 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
     };
     for part in page.split(',').map(str::trim) {
         match part {
+            "delete-review" | "delete-review-unsupported" => {
+                let chat = app.open_chat.clone().unwrap();
+                let known = app.chats.iter_mut().find(|c| c.id == chat).unwrap();
+                known.backend_account = Some("synthetic-account".into());
+                known.backend_origin = Some("http://127.0.0.1:23374".into());
+                known.mutation_capabilities = crate::model::MutationCapabilities {
+                    delete: Some(2),
+                    delete_for_me: Some(true),
+                    delete_max_age: Some(86400),
+                    archive: Some(true),
+                };
+                let messages = &mut app.conversations.get_mut(&chat).unwrap().messages;
+                let ids: Vec<_> = messages
+                    .iter_mut()
+                    .filter(|m| m.from_me)
+                    .take(2)
+                    .map(|m| {
+                        m.timestamp = crate::util::now() - 60;
+                        if part == "delete-review-unsupported" {
+                            m.status = crate::model::Delivery::Pending;
+                        }
+                        m.id.clone()
+                    })
+                    .collect();
+                app.dialog = Some(Dialog::ConfirmDeleteSelection {
+                    chat,
+                    messages: ids,
+                    for_everyone: true,
+                });
+            }
+            "previous-session-results" => {
+                app.batch_ui.owner = app.account().id.0.clone();
+                app.batch_ui.previous_session_results = vec![crate::model::BatchItem {
+                    chat: "Synthetic previous chat".into(),
+                    message: Some("Synthetic message".into()),
+                    everyone: true,
+                    result: Some(Err("Accepted request, confirmation unavailable".into())),
+                }];
+            }
+            "archive-review" | "archived-selection" => {
+                let ids: Vec<_> = app
+                    .chats
+                    .iter_mut()
+                    .take(3)
+                    .map(|chat| {
+                        chat.backend_account = Some("synthetic-account".into());
+                        chat.backend_origin = Some("http://127.0.0.1:23374".into());
+                        chat.mutation_capabilities.archive = Some(true);
+                        if part == "archived-selection" {
+                            chat.archived = true;
+                        }
+                        chat.id.clone()
+                    })
+                    .collect();
+                app.batch_ui.owner = app.account().id.0.clone();
+                app.batch_ui.selected_identities = ids
+                    .iter()
+                    .filter_map(|id| {
+                        app.chat(id)
+                            .and_then(crate::merged::Member::of)
+                            .map(|member| (id.clone(), member))
+                    })
+                    .collect();
+                app.batch_ui.selected_chats = ids;
+                app.batch_ui.reviewing_archive = part == "archive-review";
+                if part == "archived-selection" {
+                    app.show_archived = true;
+                    app.batch_ui.results = vec![crate::ui::batch_actions::Item {
+                        chat: app.batch_ui.selected_chats[0].clone(),
+                        message: None,
+                        everyone: false,
+                        result: Some(Ok(())),
+                    }];
+                }
+            }
             "flat-groups" => {
                 let work = app.settings.flat_groups.create("Work").unwrap();
                 let friends = app.settings.flat_groups.create("Friends").unwrap();

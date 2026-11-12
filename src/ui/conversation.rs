@@ -7451,7 +7451,17 @@ fn selection_menu(
         &view.palette,
         view.locale,
         &view.chat.id,
-        selection_can_revoke(messages, selected, view.now),
+        (
+            if view.chat.backend_account.is_some() {
+                matches!(view.chat.mutation_capabilities.delete, Some(2))
+            } else {
+                selection_can_revoke(messages, selected, view.now)
+            },
+            view.chat
+                .backend_account
+                .is_some()
+                .then_some(&view.chat.mutation_capabilities),
+        ),
         selected,
         actions,
     );
@@ -7464,10 +7474,11 @@ fn selection_delete_items(
     palette: &Palette,
     locale: crate::i18n::Locale,
     chat: &str,
-    can_revoke: bool,
+    support: (bool, Option<&crate::model::MutationCapabilities>),
     selected: &[String],
     actions: &mut Vec<Action>,
 ) {
+    let (can_revoke, capabilities) = support;
     for (label, for_everyone, enabled) in [
         (
             crate::i18n::gettext(locale, "Delete for everyone"),
@@ -7480,6 +7491,16 @@ fn selection_delete_items(
             !selected.is_empty(),
         ),
     ] {
+        let advertised = capabilities.is_none_or(|caps| {
+            if for_everyone {
+                matches!(caps.delete, Some(2))
+            } else {
+                caps.delete_for_me == Some(true)
+            }
+        });
+        if !advertised {
+            continue;
+        }
         if widgets::menu_item_enabled(ui, palette, Some(Icon::Trash), &label, enabled) {
             actions.push(Action::ShowDialog(Dialog::ConfirmDeleteSelection {
                 chat: chat.to_owned(),
@@ -7819,9 +7840,16 @@ fn context_menu(
     let can_edit = message.from_me
         && matches!(message.content, Content::Text { .. })
         && age <= crate::app::EDIT_WINDOW.as_secs() as i64;
-    let can_revoke = message.from_me
-        && !matches!(message.content, Content::Revoked)
-        && age <= crate::app::REVOKE_WINDOW.as_secs() as i64;
+    let can_revoke = if view.chat.backend_account.is_some() {
+        view.chat
+            .mutation_capabilities
+            .delete_refusal(true, message.from_me, message.timestamp, view.now)
+            .is_none()
+    } else {
+        message.from_me
+            && !matches!(message.content, Content::Revoked)
+            && age <= crate::app::REVOKE_WINDOW.as_secs() as i64
+    };
     if can_edit
         && widgets::menu_item(
             ui,
@@ -7852,12 +7880,15 @@ fn context_menu(
             for_everyone: true,
         }));
     }
-    if widgets::menu_item(
-        ui,
-        &palette,
-        Some(Icon::EyeOff),
-        &crate::i18n::gettext(view.locale, "Delete for me"),
-    ) {
+    if (view.chat.backend_account.is_none()
+        || view.chat.mutation_capabilities.delete_for_me == Some(true))
+        && widgets::menu_item(
+            ui,
+            &palette,
+            Some(Icon::EyeOff),
+            &crate::i18n::gettext(view.locale, "Delete for me"),
+        )
+    {
         actions.push(Action::ShowDialog(Dialog::ConfirmDeleteMessage {
             chat: view.chat.id.clone(),
             message: message.id.clone(),
@@ -11918,7 +11949,18 @@ fn selection_bar(app: &mut App, ui: &mut egui::Ui, chat: &str, selected: &[Strin
                         &palette,
                         app.locale,
                         chat,
-                        can_revoke,
+                        (
+                            if app.chat(chat).is_some_and(|c| c.backend_account.is_some()) {
+                                app.chat(chat).is_some_and(|c| {
+                                    matches!(c.mutation_capabilities.delete, Some(2))
+                                })
+                            } else {
+                                can_revoke
+                            },
+                            app.chat(chat)
+                                .filter(|c| c.backend_account.is_some())
+                                .map(|c| &c.mutation_capabilities),
+                        ),
                         selected,
                         &mut actions,
                     );
@@ -14143,7 +14185,7 @@ mod reaction_tests {
                 &crate::theme::Palette::dark(),
                 crate::i18n::Locale::Spanish,
                 "chat",
-                true,
+                (true, None),
                 &["message".to_owned()],
                 &mut actions,
             );

@@ -214,6 +214,7 @@ fn search_keyboard(app: &mut App, ui: &egui::Ui) {
 fn header(app: &mut App, ui: &mut egui::Ui) {
     if app.show_starred || app.show_saved || app.show_archived || app.locked_folder_open() {
         legacy_header(app, ui);
+        super::batch_actions::archive_bar(app, ui);
         return;
     }
     let palette = app.palette;
@@ -237,6 +238,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                 super::titlebar_drag(ui, drag);
             }
             search_field(app, ui);
+            super::batch_actions::archive_bar(app, ui);
             super::flat_groups::toggle(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
@@ -1939,7 +1941,11 @@ fn favorite_chip(
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(hover);
     if response.clicked() {
-        app.actions.push(Action::OpenChat(chat.id.clone()));
+        if ui.input(|input| input.modifiers.command) {
+            super::batch_actions::toggle_chat(app, &chat.id);
+        } else {
+            app.actions.push(Action::OpenChat(chat.id.clone()));
+        }
     }
     let menu_palette = palette;
     // The favorite item is translated, so its width counts in the reader's
@@ -2762,6 +2768,8 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
     };
     // While searching, the result reached with the arrows is the selection;
     // before any arrow press it stays the open chat, as a click leaves it.
+    let batch_selected =
+        app.batch_ui.owner == app.account().id.0 && app.batch_ui.selected_chats.contains(&chat.id);
     let selected = app
         .search_selected
         .as_ref()
@@ -2790,7 +2798,7 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
         )
     });
     if ui.is_rect_visible(rect) {
-        if selected {
+        if selected || batch_selected {
             widgets::row_highlight(ui, &palette, rect, palette.surface_active);
         } else if response.hovered() {
             widgets::row_highlight(ui, &palette, rect, palette.surface_hover);
@@ -3016,7 +3024,11 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
         full_preview_tooltip(app, ui, &chat.id, area, &prefix, &full);
     }
     if response.clicked() {
-        app.actions.push(Action::OpenChat(chat.id.clone()));
+        if ui.input(|input| input.modifiers.command) {
+            super::batch_actions::toggle_chat(app, &chat.id);
+        } else {
+            app.actions.push(Action::OpenChat(chat.id.clone()));
+        }
     }
     let menu_palette = palette;
     // The favorite item is translated, so its width counts in the reader's
@@ -3397,6 +3409,13 @@ fn compact_badge_center(avatar: Rect) -> egui::Pos2 {
 }
 
 fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette) {
+    if ui
+        .button(crate::i18n::gettext(app.locale, "Select for archive"))
+        .clicked()
+    {
+        super::batch_actions::toggle_chat(app, &chat.id);
+        ui.close();
+    }
     if ui
         .button(crate::i18n::gettext(app.locale, "Assign groups…"))
         .clicked()
