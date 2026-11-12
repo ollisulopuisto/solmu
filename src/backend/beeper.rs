@@ -3228,7 +3228,9 @@ fn load_until_message(
     }
     emit(Event::BeeperHistoryState {
         chat: chat.into(),
-        error: Some(format!("Search result not reached. History may be incomplete or the {SEARCH_JUMP_MAX_PAGES}-page safety limit was reached. Click the result again to continue.")),
+        error: Some(format!(
+            "Search result not reached. History may be incomplete or the {SEARCH_JUMP_MAX_PAGES}-page safety limit was reached. Click the result again to continue."
+        )),
     });
     emit(Event::OlderFetched {
         chat: chat.into(),
