@@ -1220,9 +1220,10 @@ impl Api {
         // A direct chat often carries no avatar of its own; the other person's
         // picture is on their participant record, keyed by their user id, which
         // the chat id never reaches.
-        if let (Ok(mut sources), Ok(mut borrowed)) =
-            (self.avatar_sources.lock(), self.borrowed_avatar_chats.lock())
-        {
+        if let (Ok(mut sources), Ok(mut borrowed)) = (
+            self.avatar_sources.lock(),
+            self.borrowed_avatar_chats.lock(),
+        ) {
             match direct_chat_avatar(wire, own.as_deref()) {
                 Some(url) => {
                     remember_avatar(&mut sources, &wire.id, url);
@@ -5883,7 +5884,10 @@ mod tests {
         .unwrap();
         api.map_chat(&avatar_chat("single", None), &|c| c.network.clone());
         let sources = api.avatar_sources.lock().unwrap();
-        assert_eq!(sources.get("chat-1").map(String::as_str), Some("file:///tea.png"));
+        assert_eq!(
+            sources.get("chat-1").map(String::as_str),
+            Some("file:///tea.png")
+        );
     }
 
     #[test]
@@ -5923,7 +5927,11 @@ mod tests {
         partial.participants = None;
         api.map_chat(&partial, &label);
         assert_eq!(
-            api.avatar_sources.lock().unwrap().get("chat-1").map(String::as_str),
+            api.avatar_sources
+                .lock()
+                .unwrap()
+                .get("chat-1")
+                .map(String::as_str),
             Some("file:///tea.png")
         );
     }
@@ -5943,7 +5951,11 @@ mod tests {
         }
         api.map_chat(&no_photo, &label);
         assert_eq!(
-            api.avatar_sources.lock().unwrap().get("chat-1").map(String::as_str),
+            api.avatar_sources
+                .lock()
+                .unwrap()
+                .get("chat-1")
+                .map(String::as_str),
             Some("file:///chat.png")
         );
     }
@@ -5958,7 +5970,8 @@ mod tests {
         assert_eq!(own(&avatar_chat("group", None)), None);
         let mut two = avatar_chat("single", None);
         two.participants.as_mut().unwrap().items.push(
-            serde_json::from_value(serde_json::json!({"id": "x", "imgURL": "file:///x.png"})).unwrap(),
+            serde_json::from_value(serde_json::json!({"id": "x", "imgURL": "file:///x.png"}))
+                .unwrap(),
         );
         assert_eq!(own(&two), None, "ambiguous: more than one other person");
     }
@@ -8323,9 +8336,15 @@ mod tests {
             );
             let events = events.into_inner().unwrap();
             assert!(!keep, "past the deadline polling always ends");
-            let toasted = events.iter().any(|e| matches!(e, Event::Info(text) if text.contains("60 seconds")));
+            let toasted = events
+                .iter()
+                .any(|e| matches!(e, Event::Info(text) if text.contains("60 seconds")));
             assert_eq!(toasted, !expect_done);
-            assert!(!events.iter().any(|e| matches!(e, Event::BeeperSendConfirmed { .. })));
+            assert!(
+                !events
+                    .iter()
+                    .any(|e| matches!(e, Event::BeeperSendConfirmed { .. }))
+            );
             worker.join().unwrap();
         }
     }
