@@ -3211,6 +3211,34 @@ struct ChatCursors {
 }
 
 /// Search/quote jumps must not silently fall through the Beeper command match.
+/// Most history pages one search jump walks before it stops and asks for a
+/// second click. A page is a few dozen messages, so a message months back in
+/// a busy chat lies well past the first 50 pages.
+const SEARCH_JUMP_MAX_PAGES: usize = 400;
+/// Pages gathered before one `Messages` event reaches the UI. Each event makes
+/// the UI merge into the whole loaded chat, so a deep jump sends a few large
+/// batches instead of one event per page.
+const SEARCH_JUMP_FLUSH_PAGES: usize = 25;
+
+fn flush_jump_pages(
+    emit: &dyn Fn(Event),
+    chat: &str,
+    pending: &mut Vec<Message>,
+    complete: bool,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let mut messages = std::mem::take(pending);
+    messages.sort_by_key(|m| m.timestamp);
+    emit(Event::Messages {
+        chat: chat.into(),
+        messages,
+        older: true,
+        complete,
+    });
+}
+
 /// Walk the actual older-history cursors, retaining good pages on failure.
 fn load_until_message(
     api: &Api,
@@ -3220,7 +3248,9 @@ fn load_until_message(
     emit: &dyn Fn(Event),
 ) {
     let mut seen = HashSet::new();
-    for _ in 0..50 {
+    let mut pending: Vec<Message> = Vec::new();
+    let mut complete = false;
+    for page_no in 0..SEARCH_JUMP_MAX_PAGES {
         let state = cursors.get(chat);
         if state.is_some_and(|state| !state.has_more_older) {
             break;
@@ -3248,19 +3278,20 @@ fn load_until_message(
                     }
                     state.has_more_older = page.has_more;
                 }
-                let mut messages: Vec<_> = page
-                    .items
-                    .iter()
-                    .filter(|m| !m.is_hidden && !m.is_deleted)
-                    .map(|m| api.map_message(m, chat))
-                    .collect();
-                messages.sort_by_key(|m| m.timestamp);
-                emit(Event::Messages {
-                    chat: chat.into(),
-                    messages,
-                    older: true,
-                    complete: !page.has_more,
-                });
+                pending.extend(
+                    page.items
+                        .iter()
+                        .filter(|m| !m.is_hidden && !m.is_deleted)
+                        .map(|m| api.map_message(m, chat)),
+                );
+                complete = !page.has_more;
+                if found
+                    || error.is_some()
+                    || !page.has_more
+                    || (page_no + 1) % SEARCH_JUMP_FLUSH_PAGES == 0
+                {
+                    flush_jump_pages(emit, chat, &mut pending, complete);
+                }
                 emit(Event::BeeperHistoryState {
                     chat: chat.into(),
                     error: error.clone(),
@@ -3286,7 +3317,13 @@ fn load_until_message(
             }
         }
     }
-    emit(Event::BeeperHistoryState { chat: chat.into(), error: Some("Search result not reached. History may be incomplete or the 50-page safety limit was reached. Click the result again to continue.".into()) });
+    flush_jump_pages(emit, chat, &mut pending, complete);
+    emit(Event::BeeperHistoryState {
+        chat: chat.into(),
+        error: Some(format!(
+            "Search result not reached. History may be incomplete or the {SEARCH_JUMP_MAX_PAGES}-page safety limit was reached. Click the result again to continue."
+        )),
+    });
     emit(Event::OlderFetched {
         chat: chat.into(),
         more: cursors.get(chat).is_none_or(|state| state.has_more_older),
@@ -7771,6 +7808,72 @@ mod tests {
             events.lock().unwrap().push(event)
         });
         assert!(events.into_inner().unwrap().iter().any(|event| matches!(event, Event::Messages { messages, older: true, .. } if messages.iter().any(|m| m.id=="target"))));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn load_until_reaches_a_target_more_than_fifty_pages_back() {
+        const TARGET_PAGE: usize = 120;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            for page in 0..TARGET_PAGE {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                let body = if page + 1 == TARGET_PAGE {
+                    r#"{"items":[{"id":"target","chatID":"chat","text":"old","timestamp":"2026-01-02T00:00:00Z"}],"hasMore":false}"#.to_owned()
+                } else {
+                    format!(
+                        r#"{{"items":[{{"id":"filler{page}","chatID":"chat","text":"x","timestamp":"2026-06-01T00:00:00Z"}}],"hasMore":true,"oldestCursor":"c{page}"}}"#
+                    )
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let mut cursors = HashMap::from([(
+            "chat".into(),
+            ChatCursors {
+                oldest: Some("start".into()),
+                newest: None,
+                has_more_older: true,
+            },
+        )]);
+        let events = std::sync::Mutex::new(Vec::new());
+        load_until_message(&api, &mut cursors, "chat", "target", &|event| {
+            events.lock().unwrap().push(event)
+        });
+        let events = events.into_inner().unwrap();
+        assert!(
+            events.iter().any(|event| matches!(event, Event::Messages { messages, older: true, .. } if messages.iter().any(|m| m.id == "target"))),
+            "the jump walks past the old 50-page stop"
+        );
+        let batches = events
+            .iter()
+            .filter(|event| matches!(event, Event::Messages { .. }))
+            .count();
+        assert!(
+            batches <= TARGET_PAGE / SEARCH_JUMP_FLUSH_PAGES + 1,
+            "{batches} Messages events for {TARGET_PAGE} pages: pages are batched"
+        );
+        let delivered: usize = events
+            .iter()
+            .map(|event| match event {
+                Event::Messages { messages, .. } => messages.len(),
+                _ => 0,
+            })
+            .sum();
+        assert_eq!(delivered, TARGET_PAGE, "batching drops no messages");
         worker.join().unwrap();
     }
 
