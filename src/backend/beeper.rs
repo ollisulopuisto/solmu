@@ -5930,7 +5930,9 @@ mod tests {
 
     #[test]
     fn the_chats_own_avatar_wins_and_groups_never_borrow_a_members() {
-        let own = |wire: &BeeperChat| direct_chat_avatar(wire, Some("@me:beeper.local"));
+        fn own(wire: &BeeperChat) -> Option<&str> {
+            direct_chat_avatar(wire, Some("@me:beeper.local"))
+        }
         assert_eq!(own(&avatar_chat("single", None)), Some("file:///tea.png"));
         assert_eq!(own(&avatar_chat("single", Some("file:///chat.png"))), None);
         assert_eq!(own(&avatar_chat("group", None)), None);
