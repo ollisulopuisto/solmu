@@ -5007,6 +5007,21 @@ impl App {
                     .collect();
                 let incoming_ids: std::collections::HashSet<String> =
                     messages.iter().map(|message| message.id.clone()).collect();
+                // The chat row's preview and order come from the inventory, which
+                // refreshes once a minute. Live messages must move the row now,
+                // or a chat you just wrote in sits under older ones.
+                let newest_live = (!older)
+                    .then(|| {
+                        messages
+                            .iter()
+                            .filter(|m| {
+                                let summary = m.content.summary();
+                                !summary.is_empty() && summary != "[message]"
+                            })
+                            .max_by_key(|m| m.timestamp)
+                            .cloned()
+                    })
+                    .flatten();
                 // `conversations` comes through DerefMut, so its entry borrow
                 // covers all of `self`; keep quote-fetch bookkeeping outside it.
                 let (was_empty, bare, still_unresolved) = {
@@ -5118,6 +5133,9 @@ impl App {
                         chat: chat.clone(),
                         refs: still_unresolved,
                     });
+                }
+                if let Some(message) = newest_live {
+                    self.follow_message_in_chat_row(&chat, &message);
                 }
                 // A message that arrives while the viewer is open joins its album.
                 if !older {
@@ -6533,6 +6551,27 @@ impl App {
                 .restore(member);
             self.beeper_history_errors.remove(&chat.id);
         }
+    }
+
+    /// Moves a chat row's preview, time and order to a message newer than the
+    /// row shows. Only newer messages count, so late history never rewinds it.
+    fn follow_message_in_chat_row(&mut self, chat: &str, message: &crate::model::Message) {
+        let Some(row) = self.chat_mut(chat) else {
+            return;
+        };
+        if message.timestamp < row.last_activity {
+            return;
+        }
+        row.last_activity = message.timestamp;
+        row.last = Some(crate::model::LastMessage {
+            from_me: message.from_me,
+            sender: message.sender.clone(),
+            sender_name: message.sender_name.clone(),
+            summary: message.content.summary(),
+            full: message.content.full_summary(),
+            labelled: message.content.labelled(),
+            status: message.status,
+        });
     }
 
     fn handle_chat_updated(&mut self, chat: Chat, live: bool) {
@@ -32044,5 +32083,109 @@ mod link_tracking_tests {
         let signed = "https://example.com/a?utm_source=chat&X-Amz-Signature=exact#part";
         assert_eq!(app.link_action_url(signed), signed);
         assert!(!Settings::default().remove_link_tracking);
+    }
+}
+
+#[cfg(test)]
+mod chat_row_follows_messages_tests {
+    use super::*;
+    use crate::model::{Content, Delivery, Message};
+
+    fn app() -> App {
+        let root = std::env::temp_dir().join(format!("solmu-rowfollow-{}", std::process::id()));
+        App::headless(AppDirs::under(&root), Settings::default()).0
+    }
+
+    fn message(chat: &str, id: &str, text: &str, timestamp: i64, from_me: bool) -> Message {
+        Message {
+            id: id.into(),
+            chat: chat.into(),
+            sender: chat.into(),
+            sender_name: None,
+            from_me,
+            timestamp,
+            content: Content::text(text),
+            status: Delivery::Sent,
+            delivered_at: None,
+            read_at: None,
+            quoted: None,
+            reactions: Vec::new(),
+            history_order: None,
+            edited: false,
+            mentions: Vec::new(),
+            forwarded: false,
+            thumbnail: None,
+        }
+    }
+
+    fn deliver(app: &mut App, chat: &str, messages: Vec<Message>, older: bool) {
+        app.apply_backend_event(
+            Event::Messages {
+                chat: chat.into(),
+                messages,
+                older,
+                complete: false,
+            },
+            true,
+        );
+    }
+
+    fn two_chats(app: &mut App) {
+        let mut peter = Chat::new("peter".into(), "Peter".into());
+        peter.last_activity = 100;
+        let mut other = Chat::new("other".into(), "Other".into());
+        other.last_activity = 200;
+        app.chats = vec![peter, other];
+    }
+
+    /// The chat list only refreshes once a minute, so a message you just
+    /// wrote must move its row by itself.
+    #[test]
+    fn a_newer_live_message_moves_the_row_preview_and_time() {
+        let mut app = app();
+        two_chats(&mut app);
+        deliver(&mut app, "peter", vec![message("peter", "m1", "jaa vai niin", 300, true)], false);
+        let row = app.chat("peter").unwrap();
+        assert_eq!(row.last_activity, 300);
+        let last = row.last.as_ref().expect("preview set");
+        assert_eq!(last.summary, "jaa vai niin");
+        assert!(last.from_me);
+    }
+
+    #[test]
+    fn the_newest_message_of_a_batch_wins() {
+        let mut app = app();
+        two_chats(&mut app);
+        deliver(
+            &mut app,
+            "peter",
+            vec![
+                message("peter", "m2", "second", 310, true),
+                message("peter", "m1", "first", 305, true),
+            ],
+            false,
+        );
+        assert_eq!(app.chat("peter").unwrap().last.as_ref().unwrap().summary, "second");
+        assert_eq!(app.chat("peter").unwrap().last_activity, 310);
+    }
+
+    /// Older history pages and stale echoes never rewind a row.
+    #[test]
+    fn older_history_and_older_messages_leave_the_row_alone() {
+        let mut app = app();
+        two_chats(&mut app);
+        deliver(&mut app, "other", vec![message("other", "h1", "old page", 500, false)], true);
+        assert_eq!(app.chat("other").unwrap().last_activity, 200);
+        deliver(&mut app, "other", vec![message("other", "h2", "stale", 150, false)], false);
+        assert_eq!(app.chat("other").unwrap().last_activity, 200);
+        assert!(app.chat("other").unwrap().last.is_none());
+    }
+
+    #[test]
+    fn a_message_for_an_unknown_chat_does_not_invent_a_row() {
+        let mut app = app();
+        two_chats(&mut app);
+        deliver(&mut app, "ghost", vec![message("ghost", "g1", "hi", 900, false)], false);
+        assert_eq!(app.chats.len(), 2);
     }
 }
