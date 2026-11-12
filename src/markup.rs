@@ -70,16 +70,32 @@ struct Span {
     quote: bool,
 }
 
-/// Lays text out within `max_width`.
+/// Size multiplier for an emoji-only message: one emoji largest, two or
+/// three big, anything else body size. Bubbles drop at the same threshold
+/// (`bubbleless` in ui::conversation), like a sticker.
+fn emoji_scale(text: &str) -> f32 {
+    match emoji::only_emoji(text) {
+        Some(1) => 3.0,
+        Some(2..=3) => 2.4,
+        _ => 1.0,
+    }
+}
+
+/// Lays text out within `max_width`. `grow_emoji` is false for text that
+/// rides inside another message's bubble, like a media caption: a caption
+/// that happens to be one emoji stays at body size, because the growth (and
+/// the bubble drop that pairs with it) belongs to standalone messages only.
 pub fn layout(
     ui: &egui::Ui,
     text: &str,
     mentions: &[Mention],
     style: &Style,
     max_width: f32,
+    grow_emoji: bool,
 ) -> Text {
-    let big = emoji::only_emoji(text).is_some_and(|count| count <= 3);
-    let size = if big { style.size * 2.4 } else { style.size };
+    let scale = if grow_emoji { emoji_scale(text) } else { 1.0 };
+    let big = scale > 1.0;
+    let size = style.size * scale;
     let mut job = LayoutJob::default();
     job.wrap.max_width = max_width;
     let mut placements = Vec::new();
@@ -971,6 +987,47 @@ const KNOWN_TLDS: &[&str] = &[
 
 #[cfg(test)]
 mod tests {
+    use super::emoji_scale;
+
+    /// One emoji draws largest, two or three big, four or more and mixed
+    /// text at body size. `bubbleless` frees the same one-to-three range.
+    #[test]
+    fn emoji_only_messages_scale_by_count() {
+        assert_eq!(emoji_scale("\u{1F4A3}"), 3.0);
+        assert_eq!(emoji_scale("\u{1F602} \u{1F44D}"), 2.4);
+        assert_eq!(emoji_scale("\u{1F602} \u{1F64F} \u{1F44D}"), 2.4);
+        assert_eq!(emoji_scale("\u{1F602}\u{1F602}\u{1F602}\u{1F602}"), 1.0);
+        assert_eq!(emoji_scale("ok \u{1F602}"), 1.0);
+        assert_eq!(emoji_scale("hello"), 1.0);
+        assert_eq!(emoji_scale(""), 1.0);
+    }
+
+    /// A single-emoji media caption stays at body size: it lives inside the
+    /// photo's bubble, so the standalone-message growth would look wrong.
+    #[test]
+    fn emoji_only_captions_stay_body_size() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let grown = layout(ui, "\u{1F602}", &[], &style, 400.0, true);
+            assert!(grown.big);
+            assert!(grown.galley.size().y > 16.0 * 2.0);
+            let caption = layout(ui, "\u{1F602}", &[], &style, 400.0, false);
+            assert!(!caption.big);
+            assert_eq!(
+                caption.galley.size().y,
+                layout(ui, "ok", &[], &style, 400.0, false).galley.size().y
+            );
+        });
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn wrapped_named_links_keep_the_target_on_each_title_character() {
         let ctx = egui::Context::default();
@@ -987,6 +1044,7 @@ mod tests {
                     mention: Color32::WHITE,
                 },
                 90.0,
+                true,
             );
             assert!(text.galley.rows.len() > 1);
             assert_eq!(text.galley.text(), "A long title across rows");
@@ -1068,6 +1126,7 @@ mod tests {
                     mention: Color32::WHITE,
                 },
                 90.0,
+                true,
             );
             assert!(text.galley.rows.len() > 1);
             assert_eq!(

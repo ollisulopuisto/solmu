@@ -1290,7 +1290,7 @@ mod tests {
                         link: Color32::LIGHT_BLUE,
                         mention: Color32::GREEN,
                     };
-                    let laid = crate::markup::layout(ui, text, &[], &style, width);
+                    let laid = crate::markup::layout(ui, text, &[], &style, width, true);
                     *galley.borrow_mut() = Some(laid.galley);
                 },
             );
@@ -1322,7 +1322,7 @@ mod tests {
                         mention: Color32::GREEN,
                     };
                     for text in crate::demo::RTL_SELF_CHAT {
-                        let laid = crate::markup::layout(ui, text, &[], &style, 400.0);
+                        let laid = crate::markup::layout(ui, text, &[], &style, 400.0, true);
                         galleys.borrow_mut().push(laid.galley);
                     }
                 },
