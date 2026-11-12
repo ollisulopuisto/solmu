@@ -2655,6 +2655,19 @@ fn newest_content_message(items: Vec<BeeperMessage>) -> Option<BeeperMessage> {
         .max_by_key(|m| unix(&Some(m.timestamp.clone())))
 }
 
+/// The chat row's preview event for a page of messages: the newest one the
+/// inventory would also show. None when the page has nothing previewable.
+fn chat_preview_of(chat: &ChatId, items: &[BeeperMessage]) -> Option<Event> {
+    newest_content_message(items.to_vec()).map(|p| {
+        let (body, labelled) = body_of(&p);
+        Event::ChatPreview {
+            chat: chat.clone(),
+            activity: unix(&Some(p.timestamp.clone())),
+            last: Chat::last_preview(&p, body, labelled),
+        }
+    })
+}
+
 fn forwardable_text(message: &BeeperMessage) -> bool {
     matches!(message.message_type.as_deref(), None | Some("TEXT"))
         && message
@@ -3983,6 +3996,12 @@ pub fn run(
                                 .map(|m| api.map_message(m, &chat))
                                 .collect();
                             messages.sort_by_key(|m| m.timestamp);
+                            // Opening a chat moves its forward cursor past this
+                            // page, so the poll never reports these messages as
+                            // new; the row must hear about them here.
+                            if !older && let Some(event) = chat_preview_of(&chat, &page.items) {
+                                emit(event);
+                            }
                             emit(Event::Messages {
                                 chat: chat.clone(),
                                 messages,
@@ -5589,13 +5608,7 @@ fn poll_newer(
                 // Eligibility is decided here on the wire type, exactly as the
                 // inventory does, so reactions, system notices and empty
                 // events never become the chat row's preview.
-                let preview = newest_content_message(page.items.clone()).map(|p| {
-                    let (body, labelled) = body_of(&p);
-                    (
-                        unix(&Some(p.timestamp.clone())),
-                        Chat::last_preview(&p, body, labelled),
-                    )
-                });
+                let preview = chat_preview_of(chat, &page.items);
                 let mut messages: Vec<Message> = page
                     .items
                     .iter()
@@ -5618,12 +5631,8 @@ fn poll_newer(
                         older: false,
                         complete: false,
                     });
-                    if let Some((activity, last)) = preview {
-                        emit(Event::ChatPreview {
-                            chat: chat.clone(),
-                            activity,
-                            last,
-                        });
+                    if let Some(event) = preview {
+                        emit(event);
                     }
                     for message in incoming {
                         emit(Event::Incoming {
@@ -10427,6 +10436,24 @@ mod tests {
     /// The live row preview picks by wire type, never by the text shown: a
     /// reaction event has no preview, a message whose text is literally
     /// "[message]" does.
+    #[test]
+    fn a_page_preview_event_uses_the_newest_previewable_message() {
+        let page: Vec<BeeperMessage> = serde_json::from_value(serde_json::json!([
+            {"id":"m1","chatID":"c1","accountID":"a","senderID":"s","sortKey":"1",
+             "timestamp":"2026-11-03T09:47:00Z","isSender":true,"type":"TEXT","text":"kerro lisää"},
+            {"id":"r1","chatID":"c1","accountID":"a","senderID":"s","sortKey":"2",
+             "timestamp":"2026-11-03T09:48:00Z","isSender":false,"type":"REACTION"}
+        ]))
+        .unwrap();
+        let Some(Event::ChatPreview { chat, last, .. }) = chat_preview_of(&"c1".into(), &page)
+        else {
+            panic!("expected a preview");
+        };
+        assert_eq!(chat, "c1");
+        assert_eq!(last.summary, "kerro lisää");
+        assert!(chat_preview_of(&"c1".into(), &[]).is_none());
+    }
+
     #[test]
     fn live_preview_eligibility_follows_the_wire_type_not_the_label() {
         let item = |id: &str, kind: &str, text: Option<&str>, at: &str| -> BeeperMessage {
