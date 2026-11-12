@@ -3378,9 +3378,26 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                             } else {
                                 None
                             };
-                            let natural =
-                                natural_text_width(ui, &view, message, text_cap).unwrap_or(0.0);
-                            book.settle(&message.id, natural, neighbour)
+                            // The neighbour rule counts balanced lines:
+                            // keep the run's width while wrapping there
+                            // costs at most one line over the minimum.
+                            match balanced_metrics(ui, &view, message, text_cap) {
+                                Some((measured, at_cap)) => book.settle(
+                                    &message.id,
+                                    at_cap.lines,
+                                    at_cap.width,
+                                    neighbour,
+                                    |width| {
+                                        crate::wrap::balance(
+                                            &measured.items,
+                                            width,
+                                            measured.hyphen,
+                                        )
+                                        .lines
+                                    },
+                                ),
+                                None => book.settle(&message.id, 1, 0.0, neighbour, |_| 1),
+                            }
                         };
                         neighbour_widths.insert(message.id.clone(), settled);
                         run_tail = Some(settled);
@@ -6223,6 +6240,28 @@ fn body_for_measurement(content: &Content) -> Option<(&str, bool)> {
         } => Some((caption, false)),
         _ => None,
     }
+}
+
+/// Body text measured for the width book: the balancer tokens and the
+/// min-line plan at the cap.
+fn balanced_metrics(
+    ui: &egui::Ui,
+    view: &View<'_>,
+    message: &Message,
+    cap: f32,
+) -> Option<(markup::Measured, crate::wrap::Plan)> {
+    let palette = view.palette;
+    let (text, grow) = body_for_measurement(&message.content)?;
+    let style = markup::Style {
+        size: BODY_SIZE,
+        color: palette.text,
+        secondary: palette.secondary,
+        link: palette.link,
+        mention: palette.accent,
+    };
+    let measured = markup::measure(ui, text, &mentions_of(view, message), &style, cap, grow);
+    let at_cap = crate::wrap::balance(&measured.items, cap, measured.hyphen);
+    Some((measured, at_cap))
 }
 
 /// Widest wrapped body-text row. Metadata sits outside the bubble.
@@ -9656,7 +9695,7 @@ fn rich_body(
         link: palette.link,
         mention: palette.accent,
     };
-    let laid = markup::layout(ui, text, &mentions, &style, width, grow_emoji);
+    let laid = markup::layout_balanced(ui, text, &mentions, &style, width, grow_emoji);
     let rtl = crate::bidi::message_rtl(text);
     let last_row = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
     // Right-aligned text ends at the block's edge. Like official WhatsApp,
@@ -9680,7 +9719,7 @@ fn rich_body(
             .push(transcript_row(
                 view,
                 message,
-                laid.galley.text().to_owned(),
+                laid.unbroken_text().to_owned(),
                 laid.placements().to_vec(),
             ));
     }

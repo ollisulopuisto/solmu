@@ -40,6 +40,9 @@ pub struct Text {
     /// Whether the message is emoji-only and should use a larger size.
     pub big: bool,
     accessible_text: String,
+    /// Balanced layout only: the laid-out text before the balancer's
+    /// inserted hyphens and newlines, for copy and transcript formatting.
+    unbroken: Option<String>,
 }
 
 impl Text {
@@ -54,6 +57,15 @@ impl Text {
             .iter()
             .find(|(range, _)| range.contains(&character))
             .map(|(_, url)| url.as_str())
+    }
+
+    /// The text without the balancer's inserted hyphens and line breaks:
+    /// what copy and transcript formatting should see. Equals the galley's
+    /// text for a greedy layout.
+    pub fn unbroken_text(&self) -> &str {
+        self.unbroken
+            .as_deref()
+            .unwrap_or_else(|| self.galley.text())
     }
 }
 
@@ -81,6 +93,15 @@ fn emoji_scale(text: &str) -> f32 {
     }
 }
 
+/// The parts of a laid-out message before the galley.
+struct Built {
+    job: LayoutJob,
+    placements: Vec<String>,
+    links: Vec<(Range<usize>, String)>,
+    big: bool,
+    accessible_text: String,
+}
+
 /// Lays text out within `max_width`. `grow_emoji` is false for text that
 /// rides inside another message's bubble, like a media caption: a caption
 /// that happens to be one emoji stays at body size, because the growth (and
@@ -93,6 +114,33 @@ pub fn layout(
     max_width: f32,
     grow_emoji: bool,
 ) -> Text {
+    finish(
+        ui,
+        build(ui, text, mentions, style, max_width, grow_emoji),
+        None,
+    )
+}
+
+fn finish(ui: &egui::Ui, built: Built, unbroken: Option<String>) -> Text {
+    let galley = bidi::layout_job(ui, built.job);
+    Text {
+        galley,
+        placements: built.placements,
+        links: built.links,
+        big: built.big,
+        accessible_text: built.accessible_text,
+        unbroken,
+    }
+}
+
+fn build(
+    ui: &egui::Ui,
+    text: &str,
+    mentions: &[Mention],
+    style: &Style,
+    max_width: f32,
+    grow_emoji: bool,
+) -> Built {
     let scale = if grow_emoji { emoji_scale(text) } else { 1.0 };
     let big = scale > 1.0;
     let size = style.size * scale;
@@ -148,14 +196,338 @@ pub fn layout(
             TextFormat::simple(theme::regular(size), style.color),
         );
     }
-    let galley = bidi::layout_job(ui, job);
-    Text {
-        galley,
+    Built {
+        job,
         placements,
         links,
         big,
         accessible_text: plain(text, mentions),
     }
+}
+
+/// Body text measured for the wrap balancer: tokens with per-character
+/// widths plus the hyphen glyph's advance.
+pub struct Measured {
+    /// The text's tokens, ready for [`crate::wrap::balance`].
+    pub items: Vec<crate::wrap::Item>,
+    /// Advance width of an inserted `-` at body size.
+    pub hyphen: f32,
+}
+
+/// Measures `text` for balancing at `max_width` without laying it out.
+pub fn measure(
+    ui: &egui::Ui,
+    text: &str,
+    mentions: &[Mention],
+    style: &Style,
+    max_width: f32,
+    grow_emoji: bool,
+) -> Measured {
+    let built = build(ui, text, mentions, style, max_width, grow_emoji);
+    measure_job(ui, &built.job, &built.links, style.size, max_width)
+}
+
+/// Splits the job text into balancer tokens. Token widths are exact
+/// (shaped per section piece); per-character widths are shaped for the
+/// tokens that can break inside (long words with hyphenation points,
+/// anything wider than the cap) and interpolated for the rest, whose
+/// interiors the balancer never inspects.
+fn measure_job(
+    ui: &egui::Ui,
+    job: &LayoutJob,
+    links: &[(Range<usize>, String)],
+    size: f32,
+    max_width: f32,
+) -> Measured {
+    let text = job.text.as_str();
+    let n_chars = text.chars().count();
+    // Byte offset of each character plus the end, for char<->byte mapping.
+    let char_bytes: Vec<usize> = text
+        .char_indices()
+        .map(|(b, _)| b)
+        .chain([text.len()])
+        .collect();
+    // URL byte spans: link ranges whose visible text is a bare address.
+    let urls: Vec<(usize, usize)> = links
+        .iter()
+        .filter(|(range, _)| {
+            let start = char_bytes.get(range.start).copied().unwrap_or(text.len());
+            let end = char_bytes.get(range.end).copied().unwrap_or(text.len());
+            let shown = &text[start..end];
+            shown.contains("://") || shown.starts_with("www.")
+        })
+        .map(|(range, _)| {
+            (
+                char_bytes.get(range.start).copied().unwrap_or(text.len()),
+                char_bytes.get(range.end).copied().unwrap_or(text.len()),
+            )
+        })
+        .collect();
+    // Section font per byte offset.
+    let font_at = |byte: usize| -> FontId {
+        job.sections
+            .iter()
+            .find(|section| {
+                let start: usize = section.byte_range.start.into();
+                let end: usize = section.byte_range.end.into();
+                start <= byte && byte < end
+            })
+            .map(|section| section.format.font_id.clone())
+            .unwrap_or_else(|| theme::regular(size))
+    };
+    let piece_width = |from: usize, to: usize, font: &FontId| -> f32 {
+        if from >= to {
+            return 0.0;
+        }
+        ui.fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap(text[from..to].to_owned(), font.clone(), Color32::WHITE)
+                .size()
+                .x
+        })
+    };
+    let mut widths = vec![0.0f32; n_chars];
+    let mut pos = 0;
+    while pos < n_chars {
+        let start = char_bytes[pos];
+        let first = text[start..].chars().next().unwrap();
+        let mut next = pos + 1;
+        if !matches!(first, '\n' | '\r') {
+            while next < n_chars {
+                let c = text[char_bytes[next]..].chars().next().unwrap();
+                if c.is_whitespace() != first.is_whitespace() || matches!(c, '\n' | '\r') {
+                    break;
+                }
+                next += 1;
+            }
+        }
+        let end = char_bytes[next];
+        // Measure the token in section pieces.
+        let mut cuts: Vec<usize> = vec![start, end];
+        for section in &job.sections {
+            for b in [
+                usize::from(section.byte_range.start),
+                usize::from(section.byte_range.end),
+            ] {
+                if b > start && b < end && !cuts.contains(&b) {
+                    cuts.push(b);
+                }
+            }
+        }
+        cuts.sort_unstable();
+        let mut pieces: Vec<(usize, usize, FontId, f32)> = Vec::new();
+        for pair in cuts.windows(2) {
+            let (b0, b1) = (pair[0], pair[1]);
+            let font = font_at(b0);
+            let width = piece_width(b0, b1, &font);
+            pieces.push((b0, b1, font, width));
+        }
+        let token_chars = next - pos;
+        let token_width: f32 = pieces.iter().map(|p| p.3).sum();
+        let is_url = urls.iter().any(|(s, e)| *s <= start && end <= *e);
+        let hyphenated = !is_url
+            && !first.is_whitespace()
+            && token_chars > crate::wrap::MIN_HYPHENATED_CHARS
+            && !text[start..end].contains(emoji::PLACEHOLDER)
+            && !crate::hyphenate::hyphenate(&text[start..end]).is_empty();
+        if token_width > max_width || hyphenated {
+            // Per-character widths from cumulative piece prefixes.
+            let mut ci = pos;
+            for (b0, b1, font, _) in &pieces {
+                let piece = &text[*b0..*b1];
+                let mut prev = 0.0f32;
+                for (k, ch) in piece.char_indices() {
+                    let w = piece_width(*b0, b0 + k + ch.len_utf8(), font);
+                    widths[ci] = (w - prev).max(0.0);
+                    prev = w;
+                    ci += 1;
+                }
+            }
+        } else {
+            let share = token_width / token_chars.max(1) as f32;
+            for w in &mut widths[pos..next] {
+                *w = share;
+            }
+        }
+        pos = next;
+    }
+    let items = crate::wrap::tokenize(text, &widths, &urls, &|word| {
+        if word.contains(emoji::PLACEHOLDER) {
+            Vec::new()
+        } else {
+            crate::hyphenate::hyphenate(word)
+        }
+    });
+    let hyphen = ui.fonts_mut(|fonts| {
+        fonts
+            .layout_no_wrap("-".to_owned(), theme::regular(size), Color32::WHITE)
+            .size()
+            .x
+    });
+    Measured { items, hyphen }
+}
+
+/// Lays text out like [`layout`], but with line breaks from the wrap
+/// balancer ([`crate::wrap`]) instead of greedy first-fit: raggedness is
+/// minimised, Finnish words may hyphenate, and URLs stay whole when they
+/// fit the cap. The inserted hyphens and newlines are layout-time only;
+/// [`Text::unbroken_text`] carries the text without them for copying.
+pub fn layout_balanced(
+    ui: &egui::Ui,
+    text: &str,
+    mentions: &[Mention],
+    style: &Style,
+    max_width: f32,
+    grow_emoji: bool,
+) -> Text {
+    let built = build(ui, text, mentions, style, max_width, grow_emoji);
+    if built.big || max_width <= 0.0 {
+        // Emoji-only text never balances; a zero cap leaves nothing to do.
+        return finish(ui, built, None);
+    }
+    let breaks = balanced_breaks(ui, &built, style.size, max_width);
+    if breaks.is_empty() {
+        return finish(ui, built, None);
+    }
+    let unbroken = built.job.text.clone();
+    let (mut job, links) = insert_breaks(built.job, &built.links, &breaks);
+    // Breaks are hard newlines now; keep egui from re-wrapping a line that
+    // shaped a hair wider than the balancer measured.
+    job.wrap.max_width = f32::INFINITY;
+    finish(
+        ui,
+        Built {
+            job,
+            placements: built.placements,
+            links,
+            big: built.big,
+            accessible_text: built.accessible_text,
+        },
+        Some(unbroken),
+    )
+}
+
+/// The balancer's breaks for this text at this width, cached: body layout
+/// runs every frame while the text, fonts and width rarely change.
+fn balanced_breaks(
+    ui: &egui::Ui,
+    built: &Built,
+    size: f32,
+    max_width: f32,
+) -> Arc<Vec<crate::wrap::LineBreak>> {
+    let key = (
+        built.job.text.clone(),
+        size.to_bits(),
+        max_width.to_bits(),
+        crate::theme::font_generation(),
+    );
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<
+            std::collections::HashMap<(String, u32, u32, u32), Arc<Vec<crate::wrap::LineBreak>>>,
+        >,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Some(breaks) = cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key) {
+        return breaks.clone();
+    }
+    let measured = measure_job(ui, &built.job, &built.links, size, max_width);
+    let plan = crate::wrap::balance(&measured.items, max_width, measured.hyphen);
+    let breaks = Arc::new(plan.breaks);
+    let mut cache = cache.lock().unwrap_or_else(|p| p.into_inner());
+    if cache.len() >= 512 {
+        cache.clear();
+    }
+    cache.insert(key, breaks.clone());
+    breaks
+}
+
+/// Rebuilds the job text with the balancer's breaks inserted as hard
+/// newlines (plus a hyphen glyph for hyphenated breaks), shifting section
+/// and link ranges. Breaks the text already makes itself (at its own
+/// newlines) are skipped.
+fn insert_breaks(
+    mut job: LayoutJob,
+    links: &[(Range<usize>, String)],
+    breaks: &[crate::wrap::LineBreak],
+) -> (LayoutJob, Vec<(Range<usize>, String)>) {
+    let text = std::mem::take(&mut job.text);
+    let char_bytes: Vec<usize> = text
+        .char_indices()
+        .map(|(b, _)| b)
+        .chain([text.len()])
+        .collect();
+    let byte_to_char = |byte: usize| -> usize { char_bytes.partition_point(|b| *b < byte) };
+    // Insertions in character coordinates, in order.
+    let mut insertions: Vec<(usize, &str)> = Vec::new();
+    for brk in breaks {
+        let at = byte_to_char(brk.byte);
+        let preceded_by_newline =
+            text[..brk.byte].ends_with('\n') || text[..brk.byte].ends_with('\r');
+        if preceded_by_newline {
+            continue;
+        }
+        insertions.push((at, if brk.hyphen { "-\n" } else { "\n" }));
+    }
+    if insertions.is_empty() {
+        job.text = text;
+        return (job, links.to_vec());
+    }
+    // shift[i] = inserted characters before original character i.
+    let n_chars = char_bytes.len() - 1;
+    let mut shift = vec![0usize; n_chars + 1];
+    let mut total = 0;
+    let mut insertion = insertions.iter().peekable();
+    for i in 0..=n_chars {
+        while let Some((at, inserted)) = insertion.peek() {
+            if *at == i {
+                total += inserted.len();
+                insertion.next();
+            } else {
+                break;
+            }
+        }
+        shift[i] = total;
+    }
+    let mut new_text = String::with_capacity(text.len() + total);
+    let mut insertion = insertions.iter().peekable();
+    for (i, ch) in text.chars().enumerate() {
+        while let Some((at, inserted)) = insertion.peek() {
+            if *at == i {
+                new_text.push_str(inserted);
+                insertion.next();
+            } else {
+                break;
+            }
+        }
+        new_text.push(ch);
+    }
+    while let Some((_, inserted)) = insertion.next() {
+        new_text.push_str(inserted);
+    }
+    // New byte offset of a new character index.
+    let new_bytes: Vec<usize> = new_text
+        .char_indices()
+        .map(|(b, _)| b)
+        .chain([new_text.len()])
+        .collect();
+    let map_range = |start: usize, end: usize| -> Range<usize> {
+        let s = start + shift[start.min(n_chars)];
+        let e = end + shift[end.min(n_chars)];
+        new_bytes[s]..new_bytes[e.min(new_bytes.len() - 1)]
+    };
+    for section in &mut job.sections {
+        let range = map_range(
+            byte_to_char(usize::from(section.byte_range.start)),
+            byte_to_char(usize::from(section.byte_range.end)),
+        );
+        section.byte_range = range.start.into()..range.end.into();
+    }
+    let links = links
+        .iter()
+        .map(|(range, url)| (map_range(range.start, range.end), url.clone()))
+        .collect();
+    job.text = new_text;
+    (job, links)
 }
 
 /// Paints laid-out text at `pos`.
