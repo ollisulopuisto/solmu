@@ -1759,7 +1759,10 @@ pub(crate) fn composer_with_capabilities(
             let line = (line_height + COMPOSER_PADDING)
                 .round()
                 .max(COMPOSER_CONTROL);
-            let button_width = line;
+            // The send (or record) circle is smaller than the row by a gap on
+            // each side, so it never touches the field's border, even grown on
+            // hover; the same gap is left to its right.
+            let button_width = (line - 2.0 * SEND_BUTTON_GAP).max(0.0);
             let view_once = super::view_once::visible(
                 app.editing.is_some(),
                 chat.backend_account.is_some() || chat.backend_origin.is_some(),
@@ -1846,7 +1849,7 @@ pub(crate) fn composer_with_capabilities(
                 }
                 // The send button closes the row, flush with the field's end.
                 let field_width =
-                    (ui.available_width() - button_width - view_once_width - extras_width - ui.spacing().item_spacing.x).max(0.0);
+                    (ui.available_width() - button_width - SEND_BUTTON_GAP - view_once_width - extras_width - ui.spacing().item_spacing.x).max(0.0);
                 // The ink is centred on the controls, not the line box: the
                 // span from a capital's top to a descender's bottom sits as far
                 // from the field's top as from its bottom. Inter's box leaves
@@ -2276,6 +2279,10 @@ const COMPOSER_PADDING: f32 = 14.0;
 const COMPOSER_CONTROL: f32 = 36.0;
 /// Space between the composer's rounded field and the buttons at its ends.
 const COMPOSER_INSET: i8 = 2;
+/// Gap between the send circle and the field's inner edge at the top, bottom
+/// and right, beyond `COMPOSER_INSET`. The circle is the row's height minus
+/// twice this, centred on the row's centre line.
+const SEND_BUTTON_GAP: f32 = 3.0;
 /// Space between the plus and emoji buttons' hit areas. Each area pads its
 /// 22-point icon by six points a side, so this leaves eight between the
 /// icons, a pair.
