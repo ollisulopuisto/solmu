@@ -21713,7 +21713,6 @@ mod tests {
                 Stop::Unread,
                 Stop::ReplyLater,
                 Stop::ReadLater,
-                Stop::Filters,
                 Stop::NewChat,
             ];
             assert_eq!(

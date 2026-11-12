@@ -30,3 +30,9 @@ cover one-home assignment (old implementation fails) and local 08:00 across
 midnight and daylight-saving change. Full native tests and screenshots remain
 pending because test executable code generation exceeds the local execution
 limit. macOS keyboard/drag and live bridge behavior need CI/runtime validation.
+
+The pre-existing Filters row is removed. It previously exposed chat type,
+favorites, Unreplied, auto-category, network/account, labels and link suggestions.
+Shared filter actions remain for palette/keyboard and legacy views. Starting the
+app or picking a primary mode does not restore hidden saved type/favorite scope;
+picking a mode clears all extra scope. These controls are no longer in the list.

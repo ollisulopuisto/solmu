@@ -177,11 +177,10 @@ impl Account {
             Some(crate::model::ListFilter::Chip(chip)) => chip,
             _ => ChatFilter::All,
         };
-        let category_filter = settings.chat_category.or(match chat_filter {
-            ChatFilter::Private | ChatFilter::Groups | ChatFilter::Channels => Some(chat_filter),
-            _ => None,
-        });
-        let favorites_only = settings.favorites_only || chat_filter == ChatFilter::Favorites;
+        // The retired Filters row must not leave an invisible saved scope.
+        // Explicit palette filters remain available during the session.
+        let category_filter = None;
+        let favorites_only = false;
         let chat_filter = settings.chat_queue.unwrap_or(chat_filter);
         let list_mode = settings.list_mode.unwrap_or_else(|| match chat_filter {
             ChatFilter::Unread | ChatFilter::ReplyLater | ChatFilter::ReadLater => {

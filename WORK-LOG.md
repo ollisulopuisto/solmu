@@ -86,3 +86,13 @@ preceded tests, so strict red-first is not claimed for the whole feature.
 Full test linking/native demo code generation exceeds the local 120-second
 execution limit; no test-suite or pixel-verification pass claimed. CI and
 runtime capture remain required. No merge or release claimed.
+
+
+Follow-up: maintainer removed the pre-existing Filters row after the first
+capture. It exposed type/favorite/unreplied/category/network/account/label scopes
+and link suggestions. Shared palette actions and predicates remain, while
+mode selection clears extra scope and startup no longer restores hidden
+type/favorite filters. Captures refreshed and visually inspected in both themes.
+Updated obsolete favorite/draft ordering tests to the approved latest-first
+Recent semantics, preserving legacy favorites-filter ordering. Native demo
+build now passes after local shared-library setup; full tests remain on CI.

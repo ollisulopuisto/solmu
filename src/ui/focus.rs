@@ -46,7 +46,6 @@ pub enum Stop {
     Unread,
     ReplyLater,
     ReadLater,
-    Filters,
     Private,
     Favorites,
     Groups,
