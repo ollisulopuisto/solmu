@@ -147,6 +147,7 @@ mod tests {
             ("/packs/Ducks/1.webp", vec!["🦆", "😂"]),
             ("/recent/frog.webp", vec!["🐸"]),
             ("/received/cat.webp", vec!["🐱"]),
+            ("/received/poop.webp", vec!["💩"]),
         ]
         .into_iter()
         .map(|(path, emojis)| {
@@ -168,7 +169,10 @@ mod tests {
             pack("Ducks", &["/packs/Ducks/1.webp", "/packs/Ducks/2.webp"]),
             pack("Bom dia", &["/packs/Bom dia/1.webp"]),
         ];
-        let received = [PathBuf::from("/received/cat.webp")];
+        let received = [
+            PathBuf::from("/received/cat.webp"),
+            PathBuf::from("/received/poop.webp"),
+        ];
         search(
             &Library {
                 recent: &recent,
@@ -213,5 +217,13 @@ mod tests {
     #[test]
     fn a_sticker_only_in_received_is_found() {
         assert_eq!(library_search("🐱"), vec!["/received/cat.webp"]);
+    }
+
+    /// "poop" is a shortcode for 💩 but absent from its name ("pile of
+    /// poo"): the match has to come from the indexed shortcodes, not the
+    /// lowercased name.
+    #[test]
+    fn a_shortcode_word_finds_the_emoji_it_abbreviates() {
+        assert_eq!(library_search("poop"), vec!["/received/poop.webp"]);
     }
 }
