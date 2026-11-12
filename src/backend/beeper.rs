@@ -2545,8 +2545,10 @@ fn plain_rich_text(raw: &str) -> String {
                                         // The word the label sits in: the renderer
                                         // judges `run_widths.rs` as a whole.
                                         let word_start = out[..start]
-                                            .rfind(char::is_whitespace)
-                                            .map_or(0, |at| at + 1);
+                                            .char_indices()
+                                            .rev()
+                                            .find(|(_, c)| c.is_whitespace())
+                                            .map_or(0, |(at, c)| at + c.len_utf8());
                                         let word = &out[word_start..];
                                         let bare = url
                                             .strip_prefix("https://")
@@ -10894,6 +10896,13 @@ mod tests {
             plain_rich_text(r#"<a href="https://example.com">example.com</a>"#),
             "example.com"
         );
+        // Unicode spaces before the anchor (U+00A0, U+2003) are not one byte.
+        for space in ["&#160;", "&#8195;"] {
+            for s in ["http", "https"] {
+                let html = format!(r#"Hi{space}<a href="{s}://example.com">example.com</a>"#);
+                assert!(plain_rich_text(&html).ends_with("example.com"), "{html}");
+            }
+        }
         // An http-only address keeps its scheme: the renderer would link the
         // bare label as https.
         assert_eq!(
