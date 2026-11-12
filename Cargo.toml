@@ -28,6 +28,8 @@ path = "src/bin/solmu-reader.rs"
 
 [dependencies]
 anyhow = "1"
+# Already in the tree transitively; fast first-byte skip for the merged-view search.
+memchr = "2"
 # Hashes saved stickers by content.
 sha2 = "0.11"
 # Already in the tree through rustls; verifies lock codes.

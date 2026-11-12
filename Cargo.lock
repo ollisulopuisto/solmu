@@ -5790,6 +5790,7 @@ dependencies = [
  "libwebp-sys2 0.2.0",
  "linuxvideo",
  "log",
+ "memchr",
  "mime_guess2",
  "mp4",
  "nokhwa",
