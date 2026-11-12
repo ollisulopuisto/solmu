@@ -21614,6 +21614,7 @@ mod tests {
                 Stop::Messages,
                 Stop::Chats,
                 Stop::Starred,
+                Stop::Saved,
                 Stop::Archived,
                 Stop::Locked,
                 Stop::Settings,
@@ -21728,6 +21729,7 @@ mod tests {
                         Stop::Messages,
                         Stop::Chats,
                         Stop::Starred,
+                        Stop::Saved,
                         Stop::Archived,
                         Stop::Locked,
                         Stop::Settings,
@@ -23580,10 +23582,11 @@ mod rail_tests {
                 assert!(rail.contains_rect(*rect), "{macos}: {rect:?} in {rail:?}");
             }
             // The compact rail stacks the bottom group one plate per row
-            // in Starred, Archived, Locked, Settings order, 4 points
+            // in Starred, Saved, Archived, Locked, Settings order, 4 points
             // apart, centered in the rail.
             let bottom: Vec<egui::Rect> = [
                 Destination::Starred,
+                Destination::Saved,
                 Destination::Archived,
                 Destination::Locked,
                 Destination::Settings,
@@ -23686,6 +23689,7 @@ mod rail_tests {
                     let mut expected = vec![
                         Stop::Chats,
                         Stop::Starred,
+                        Stop::Saved,
                         Stop::Archived,
                         Stop::Locked,
                         Stop::Settings,

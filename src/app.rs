@@ -3353,6 +3353,7 @@ impl App {
             self.page = Page::Chats;
         }
         self.show_starred = false;
+        self.show_saved = false;
     }
 
     /// Local per-chat triage, scoped to the exact configured members.
@@ -6411,6 +6412,18 @@ impl App {
                 self.avatars.clear();
                 self.starred.clear();
                 self.show_starred = false;
+                self.show_saved = false;
+                self.saved_search.clear();
+                // The saved copies belong to the account that left: a number
+                // linked here later must not find them in Settings.
+                let saved_before = self.settings.beeper.saved.len();
+                self.settings
+                    .beeper
+                    .saved
+                    .retain(|entry| entry.member.account != account.0);
+                if self.settings.beeper.saved.len() != saved_before {
+                    self.mark_settings_dirty();
+                }
                 self.stars.clear();
                 self.pins.clear();
                 self.chat_pins.clear();
@@ -10112,6 +10125,71 @@ impl App {
                     starred,
                 });
             }
+            Action::SetSaved {
+                chat,
+                message,
+                saved,
+            } => {
+                if !saved {
+                    // The live chat gives the full member identity. When it
+                    // is gone - deleted, or its account unlinked - the entry's
+                    // persisted identity is all that remains: match this
+                    // account's entry for the chat so another backend's
+                    // same-id entry survives.
+                    let removed = match self.chat(&chat) {
+                        Some(chat_ref) => {
+                            let member = self.later_key(chat_ref);
+                            crate::saved::remove(&mut self.settings.beeper.saved, &member, &message)
+                        }
+                        None => {
+                            let account = self.account().id.0.clone();
+                            let before = self.settings.beeper.saved.len();
+                            self.settings.beeper.saved.retain(|entry| {
+                                entry.member.chat != chat
+                                    || entry.message != message
+                                    || entry.member.account != account
+                            });
+                            before != self.settings.beeper.saved.len()
+                        }
+                    };
+                    if removed {
+                        self.mark_settings_dirty();
+                    }
+                    return;
+                }
+                let Some(chat_ref) = self.chat(&chat) else {
+                    return;
+                };
+                let member = self.later_key(chat_ref);
+                {
+                    // Cache how the message reads now: the Saved list shows
+                    // and searches it even after the original is gone.
+                    let found = self
+                        .conversations
+                        .get(&chat)
+                        .and_then(|conversation| conversation.message(&message).cloned())
+                        .or_else(|| {
+                            self.starred
+                                .iter()
+                                .find(|entry| {
+                                    entry.message.id == message && entry.message.chat == chat
+                                })
+                                .map(|entry| entry.message.clone())
+                        });
+                    let Some(found) = found else {
+                        return;
+                    };
+                    let title = self.chat_title_of(&chat);
+                    let sender = self.display_name_or(&found.sender, found.sender_name.as_deref());
+                    let summary = found.content.full_summary_in(self.locale);
+                    let preview = crate::markup::plain(&self.resolve_mention_tokens(&summary), &[]);
+                    let entry =
+                        crate::saved::SavedMessage::new(member, &found, title, sender, preview);
+                    if crate::saved::add(&mut self.settings.beeper.saved, entry) {
+                        self.mark_settings_dirty();
+                    }
+                }
+            }
             Action::ToggleForwardRecipient(id) => {
                 if !matches!(self.dialog, Some(Dialog::Forward { .. }))
                     || self.forward_reviewing
@@ -11520,6 +11598,7 @@ impl App {
                 self.show_starred = !self.show_starred;
                 if self.show_starred {
                     self.show_archived = false;
+                    self.show_saved = false;
                     // The starred list takes the panel the folder held, and
                     // the folder is a locked one: leave it on the way in.
                     if self.locked_folder {
@@ -11528,6 +11607,23 @@ impl App {
                         self.search_hits.clear();
                     }
                     self.backend.send(Command::LoadStarred);
+                }
+            }
+            Action::ToggleSaved => {
+                // The rail, the list header's Back and Escape all land here. The
+                // sidebar has to be open for the list to be visible.
+                self.sidebar_visible = true;
+                self.show_saved = !self.show_saved;
+                if self.show_saved {
+                    self.show_archived = false;
+                    self.show_starred = false;
+                    // The saved list takes the panel the folder held, and
+                    // the folder is a locked one: leave it on the way in.
+                    if self.locked_folder {
+                        self.close_locked_folder();
+                        self.search.clear();
+                        self.search_hits.clear();
+                    }
                 }
             }
             Action::SelectLabel(label) => self.select_label(label),
@@ -15607,6 +15703,82 @@ mod tests {
             "back still leaves the window's own Settings"
         );
         assert_eq!(app.open_chat.as_deref(), Some(chat));
+    }
+
+    fn saved_entry(chat: &str, account: &str, message: &str) -> crate::saved::SavedMessage {
+        let message = Message {
+            id: message.into(),
+            chat: chat.into(),
+            sender: chat.into(),
+            sender_name: None,
+            from_me: false,
+            timestamp: 1,
+            content: Content::text(message),
+            status: Delivery::None,
+            delivered_at: None,
+            read_at: None,
+            quoted: None,
+            reactions: Vec::new(),
+            history_order: None,
+            edited: false,
+            mentions: Vec::new(),
+            forwarded: false,
+            thumbnail: None,
+        };
+        crate::saved::SavedMessage::new(
+            crate::merged::Member {
+                origin: String::new(),
+                account: account.into(),
+                chat: chat.into(),
+            },
+            &message,
+            "Ada".into(),
+            "Ada".into(),
+            "hi".into(),
+        )
+    }
+
+    #[test]
+    fn unsaving_outlives_its_chat() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let chat = "15550009999@s.whatsapp.net";
+        let account = app.account().id.0.clone();
+        app.settings
+            .beeper
+            .saved
+            .push(saved_entry(chat, &account, "m1"));
+        // Another account's entry under the same chat id is not touched.
+        app.settings.beeper.saved.push(saved_entry(chat, "2", "m1"));
+        app.apply(
+            Action::SetSaved {
+                chat: chat.into(),
+                message: "m1".into(),
+                saved: false,
+            },
+            &ctx,
+        );
+        let left = &app.settings.beeper.saved;
+        assert_eq!(left.len(), 1, "{left:?}");
+        assert_eq!(left[0].member.account, "2");
+    }
+
+    #[test]
+    fn logout_forgets_the_unlinked_accounts_saved_messages() {
+        let mut app = app();
+        let account = app.account().id.0.clone();
+        app.settings
+            .beeper
+            .saved
+            .push(saved_entry("15550009998@s.whatsapp.net", &account, "m1"));
+        app.settings
+            .beeper
+            .saved
+            .push(saved_entry("15550009999@s.whatsapp.net", "2", "m2"));
+        app.handle_link(LinkStatus::LoggedOut, true);
+        let left = &app.settings.beeper.saved;
+        assert_eq!(left.len(), 1, "{left:?}");
+        assert_eq!(left[0].member.account, "2");
     }
 
     #[test]

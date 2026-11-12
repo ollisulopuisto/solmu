@@ -2612,6 +2612,9 @@ struct View<'a> {
     open_menu: Option<&'a str>,
     /// Ids of the starred messages of this chat, for the mark in the footer.
     starred: Option<&'a HashSet<String>>,
+    /// Ids of this chat's locally saved messages, for the menu and the mark
+    /// in the footer.
+    saved: Option<&'a HashSet<String>>,
     /// Ids of this chat's pinned messages, for the menu and the bubble mark.
     pins: Option<&'a HashSet<String>>,
     /// Active pins of this chat, for the notices in the transcript.
@@ -2982,6 +2985,12 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     // reader is attached, like the rows' labels, once the list's node exists.
     let list_label =
         || crate::a11y::messages_list_label(app.locale, &app.chat_title(chat), chat.is_group());
+    // The saved bookmarks of this chat, for the menu and the footer mark.
+    let saved_ids: HashSet<String> =
+        crate::saved::ids_in(&app.settings.beeper.saved, &app.later_key(chat))
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
     let view = View {
         pending_media: Some(&app.pending_media),
         link_menu_owner: None,
@@ -3017,6 +3026,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         },
         open_menu: app.open_message_menu.as_deref(),
         starred: app.stars.get(&chat.id),
+        saved: Some(&saved_ids),
         pins: app.pins.get(&chat.id),
         pin_notices: app
             .chat_pins
@@ -4884,12 +4894,17 @@ fn bubble(
                 let last = members.last().unwrap_or(message);
                 let starred = view.starred.is_some_and(|ids| ids.contains(&last.id));
                 let pinned = view.pins.is_some_and(|ids| ids.contains(&last.id));
+                let saved = view.saved.is_some_and(|ids| ids.contains(&last.id));
                 let status = shown_delivery(view, last);
                 let visible_status = last.from_me
                     && !matches!(status, Delivery::None | Delivery::Unknown)
                     && !view.hide_grouped_status;
-                let metadata =
-                    view.show_timestamp || visible_status || starred || pinned || last.edited;
+                let metadata = view.show_timestamp
+                    || visible_status
+                    || starred
+                    || pinned
+                    || saved
+                    || last.edited;
                 let reacted = members.iter().any(|row| !row.reactions.is_empty());
                 if metadata || reacted {
                     ui.add_space(3.0);
@@ -4898,7 +4913,8 @@ fn bubble(
                     } else {
                         body.rect.left()
                     };
-                    let mut metadata_width = footer_width(ui, view.locale, last, starred, pinned);
+                    let mut metadata_width =
+                        footer_width(ui, view.locale, last, starred, pinned, saved);
                     if !view.show_timestamp {
                         metadata_width -= clock_width(ui, view.locale, last);
                     }
@@ -4928,7 +4944,7 @@ fn bubble(
                             }
                             if metadata {
                                 let mut width =
-                                    footer_width(ui, view.locale, last, starred, pinned);
+                                    footer_width(ui, view.locale, last, starred, pinned, saved);
                                 if !view.show_timestamp {
                                     width -= clock_width(ui, view.locale, last);
                                 }
@@ -4939,7 +4955,7 @@ fn bubble(
                                     vec2(width.max(1.0), if reacted { 22.0 } else { 15.0 }),
                                     Sense::hover(),
                                 );
-                                footer(ui, view, last, Some(slot), starred, pinned, actions);
+                                footer(ui, view, last, Some(slot), starred, pinned, saved, actions);
                             } else {
                                 ui.ctx().data_mut(|data| {
                                     data.remove::<Rect>(footer_id(&last.chat, &last.id))
@@ -6542,6 +6558,7 @@ fn footer_width(
     message: &Message,
     starred: bool,
     pinned: bool,
+    saved: bool,
 ) -> f32 {
     let font = theme::regular(11.0);
     let time = clock_width(ui, locale, message);
@@ -6574,8 +6591,9 @@ fn footer_width(
     // Only a message that carries a mark reserves its slot, as WhatsApp does:
     // a plain footer is the clock and the ticks alone. Starring or pinning
     // grows that bubble's footer by one slot each.
-    let marks =
-        if starred { FOOTER_MARK_SLOT } else { 0.0 } + if pinned { FOOTER_MARK_SLOT } else { 0.0 };
+    let marks = if starred { FOOTER_MARK_SLOT } else { 0.0 }
+        + if pinned { FOOTER_MARK_SLOT } else { 0.0 }
+        + if saved { FOOTER_MARK_SLOT } else { 0.0 };
     time + edited + not_sent + if message.from_me { 19.0 } else { 0.0 } + marks
 }
 
@@ -6701,6 +6719,7 @@ fn group_footer_rect(bubble: Rect, width: f32, own: bool) -> Rect {
 }
 
 /// Paints the clock/status strip, including an explicit externally supplied slot.
+#[allow(clippy::too_many_arguments)]
 fn footer(
     ui: &mut egui::Ui,
     view: &View<'_>,
@@ -6708,6 +6727,7 @@ fn footer(
     slot: Option<Rect>,
     starred: bool,
     pinned: bool,
+    saved: bool,
     actions: &mut Vec<Action>,
 ) {
     let palette = &view.palette;
@@ -6858,6 +6878,19 @@ fn footer(
                 });
             }
         }
+    }
+    if saved {
+        x -= FOOTER_MARK_SLOT;
+        theme::paint_icon(
+            ui,
+            Icon::Bookmark,
+            Rect::from_center_size(
+                pos2(x + FOOTER_MARK / 2.0, rect.center().y),
+                Vec2::splat(FOOTER_MARK),
+            ),
+            FOOTER_MARK,
+            palette.secondary,
+        );
     }
     if starred {
         x -= FOOTER_MARK_SLOT;
@@ -7018,6 +7051,8 @@ fn message_menu_labels(locale: crate::i18n::Locale) -> Vec<String> {
         gettext(locale, "Pin message"),
         gettext(locale, "Unpin message"),
         gettext(locale, "Forward"),
+        gettext(locale, "Save for later"),
+        gettext(locale, "Remove from Saved"),
         gettext(locale, "Open in the viewer"),
         gettext(locale, "Transcription language…"),
         gettext(locale, "Playback speed 1x"),
@@ -7079,6 +7114,11 @@ pub(crate) fn list_menu(
         .then(|| message.id.clone())
         .into_iter()
         .collect();
+    let saved_set: HashSet<String> =
+        crate::saved::ids_in(&app.settings.beeper.saved, &app.later_key(chat))
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
     let names_or = |id: &str, hint: Option<&str>| app.display_name_or(id, hint);
     let mention_names = |id: &str| app.mention_name(id);
     let avatars = HashMap::new();
@@ -7128,6 +7168,7 @@ pub(crate) fn list_menu(
         selecting: false,
         motion_playing: None,
         starred: marks.starred.then_some(&stars),
+        saved: Some(&saved_set),
         pins: app.pins.get(&message.chat),
         pin_notices: &[],
     };
@@ -7172,6 +7213,11 @@ pub(crate) fn linked_bubble(
     let mention_names = |id: &str| app.mention_name(id);
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
+    let saved_set: HashSet<String> =
+        crate::saved::ids_in(&app.settings.beeper.saved, &app.later_key(chat))
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
     let view = View {
         pending_media: Some(&app.pending_media),
         link_menu_owner: None,
@@ -7217,6 +7263,7 @@ pub(crate) fn linked_bubble(
         selecting: false,
         motion_playing: None,
         starred: app.stars.get(&message.chat),
+        saved: Some(&saved_set),
         pins: app.pins.get(&message.chat),
         pin_notices: &[],
     };
@@ -7571,6 +7618,25 @@ fn context_menu(
             chat: chat.clone(),
             messages: vec![message.id.clone()],
         }));
+    }
+    let saved = view.saved.is_some_and(|ids| ids.contains(&message.id));
+    let saved_label = if saved {
+        crate::i18n::gettext(view.locale, "Remove from Saved")
+    } else {
+        crate::i18n::gettext(view.locale, "Save for later")
+    };
+    // A local bookmark: the message stays put, nothing is starred or pinned
+    // on the account, and saving never marks the chat read.
+    if !matches!(message.content, Content::Revoked)
+        && view.saved.is_some()
+        && widgets::menu_item(ui, &palette, Some(Icon::Bookmark), &saved_label)
+    {
+        actions.push(Action::SetSaved {
+            chat: chat.clone(),
+            message: message.id.clone(),
+            saved: !saved,
+        });
+        ui.close();
     }
     // A photo opens the viewer on its own click; a clip plays in its bubble
     // there, so this is how the album is reached from a chat that holds no
@@ -11824,6 +11890,7 @@ mod tests {
                     Some(Rect::from_min_size(pos2(10.0, 10.0), vec2(100.0, 20.0))),
                     false,
                     false,
+                    false,
                     &mut Vec::new(),
                 );
             });
@@ -12823,9 +12890,30 @@ mod tests {
             |ui| {
                 let message = crate::archive::tests::message("1@s.whatsapp.net", "m1", 0, false);
                 clock = clock_width(ui, crate::i18n::Locale::English, &message);
-                plain = footer_width(ui, crate::i18n::Locale::English, &message, false, false);
-                pinned = footer_width(ui, crate::i18n::Locale::English, &message, false, true);
-                both = footer_width(ui, crate::i18n::Locale::English, &message, true, true);
+                plain = footer_width(
+                    ui,
+                    crate::i18n::Locale::English,
+                    &message,
+                    false,
+                    false,
+                    false,
+                );
+                pinned = footer_width(
+                    ui,
+                    crate::i18n::Locale::English,
+                    &message,
+                    false,
+                    true,
+                    false,
+                );
+                both = footer_width(
+                    ui,
+                    crate::i18n::Locale::English,
+                    &message,
+                    true,
+                    true,
+                    false,
+                );
             },
         );
         output.textures_delta.clear();
@@ -12866,7 +12954,16 @@ mod tests {
                 crate::archive::tests::message("1@s.whatsapp.net", "time-only", 1000, false);
             message.content = Content::text("An old message");
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                footer(ui, view, &message, None, false, false, &mut Vec::new());
+                footer(
+                    ui,
+                    view,
+                    &message,
+                    None,
+                    false,
+                    false,
+                    false,
+                    &mut Vec::new(),
+                );
             });
             let clock = crate::util::clock(message.timestamp);
             let texts: Vec<_> = output
@@ -12902,7 +12999,16 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        footer(ui, view, &message, None, false, pinned, &mut Vec::new());
+                        footer(
+                            ui,
+                            view,
+                            &message,
+                            None,
+                            false,
+                            pinned,
+                            false,
+                            &mut Vec::new(),
+                        );
                     },
                 );
                 output.textures_delta.clear();
@@ -12949,9 +13055,30 @@ mod tests {
                 let from_them = crate::archive::tests::message("1@s.whatsapp.net", "m1", 0, false);
                 let from_me = crate::archive::tests::message("1@s.whatsapp.net", "m1", 0, true);
                 clock = clock_width(ui, crate::i18n::Locale::English, &from_them);
-                incoming = footer_width(ui, crate::i18n::Locale::English, &from_them, false, false);
-                starred = footer_width(ui, crate::i18n::Locale::English, &from_them, true, false);
-                own = footer_width(ui, crate::i18n::Locale::English, &from_me, false, false);
+                incoming = footer_width(
+                    ui,
+                    crate::i18n::Locale::English,
+                    &from_them,
+                    false,
+                    false,
+                    false,
+                );
+                starred = footer_width(
+                    ui,
+                    crate::i18n::Locale::English,
+                    &from_them,
+                    true,
+                    false,
+                    false,
+                );
+                own = footer_width(
+                    ui,
+                    crate::i18n::Locale::English,
+                    &from_me,
+                    false,
+                    false,
+                    false,
+                );
             },
         );
         output.textures_delta.clear();
@@ -12994,6 +13121,7 @@ mod tests {
             show_timestamp: true,
             footer_right: None,
             neighbour_width: None,
+            saved: None,
             preview_worker: None,
             local_previews: false,
             auto_previews: false,
@@ -13050,7 +13178,16 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
-                        footer(ui, view, &message, None, starred, false, &mut Vec::new());
+                        footer(
+                            ui,
+                            view,
+                            &message,
+                            None,
+                            starred,
+                            false,
+                            false,
+                            &mut Vec::new(),
+                        );
                     },
                 );
                 output.textures_delta.clear();
@@ -13083,11 +13220,12 @@ mod tests {
                             &message,
                             Some(group_footer_rect(
                                 picture,
-                                footer_width(ui, view.locale, &message, starred, pinned),
+                                footer_width(ui, view.locale, &message, starred, pinned, false),
                                 false,
                             )),
                             starred,
                             pinned,
+                            false,
                             &mut Vec::new(),
                         );
                     },
@@ -13150,6 +13288,7 @@ mod tests {
                 &message,
                 false,
                 false,
+                false,
             ));
             message.status = Delivery::Failed;
             widths.push(footer_width(
@@ -13158,11 +13297,19 @@ mod tests {
                 &message,
                 false,
                 false,
+                false,
             ));
             // Only our own messages can fail to send.
             message.from_me = false;
             widths.push(
-                footer_width(ui, crate::i18n::Locale::English, &message, false, false) + 19.0,
+                footer_width(
+                    ui,
+                    crate::i18n::Locale::English,
+                    &message,
+                    false,
+                    false,
+                    false,
+                ) + 19.0,
             );
         });
         output.textures_delta.clear();
@@ -13546,6 +13693,7 @@ mod reaction_tests {
         message: Message,
         marks: Marks,
         pinned: bool,
+        saved: bool,
     }
 
     /// The accessible labels of the message menu for `row`, drawn in
@@ -13563,6 +13711,19 @@ mod reaction_tests {
                 .insert(message.chat.clone(), HashSet::from([message.id.clone()]));
         }
         let chat = Chat::new(message.chat.clone(), "Ada".into());
+        if row.saved {
+            let member = app.later_key(&chat);
+            crate::saved::add(
+                &mut app.settings.beeper.saved,
+                crate::saved::SavedMessage::new(
+                    member,
+                    message,
+                    chat.name.clone(),
+                    "Ada".into(),
+                    "Kept for later.".into(),
+                ),
+            );
+        }
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         crate::theme::install(&ctx);
@@ -13615,6 +13776,7 @@ mod reaction_tests {
                 message,
                 marks: Marks { starred: false },
                 pinned: false,
+                saved: false,
             }
         };
         let photo = |path: Option<PathBuf>, state| {
@@ -13629,6 +13791,7 @@ mod reaction_tests {
                 message: own,
                 marks: Marks { starred: true },
                 pinned: true,
+                saved: false,
             },
             photo(path.clone(), Idle),
             photo(None, Idle),
@@ -13663,6 +13826,12 @@ mod reaction_tests {
         for row in menu_fixtures(&file) {
             let spanish = drawn_menu_words(crate::i18n::Locale::Spanish, &row);
             for english in drawn_menu_words(crate::i18n::Locale::English, &row) {
+                // "Save for later" awaits catalog extraction: until the
+                // maintainer regenerates them, every locale draws it in
+                // English, so it cannot count as untranslated here.
+                if english == "Save for later" {
+                    continue;
+                }
                 assert!(!spanish.contains(&english), "{english} in {spanish:?}");
             }
             labels.extend(spanish);
@@ -13690,9 +13859,11 @@ mod reaction_tests {
             let msgid = format!("msgid \"{text}\"");
             TEMPLATE.lines().any(|line| line == msgid)
                 // CONTRIBUTING leaves catalog/template regeneration to the
-                // maintainer. This new gettext key awaits that extraction;
+                // maintainer. These new gettext keys await that extraction;
                 // keep testing every existing catalogued menu item meanwhile.
                 || text == "Copy URL to clipboard"
+                || text == "Save for later"
+                || text == "Remove from Saved"
         };
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("photo.jpg");
@@ -13723,6 +13894,26 @@ mod reaction_tests {
                 .any(|label| label == "Copy URL to clipboard")
         );
         labels.extend(link_labels);
+        // A saved message swaps the menu entry to its removal form. The new
+        // keys await extraction, so cover the swap in English alone here.
+        let saved_row = MenuRow {
+            message: with_reactions(Vec::new()),
+            marks: Marks { starred: false },
+            pinned: false,
+            saved: true,
+        };
+        let saved_labels = drawn_menu_words(crate::i18n::Locale::English, &saved_row);
+        assert!(
+            saved_labels
+                .iter()
+                .any(|label| label == "Remove from Saved"),
+            "{saved_labels:?}"
+        );
+        assert!(
+            !saved_labels.iter().any(|label| label == "Save for later"),
+            "{saved_labels:?}"
+        );
+        labels.extend(saved_labels);
         let undrawn: Vec<&str> = measured
             .iter()
             .map(String::as_str)

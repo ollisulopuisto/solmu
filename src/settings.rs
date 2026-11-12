@@ -1733,6 +1733,9 @@ pub struct BeeperPreferences {
     /// Chats the user moved out of their automatic category; the rules never
     /// re-sort them. Local only, same per-chat key as the later marks.
     pub category_overrides: Vec<(crate::merged::Member, crate::categories::AutoCategory)>,
+    /// Per-message bookmarks, local only: identity plus the text shown when
+    /// the message was saved. Never written to remote accounts.
+    pub saved: Vec<crate::saved::SavedMessage>,
     pub incognito: bool,
     pub compact_list: bool,
     pub show_previews: bool,
@@ -1758,6 +1761,7 @@ impl Default for BeeperPreferences {
             reply_later: Vec::new(),
             read_later: Vec::new(),
             category_overrides: Vec::new(),
+            saved: Vec::new(),
             incognito: false,
             compact_list: false,
             show_previews: true,

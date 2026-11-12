@@ -100,6 +100,7 @@ pub(crate) fn width_id() -> egui::Id {
 pub enum Destination {
     Chats,
     Starred,
+    Saved,
     Archived,
     Locked,
     Settings,
@@ -108,7 +109,7 @@ pub enum Destination {
 impl Destination {
     /// Whether the window shows this destination now: its icon is lit.
     pub fn lit(self, app: &App) -> bool {
-        let chats = app.page == Page::Chats && !app.show_starred;
+        let chats = app.page == Page::Chats && !app.show_starred && !app.show_saved;
         match self {
             Self::Chats => {
                 chats
@@ -117,6 +118,7 @@ impl Destination {
                     && !app.beeper_scope_is_active()
             }
             Self::Starred => app.page == Page::Chats && app.show_starred,
+            Self::Saved => app.page == Page::Chats && app.show_saved,
             Self::Archived => chats && app.show_archived,
             Self::Locked => chats && app.locked_folder_open(),
             Self::Settings => matches!(app.page, Page::Settings | Page::Wallpaper),
@@ -144,6 +146,9 @@ impl Destination {
             if app.show_starred {
                 actions.push(Action::ToggleStarred);
             }
+            if app.show_saved {
+                actions.push(Action::ToggleSaved);
+            }
         };
         match self {
             Self::Chats => {
@@ -161,6 +166,14 @@ impl Destination {
                 }
                 if !app.show_starred {
                     actions.push(Action::ToggleStarred);
+                }
+            }
+            Self::Saved => {
+                if app.page != Page::Chats {
+                    actions.push(Action::Open(Page::Chats));
+                }
+                if !app.show_saved {
+                    actions.push(Action::ToggleSaved);
                 }
             }
             Self::Archived => {
@@ -213,6 +226,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, hidden: bool) {
         }
         let bottom: Vec<Destination> = [
             Destination::Starred,
+            Destination::Saved,
             Destination::Archived,
             Destination::Locked,
             Destination::Settings,
@@ -509,6 +523,11 @@ fn destination_plate(
             Icon::Star,
             Stop::Starred,
             gettext(app.locale, "Starred messages").into_owned(),
+        ),
+        Destination::Saved => (
+            Icon::Bookmark,
+            Stop::Saved,
+            gettext(app.locale, "Saved messages").into_owned(),
         ),
         Destination::Archived => {
             // The count the Archived chip carried: archived chats unread.

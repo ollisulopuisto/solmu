@@ -363,6 +363,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             actions.push(Action::CancelSelection);
         } else if app.show_starred {
             actions.push(Action::ToggleStarred);
+        } else if app.show_saved {
+            actions.push(Action::ToggleSaved);
         } else if app.chat_search_visible() && app.chat_search_calendar {
             // The day filter first, then the pane it hangs from.
             app.chat_search_calendar = false;
