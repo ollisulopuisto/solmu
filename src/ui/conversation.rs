@@ -5277,6 +5277,45 @@ pub fn speed_button_id(chat: &str, message: &str, speed: f32) -> egui::Id {
     egui::Id::new(("speed", chat, message, speed.to_bits()))
 }
 
+/// The speed chip's colours. In a bubble they come from the player's
+/// contrast colours; the message menu keeps its accent tint on the menu
+/// surface.
+struct SpeedPill {
+    rest: Color32,
+    rest_hover: Color32,
+    active: Color32,
+    active_hover: Color32,
+    label: Color32,
+    label_active: Color32,
+}
+
+impl SpeedPill {
+    /// The chip inside a bubble's player: the player colour when active,
+    /// the quiet track colour at rest.
+    fn player(colours: &theme::PlayerColours) -> Self {
+        Self {
+            rest: colours.quiet,
+            rest_hover: theme::blend(colours.quiet, colours.player, 0.25),
+            active: colours.player,
+            active_hover: theme::blend(colours.player, colours.on_player, 0.15),
+            label: colours.on_quiet,
+            label_active: colours.on_player,
+        }
+    }
+
+    /// The chip in the message menu, on the menu's own surface.
+    fn menu(palette: &Palette) -> Self {
+        Self {
+            rest: palette.surface_hover,
+            rest_hover: palette.surface_active,
+            active: palette.accent.gamma_multiply(0.30),
+            active_hover: palette.accent.gamma_multiply(0.42),
+            label: palette.secondary,
+            label_active: palette.accent,
+        }
+    }
+}
+
 /// Draws a playback speed pill labelled with `speed`, highlighted when
 /// `active` and faded while that speed is still `preparing`.
 fn speed_pill(
@@ -5286,8 +5325,8 @@ fn speed_pill(
     speed: f32,
     active: bool,
     preparing: bool,
+    colours: &SpeedPill,
 ) -> egui::Response {
-    let palette = view.palette;
     let label = crate::audio::speed_label(speed);
     // A literal msgid per speed: the menu tests match exact pot entries.
     let a11y = match label.as_str() {
@@ -5310,22 +5349,17 @@ fn speed_pill(
     theme::focus_outline(ui, response.id, rect, rect.height() / 2.0);
     if ui.is_rect_visible(rect) {
         let hovered = response.hovered();
-        // The resting fill uses the hover step because incoming bubbles
-        // share the resting surface colour.
-        let fill = if active {
-            palette
-                .accent
-                .gamma_multiply(if hovered { 0.42 } else { 0.30 })
-        } else if hovered {
-            palette.surface_active
-        } else {
-            palette.surface_hover
+        let fill = match (active, hovered) {
+            (true, true) => colours.active_hover,
+            (true, false) => colours.active,
+            (false, true) => colours.rest_hover,
+            (false, false) => colours.rest,
         };
         ui.painter().rect_filled(rect, rect.height() / 2.0, fill);
         let colour = if active {
-            palette.accent
+            colours.label_active
         } else {
-            palette.secondary
+            colours.label
         };
         let colour = if preparing {
             colour.gamma_multiply(0.5)
@@ -5380,6 +5414,7 @@ fn speed_menu_row(
                     option,
                     selected,
                     preparing && selected,
+                    &SpeedPill::menu(&view.palette),
                 );
                 ui.ctx().data_mut(|data| {
                     data.insert_temp(
@@ -7416,7 +7451,17 @@ fn selection_menu(
         &view.palette,
         view.locale,
         &view.chat.id,
-        selection_can_revoke(messages, selected, view.now),
+        (
+            if view.chat.backend_account.is_some() {
+                matches!(view.chat.mutation_capabilities.delete, Some(2))
+            } else {
+                selection_can_revoke(messages, selected, view.now)
+            },
+            view.chat
+                .backend_account
+                .is_some()
+                .then_some(&view.chat.mutation_capabilities),
+        ),
         selected,
         actions,
     );
@@ -7429,10 +7474,11 @@ fn selection_delete_items(
     palette: &Palette,
     locale: crate::i18n::Locale,
     chat: &str,
-    can_revoke: bool,
+    support: (bool, Option<&crate::model::MutationCapabilities>),
     selected: &[String],
     actions: &mut Vec<Action>,
 ) {
+    let (can_revoke, capabilities) = support;
     for (label, for_everyone, enabled) in [
         (
             crate::i18n::gettext(locale, "Delete for everyone"),
@@ -7445,6 +7491,16 @@ fn selection_delete_items(
             !selected.is_empty(),
         ),
     ] {
+        let advertised = capabilities.is_none_or(|caps| {
+            if for_everyone {
+                matches!(caps.delete, Some(2))
+            } else {
+                caps.delete_for_me == Some(true)
+            }
+        });
+        if !advertised {
+            continue;
+        }
         if widgets::menu_item_enabled(ui, palette, Some(Icon::Trash), &label, enabled) {
             actions.push(Action::ShowDialog(Dialog::ConfirmDeleteSelection {
                 chat: chat.to_owned(),
@@ -7784,9 +7840,16 @@ fn context_menu(
     let can_edit = message.from_me
         && matches!(message.content, Content::Text { .. })
         && age <= crate::app::EDIT_WINDOW.as_secs() as i64;
-    let can_revoke = message.from_me
-        && !matches!(message.content, Content::Revoked)
-        && age <= crate::app::REVOKE_WINDOW.as_secs() as i64;
+    let can_revoke = if view.chat.backend_account.is_some() {
+        view.chat
+            .mutation_capabilities
+            .delete_refusal(true, message.from_me, message.timestamp, view.now)
+            .is_none()
+    } else {
+        message.from_me
+            && !matches!(message.content, Content::Revoked)
+            && age <= crate::app::REVOKE_WINDOW.as_secs() as i64
+    };
     if can_edit
         && widgets::menu_item(
             ui,
@@ -7817,12 +7880,15 @@ fn context_menu(
             for_everyone: true,
         }));
     }
-    if widgets::menu_item(
-        ui,
-        &palette,
-        Some(Icon::EyeOff),
-        &crate::i18n::gettext(view.locale, "Delete for me"),
-    ) {
+    if (view.chat.backend_account.is_none()
+        || view.chat.mutation_capabilities.delete_for_me == Some(true))
+        && widgets::menu_item(
+            ui,
+            &palette,
+            Some(Icon::EyeOff),
+            &crate::i18n::gettext(view.locale, "Delete for me"),
+        )
+    {
         actions.push(Action::ShowDialog(Dialog::ConfirmDeleteMessage {
             chat: view.chat.id.clone(),
             message: message.id.clone(),
@@ -11332,15 +11398,22 @@ fn voice_player(
     } else {
         vec![12; crate::voice::BARS]
     };
-    let fill = palette.accent.gamma_multiply(0.22);
-    let hover = palette.accent.gamma_multiply(0.38);
+    // The player reads on the bubble, not on the panel: the accent nudged
+    // to 3:1 against the bubble fill, with its own on-colour for icons.
+    let bubble_fill = if message.from_me {
+        palette.bubble_out
+    } else {
+        palette.bubble_in
+    };
+    let colours = palette.player_on(bubble_fill);
+    let hover = theme::blend(colours.player, colours.on_player, 0.15);
     let waiting = |ui: &mut egui::Ui| {
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(button), Sense::hover());
         ui.painter()
-            .circle_filled(rect.center(), button / 2.0, fill);
+            .circle_filled(rect.center(), button / 2.0, colours.player);
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.centered_and_justified(|ui| {
-                theme::spinner(ui, 18.0, palette.accent);
+                theme::spinner(ui, 18.0, colours.on_player);
             });
         });
     };
@@ -11358,9 +11431,9 @@ fn voice_player(
                         ui,
                         Icon::Download,
                         button,
-                        fill,
+                        colours.player,
                         hover,
-                        palette.accent,
+                        colours.on_player,
                         "Download",
                     )
                     .clicked()
@@ -11385,9 +11458,9 @@ fn voice_player(
                             ui,
                             icon,
                             button,
-                            fill,
+                            colours.player,
                             hover,
-                            palette.accent,
+                            colours.on_player,
                             tooltip,
                         )
                         .clicked()
@@ -11414,7 +11487,7 @@ fn voice_player(
                     0.0
                 };
                 let played_until = rect.left() + fraction * rect.width();
-                let quiet = palette.secondary.gamma_multiply(0.7);
+                let quiet = colours.quiet;
                 let kind = if voice_note {
                     "voice-waveform"
                 } else {
@@ -11430,7 +11503,7 @@ fn voice_player(
                         ui.painter().rect_filled(
                             Rect::from_min_max(track.min, pos2(played_until, track.bottom())),
                             2.0,
-                            palette.accent,
+                            colours.player,
                         );
                     }
                 } else if count > 0 {
@@ -11439,7 +11512,7 @@ fn voice_player(
                         let height = (2.0 + level * (bar_height - 4.0)).max(2.0);
                         let x = rect.left() + index as f32 * pitch + 1.0;
                         let colour = if status.state != State::Idle && x <= played_until {
-                            palette.accent
+                            colours.player
                         } else {
                             quiet
                         };
@@ -11460,7 +11533,7 @@ fn voice_player(
                     ui.painter().circle_filled(
                         egui::pos2(knob, rect.center().y),
                         5.0,
-                        palette.accent,
+                        colours.player,
                     );
                 }
                 if let Some(path) = &media.path {
@@ -11515,7 +11588,7 @@ fn voice_player(
                         Vec2::splat(6.0),
                     );
                     ui.painter()
-                        .circle_filled(dot.center(), 3.0, palette.accent);
+                        .circle_filled(dot.center(), 3.0, colours.player);
                     // The time beside it keeps clear of the dot too.
                     duration = Some(shown.union(dot));
                     ui.ctx().data_mut(|data| {
@@ -11532,8 +11605,9 @@ fn voice_player(
                     pos2(slot.center().x, wave_middle.unwrap_or(slot.center().y)),
                     Vec2::splat(button),
                 );
-                ui.painter().circle_filled(at.center(), button / 2.0, fill);
-                theme::paint_icon(ui, Icon::Music, at, 20.0, palette.accent);
+                ui.painter()
+                    .circle_filled(at.center(), button / 2.0, colours.player);
+                theme::paint_icon(ui, Icon::Music, at, 20.0, colours.on_player);
                 let label = crate::i18n::gettext(view.locale, "Audio");
                 response.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::WidgetType::Label, true, label.as_ref())
@@ -11559,7 +11633,15 @@ fn voice_player(
                 );
                 let response = ui
                     .scope_builder(egui::UiBuilder::new().max_rect(at), |ui| {
-                        speed_pill(ui, view, size, speed, speed > 1.0, preparing)
+                        speed_pill(
+                            ui,
+                            view,
+                            size,
+                            speed,
+                            speed > 1.0,
+                            preparing,
+                            &SpeedPill::player(&colours),
+                        )
                     })
                     .inner;
                 ui.ctx().data_mut(|data| {
@@ -11867,7 +11949,18 @@ fn selection_bar(app: &mut App, ui: &mut egui::Ui, chat: &str, selected: &[Strin
                         &palette,
                         app.locale,
                         chat,
-                        can_revoke,
+                        (
+                            if app.chat(chat).is_some_and(|c| c.backend_account.is_some()) {
+                                app.chat(chat).is_some_and(|c| {
+                                    matches!(c.mutation_capabilities.delete, Some(2))
+                                })
+                            } else {
+                                can_revoke
+                            },
+                            app.chat(chat)
+                                .filter(|c| c.backend_account.is_some())
+                                .map(|c| &c.mutation_capabilities),
+                        ),
                         selected,
                         &mut actions,
                     );
@@ -14092,7 +14185,7 @@ mod reaction_tests {
                 &crate::theme::Palette::dark(),
                 crate::i18n::Locale::Spanish,
                 "chat",
-                true,
+                (true, None),
                 &["message".to_owned()],
                 &mut actions,
             );

@@ -108,6 +108,46 @@ impl ChatKind {
     }
 }
 
+/// Live bridge-reported destructive capabilities. Missing is never permission.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MutationCapabilities {
+    pub archive: Option<bool>,
+    pub delete_for_me: Option<bool>,
+    pub delete: Option<i8>,
+    pub delete_max_age: Option<i64>,
+}
+impl MutationCapabilities {
+    pub fn delete_refusal(
+        &self,
+        everyone: bool,
+        from_me: bool,
+        timestamp: i64,
+        now: i64,
+    ) -> Option<&'static str> {
+        if !everyone {
+            return (self.delete_for_me != Some(true))
+                .then_some("Delete for me is not confirmed by this bridge");
+        }
+        if !matches!(self.delete, Some(2)) {
+            return Some("Delete for everyone is not confirmed by this bridge");
+        }
+        if !from_me {
+            return Some("Only your own messages can be deleted for everyone here");
+        }
+        if timestamp <= 0 || timestamp > now {
+            return Some("Message age could not be verified");
+        }
+        if self
+            .delete_max_age
+            .is_some_and(|limit| limit < 0 || now.saturating_sub(timestamp) > limit)
+        {
+            return Some("The bridge's delete age limit has passed");
+        }
+        None
+    }
+}
+
 /// A local chat label: a name, a colour, and nothing that leaves this computer.
 /// Not a WhatsApp Business label; Solmu neither reads nor syncs those.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -312,6 +352,7 @@ pub struct Chat {
     /// capabilities. Informational only: the API has no poll content or
     /// vote endpoint to use it with yet.
     pub poll_capability: Option<i8>,
+    pub mutation_capabilities: MutationCapabilities,
     /// The other person's phone numbers and usernames in a direct chat, as the
     /// network reports them. Used only to suggest links on this computer.
     pub handles: Vec<String>,
@@ -413,6 +454,7 @@ impl Chat {
             backend_origin: None,
             backend_network: None,
             poll_capability: None,
+            mutation_capabilities: Default::default(),
             handles: Vec::new(),
         }
     }
@@ -2595,6 +2637,18 @@ pub fn forward_limit(frequently_forwarded: bool) -> usize {
 /// Actions queued by views and applied after drawing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    BatchArchive {
+        request: u64,
+        expected: crate::merged::Member,
+        chat: ChatId,
+    },
+    BatchDelete {
+        request: u64,
+        expected: crate::merged::Member,
+        chat: ChatId,
+        id: String,
+        everyone: bool,
+    },
     RetryPendingMedia(String),
     TranslateLocally(String),
     Open(Page),
@@ -4386,5 +4440,114 @@ mod tests {
         assert_eq!(listed.links.len(), MEDIA_LIST_LIMIT, "cut to what is shown");
         assert!(listed.links_truncated, "600 addresses do not fit");
         assert!(!listed.media_truncated && !listed.docs_truncated);
+    }
+}
+
+#[cfg(test)]
+mod mutation_capability_tests {
+    use super::MutationCapabilities;
+    #[test]
+    fn scope_is_never_widened_and_unknown_or_partial_fails_closed() {
+        let mut caps = MutationCapabilities::default();
+        assert!(caps.delete_refusal(false, true, 10, 20).is_some());
+        assert!(caps.delete_refusal(true, true, 10, 20).is_some());
+        caps.delete_for_me = Some(true);
+        assert_eq!(caps.delete_refusal(false, false, 10, 20), None);
+        assert!(caps.delete_refusal(true, true, 10, 20).is_some());
+        caps.delete = Some(1);
+        assert!(caps.delete_refusal(true, true, 10, 20).is_some());
+        caps.delete = Some(2);
+        caps.delete_max_age = Some(5);
+        assert!(caps.delete_refusal(true, true, 10, 20).is_some());
+        assert_eq!(caps.delete_refusal(true, true, 18, 20), None);
+        assert!(caps.delete_refusal(true, false, 18, 20).is_some());
+        assert!(caps.delete_refusal(true, true, 0, 20).is_some());
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchItem {
+    pub chat: String,
+    pub message: Option<String>,
+    pub everyone: bool,
+    pub result: Option<Result<(), String>>,
+}
+#[derive(Default)]
+pub struct BatchState {
+    pub request: Option<u64>,
+    pub selected_chats: Vec<String>,
+    pub selected_identities: std::collections::HashMap<String, crate::merged::Member>,
+    pub owner: String,
+    pub reviewing_archive: bool,
+    pub results: Vec<BatchItem>,
+    pub previous_session_results: Vec<BatchItem>,
+}
+impl BatchState {
+    /// A new connection cannot inherit current outcomes. Preserve only unresolved
+    /// work, explicitly separated as uncertain history of the old connection.
+    pub fn replace_session(&mut self) {
+        self.selected_chats.clear();
+        self.selected_identities.clear();
+        self.reviewing_archive = false;
+        self.request = None;
+        for mut item in self.results.drain(..) {
+            if !matches!(item.result, Some(Ok(()))) {
+                if item.result.is_none() {
+                    item.result = Some(Err("Connection changed before confirmation; check the previous connection before retrying".into()));
+                }
+                self.previous_session_results.push(item);
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod batch_session_tests {
+    use super::*;
+    #[test]
+    fn replacement_clears_completed_current_results_and_retains_only_uncertain_history() {
+        let mut state = BatchState {
+            request: Some(4),
+            selected_chats: vec!["old".into()],
+            reviewing_archive: true,
+            ..Default::default()
+        };
+        state.results = vec![
+            BatchItem {
+                chat: "old".into(),
+                message: None,
+                everyone: false,
+                result: Some(Ok(())),
+            },
+            BatchItem {
+                chat: "pending".into(),
+                message: None,
+                everyone: false,
+                result: None,
+            },
+        ];
+        state.results.push(BatchItem {
+            chat: "uncertain".into(),
+            message: Some("message".into()),
+            everyone: true,
+            result: Some(Err("POST accepted but confirmation failed".into())),
+        });
+        state.replace_session();
+        assert!(state.results.is_empty());
+        assert!(state.selected_chats.is_empty());
+        assert!(!state.reviewing_archive);
+        assert_eq!(state.request, None);
+        assert_eq!(state.previous_session_results.len(), 2);
+        assert_eq!(
+            state.previous_session_results[1].result,
+            Some(Err("POST accepted but confirmation failed".into()))
+        );
+        assert_eq!(state.previous_session_results[0].chat, "pending");
+        assert!(
+            state.previous_session_results[0]
+                .result
+                .as_ref()
+                .unwrap()
+                .is_err()
+        );
     }
 }
