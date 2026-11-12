@@ -19174,9 +19174,7 @@ mod tests {
             vec![egui::Event::PointerMoved(from), press(from, true)],
             vec![egui::Event::PointerMoved(below), egui::Event::PointerGone],
         ];
-        // Balanced layout shifts message heights, so keep sweeping well
-        // past the old fixed distance to settle past the next message.
-        frames.extend((0..40).map(|_| vec![egui::Event::PointerMoved(below)]));
+        frames.extend((0..14).map(|_| vec![egui::Event::PointerMoved(below)]));
         frames.push(vec![press(below, false)]);
         frames.push(vec![egui::Event::Copy]);
         frames.push(vec![]);

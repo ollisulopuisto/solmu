@@ -44,6 +44,13 @@ pub struct Row {
     /// Preformatted reply context:
     /// `(replying to Roberta: "…")`.
     pub quote: Option<String>,
+    /// The laid-out body with the wrap balancer's inserted hyphens and line
+    /// breaks: what egui's selection actually copies. Set when it differs
+    /// from `body`.
+    pub broken: Option<String>,
+    /// Byte ranges in `broken` holding the balancer's inserted characters
+    /// (a newline, or a hyphen and newline, per break), dropped from output.
+    pub inserted: Vec<(usize, usize)>,
 }
 
 impl Row {
@@ -65,12 +72,52 @@ impl Row {
         line
     }
 
+    /// The text a selection copy matches against: the laid-out body when
+    /// the balancer rewrote it, the plain body otherwise.
+    fn match_text(&self) -> &str {
+        self.broken.as_deref().unwrap_or(&self.body)
+    }
+
+    /// `restored` plus the balancer's inserted break characters removed:
+    /// what the clipboard should carry. `start` is the segment's byte
+    /// offset in the match text. Inserted ranges never cover placeholders.
+    fn cleaned(&self, start: usize, segment: &str) -> String {
+        if self.inserted.is_empty() {
+            return self.restored(start, segment);
+        }
+        let mut next = self.match_text()[..start]
+            .chars()
+            .filter(|&c| c == crate::emoji::PLACEHOLDER)
+            .count();
+        let mut out = String::with_capacity(segment.len());
+        for (offset, character) in segment.char_indices() {
+            let at = start + offset;
+            if self
+                .inserted
+                .iter()
+                .any(|&(pos, len)| at >= pos && at < pos + len)
+            {
+                continue;
+            }
+            if character == crate::emoji::PLACEHOLDER {
+                match self.placements.get(next) {
+                    Some(emoji) => out.push_str(emoji),
+                    None => out.push(character),
+                }
+                next += 1;
+            } else {
+                out.push(character);
+            }
+        }
+        out
+    }
+
     /// Returns the body from `start` with emoji placeholders restored.
     fn restored(&self, start: usize, segment: &str) -> String {
         if self.placements.is_empty() {
             return segment.to_owned();
         }
-        let mut next = self.body[..start]
+        let mut next = self.match_text()[..start]
             .chars()
             .filter(|&c| c == crate::emoji::PLACEHOLDER)
             .count();
@@ -96,13 +143,16 @@ pub fn refine(copied: &str, rows: &[Row]) -> Option<String> {
     if let Some(annotated) = annotate(copied, rows) {
         return Some(annotated);
     }
-    // Single-message selections only need emoji restored.
-    if !copied.contains(crate::emoji::PLACEHOLDER) {
+    // Single-message selections need emoji restored and the balancer's
+    // inserted hyphens and line breaks dropped.
+    let needs_cleanup = copied.contains(crate::emoji::PLACEHOLDER)
+        || rows.iter().any(|row| !row.inserted.is_empty());
+    if !needs_cleanup {
         return None;
     }
     for row in rows {
-        if let Some(start) = row.body.find(copied) {
-            return Some(row.restored(start, copied));
+        if let Some(start) = row.match_text().find(copied) {
+            return Some(row.cleaned(start, copied));
         }
     }
     None
@@ -125,16 +175,17 @@ pub fn annotate(copied: &str, rows: &[Row]) -> Option<String> {
 /// Parses a copied tail followed by later rows into annotated lines.
 fn walk(copied: &str, rows: &[Row]) -> Option<Vec<String>> {
     let row = rows.first()?;
+    let text = row.match_text();
     // Try the longest tail first because the selection continues into the next row.
-    for cut in 0..row.body.len() {
-        if !row.body.is_char_boundary(cut) {
+    for cut in 0..text.len() {
+        if !text.is_char_boundary(cut) {
             continue;
         }
-        let part = &row.body[cut..];
+        let part = &text[cut..];
         let Some(rest) = copied.strip_prefix(part) else {
             continue;
         };
-        let line = row.line(&row.restored(cut, part));
+        let line = row.line(&row.cleaned(cut, part));
         if rest.is_empty() {
             return Some(vec![line]);
         }
@@ -157,22 +208,23 @@ fn follow(copied: &str, rows: &[Row]) -> Option<Vec<String>> {
     }
     let mut passed: Vec<String> = Vec::new();
     for (skipped, row) in rows.iter().enumerate() {
-        if row.body.is_empty() {
+        let text = row.match_text();
+        if text.is_empty() {
             if row.marker.is_some() {
                 passed.push(row.line(""));
             }
             continue;
         }
         // The remaining text is the final body's prefix.
-        if row.body.starts_with(remaining) {
-            passed.push(row.line(&row.restored(0, remaining)));
+        if text.starts_with(remaining) {
+            passed.push(row.line(&row.cleaned(0, remaining)));
             return Some(passed);
         }
         // This complete body is followed by more copied text.
-        if let Some(rest) = remaining.strip_prefix(row.body.as_str())
+        if let Some(rest) = remaining.strip_prefix(text)
             && let Some(tail) = follow(rest, &rows[skipped + 1..])
         {
-            passed.push(row.line(&row.restored(0, &row.body)));
+            passed.push(row.line(&row.cleaned(0, text)));
             passed.extend(tail);
             return Some(passed);
         }
@@ -227,6 +279,32 @@ mod tests {
                 "[22:41, 8/18/2026] Carmine: good\n\
                  [18:21, 8/30/2026] Ada: Hello from France!\nSee you soon"
             )
+        );
+    }
+
+    #[test]
+    fn balanced_breaks_match_and_drop_out_again() {
+        // The balancer broke "the analyzer is crazy good" before "good" and
+        // hyphenated "compoundword" after "compo": the selection copies the
+        // broken text, the transcript drops the inserted characters.
+        let mut first = row("[18:21, 8/30/2026] Ada: ", "the analyzer is crazy good");
+        first.broken = Some("the analyzer is crazy \ngood".to_owned());
+        first.inserted = vec![(22, 1)];
+        let mut second = row("[18:22, 8/30/2026] Carmine: ", "a compoundword indeed");
+        second.broken = Some("a compo-\nundword indeed".to_owned());
+        second.inserted = vec![(7, 2)];
+        let copied = "crazy \ngood\na compo-\nundword indeed";
+        assert_eq!(
+            annotate(copied, &[first.clone(), second]).as_deref(),
+            Some(
+                "[18:21, 8/30/2026] Ada: crazy good\n\
+                 [18:22, 8/30/2026] Carmine: a compoundword indeed"
+            )
+        );
+        // A single-message copy drops the break too.
+        assert_eq!(
+            refine("crazy \ngood", &[first]).as_deref(),
+            Some("crazy good")
         );
     }
 

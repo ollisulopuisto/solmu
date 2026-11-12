@@ -5222,6 +5222,7 @@ fn message_copy_row(
         marker,
         reactions,
         quote,
+        ..Default::default()
     }
 }
 
@@ -9713,15 +9714,22 @@ fn rich_body(
     }
     // Register the body for transcript formatting when copying across messages.
     if let Some(copy_rows) = view.copy_rows {
+        let mut row = transcript_row(
+            view,
+            message,
+            laid.unbroken_text().to_owned(),
+            laid.placements().to_vec(),
+        );
+        if let Some(broken) = laid.broken_text() {
+            // A drag selection copies the laid-out text, breaks included;
+            // the row matches against it and drops the inserted characters.
+            row.broken = Some(broken.to_owned());
+            row.inserted = laid.inserted().to_vec();
+        }
         copy_rows
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .push(transcript_row(
-                view,
-                message,
-                laid.unbroken_text().to_owned(),
-                laid.placements().to_vec(),
-            ));
+            .push(row);
     }
     // Click links and drag to select text.
     // Text selection and web links do not need a sequential Tab stop.

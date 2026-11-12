@@ -46,6 +46,10 @@ pub struct Text {
     /// Balanced layout only: the laid-out text before the balancer's
     /// inserted hyphens and newlines, for copy and transcript formatting.
     unbroken: Option<String>,
+    /// Byte ranges in the galley text holding the balancer's inserted
+    /// characters (a "\n" or "-\n" per break), so transcript formatting
+    /// can drop them.
+    inserted: Vec<(usize, usize)>,
 }
 
 impl Text {
@@ -80,6 +84,18 @@ impl Text {
             .skip(range.start)
             .take(range.len())
             .collect()
+    }
+
+    /// The galley text when it carries the balancer's inserted breaks and
+    /// so differs from `unbroken_text`: what a drag selection copies.
+    pub fn broken_text(&self) -> Option<&str> {
+        self.unbroken.is_some().then(|| self.galley.text())
+    }
+
+    /// Byte ranges in the galley text holding the balancer's inserted
+    /// characters. Empty for a greedy layout.
+    pub fn inserted(&self) -> &[(usize, usize)] {
+        &self.inserted
     }
 }
 
@@ -133,6 +149,7 @@ pub fn layout(
         build(ui, text, mentions, style, max_width, grow_emoji),
         None,
         None,
+        Vec::new(),
     )
 }
 
@@ -141,6 +158,7 @@ fn finish(
     built: Built,
     unbroken: Option<String>,
     copy_links: Option<Vec<(Range<usize>, String)>>,
+    inserted: Vec<(usize, usize)>,
 ) -> Text {
     let galley = bidi::layout_job(ui, built.job);
     Text {
@@ -151,6 +169,7 @@ fn finish(
         big: built.big,
         accessible_text: built.accessible_text,
         unbroken,
+        inserted,
     }
 }
 
@@ -229,7 +248,7 @@ fn build(
 /// Body text measured for the wrap balancer: tokens with per-character
 /// widths plus the hyphen glyph's advance.
 pub struct Measured {
-    /// The text's tokens, ready for [`crate::wrap::balance`].
+    /// The text's tokens, ready for `crate::wrap::balance` (private, so no doc link).
     pub items: Vec<crate::wrap::Item>,
     /// Advance width of an inserted `-` at body size.
     pub hyphen: f32,
@@ -389,7 +408,7 @@ fn measure_job(
 }
 
 /// Lays text out like [`layout`], but with line breaks from the wrap
-/// balancer ([`crate::wrap`]) instead of greedy first-fit: raggedness is
+/// balancer (`crate::wrap`, private, so no doc link) instead of greedy first-fit: raggedness is
 /// minimised, Finnish words may hyphenate, and URLs stay whole when they
 /// fit the cap. The inserted hyphens and newlines are layout-time only;
 /// [`Text::unbroken_text`] carries the text without them for copying.
@@ -404,15 +423,15 @@ pub fn layout_balanced(
     let built = build(ui, text, mentions, style, max_width, grow_emoji);
     if built.big || max_width <= 0.0 {
         // Emoji-only text never balances; a zero cap leaves nothing to do.
-        return finish(ui, built, None, None);
+        return finish(ui, built, None, None, Vec::new());
     }
     let breaks = balanced_breaks(ui, &built, style.size, max_width);
     if breaks.is_empty() {
-        return finish(ui, built, None, None);
+        return finish(ui, built, None, None, Vec::new());
     }
     let unbroken = built.job.text.clone();
     let copy_links = built.links.clone();
-    let (mut job, links) = insert_breaks(built.job, &built.links, &breaks);
+    let (mut job, links, inserted) = insert_breaks(built.job, &built.links, &breaks);
     // Breaks are hard newlines now; keep egui from re-wrapping a line that
     // shaped a hair wider than the balancer measured.
     job.wrap.max_width = f32::INFINITY;
@@ -427,6 +446,7 @@ pub fn layout_balanced(
         },
         Some(unbroken),
         Some(copy_links),
+        inserted,
     )
 }
 
@@ -469,11 +489,14 @@ fn balanced_breaks(
 /// newlines (plus a hyphen glyph for hyphenated breaks), shifting section
 /// and link ranges. Breaks the text already makes itself (at its own
 /// newlines) are skipped.
+/// The job, link ranges and inserted-character ranges after break insertion.
+type Broken = (LayoutJob, Vec<(Range<usize>, String)>, Vec<(usize, usize)>);
+
 fn insert_breaks(
     mut job: LayoutJob,
     links: &[(Range<usize>, String)],
     breaks: &[crate::wrap::LineBreak],
-) -> (LayoutJob, Vec<(Range<usize>, String)>) {
+) -> Broken {
     let text = std::mem::take(&mut job.text);
     let char_bytes: Vec<usize> = text
         .char_indices()
@@ -494,7 +517,7 @@ fn insert_breaks(
     }
     if insertions.is_empty() {
         job.text = text;
-        return (job, links.to_vec());
+        return (job, links.to_vec(), Vec::new());
     }
     // shift[i] = inserted characters before original character i.
     let n_chars = char_bytes.len() - 1;
@@ -513,10 +536,12 @@ fn insert_breaks(
         *slot = total;
     }
     let mut new_text = String::with_capacity(text.len() + total);
+    let mut inserted_ranges: Vec<(usize, usize)> = Vec::with_capacity(insertions.len());
     let mut insertion = insertions.iter().peekable();
     for (i, ch) in text.chars().enumerate() {
         while let Some((at, inserted)) = insertion.peek() {
             if *at == i {
+                inserted_ranges.push((new_text.len(), inserted.len()));
                 new_text.push_str(inserted);
                 insertion.next();
             } else {
@@ -526,6 +551,7 @@ fn insert_breaks(
         new_text.push(ch);
     }
     for (_, inserted) in insertion {
+        inserted_ranges.push((new_text.len(), inserted.len()));
         new_text.push_str(inserted);
     }
     // New byte offset of a new character index.
@@ -557,7 +583,7 @@ fn insert_breaks(
         })
         .collect();
     job.text = new_text;
-    (job, links)
+    (job, links, inserted_ranges)
 }
 
 /// Paints laid-out text at `pos`.

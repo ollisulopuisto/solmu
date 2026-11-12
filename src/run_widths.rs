@@ -9,7 +9,7 @@
 //! bubbles already on screen; a later slightly wider message grows alone
 //! instead. Media, quotes, cards and forwarded messages keep the old grid.
 //! This module is the pure decision logic; measuring and balancing text
-//! lives in [`crate::wrap`] and [`crate::ui::conversation`].
+//! lives in `crate::wrap` and `crate::ui::conversation` (private modules, so no doc links).
 
 use std::collections::HashMap;
 
