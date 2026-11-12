@@ -5509,7 +5509,20 @@ fn poll_pending_send(
                 });
             }
             let mapped = api.map_message(&m, chat);
-            let complete = explicit_success || matches!(mapped.status, Delivery::Failed);
+            // Some bridges (reported for WhatsApp) never attach a sendStatus.
+            // Once the lookup has resolved to a final message ID that is ours,
+            // in this chat, with no status at all, the message is no longer a
+            // pending echo and nothing says it failed: stop polling quietly
+            // rather than toasting after 60 seconds. This is not a delivery
+            // confirmation, so no BeeperSendConfirmed is emitted for it.
+            let resolved_without_status = m.id != pending_id
+                && !m.id.is_empty()
+                && m.chat_id == *chat
+                && m.is_sender == Some(true)
+                && m.send_status.is_none();
+            let complete = explicit_success
+                || resolved_without_status
+                || matches!(mapped.status, Delivery::Failed);
             if matches!(mapped.status, Delivery::Failed) {
                 emit(Event::Info(
                     "Beeper reports that a message failed to send".into(),
@@ -8110,6 +8123,49 @@ mod tests {
             );
         }
         server.join().unwrap();
+    }
+
+    #[test]
+    fn resolved_final_id_without_send_status_stops_polling_without_a_toast() {
+        for (status, expect_done) in [(None, true), (Some("PENDING"), false)] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let worker = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request);
+                let mut body = serde_json::json!({"id":"final-event","chatID":"chat","accountID":"wa","isSender":true});
+                if let Some(status) = status {
+                    body["sendStatus"] = serde_json::json!({"status":status});
+                }
+                let body = body.to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            });
+            let api = Api::new(&BeeperConfig {
+                base_url,
+                token: "fixture".into(),
+            })
+            .unwrap();
+            let events = Mutex::new(Vec::new());
+            let keep = poll_pending_send(
+                &api,
+                &"chat".into(),
+                "pending-id",
+                Duration::from_secs(61),
+                &|e| events.lock().unwrap().push(e),
+            );
+            let events = events.into_inner().unwrap();
+            assert!(!keep, "past the deadline polling always ends");
+            let toasted = events.iter().any(|e| matches!(e, Event::Info(text) if text.contains("60 seconds")));
+            assert_eq!(toasted, !expect_done);
+            assert!(!events.iter().any(|e| matches!(e, Event::BeeperSendConfirmed { .. })));
+            worker.join().unwrap();
+        }
     }
 
     #[test]
