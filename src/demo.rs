@@ -7668,6 +7668,7 @@ mod tests {
                     mention: palette.accent,
                 },
                 300.0,
+                true,
             );
             let (rect, response) =
                 ui.allocate_exact_size(text.galley.size(), egui::Sense::click_and_drag());

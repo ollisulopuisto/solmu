@@ -6173,7 +6173,7 @@ fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f3
         link: palette.link,
         mention: palette.accent,
     };
-    let laid = markup::layout(ui, text, &mentions_of(view, message), &style, cap);
+    let laid = markup::layout(ui, text, &mentions_of(view, message), &style, cap, false);
     let widest = laid
         .galley
         .rows
@@ -8070,7 +8070,17 @@ fn content(
         Content::Interactive { text, card } => {
             let Some(card) = card else {
                 let span = message.quoted.is_some().then_some(width);
-                return rich_body(ui, view, message, text, width, Some(reserve), span, actions);
+                return rich_body(
+                    ui,
+                    view,
+                    message,
+                    text,
+                    width,
+                    Some(reserve),
+                    span,
+                    actions,
+                    true,
+                );
             };
             if !card.carousel.is_empty() {
                 carousel(ui, view, message, card, width, actions);
@@ -8097,6 +8107,7 @@ fn content(
                 Some(reserve),
                 Some(width),
                 actions,
+                true,
             )
         }
         Content::Text { text, preview } => {
@@ -8114,6 +8125,7 @@ fn content(
                 Some(reserve),
                 Some(width),
                 actions,
+                true,
             );
             if local_link_previews(ui, view, message, text, preview.as_ref(), width, actions) {
                 None
@@ -8154,6 +8166,7 @@ fn content(
                     Some(reserve),
                     Some(wrap),
                     actions,
+                    false,
                 )
             }
         }
@@ -8193,6 +8206,7 @@ fn content(
                     Some(reserve),
                     Some(wrap),
                     actions,
+                    false,
                 )
             })
         }
@@ -8239,6 +8253,7 @@ fn content(
                     Some(reserve),
                     Some(width),
                     actions,
+                    false,
                 )
             })
         }
@@ -8620,6 +8635,7 @@ fn carousel(
             None,
             Some(width),
             actions,
+            true,
         );
         ui.add_space(4.0);
     }
@@ -8677,6 +8693,7 @@ fn carousel(
                                                 None,
                                                 Some(card_width),
                                                 actions,
+                                                true,
                                             );
                                         }
                                         interactive_buttons(
@@ -8873,6 +8890,7 @@ fn album_content(
                 None,
                 Some(width),
                 actions,
+                false,
             );
         } else if let Some(copy_rows) = view.copy_rows {
             copy_rows
@@ -9483,6 +9501,7 @@ fn rich_body(
     reserve: Option<f32>,
     span: Option<f32>,
     actions: &mut Vec<Action>,
+    grow_emoji: bool,
 ) -> Option<Rect> {
     let palette = view.palette;
     let mentions = mentions_of(view, message);
@@ -9493,7 +9512,7 @@ fn rich_body(
         link: palette.link,
         mention: palette.accent,
     };
-    let laid = markup::layout(ui, text, &mentions, &style, width);
+    let laid = markup::layout(ui, text, &mentions, &style, width, grow_emoji);
     let rtl = crate::bidi::message_rtl(text);
     let last_row = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
     // Right-aligned text ends at the block's edge. Like official WhatsApp,
