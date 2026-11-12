@@ -8104,7 +8104,15 @@ mod tests {
             token: "fixture".into(),
         })
         .unwrap();
-        for success in [true, false, false, false, false] {
+        // A resolved final id with no sendStatus (last case) ends polling
+        // quietly: no confirmation event and no "check history" toast.
+        for (success, toast) in [
+            (true, false),
+            (false, true),
+            (false, true),
+            (false, true),
+            (false, false),
+        ] {
             let events = Mutex::new(Vec::new());
             assert!(!poll_pending_send(
                 &api,
@@ -8119,7 +8127,7 @@ mod tests {
                 events.iter().any(
                     |event| matches!(event, Event::Info(text) if text.contains("check history before retrying"))
                 ),
-                !success
+                toast
             );
         }
         server.join().unwrap();
