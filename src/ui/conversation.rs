@@ -1659,7 +1659,8 @@ pub(crate) fn composer_with_capabilities(
             mention_picker(app, ui, chat, id);
             // `consume_key(NONE, Enter)` also matches Shift+Enter. Check the
             // event modifiers directly. An active suggestion list consumes
-            // plain Enter first when it has a selection.
+            // plain Enter first when it has a selection. Cmd+Enter (Ctrl+Enter
+            // elsewhere) sends in both modes; plain Enter only when it sends.
             let send_key = has_focus
                 && ui.input_mut(|input| {
                     let mut sent = false;
@@ -1675,7 +1676,7 @@ pub(crate) fn composer_with_capabilities(
                                 modifiers,
                                 ..
                             } if !modifiers.shift && !modifiers.alt
-                                && (if enter_sends { !modifiers.command && !modifiers.ctrl } else { modifiers.command })
+                                && (modifiers.command || (enter_sends && !modifiers.ctrl))
                         );
                         sent |= is_send;
                         !is_send

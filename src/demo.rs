@@ -14238,6 +14238,24 @@ mod tests {
     }
 
     #[test]
+    fn command_enter_sends_while_enter_sends_too() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        assert!(app.settings.enter_sends, "the default");
+        app.attach(&ctx);
+        app.focus_composer = true;
+        render(&mut app, &ctx);
+        frame_with(&mut app, &ctx, vec![egui::Event::Text("hello".into())]);
+        assert_eq!(app.composer, "hello");
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::COMMAND)],
+        );
+        assert!(app.composer.is_empty(), "Cmd+Enter sends, not only Enter");
+    }
+
+    #[test]
     fn configured_send_shortcut_bypasses_emoji_autocomplete() {
         let mut app = app();
         let ctx = egui::Context::default();

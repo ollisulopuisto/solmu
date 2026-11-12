@@ -13,7 +13,8 @@ Switching chats or accounts, closing a chat, or unlinking clears the editor's
 undo history. Saved drafts remain available when you return to their chat.
 
 Enter sends and Shift+Enter adds a line. Turn off **Enter sends** in Settings
-to make Enter add a line and send with Ctrl+Enter (Command+Enter on macOS).
+to make Enter add a line and send with Ctrl+Enter (Command+Enter on macOS), which also sends
+while Enter sends.
 `*bold*`, `_italic_`, `~strike~`, and ```` ```monospace ```` ```` format
 like WhatsApp, and a message of nothing but emoji shows large. Up to three
 emoji alone show without a bubble, like a sticker; more emoji, mixed text,

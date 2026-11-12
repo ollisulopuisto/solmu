@@ -153,7 +153,7 @@ name or description, in the interface language or in English.
 **Chats**
 
 - **Enter sends**: when off, Enter adds a line and `Ctrl+Enter` (Command+Enter
-  on macOS) sends.
+  on macOS) sends. `Ctrl+Enter` (Command+Enter) sends in both modes.
 - **Download files automatically**: attachments up to 64 MiB download as they
   come into view. When off, click one to download it. Visible stickers still
   download automatically. Larger attachments download only when clicked.
