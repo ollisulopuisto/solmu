@@ -34,6 +34,8 @@ The adapter can also use an existing Beeper Desktop/Server API directly. That is
 
 ## Features
 
+See [ROADMAP.md](ROADMAP.md) for ideas that are not built yet.
+
 - **Local flat groups.** Latest/Groups views, many-to-many local membership, additive drag with Undo and deduplicated unread counts. [Details and limits](docs/flat-groups.md).
 - **Multi-network chat lists.** Account/network filters, unread and unreplied views, plus a persistent Reply Later queue.
 - **Chat tabs and linked conversations.** Keep several chats open, or manually group related chats across accounts while preserving their source identity.
