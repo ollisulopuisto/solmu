@@ -7,6 +7,7 @@ edition = "2024"
 # and stub only unrelated UI/platform leaves. Full native tests run in CI.
 
 [dependencies]
+memchr = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 base64 = "0.23"
 serde = { version = "1", features = ["derive"] }

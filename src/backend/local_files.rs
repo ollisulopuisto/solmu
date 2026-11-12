@@ -415,6 +415,8 @@ mod tests {
             ("conout$.png", "attachment.png"),
             ("COM0.txt", "attachment.txt"),
             ("LPT0.csv", "attachment.csv"),
+            ("CLOCK$.txt", "attachment.txt"),
+            ("clock$.log", "attachment.log"),
             (r"folder\CON.txt", "attachment.txt"),
             ("../PRN.png", "attachment.png"),
             ("CON.pdf.", "attachment.pdf"),

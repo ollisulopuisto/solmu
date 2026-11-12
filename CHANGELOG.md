@@ -1,9 +1,3 @@
-## Unreleased: scoped archive/delete batches
-
-- Archive multiple selected chats without deleting messages.
-- Explicit per-chat bridge-supported message deletion scope and age checks.
-- Unsupported-item preflight and request-correlated per-item outcomes, no auto retry.
-
 # Changelog
 
 Newest first. One `## <version>` section per release, bullets under it;
@@ -14,6 +8,18 @@ shown automatically; move its bullets under the release version when the
 version in Cargo.toml is bumped.
 
 ## Unreleased
+
+- Archive multiple selected chats without deleting messages.
+- Explicit per-chat bridge-supported message deletion scope and age checks.
+- Unsupported-item preflight and request-correlated per-item outcomes, no auto retry.
+- Settings no longer shows an About button inside the About section. The button only reopened the About dialog over the section that was already on screen; the dialog remains available from the macOS menu. The section gains a whatsapp-rust chip so the protocol library link the dialog shows only on macOS stays reachable on every platform.
+- Emoji-only messages of up to three emoji draw without a bubble, like stickers: one emoji largest, two or three big, and in group chats under a floating sender name. A message quoting another, carrying a link preview, or mixing text with emoji keeps its bubble.
+- Latest/Groups list views with local-only many-to-many membership.
+- Assign groups with Apply/Cancel, additive drag with Undo, safe group deletion.
+- Cmd-D switches views; requires shared keymap #281 (info is Cmd-Option-I).
+- The info sidebar moves from Cmd-D to Cmd-Option-I under the shared Postilaatikko/Solmu keymap; Cmd-D is reserved for the upcoming groups toggle. The shortcuts dialog and the macOS menu show the new chord.
+- Hide the View once photo toggle on Beeper chats. The send API cannot carry this mode, so offering it led to a refused send. Existing attachment drafts are retained without silently changing their send mode.
+- On macOS the message field applies the system's text replacements (System Settings > Keyboard > Text Replacements): a shortcut typed before a space, return, or punctuation expands to its phrase, including when adding a line or sending. Edits in System Settings apply the next time the window gains focus.
 
 ## v0.24.21
 

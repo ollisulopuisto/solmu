@@ -797,6 +797,21 @@ fn sections(app: &App) -> Vec<Section> {
         "",
         |settings| &mut settings.send_typing,
     );
+    privacy.toggle(
+        translated(locale, "Automatically fetch link previews"),
+        translated(locale, "Off by default. Visible links contact websites directly, sharing your IP address and the requested URL. No proxy is used."),
+        |settings| &mut settings.auto_link_previews,
+    );
+    privacy.toggle(
+        translated(locale, "Remove tracking parameters when opening, copying and fetching links"),
+        translated(locale, "Off by default. Removes known tracking keys, keeps recognized signed URLs, and never changes messages. Some links may still need their original parameters."),
+        |settings| &mut settings.remove_link_tracking,
+    );
+    privacy.row(translated(locale, "Cached link previews"), translated(locale, "Kept in memory on this device only, until Solmu closes. Clearing also cancels pending requests."), move |ui, app| {
+        if ui.button(crate::i18n::gettext(locale, "Clear cached previews")).clicked() {
+            app.actions.push(Action::ClearLinkPreviews);
+        }
+    });
     app_lock_rows(app, &mut privacy);
     // The account values live on the phone: they are shown once fetched and
     // edited only while connected with a fresh snapshot.
@@ -909,7 +924,7 @@ fn sections(app: &App) -> Vec<Section> {
             translated(locale, "Allow App Nap"),
             translated(
                 locale,
-                "Saves battery by letting macOS pause Solmu in the background. While off, messaging and the connection keep working without delay.",
+                "Saves battery by letting macOS pause Solmu even while its window is open. While off, Solmu stays awake only while a window is shown; hidden or minimized, macOS may pause it and new messages can arrive late.",
             ),
             move |ui, app| {
                 let mut allow = app.settings.allow_app_nap;
@@ -1116,6 +1131,7 @@ fn sections(app: &App) -> Vec<Section> {
             "Solmu".into(),
             translated(locale, "Keyboard shortcuts"),
             translated(locale, "Source code"),
+            "whatsapp-rust".into(),
         ],
         |ui, app| about(app, ui),
     );
@@ -2130,17 +2146,8 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
         {
             app.actions.push(Action::ShowDialog(Dialog::Shortcuts));
         }
-        if theme::soft_button(
-            ui,
-            &palette,
-            Some(Icon::Info),
-            &crate::i18n::gettext(app.locale, "About"),
-            false,
-        )
-        .clicked()
-        {
-            app.actions.push(Action::ShowDialog(Dialog::About));
-        }
+        // No About chip: the section itself already carries what the
+        // dialog shows, and the macOS menu opens the dialog on its own.
         if theme::soft_button(
             ui,
             &palette,
@@ -2152,6 +2159,21 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
         {
             app.actions
                 .push(Action::OpenUrl(env!("CARGO_PKG_REPOSITORY").to_owned()));
+        }
+        // The About dialog links the protocol library only on macOS; keep
+        // the link reachable on every platform.
+        if theme::soft_button(
+            ui,
+            &palette,
+            Some(Icon::ExternalLink),
+            "whatsapp-rust",
+            false,
+        )
+        .clicked()
+        {
+            app.actions.push(Action::OpenUrl(
+                "https://github.com/oxidezap/whatsapp-rust".to_owned(),
+            ));
         }
     });
     ui.add_space(8.0);
@@ -2404,6 +2426,42 @@ fn theme_option(ui: &mut egui::Ui, palette: &theme::Palette, text: &str, selecte
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The About section links to shortcuts and source; an About chip inside
+    /// it would only reopen the dialog already on screen, so none exists.
+    #[test]
+    fn the_about_section_does_not_offer_a_second_about_dialog() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install(&ctx);
+        app.attach(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            about(&mut app, ui);
+        });
+        output.textures_delta.clear();
+        let tree = output
+            .platform_output
+            .accesskit_update
+            .expect("accessibility tree");
+        let buttons: Vec<_> = tree
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.role() == egui::accesskit::Role::Button)
+            .filter_map(|(_, node)| node.label().or_else(|| node.value()))
+            .collect();
+        for expected in ["Keyboard shortcuts", "Source code", "whatsapp-rust"] {
+            assert!(buttons.contains(&expected), "missing chip: {expected}");
+        }
+        assert!(
+            !buttons.contains(&"About"),
+            "the About section must not open a second About dialog"
+        );
+    }
 
     /// The account panel's theme combo is reachable by clicks alone: the
     /// header expanded by egui's everything-visible memory, the combo by a
@@ -2668,5 +2726,24 @@ mod tests {
         let mut account = Section::new(translated(Locale::English, "Account"));
         account.block(Vec::new(), |_, _| {});
         assert!(account.visible(&Filter::new("unlink")).1.is_empty());
+    }
+
+    /// Searching the protocol library's name keeps the section whose chip
+    /// links it: the keyword list names every chip the section draws.
+    #[test]
+    fn settings_search_finds_the_protocol_library_chip() {
+        let directory = tempfile::tempdir().unwrap();
+        let (app, _) = App::headless(
+            crate::paths::AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        let about = sections(&app)
+            .into_iter()
+            .find(|section| section.title.shown == "About")
+            .expect("About section");
+        assert!(
+            !about.visible(&Filter::new("whatsapp-rust")).1.is_empty(),
+            "searching whatsapp-rust must keep the About section"
+        );
     }
 }

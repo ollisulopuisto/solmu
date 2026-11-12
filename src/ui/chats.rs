@@ -12,7 +12,7 @@ use super::labels;
 use super::widgets;
 
 // Roomier by default; retain the existing explicit compact-density choice.
-fn chat_row_height(compact: bool) -> f32 {
+pub(super) fn chat_row_height(compact: bool) -> f32 {
     if compact { 56.0 } else { 80.0 }
 }
 
@@ -212,7 +212,7 @@ fn search_keyboard(app: &mut App, ui: &egui::Ui) {
 
 /// Search, title and queues, then the composed scope. Shared by every platform.
 fn header(app: &mut App, ui: &mut egui::Ui) {
-    if app.show_starred || app.show_archived || app.locked_folder_open() {
+    if app.show_starred || app.show_saved || app.show_archived || app.locked_folder_open() {
         legacy_header(app, ui);
         super::batch_actions::archive_bar(app, ui);
         return;
@@ -239,6 +239,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             }
             search_field(app, ui);
             super::batch_actions::archive_bar(app, ui);
+            super::flat_groups::toggle(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
                 ui.set_min_height(36.0);
@@ -599,6 +600,27 @@ fn legacy_header(app: &mut App, ui: &mut egui::Ui) {
                             palette.text,
                             buttons_width,
                         );
+                    } else if app.show_saved {
+                        if theme::icon_button(
+                            ui,
+                            Icon::ArrowLeft,
+                            18.0,
+                            palette.secondary,
+                            palette.text,
+                            "Back to chats",
+                        )
+                        .tab_stop(Stop::Back)
+                        .clicked()
+                        {
+                            app.actions.push(Action::ToggleSaved);
+                        }
+                        header_title(
+                            ui,
+                            crate::i18n::gettext(app.locale, "Saved").as_ref(),
+                            theme::bold(20.0),
+                            palette.text,
+                            buttons_width,
+                        );
                     } else if app.show_archived || app.locked_folder {
                         if theme::icon_button(
                             ui,
@@ -689,7 +711,7 @@ fn search_field(app: &mut App, ui: &mut egui::Ui) {
 
 /// Four permanent queue cells, independent of the additional scope.
 fn facet_row(app: &mut App, ui: &mut egui::Ui) {
-    if app.show_starred {
+    if app.show_starred || app.show_saved {
         return;
     }
     let palette = app.palette;
@@ -956,6 +978,27 @@ fn macos_header(app: &mut App, ui: &mut egui::Ui) {
                         palette.text,
                         header_buttons_width(ui, &buttons),
                     );
+                } else if app.show_saved {
+                    if theme::icon_button(
+                        ui,
+                        Icon::ArrowLeft,
+                        18.0,
+                        palette.secondary,
+                        palette.text,
+                        "Back to chats",
+                    )
+                    .tab_stop(Stop::Back)
+                    .clicked()
+                    {
+                        app.actions.push(Action::ToggleSaved);
+                    }
+                    header_title(
+                        ui,
+                        crate::i18n::gettext(app.locale, "Saved").as_ref(),
+                        theme::bold(16.0),
+                        palette.text,
+                        header_buttons_width(ui, &buttons),
+                    );
                 } else if app.show_archived || app.locked_folder {
                     if theme::icon_button(
                         ui,
@@ -1129,8 +1172,9 @@ fn filter_icon(
 /// labeled row above the chat list, so the rail keeps the rest. Search
 /// lists every match, so the chips hide there.
 pub(super) fn filter_chips(app: &mut App, ui: &mut egui::Ui) {
-    if app.show_starred {
-        // The starred panel replaces the chat list, so its filters go with it.
+    if app.show_starred || app.show_saved {
+        // The starred and saved panels replace the chat list, so its
+        // filters go with it.
         return;
     }
     if !app.locked_folder_open() && !app.search.trim().is_empty() {
@@ -1472,6 +1516,215 @@ fn starred_row(
     }
 }
 
+/// The locally saved messages, newest bookmark first, filtered by the
+/// panel's own search over text, sender and chat. Clicking an entry opens
+/// its chat at the message; removing a bookmark never deletes the message,
+/// and saving never marked the chat read.
+fn saved_list(app: &mut App, ui: &mut egui::Ui) {
+    let palette = app.palette;
+    let width = ui.available_width();
+    let mut text = app.saved_search.clone();
+    widgets::search_field(
+        ui,
+        &palette,
+        egui::Id::new("saved-search"),
+        &mut text,
+        crate::i18n::gettext(app.locale, "Search saved messages").as_ref(),
+        width,
+    );
+    if text != app.saved_search {
+        app.saved_search = text;
+    }
+    ui.add_space(4.0);
+    if app.settings.beeper.saved.is_empty() {
+        widgets::empty_state(
+            ui,
+            &palette,
+            Icon::Bookmark,
+            crate::i18n::gettext(app.locale, "No saved messages").as_ref(),
+            crate::i18n::gettext(
+                app.locale,
+                "Right-click a message and choose Save for later to keep it here.",
+            )
+            .as_ref(),
+        );
+        return;
+    }
+    // Rows read the list from the app while they hand their actions back, so
+    // the actions are collected here and applied once the list is drawn.
+    let mut actions = Vec::new();
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for entry in crate::saved::filtered(&app.settings.beeper.saved, &app.saved_search) {
+                if app.chat(&entry.member.chat).is_some_and(|chat| chat.locked) {
+                    continue;
+                }
+                saved_row(app, ui, &palette, entry, &mut actions);
+            }
+        });
+    app.actions.append(&mut actions);
+}
+
+/// One saved message: where it is, its date and the words it had when it
+/// was saved. Clicking opens the chat at the message while the original is
+/// still known; once it is gone the row says so instead of jumping.
+fn saved_row(
+    app: &App,
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    entry: &crate::saved::SavedMessage,
+    actions: &mut Vec<Action>,
+) {
+    let width = ui.available_width();
+    let clock = widgets::line(
+        ui,
+        &crate::util::clock(entry.timestamp),
+        theme::regular(11.0),
+        palette.secondary,
+        80.0,
+        1,
+    );
+    let body_width = (width - 32.0 - clock.size().x - 10.0).max(60.0);
+    let body = widgets::line(
+        ui,
+        &entry.preview,
+        theme::regular(13.0),
+        palette.text,
+        body_width,
+        12,
+    );
+    let bubble_height = body.size().y + 12.0;
+    let row_id = list_row_id(&entry.member.chat, &entry.message);
+    let (rect, _) =
+        ui.allocate_exact_size(vec2(width, 26.0 + bubble_height + 10.0), Sense::hover());
+    let response = ui.interact(rect, row_id, Sense::click());
+    theme::reveal_focus(&response);
+    // The jump works only while the chat is still there and the message is
+    // known locally; a fully loaded chat without it means it is gone.
+    let chat = app.chat(&entry.member.chat);
+    let available = chat.is_some()
+        && app
+            .conversations
+            .get(&entry.member.chat)
+            .is_none_or(|conversation| {
+                !conversation.complete
+                    || conversation
+                        .messages
+                        .iter()
+                        .any(|message| message.id == entry.message)
+            });
+    let name = chat
+        .map(|chat| app.chat_title_of(&chat.id))
+        .unwrap_or_else(|| entry.chat_title.clone());
+    let label = if available {
+        format!("{name}, {}", entry.preview)
+    } else {
+        format!(
+            "{name}, {}",
+            crate::i18n::gettext(app.locale, "Original message unavailable")
+        )
+    };
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &label)
+    });
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, 6.0, palette.surface_hover.gamma_multiply(0.5));
+    }
+    let when = crate::util::moment_stamp(app.locale, entry.timestamp);
+    let name_line = widgets::line(
+        ui,
+        &name,
+        theme::medium(14.0),
+        palette.text,
+        width - 140.0,
+        1,
+    );
+    name_line.paint(
+        ui,
+        pos2(
+            rect.left() + 16.0,
+            rect.top() + 14.0 - name_line.size().y / 2.0,
+        ),
+        palette.text,
+    );
+    ui.painter().text(
+        pos2(rect.right() - 16.0, rect.top() + 14.0),
+        egui::Align2::RIGHT_CENTER,
+        when,
+        theme::regular(11.5),
+        palette.secondary,
+    );
+    let bubble_width = (body.size().x + 20.0 + clock.size().x + 6.0).min(width - 32.0);
+    let left = if entry.from_me {
+        rect.right() - 16.0 - bubble_width
+    } else {
+        rect.left() + 16.0
+    };
+    let bubble = Rect::from_min_size(
+        pos2(left, rect.top() + 26.0),
+        vec2(bubble_width, bubble_height),
+    );
+    ui.painter().rect_filled(
+        bubble,
+        10.0,
+        if entry.from_me {
+            palette.bubble_out
+        } else {
+            palette.bubble_in
+        },
+    );
+    body.paint(
+        ui,
+        pos2(bubble.left() + 10.0, bubble.top() + 6.0),
+        palette.text,
+    );
+    clock.paint(
+        ui,
+        pos2(
+            bubble.right() - 10.0 - clock.size().x,
+            bubble.bottom() - 6.0 - clock.size().y,
+        ),
+        palette.secondary,
+    );
+    if !available {
+        ui.painter().text(
+            pos2(rect.left() + 16.0, bubble.bottom() + 4.0),
+            egui::Align2::LEFT_CENTER,
+            crate::i18n::gettext(app.locale, "Original message unavailable"),
+            theme::regular(11.0),
+            palette.dim,
+        );
+    }
+    response.context_menu(|ui| {
+        if ui
+            .button(crate::i18n::gettext(app.locale, "Remove from Saved"))
+            .clicked()
+        {
+            actions.push(Action::SetSaved {
+                chat: entry.member.chat.clone(),
+                message: entry.message.clone(),
+                saved: false,
+            });
+            ui.close();
+        }
+    });
+    if available
+        && response
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .clicked()
+    {
+        actions.push(Action::OpenMessage {
+            chat: entry.member.chat.clone(),
+            message: entry.message.clone(),
+        });
+    }
+}
+
 /// Side of a favorite chip: the avatar, its badges and a little air.
 const FAVORITE_CELL: f32 = 44.0;
 /// The avatar inside a favorite chip.
@@ -1748,6 +2001,80 @@ fn favorite_chip(
     response
 }
 
+/// Section headers are virtual rows too: keyboard reveal and wheel scrolling
+/// use the same row indices as painting, without invisible pixel offsets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChatListRow {
+    Header(bool),
+    Chat(usize),
+}
+
+fn sectioned_rows(favorites: &[bool]) -> Vec<ChatListRow> {
+    let split = favorites.iter().take_while(|favorite| **favorite).count();
+    let grouped = split > 0 && split < favorites.len();
+    let mut rows = Vec::with_capacity(favorites.len() + if grouped { 2 } else { 0 });
+    for index in 0..favorites.len() {
+        if grouped && (index == 0 || index == split) {
+            rows.push(ChatListRow::Header(index == 0));
+        }
+        rows.push(ChatListRow::Chat(index));
+    }
+    rows
+}
+
+fn section_height(pinned: bool) -> f32 {
+    if pinned { 26.0 } else { 32.0 }
+}
+
+fn section_offsets(rows: &[ChatListRow], row_height: f32) -> Vec<f32> {
+    let mut offsets = vec![0.0];
+    for row in rows {
+        offsets.push(
+            offsets.last().unwrap()
+                + match row {
+                    ChatListRow::Header(pinned) => section_height(*pinned),
+                    ChatListRow::Chat(_) => row_height,
+                },
+        );
+    }
+    offsets
+}
+
+fn reveal_bounds(current: f32, viewport: f32, top: f32, bottom: f32) -> f32 {
+    if top < current {
+        top
+    } else if bottom > current + viewport {
+        (bottom - viewport).max(0.0)
+    } else {
+        current
+    }
+}
+
+fn section_header(app: &App, ui: &mut egui::Ui, pinned: bool, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    if !pinned {
+        ui.painter().hline(
+            (rect.left() + 14.0)..=(rect.right() - 14.0),
+            rect.top() + 1.0,
+            egui::Stroke::new(1.0, app.palette.outline),
+        );
+    }
+    // Keep each catalog key a literal call: extraction reads gettext's
+    // argument, not a conditional expression.
+    let label = if pinned {
+        crate::i18n::gettext(app.locale, "Pinned")
+    } else {
+        crate::i18n::gettext(app.locale, "Other chats")
+    };
+    ui.painter().text(
+        rect.left_center() + vec2(16.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(12.0),
+        app.palette.secondary,
+    );
+}
+
 fn list(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     // Taken here so a send seen while the list is hidden cannot move it later.
@@ -1766,17 +2093,27 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
         starred_list(app, ui);
         return;
     }
+    if app.show_saved {
+        saved_list(app, ui);
+        return;
+    }
     if !app.search.trim().is_empty() {
         results(app, ui);
         return;
     }
+    if app.settings.flat_groups.grouped_view && !app.show_archived {
+        super::flat_groups::list(app, ui);
+        return;
+    }
     // A pin is a shortcut, not a removal: pinned chats keep their rail
     // chips AND their ordinary rows here, linked ones included.
-    let chat_ids: Vec<ChatId> = app
+    // One traversal keeps both the ids and the favorite flags: a per-row
+    // app.chat lookup would repeat a hash search for every chat every frame.
+    let (chat_ids, favorites): (Vec<ChatId>, Vec<bool>) = app
         .visible_chats()
         .into_iter()
-        .map(|c| c.id.clone())
-        .collect();
+        .map(|chat| (chat.id.clone(), chat.favorite))
+        .unzip();
     if chat_ids.is_empty() {
         // The favorites title is translated, so it is bound here: the tuple
         // below borrows it for this frame, and every other arm stays a literal.
@@ -1810,20 +2147,23 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
         widgets::empty_state(ui, &palette, Icon::MessageCircle, title, body);
         return;
     }
-    // Rows touch: one clickable surface from top to bottom, no gaps or rules.
+    // Labels appear only when both groups remain in this filtered view.
+    let list_rows = sectioned_rows(&favorites);
+    // Virtual headers have short, noninteractive rows of their own.
     ui.spacing_mut().item_spacing.y = 0.0;
     let row_height = chat_row_height(app.settings.beeper.compact_list);
-    let total = chat_ids.len();
+    let offsets = section_offsets(&list_rows, row_height);
     let mut scroll_area = egui::ScrollArea::vertical()
         .id_salt("chat-list")
         .auto_shrink([false, false]);
     if to_top && near_top(ui, "chat-list", row_height) {
         scroll_area = scroll_area.vertical_scroll_offset(0.0);
     }
-    let target_row = app
-        .scroll_chat_into_view
-        .as_ref()
-        .and_then(|target| chat_ids.iter().position(|id| id == target));
+    let target_row = app.scroll_chat_into_view.as_ref().and_then(|target| {
+        list_rows
+            .iter()
+            .position(|row| matches!(row, ChatListRow::Chat(index) if &chat_ids[*index] == target))
+    });
     // The copies a narrow window's slide draws have widget ids of their own:
     // they show the real list's offset instead of keeping one.
     let copy = ui
@@ -1845,12 +2185,11 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
             .unwrap_or_default()
             .offset
             .y;
-        let offset = row_scroll_offset(
+        let offset = reveal_bounds(
             current,
             ui.available_height(),
-            target_row,
-            row_height,
-            ui.spacing().item_spacing.y,
+            offsets[target_row],
+            offsets[target_row + 1],
         );
         scroll_area = scroll_area.vertical_scroll_offset(offset);
         app.scroll_chat_into_view = None;
@@ -1861,36 +2200,59 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
     } else {
         0.0
     };
-    let output = scroll_area.show_rows(ui, row_height, total, |ui, range| {
-        if carried != 0.0 {
-            ui.scroll_with_delta_animation(
-                vec2(0.0, carried),
-                egui::style::ScrollAnimation::none(),
-            );
-        }
-        let rows_to_display: Vec<Chat> = range
-            .clone()
-            .filter_map(|index| {
-                let id = &chat_ids[index];
-                app.chat(id).map(|chat| app.beeper_person_preview(chat))
-            })
-            .collect();
-        for display in rows_to_display {
-            // Key by chat so an open menu survives list reordering.
-            let response = ui
-                .push_id(("chat", &display.id), |ui| row(app, ui, &display))
-                .inner;
-            // Store the row rect for interaction tests.
-            ui.ctx()
-                .data_mut(|data| data.insert_temp(chat_row_id(&display.id), response.rect));
-            #[cfg(test)]
-            ui.ctx().data_mut(|data| {
-                data.insert_temp(chat_row_id(&display.id).with("widget"), response.id);
-            });
-            if response.clicked() && !app.show_archived {
-                app.actions.push(Action::KeepUnread(display.id.clone()));
+    let output = scroll_area.show_viewport(ui, |ui, viewport| {
+        ui.set_height(*offsets.last().unwrap_or(&0.0));
+        let start = offsets
+            .partition_point(|offset| *offset <= viewport.top())
+            .saturating_sub(1)
+            .min(list_rows.len());
+        let end = offsets
+            .partition_point(|offset| *offset < viewport.bottom())
+            .min(list_rows.len());
+        let top = ui.max_rect().top();
+        let rect = Rect::from_x_y_ranges(
+            ui.max_rect().x_range(),
+            (top + offsets[start])..=(top + offsets[end]),
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            ui.skip_ahead_auto_ids(start);
+            let range = start..end;
+            if carried != 0.0 {
+                ui.scroll_with_delta_animation(
+                    vec2(0.0, carried),
+                    egui::style::ScrollAnimation::none(),
+                );
             }
-        }
+            for index in range {
+                let chat_index = match list_rows[index] {
+                    ChatListRow::Header(pinned) => {
+                        section_header(app, ui, pinned, section_height(pinned));
+                        continue;
+                    }
+                    ChatListRow::Chat(index) => index,
+                };
+                let Some(display) = app
+                    .chat(&chat_ids[chat_index])
+                    .map(|chat| app.beeper_person_preview(chat))
+                else {
+                    continue;
+                };
+                // Key by chat so an open menu survives list reordering.
+                let response = ui
+                    .push_id(("chat", &display.id), |ui| row(app, ui, &display))
+                    .inner;
+                // Store the row rect for interaction tests.
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(chat_row_id(&display.id), response.rect));
+                #[cfg(test)]
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(chat_row_id(&display.id).with("widget"), response.id);
+                });
+                if response.clicked() && !app.show_archived {
+                    app.actions.push(Action::KeepUnread(display.id.clone()));
+                }
+            }
+        });
     });
     if !copy {
         ui.ctx()
@@ -2395,7 +2757,7 @@ fn quiet_tint(
     Some(theme::readable_on(palette.panel, faded, palette.text, 4.5))
 }
 
-fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
+pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
     let palette = app.palette;
     let title = app.chat_title(chat);
     // Beeper demo: tag each row with its bridge network/account when the
@@ -2421,8 +2783,9 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
             ui.available_width(),
             chat_row_height(app.settings.beeper.compact_list),
         ),
-        Sense::click(),
+        Sense::click_and_drag(),
     );
+    response.dnd_set_drag_payload(super::flat_groups::member(app, chat));
     theme::reveal_focus(&response);
     // The preview area and the whole last message, when the row cuts it short.
     let mut full_preview: Option<(Rect, String, String)> = None;
@@ -3053,6 +3416,13 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
         super::batch_actions::toggle_chat(app, &chat.id);
         ui.close();
     }
+    if ui
+        .button(crate::i18n::gettext(app.locale, "Assign groups…"))
+        .clicked()
+    {
+        super::flat_groups::assign(app, chat);
+        ui.close();
+    }
     let locale = app.locale;
     if chat.looks_unread()
         && widgets::menu_item(
@@ -3569,6 +3939,28 @@ mod tests {
     }
 
     #[test]
+    fn favorites_sections_exist_only_with_both_visible_groups() {
+        use ChatListRow::{Chat, Header};
+        assert_eq!(sectioned_rows(&[]), vec![]);
+        assert_eq!(sectioned_rows(&[false, false]), vec![Chat(0), Chat(1)]);
+        assert_eq!(sectioned_rows(&[true, true]), vec![Chat(0), Chat(1)]);
+        assert_eq!(
+            sectioned_rows(&[true, true, false]),
+            vec![Header(true), Chat(0), Chat(1), Header(false), Chat(2)]
+        );
+    }
+
+    #[test]
+    fn favorites_headers_are_included_in_virtual_scroll_geometry() {
+        let rows = sectioned_rows(&[true, false, false]);
+        let offsets = section_offsets(&rows, 80.0);
+        assert_eq!(offsets, vec![0.0, 26.0, 106.0, 138.0, 218.0, 298.0]);
+        assert_eq!(reveal_bounds(0.0, 200.0, offsets[4], offsets[5]), 98.0);
+        assert_eq!(reveal_bounds(98.0, 200.0, offsets[1], offsets[2]), 26.0);
+        assert_eq!(section_offsets(&rows, 56.0).last(), Some(&226.0));
+    }
+
+    #[test]
     fn chat_density_keeps_virtual_rows_and_text_geometry_in_sync() {
         assert_eq!(chat_row_height(false), 80.0);
         assert_eq!(chat_row_height(true), 56.0);
@@ -3599,6 +3991,39 @@ mod tests {
         assert!(!title_fits(100.0, 176.0, three, spacing));
         assert!(title_fits(100.0, 214.0, three, spacing));
         assert_eq!(row_width(0, 30.0, spacing), 0.0);
+    }
+
+    /// The Saved list keeps the scoped lists' Back control: opening it must
+    /// not drop the arrow that returns to the chat list.
+    #[test]
+    fn the_saved_list_header_offers_a_way_back() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        app.show_saved = true;
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install(&ctx);
+        app.attach(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            header(&mut app, ui);
+        });
+        output.textures_delta.clear();
+        let tree = output
+            .platform_output
+            .accesskit_update
+            .expect("accessibility tree");
+        let labels: Vec<_> = tree
+            .nodes
+            .iter()
+            .filter_map(|(_, node)| node.label().or_else(|| node.value()))
+            .collect();
+        assert!(
+            labels.contains(&"Back to chats"),
+            "no way back in {labels:?}"
+        );
     }
 
     /// The title measures its room from the list the header draws: New chat,

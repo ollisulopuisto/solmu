@@ -136,6 +136,7 @@ pub enum Command {
         id: String,
         everyone: bool,
     },
+    BeeperMedia(crate::pending_media::Job),
     RefreshPoll {
         chat: ChatId,
         message: String,
@@ -191,6 +192,13 @@ pub enum Command {
     /// Forwards archived messages to each chat in `to_chats`, oldest first.
     /// The whole batch is refused when it names more chats than
     /// [`forward_limit`](crate::model::forward_limit) allows for these messages.
+    /// Resume identity-only confirmation reads; never submits messages.
+    BeeperResumeForwards(Vec<crate::composed_forward::ForwardedMessage>),
+    BeeperForward {
+        generation: u64,
+        prepared: bool,
+        items: Vec<(usize, crate::composed_forward::Item)>,
+    },
     Forward {
         from_chat: ChatId,
         messages: Vec<String>,
@@ -276,6 +284,8 @@ pub enum Command {
     LoadChatMedia {
         chat: ChatId,
         around: Option<String>,
+        /// True for an open/live refresh; false continues the older edge.
+        fresh: bool,
     },
     Download {
         /// Asked for by the reader: no size limit, a deadline that grows
@@ -1124,6 +1134,40 @@ pub enum Event {
         everyone: bool,
         result: Result<(), String>,
     },
+    BeeperMediaProgress {
+        local: String,
+        member: crate::merged::Member,
+        state: crate::pending_media::State,
+    },
+    BeeperMediaResolved {
+        local: String,
+        member: crate::merged::Member,
+        message: Box<Message>,
+        complete: bool,
+    },
+    BeeperForwardPrepared {
+        generation: u64,
+        items: Vec<crate::composed_forward::Item>,
+    },
+    BeeperForwardMarked {
+        origin: String,
+        account: String,
+        chat: ChatId,
+        message: String,
+    },
+    BeeperForwardProgress {
+        generation: u64,
+        index: usize,
+        state: crate::composed_forward::State,
+    },
+    BeeperForwardResolved {
+        origin: String,
+        account: String,
+        chat: ChatId,
+        pending: String,
+        final_id: String,
+    },
+
     BeeperAccounts {
         origin: String,
         accounts: Vec<BeeperAccountInfo>,
@@ -1210,6 +1254,12 @@ pub enum Event {
         around: Option<String>,
         items: Vec<crate::model::MediaItem>,
     },
+    /// Beeper album page, cumulative within its exact source chat.
+    BeeperViewerMedia {
+        chat: ChatId,
+        around: Option<String>,
+        result: Result<(Vec<crate::model::MediaItem>, bool), String>,
+    },
     ChatUpdated(Box<Chat>),
     /// Active pins of one chat, for the line under its header.
     Pins {
@@ -1244,6 +1294,15 @@ pub enum Event {
         chat: ChatId,
         paths: Vec<PathBuf>,
         documents: bool,
+    },
+    /// The chat row's newest previewable message, as the worker's own
+    /// eligibility rules (the ones the inventory uses) chose it. Sent only for
+    /// messages that are new to the forward poll, never for receipt refreshes
+    /// that re-return old ones.
+    ChatPreview {
+        chat: ChatId,
+        activity: i64,
+        last: crate::model::LastMessage,
     },
     /// Live incoming message for desktop notification.
     Incoming {

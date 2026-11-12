@@ -598,6 +598,98 @@ fn forward(app: &mut App, ui: &mut egui::Ui, messages: &[String]) {
         .replace("{count}", &messages.len().to_string())
     };
     title(ui, app, &heading);
+    if !app.forward_items.is_empty() {
+        ui.label(crate::i18n::gettext(
+            app.locale,
+            "Accepted means queued, not delivered. Unknown outcomes are not retried.",
+        ));
+        egui::ScrollArea::vertical()
+            .max_height(450.0)
+            .show(ui, |ui| {
+                for (index, item) in app.forward_items.iter().enumerate() {
+                    let destination = app
+                        .chat(&item.destination)
+                        .map(|chat| app.chat_title(chat))
+                        .unwrap_or_else(|| item.destination.clone());
+                    let status = match &item.state {
+                        crate::composed_forward::State::Waiting => {
+                            crate::i18n::gettext(app.locale, "Waiting").into_owned()
+                        }
+                        crate::composed_forward::State::Sending => {
+                            crate::i18n::gettext(app.locale, "Sending").into_owned()
+                        }
+                        crate::composed_forward::State::Accepted { .. } => {
+                            crate::i18n::gettext(app.locale, "Accepted by Beeper").into_owned()
+                        }
+                        crate::composed_forward::State::FailedBeforeSend(error) => format!(
+                            "{}: {error}",
+                            crate::i18n::gettext(app.locale, "Not submitted")
+                        ),
+                        crate::composed_forward::State::Uncertain(error) => format!(
+                            "{}: {error}",
+                            crate::i18n::gettext(app.locale, "Outcome unknown. Check history")
+                        ),
+                    };
+                    ui.label(format!("{}. {destination}: {status}", index + 1));
+                    if let Some(attachment) = item.attachment {
+                        ui.small(format!("Attachment {}", attachment + 1));
+                    }
+                }
+            });
+        let running = app.forward_items.iter().any(|item| {
+            matches!(
+                item.state,
+                crate::composed_forward::State::Waiting | crate::composed_forward::State::Sending
+            )
+        });
+        let retryable = app.forward_items.iter().any(|item| {
+            matches!(
+                item.state,
+                crate::composed_forward::State::FailedBeforeSend(_)
+            )
+        });
+        if ui
+            .add_enabled(
+                !running && retryable,
+                egui::Button::new(crate::i18n::gettext(
+                    app.locale,
+                    "Retry items not submitted",
+                )),
+            )
+            .clicked()
+        {
+            app.actions.push(Action::RetryComposedForward);
+        }
+        if ui
+            .add_enabled(
+                !running,
+                egui::Button::new(crate::i18n::gettext(app.locale, "Close")),
+            )
+            .clicked()
+        {
+            app.actions.push(Action::CloseDialog);
+        }
+        return;
+    }
+    if let Some(Dialog::Forward { chat, .. }) = &app.dialog
+        && app
+            .chat(chat)
+            .is_some_and(|source| source.backend_origin.is_some())
+    {
+        ui.label(crate::i18n::gettext(
+            app.locale,
+            "Re-send with sender, network and original time. This is not a native forward.",
+        ));
+        if app
+            .chat(chat)
+            .is_some_and(|source| source.kind == crate::model::ChatKind::Group)
+        {
+            ui.checkbox(
+                &mut app.forward_include_group,
+                crate::i18n::gettext(app.locale, "Include source group name"),
+            );
+        }
+    }
     // Lay out the real footer first, upwards from the bottom. Wrapped notes
     // and translated buttons then leave exactly their measured room for the
     // list, rather than relying on a guessed header/footer height.

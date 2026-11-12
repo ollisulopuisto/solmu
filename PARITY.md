@@ -274,11 +274,25 @@ Desktop running adds this UI rather than demonstrating a memory saving.
 - Authoritative account inventory includes accounts with no chats, supplied
   identity/network/status, and per-account settings. Missing network/status is
   labeled rather than guessed. Chat network fills older API omissions.
-- HTML-looking message bodies become conservative plain text. No HTML engine,
+- HTML-looking message bodies become conservative styled text. No HTML engine,
   scripts/styles/iframe execution, remote assets, or markup-provided actions.
-  Common/numeric entities and block/list boundaries are decoded. This is not
-  full rich-text fidelity: links represented only in href may lose their URL,
-  uncommon entities can remain literal, malformed markup may be imperfect.
+  Common/numeric entities and block/list boundaries are decoded. Bold, italic,
+  strike, inline code, fenced blocks, blockquotes and list bullets survive as
+  the WhatsApp-style markup the renderer already parses; properly nested tags
+  style correctly, overlapping tags style by their spans, and unclosed tags
+  degrade to literal characters. Markers materialize only around text they
+  actually style - an empty style or an empty styled line emits nothing -
+  and markers that open or close mid-word carry a zero-width-space hint so
+  the renderer's word-boundary rules accept them. Styles spanning line
+  breaks close and reopen per line; code content that holds backticks or a
+  fence line is backslash-escaped, and entities decode before that escaping
+  is applied. The hints and escapes resolve only in the exact shapes the
+  mapper emits, so native text keeps its own zero-width spaces, backslash
+  lines, and code that ends in a backslash.
+  This is not full rich-text fidelity: links represented only in href may lose
+  their URL, uncommon entities can remain literal, malformed markup may be
+  imperfect. Parser behaviour is fixture-tested; only live captures per bridge
+  prove every bridge sends the shapes the fixtures assume.
 - Opaque Matrix-like IDs are no longer presented as human names. A supplied
   matching participant name can be used; otherwise label says name unavailable.
   This does not invent a contact name or prove contacts resolved on real data.

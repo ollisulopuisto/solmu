@@ -21,6 +21,9 @@ pub struct Account {
     /// Pending mutations and outcomes stay with their owning account.
     pub batch_ui: crate::model::BatchState,
     pub id: AccountId,
+    pub forward_dialog_hidden: bool,
+    pub forward_generation: u64,
+    pub forward_items: Vec<crate::composed_forward::Item>,
     pub dirs: AccountDirs,
     pub settings: AccountSettings,
     pub(crate) settings_dirty: bool,
@@ -38,6 +41,7 @@ pub struct Account {
     pub favorites: Option<Vec<ChatId>>,
     pub contacts: HashMap<String, Contact>,
     pub conversations: HashMap<ChatId, Conversation>,
+    pub pending_media: HashMap<String, crate::pending_media::Record>,
     pub open_chat: Option<ChatId>,
     /// Recently opened chats, most recent last; `open_chat` is the open
     /// one and is always a member. Feeds the Cmd+K switcher; was the tab
@@ -125,6 +129,10 @@ pub struct Account {
     /// them instead of the chats.
     pub starred: Vec<crate::archive::Starred>,
     pub show_starred: bool,
+    /// Whether the left panel lists the locally saved messages instead of
+    /// the chats, and the text the panel's own search filters them by.
+    pub show_saved: bool,
+    pub saved_search: String,
     /// Ids of the starred messages of each chat, for the mark in the
     /// conversation. Filled when a chat opens and on every confirmed star.
     pub stars: HashMap<ChatId, HashSet<String>>,
@@ -176,6 +184,9 @@ impl Account {
         Self {
             batch_ui: Default::default(),
             id,
+            forward_dialog_hidden: false,
+            forward_generation: 0,
+            forward_items: Vec::new(),
             dirs,
             settings,
             settings_dirty: false,
@@ -191,6 +202,7 @@ impl Account {
             favorites: None,
             contacts: HashMap::new(),
             conversations: HashMap::new(),
+            pending_media: HashMap::new(),
             open_chat,
             open_tabs,
             prefetch_sent: None,
@@ -260,6 +272,8 @@ impl Account {
             labels: Vec::new(),
             starred: Vec::new(),
             show_starred: false,
+            show_saved: false,
+            saved_search: String::new(),
             stars: HashMap::new(),
             pins: HashMap::new(),
             chat_pins: HashMap::new(),
@@ -301,6 +315,9 @@ impl Account {
             crate::backend::beeper::BeeperConfig::from_env()
                 .expect("Beeper session or environment config"),
         );
+        backend.send(crate::backend::Command::BeeperResumeForwards(
+            legacy.beeper.forwarded_messages.clone(),
+        ));
         Ok(Self::new(id, dirs, settings, backend))
     }
 

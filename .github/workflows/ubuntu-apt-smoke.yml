@@ -1,0 +1,27 @@
+name: Ubuntu apt DNS smoke
+on:
+  pull_request:
+    paths:
+      - .github/scripts/install-ubuntu-build-deps.py
+      - .github/scripts/test-install-ubuntu-build-deps.py
+      - .github/workflows/ubuntu-apt-smoke.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apt-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Helper regressions
+        run: python3 .github/scripts/test-install-ubuntu-build-deps.py
+      - name: Real apt update and native dependency install with scoped fallback
+        run: |
+          before=$(sha256sum /etc/hosts /etc/resolv.conf)
+          sudo python3 .github/scripts/install-ubuntu-build-deps.py libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpipewire-0.3-dev clang libclang-dev cmake perl
+          after=$(sha256sum /etc/hosts /etc/resolv.conf)
+          test "$before" = "$after"
+          dpkg-query -W -f='${Package} ${Status}\n' libxkbcommon-dev libwayland-dev libpipewire-0.3-dev

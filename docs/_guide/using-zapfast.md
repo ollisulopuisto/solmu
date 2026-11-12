@@ -15,9 +15,16 @@ undo history. Saved drafts remain available when you return to their chat.
 Enter sends and Shift+Enter adds a line. Turn off **Enter sends** in Settings
 to make Enter add a line and send with Ctrl+Enter (Command+Enter on macOS).
 `*bold*`, `_italic_`, `~strike~`, and ```` ```monospace ```` ```` format
-like WhatsApp, and a message of nothing but emoji shows large.
+like WhatsApp, and a message of nothing but emoji shows large. Up to three
+emoji alone show without a bubble, like a sticker; more emoji, mixed text,
+a link preview, or a quoted message keep the bubble.
 Paste text with Ctrl+V (Command+V on macOS) or Shift+Insert, as in other
 Linux applications.
+On macOS the field uses the system's text replacements (System Settings >
+Keyboard > Text Replacements): a shortcut expands to its phrase when you
+type a space, return, or punctuation after it, and just before the message
+sends. Changes made in System Settings apply when Solmu's window next
+gains focus.
 Mentions in a group are written with `@`. Choose **all** to mention
 everyone when the group's member list is available: the message shows `@all`,
 highlighted like any other mention.
@@ -37,6 +44,10 @@ Right-click a message to reply, react with any emoji, edit, forward, delete, or
 check when it was sent, delivered, and read. The reaction row has a **+** that
 opens the full emoji picker. Hover over a reaction to see who added it. When
 someone reacts to one of your messages, the chat moves to the top of the list.
+Right-clicking a web link in message text opens only **Open link** and **Copy
+link**, for that exact destination. Copy keeps its query and fragment. The
+shortened destination can be read in full by hovering it. Right-clicking other
+message text, padding, or a link-preview card still opens the message menu.
 Editing uses the composer. Press Escape to cancel. If WhatsApp refuses an
 edit, the message keeps its earlier text.
 
@@ -915,7 +926,7 @@ rail, the chat list's header, search and the chat filters, then returns to the
 input. Shift+Tab goes back; hidden controls are skipped. Single messages,
 reactions and chat rows are not stops; Alt+Up/Down switches conversations.
 
-Cmd+D (Ctrl+D elsewhere) toggles the right-hand info sidebar for the open
+Cmd+Option+I (Ctrl+Alt+I elsewhere) toggles the right-hand info sidebar for the open
 chat. Cmd+B still toggles the left chat list; Cmd+I marks Reply later.
 
 ### Numbered sidebar shortcuts

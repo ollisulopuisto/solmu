@@ -110,13 +110,60 @@ pub fn row_near_view(
 ) -> bool {
     top + height >= view_top - overscan && top <= view_bottom + overscan
 }
+/// ASCII case-insensitive contains over raw bytes: a memchr first-byte skip
+/// (both case variants of the query's first byte) with an
+/// `eq_ignore_ascii_case` tail check. No allocation. The caller lowercases
+/// non-ASCII candidates first: they can fold onto ASCII (U+212A KELVIN SIGN
+/// -> "k", U+0130 -> "i" + combining dot above), which a byte scan of the
+/// original bytes would miss.
+fn ascii_case_contains(text: &[u8], q: &[u8]) -> bool {
+    let (first, rest) = (q[0], &q[1..]);
+    let lo = first.to_ascii_lowercase();
+    let hi = first.to_ascii_uppercase();
+    let mut offset = 0usize;
+    while offset + q.len() <= text.len() {
+        match memchr::memchr2(lo, hi, &text[offset..text.len() - rest.len()]) {
+            Some(i) => {
+                let start = offset + i;
+                if text[start + 1..start + q.len()].eq_ignore_ascii_case(rest) {
+                    return true;
+                }
+                offset = start + 1;
+            }
+            None => return false,
+        }
+    }
+    false
+}
+
 /// Literal case-insensitive search of already-loaded data. No remote query.
 pub fn search_matches(body: &str, query: &str, network: &str, sender: &str) -> bool {
-    let query = query.trim().to_lowercase();
-    query.is_empty()
-        || [body, network, sender]
-            .iter()
-            .any(|value| value.to_lowercase().contains(&query))
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+    // Performance optimization:
+    // 1. Return immediately when `query.trim()` is empty without lowercase conversion.
+    // 2. An ASCII query against ASCII candidates matches with zero allocations;
+    //    non-ASCII candidates are lowercased first (they can fold onto ASCII),
+    //    and non-ASCII queries take the lowercasing path for both sides.
+    // 3. Short-circuit across `[body, network, sender]` sequentially to avoid
+    //    redundant checks and allocations once a match is found.
+    if query.is_ascii() {
+        let q = query.as_bytes();
+        [body, network, sender].into_iter().any(|value| {
+            if value.is_ascii() {
+                ascii_case_contains(value.as_bytes(), q)
+            } else {
+                ascii_case_contains(value.to_lowercase().as_bytes(), q)
+            }
+        })
+    } else {
+        let query_lower = query.to_lowercase();
+        [body, network, sender]
+            .into_iter()
+            .any(|value| value.to_lowercase().contains(&query_lower))
+    }
 }
 /// Keyboard-focusable fallback operates on the same filtered, ordered rows as the view.
 pub fn latest_replyable<'a>(messages: &[&'a Message]) -> Option<&'a Message> {
@@ -409,6 +456,36 @@ mod tests {
         assert!(!search_matches("plain text", "signal", "Work", "friend"));
         assert!(!search_matches("plain text", ".*", "Work", "friend"));
         assert!(search_matches("plain text", "  ", "Work", "friend"));
+    }
+    #[test]
+    fn loaded_search_matches_unicode_that_lowercases_to_ascii() {
+        // U+212A KELVIN SIGN lowercases to ASCII "k".
+        assert!(search_matches("temp is 300\u{212A}", "k", "Work", "friend"));
+        // U+0130 lowercases to "i" + combining dot above.
+        assert!(search_matches("\u{0130}stanbul", "i", "Work", "friend"));
+        // ASCII candidates keep matching through the fast path.
+        assert!(search_matches("Kernel", "k", "Net", "pal"));
+        assert!(!search_matches("Kernel", "z", "Net", "pal"));
+        // Non-ASCII text that does not lowercase onto the query still misses.
+        assert!(!search_matches("Hyvää yötä", "k", "Net", "pal"));
+    }
+    #[test]
+    fn loaded_search_fast_path_edges() {
+        // Query longer than the candidate.
+        assert!(!search_matches("hi", "high", "Net", "pal"));
+        // Match at the very start and very end of the candidate.
+        assert!(search_matches("laptop", "laptop", "Net", "pal"));
+        assert!(search_matches("xxlaptop", "laptop", "Net", "pal"));
+        // Single-character query.
+        assert!(search_matches("abc", "b", "Net", "pal"));
+        assert!(!search_matches("abc", "d", "Net", "pal"));
+        // Repeated first-byte false starts before the real match.
+        assert!(search_matches("kkkkkkkelvin", "kelvin", "Net", "pal"));
+        assert!(!search_matches("kkkkkkkelvi", "kelvinx", "Net", "pal"));
+        // Uppercase ASCII query.
+        assert!(search_matches("kernel", "KERNEL", "Net", "pal"));
+        // Non-letter first byte.
+        assert!(search_matches("a-b", "-B", "Net", "pal"));
     }
     #[test]
     fn borrowed_timeline_preserves_sources_without_copying_payloads() {

@@ -479,6 +479,7 @@ pub struct Settings {
     /// Beeper chats with a local Silence promise, keyed by chat id.
     #[serde(default)]
     pub silenced: BTreeMap<String, Silence>,
+    pub flat_groups: crate::flat_groups::Groups,
     pub sidebar_width: f32,
     /// Width of the search pane beside the open chat.
     pub search_pane_width: f32,
@@ -494,6 +495,10 @@ pub struct Settings {
     /// Download attachments when they enter view instead of on click.
     #[serde(alias = "auto_download_images")]
     pub auto_download: bool,
+    /// Local website requests are opt-in, separate from supplied message cards.
+    pub auto_link_previews: bool,
+    /// Applies only to explicit link actions, never stored messages.
+    pub remove_link_tracking: bool,
     /// Show the default doodle wallpaper behind conversations.
     pub show_wallpaper: bool,
     /// Colour selected in the wallpaper picker.
@@ -572,8 +577,9 @@ pub struct Settings {
     /// Offer Touch ID on the lock screen. After the next successful
     /// password unlock, the password is kept in the OS keychain for it.
     pub app_lock_touch_id: bool,
-    /// Let macOS put Solmu into App Nap. Off, Solmu holds a power
-    /// assertion so messaging keeps working from the background.
+    /// Let macOS put Solmu into App Nap at any time. Off, Solmu holds a power
+    /// assertion only while a window is shown; hidden or minimized, macOS may
+    /// pause it.
     pub allow_app_nap: bool,
     /// Last window width in logical pixels (points at zoom 1), remembered
     /// across restarts; see [`fastframe_shell::window::Geometry`]. `None`
@@ -617,6 +623,7 @@ impl Default for Settings {
             system_theme_cache: None,
             zoom: 1.0,
             beeper: BeeperPreferences::default(),
+            flat_groups: Default::default(),
             sidebar_width: 300.0,
             search_pane_width: 380.0,
             info_pane_width: 380.0,
@@ -624,6 +631,8 @@ impl Default for Settings {
             send_read_receipts: true,
             send_typing: true,
             auto_download: true,
+            auto_link_previews: false,
+            remove_link_tracking: false,
             show_wallpaper: true,
             wallpaper_color: WallpaperColor::Theme,
             dark_wallpaper_color: WallpaperColor::Theme,
@@ -910,6 +919,7 @@ pub struct AccountSettings {
     pub send_typing: bool,
     #[serde(alias = "auto_download_images")]
     pub auto_download: bool,
+
     pub last_chat: Option<String>,
     /// Recently opened chats, most recent last; `last_chat` is the open
     /// one. The field name stays for file compatibility: it was the tab
@@ -943,6 +953,7 @@ impl Default for AccountSettings {
             send_read_receipts: true,
             send_typing: true,
             auto_download: true,
+
             last_chat: None,
             open_tabs: Vec::new(),
             notifications: true,
@@ -1704,11 +1715,15 @@ mod giphy_tests {
     }
 }
 
+/// Local provenance only. Never sent as a bridge-native forwarding claim.
+pub use crate::composed_forward::ForwardedMessage;
+
 /// Local preferences for the native Beeper view. Never written to remote accounts.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BeeperPreferences {
     pub people: Vec<crate::merged::Person>,
+    pub forwarded_messages: Vec<ForwardedMessage>,
     /// Pairs the user said are not the same person; never suggested again.
     pub dismissed_links: Vec<crate::suggest::LinkPair>,
     /// Local display names for single chats, by chat id. Never sent anywhere.
@@ -1719,6 +1734,9 @@ pub struct BeeperPreferences {
     /// Chats the user moved out of their automatic category; the rules never
     /// re-sort them. Local only, same per-chat key as the later marks.
     pub category_overrides: Vec<(crate::merged::Member, crate::categories::AutoCategory)>,
+    /// Per-message bookmarks, local only: identity plus the text shown when
+    /// the message was saved. Never written to remote accounts.
+    pub saved: Vec<crate::saved::SavedMessage>,
     pub incognito: bool,
     pub compact_list: bool,
     pub show_previews: bool,
@@ -1738,11 +1756,13 @@ impl Default for BeeperPreferences {
     fn default() -> Self {
         Self {
             people: Vec::new(),
+            forwarded_messages: Vec::new(),
             dismissed_links: Vec::new(),
             chat_names: std::collections::HashMap::new(),
             reply_later: Vec::new(),
             read_later: Vec::new(),
             category_overrides: Vec::new(),
+            saved: Vec::new(),
             incognito: false,
             compact_list: false,
             show_previews: true,

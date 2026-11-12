@@ -6,6 +6,7 @@ pub mod call_log;
 pub mod chats;
 pub mod conversation;
 pub mod dialogs;
+pub mod flat_groups;
 pub(crate) mod focus;
 mod glass;
 pub mod image_editor;
@@ -122,6 +123,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     picker::show(app, ctx);
     dialogs::show(app, ctx);
     batch_actions::dialogs(app, ctx);
+    flat_groups::dialogs(app, ctx);
     image_preview::show(app, ctx);
     image_preview::show_sticker(app, ctx);
     image_editor::show(app, ctx);
@@ -1691,3 +1693,5 @@ mod idle_tests {
 }
 
 pub mod merged;
+
+mod view_once;
