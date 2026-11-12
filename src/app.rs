@@ -12833,6 +12833,16 @@ impl App {
         }
     }
 
+    /// Whether a window is on screen for the power policy. `hide_intent` is
+    /// set by a hidden start (`--start-hidden`) before any window exists, and
+    /// stays until a window attaches, so a login launch does not hold the App
+    /// Nap opt-out.
+    fn window_shown(&self, ctx: &egui::Context) -> bool {
+        !self.window_hidden
+            && !self.hide_intent
+            && ctx.input(|input| input.viewport().minimized) != Some(true)
+    }
+
     /// Processes app state shared by windowed and headless modes.
     pub fn background_frame(&mut self, ctx: &egui::Context) {
         // Events are drained before frame_ui observes focus. Losing focus in
@@ -12849,9 +12859,7 @@ impl App {
         }
         self.report_presence();
         // A shown window keeps Solmu awake; hidden or minimized, macOS may nap it.
-        crate::energy::set_window_visible(
-            !self.window_hidden && ctx.input(|input| input.viewport().minimized) != Some(true),
-        );
+        crate::energy::set_window_visible(self.window_shown(ctx));
         self.handle_power();
         self.handle_tray();
         #[cfg(target_os = "macos")]
@@ -20130,6 +20138,26 @@ mod tests {
         app.start_hidden();
         assert!(app.hide_intent);
         assert_eq!(started.try_recv(), Ok(()));
+    }
+
+    #[test]
+    fn a_hidden_start_does_not_count_as_a_shown_window() {
+        let root = tempfile::tempdir().unwrap();
+        let (backend, _started) = Backend::detached_with_startup();
+        let mut app = App::with_backend(
+            AppDirs::under(root.path()),
+            Settings::default(),
+            backend,
+            Waker::default(),
+        );
+        let ctx = egui::Context::default();
+        assert!(app.window_shown(&ctx), "a normal start shows a window");
+        app.start_hidden();
+        assert!(!app.window_shown(&ctx), "--start-hidden has no window yet");
+        app.hide_intent = false;
+        assert!(app.window_shown(&ctx), "attaching a window resets the intent");
+        app.window_hidden = true;
+        assert!(!app.window_shown(&ctx));
     }
 
     /// The shell asks the app what a closed window means and what each
