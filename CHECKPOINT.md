@@ -1,5 +1,9 @@
 # Fast-beeper coordination and development checkpoint
 
+## Automatic chat categories - November 10, 2026
+
+Branch `feat/chat-auto-categories`, based on main c4e24cc, version 0.24.18. First slice of option 4: Filters > Automatic category (People, Quiet people 7+ days, Long quiet 30+ days, Notifications) from plain rules in `src/categories.rs`, plus Move to... / Sort automatically on a one-to-one chat's menu, stored in `beeper.category_overrides`. Quiet tiers fade in search. Tests in `src/categories.rs`, `src/ui/chats.rs` and `tests/chat_scope.rs`. Not compiled locally (no libpipewire headers here); CI is the first compile. No demo captures yet. Details and gaps: docs/chat-categories.md. No merge by the author.
+
 ## Beeper attachment replies - November 10, 2026
 
 Branch `feat/beeper-attachment-replies`, based on main 0486c64, version 0.24.12 (open PRs #264 and #265 are on 0.24.11 without bumps, so no version conflict expected). The Beeper backend refused or kept any file, document or pasted picture sent as a reply: SendFiles and the pasted-image gate treated a quote like the genuinely unsupported mentions and view-once. The Beeper message API takes an attachment and replyToMessageID in one body (voice notes already send that way), so the upload batch now carries the quote, the worker sets it on the first file only, and a failed upload returns the quote to the composer with the kept files, like a failed voice note does. The kept-files toast now names only mentions and view-once. Tests: a quoted pasted image passes the unsupported gate, and a quoted document's request body carries the attachment and replyToMessageID together. Not run locally (no Rust toolchain in this checkout), CI is the check. Unverified: a live bridge accepting reply plus attachment on every network. No merge by the author.
@@ -834,3 +838,126 @@ The next automatic review confirmed the previous three findings resolved and ide
 ### Native CI shutdown-test contract
 
 Native CI at b041035 passed 1959 tests and failed one old combined draft test because it injected a logout event after `App::shutdown`. Shutdown now deliberately closes event delivery to reclaim unpolled media. Split that test into shutdown saving/rejection and live-account logout clearing. Both exact production tests pass in the reduced build, alongside all 29 linked regressions; full all-target/all-feature clippy and fmt pass. No production shutdown cleanup was weakened.
+
+### Link suggestions, first slice
+
+Added `src/suggest.rs` (pure matcher with tests), `Chat.handles` filled from the other participant's phone number and username, per-pair dismissals in `beeper.dismissed_links`, a Contact info card, a collapsed Filters row and an Undo toast (`ToastKind::Undo`). The portable adapter harness passes with suggest.rs staged; the UI is first compiled in CI.
+
+## Export alternate-stream names - November 10, 2026
+
+PR #272 follow-up: normalize colon to underscore before reserved-DOS-stem replacement so `CON.pdf:payload` becomes `attachment.pdf_payload` and ordinary filenames cannot select NTFS streams either. Four new regression cases; the old code failed on the first case, 242 other portable tests passed. Linux portable adapter tests rerun after repair; real Windows/NTFS not exercised. No merge or release build.
+
+
+
+## Linked-chat avatar source - November 11, 2026
+
+Owner Instinct, branch `fix/linked-avatar-default`, isolated from #267/#269.
+Use the saved primary picture, then saved member order. Resolve exact identities
+in the active app account and reject locked, missing, replaced, duplicate-ID,
+group and foreign-origin sources. Thumbnail and Contact info full-size lookups
+share that order. Never write fallback paths over member caches or change send
+routing. Re-evaluate each lookup so late pictures/default changes take effect.
+
+Portable current-source regressions and Python checks run locally; native App
+regressions added for fallback, late primary arrival, changed default, source
+cache preservation, full-size/thumbnail agreement and request order. Native GUI
+and real Mac/connected-network avatar behavior remain unverified locally.
+Custom contact pictures are a separate requested feature awaiting UI approval.
+No merge, main push or release build.
+## Final-ID send confirmation - November 11, 2026
+
+Owner Instinct, branch `fix/final-id-send-confirmation`, based on main c1ff292.
+Read-only investigation of the 60-second toast found that pending-message GET
+may return the final ID per Beeper's current retrieve/send API docs, but the
+poller required returned ID == pending ID. Accept that resolution while keeping
+exact chat, outgoing-sender and explicit SUCCESS/delivery evidence. Timeout copy
+now says not confirmed, since missing/unknown status is not necessarily PENDING.
+No retry, resend, send payload or routing changes. Text/media share this poller.
+
+Regression first failed against unchanged production code for final-ID SUCCESS;
+then passed with the repair. Fixture also covers foreign chat, incoming SUCCESS,
+pending and absent status. The current-source portable suite runs locally. No
+live message was sent or private message data retrieved. This proves a possible
+false warning, not which bridge/status caused the owner's particular toast.
+Source behavior predates Nov 9; #274 changes inbound download queuing, not send
+confirmation. Real network send confirmations remain unverified. No merge/build.
+
+API references:
+https://developers.beeper.com/desktop-api-reference/resources/messages/methods/retrieve
+https://developers.beeper.com/desktop-api-reference/resources/messages/methods/send
+
+Review follow-up: route the new static confirmation-timeout key through gettext
+at the Event::Info UI boundary. Other dynamic Info messages are unchanged. No
+translation catalogs regenerated; the maintainer owns that step.
+
+## Media download queue backpressure - November 11, 2026
+
+Owner Instinct, branch `fix/media-queue-busy`, separate from avatar work.
+Applied the supplied media-backlog patch to main c1ff292. Requests rejected by
+the eight-slot worker queue wait in a bounded 256-entry backlog and retry on
+control-loop ticks; explicit clicks go before automatic work. Review repair:
+a click upgrades a queued automatic duplicate (including its manual-download
+permission), clicks keep FIFO order, and new automatic overflow cannot evict
+older accepted work. A full backlog may still reject work explicitly; a dead
+worker reports failures. No unbounded queue or automatic resend is introduced.
+Portable production-source regressions run locally; real Telegram/WhatsApp
+media downloads and native GUI remain unverified. No merge or release build.
+
+Review scope clarification: the current UI disables controls for items already
+marked Downloading, including waiting automatic requests. They cannot be clicked
+to promote them. Priority applies to new explicit requests reaching the backend;
+manual upgrades are a backend safeguard, not a new user-visible promotion flow.
+The PR description/changelog now make this limitation explicit. A waiting versus
+active UI model is outside this queue-full repair.
+
+
+## Reply/forward shortcut gap - November 11, 2026
+
+Owner Instinct, branch `fix/reply-forward-shortcuts`, based on main after #274.
+Ordinary chats had no Cmd-R handler: only merged::show consumed that key. Add
+exact-modifier Cmd-R handling for ordinary chats via existing Action::Reply,
+which preserves an unedited draft and focuses the composer. Latest incoming
+selection ignores later outgoing/revoked rows, independently of unread divider.
+Linked Cmd-R remains in merged::show and retains exact-source routing.
+
+Cmd-L was free (Cmd-Option-Shift-L is app lock). It now opens the existing
+Forward dialog for the selection or latest forwardable loaded message, including
+an exact source chat in linked views. No send is performed by the shortcut.
+Existing Beeper Command::Forward remains unsupported: this is dialog wiring,
+not the separately proposed composed-forward implementation. Overlay guards and
+exact modifiers preserve other shortcuts. Added native key-dispatch regressions
+and updated the shortcut registry/help. Fmt and diff checks pass locally; native
+execution/real Mac UI remain unverified pending CI. No merge or build.
+
+PR #276 follow-up review: exclude synthetic call records from ordinary replies,
+cancel selection before Reply so its composer is visible, and share the exact
+linked-view ownership predicate with merged::show (duplicate IDs/group-kind
+fallbacks keep ordinary Cmd-R). Regressions include those edge cases. Local
+native test compilation was attempted but exceeded the available command window
+while building dependencies; no passing native result claimed.
+Own adversarial pass also keeps the new message shortcuts out of the image
+viewer and uses the linked view's exact valid-members filter for Forward,
+including direct-chat, unlocked, same-origin and unique-ID constraints.
+CI caught one needless-unwrap Clippy lint and a regression fixture borrow
+conflict. Use if-let dispatch and construct the member before mutating settings.
+No production behavior change in this follow-up.
+
+## 2026-11-11 - Beeper chat media album (Instinct, draft)
+
+User request: browse chat-wide media with Left/Right. Existing key handlers and
+ViewerStep were already in the delivered manual.29 build, but Beeper silently
+ignored LoadChatMedia. Added a dedicated bounded history worker, exact-chat
+validation, fresh/continuation requests, and older-edge continuation. Plain arrows
+now browse photos and playable videos; Alt+arrows retain video seeking. Does not
+create an audio/document/GIF viewer or combine linked sources into one album.
+Portable adapter tests cover paging/cursor/source boundaries. Full native tests
+and macOS interaction remain unverified; do not describe this as a shipped fix.
+
+## 2026-11-11 - Favorites list sections, option B (Instinct, draft)
+
+Approved sketch B: small Pinned/Other chats labels, with a subtle rule only at
+the group boundary. Headers appear only when both favorite and ordinary chats
+remain visible; search/empty/Favorites-only/all-unpinned views remain ungrouped.
+Variable-height virtual rows include headers in keyboard reveal geometry.
+Native tests and actual pixels still require verification. No release build.
+

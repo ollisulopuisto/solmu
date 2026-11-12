@@ -79,7 +79,7 @@ struct Cli {
     #[arg(long, conflicts_with = "demo_macos")]
     demo_titlebar: bool,
 
-    /// Demo view: `chat`, `phone-menu`, `empty`, `settings`, `login`,
+    /// Demo view: `chat`, `phone-menu`, `link-menu`, `empty`, `settings`, `login`,
     /// `pair`, `shortcuts`, `about`, `info`, `mention`, `light`, or a comma-separated
     /// mix such as `chat,light`.
     #[cfg(feature = "demo")]
@@ -425,6 +425,11 @@ fn run() -> eframe::Result<()> {
         .demo_page
         .as_deref()
         .is_some_and(|page| page.split(',').any(|part| part.trim() == "phone-menu"));
+    #[cfg(feature = "demo")]
+    let demo_link_menu = cli
+        .demo_page
+        .as_deref()
+        .is_some_and(|page| page.split(',').any(|part| part.trim() == "link-menu"));
     let mut update_receipt = launch.receipt;
     // The link, archive, and tray outlive windows. The shell recreates a
     // window when the tray, a notification, or another launch requests one;
@@ -505,6 +510,8 @@ fn run() -> eframe::Result<()> {
                         hover: demo_hover,
                         #[cfg(feature = "demo")]
                         open_phone_menu: demo_phone_menu,
+                        #[cfg(feature = "demo")]
+                        link_menu_click: if demo_link_menu { 12 } else { 0 },
                         #[cfg(feature = "demo")]
                         tour,
                     }))
@@ -669,6 +676,8 @@ struct Shell {
     hover: Option<egui::Pos2>,
     #[cfg(feature = "demo")]
     open_phone_menu: bool,
+    #[cfg(feature = "demo")]
+    link_menu_click: u8,
 }
 
 /// Pending screenshot request.
@@ -733,6 +742,26 @@ impl eframe::App for Shell {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         if let Some(tour) = &mut self.tour {
             tour.input(&mut self.app, ctx, input);
+        }
+        if self.link_menu_click > 2 {
+            self.link_menu_click -= 1;
+            ctx.request_repaint();
+        } else if self.link_menu_click != 0 {
+            let id = solmu::ui::conversation::bubble_id(solmu::demo::sample_ids()[0], "ada-link");
+            if let Some(pos) = ctx
+                .data(|data| data.get_temp::<Vec<(egui::Rect, String)>>(id.with("web-link-hits")))
+                .and_then(|hits| hits.first().map(|(rect, _)| rect.center()))
+            {
+                input.events.push(egui::Event::PointerMoved(pos));
+                input.events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed: self.link_menu_click == 2,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                self.link_menu_click -= 1;
+                ctx.request_repaint();
+            }
         }
         // Moves the pointer only while it is elsewhere: each move restarts
         // egui's tooltip delay, so a fake pointer that kept moving in place

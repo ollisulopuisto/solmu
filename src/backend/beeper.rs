@@ -26,6 +26,8 @@ use super::{Command, Event, LinkStatus, Waker};
 use crate::model::{Chat, ChatId, ChatKind, Content, Delivery, LastMessage, Message};
 use crate::paths::AccountDirs;
 
+mod gallery;
+
 const CHAT_PAGE_LIMIT: u32 = 100;
 /// How often the chat list (ordering, previews, unread counts) is refreshed.
 const CHAT_REFRESH: Duration = Duration::from_secs(60);
@@ -151,6 +153,10 @@ struct BeeperUser {
     full_name: Option<String>,
     #[serde(default)]
     username: Option<String>,
+    #[serde(default)]
+    phone_number: Option<String>,
+    #[serde(default)]
+    is_self: Option<bool>,
 }
 
 type PreviewFallbacks =
@@ -195,7 +201,24 @@ struct BeeperMessage {
     linked_message_id: Option<String>,
     #[serde(default)]
     reactions: Vec<BeeperReaction>,
+    #[serde(default)]
+    links: Vec<BeeperLinkPreview>,
 }
+
+/// Supplied metadata only. Image URLs are deliberately not downloaded here.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BeeperLinkPreview {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: String,
+    #[serde(rename = "originalURL", default)]
+    original_url: Option<String>,
+    #[serde(default)]
+    summary: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct BeeperReaction {
     #[serde(rename = "participantID")]
@@ -434,6 +457,125 @@ fn cache_files(
     }
     files.sort_by_key(|(time, _, _)| *time);
     Ok(files)
+}
+
+/// File extension for one ISO base media `ftyp` brand, if it is known.
+fn iso_brand_extension(brand: &[u8]) -> Option<&'static str> {
+    Some(match brand {
+        b"qt  " => "mov",
+        b"M4A " | b"M4B " => "m4a",
+        b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1" | b"msf1" => "heic",
+        b"avif" | b"avis" => "avif",
+        [b'3', b'g', ..] => "3gp",
+        b"isom" | b"iso2" | b"iso3" | b"iso4" | b"iso5" | b"iso6" | b"iso7" | b"iso8" | b"iso9"
+        | b"mp41" | b"mp42" | b"avc1" | b"dash" | b"M4V " | b"M4VH" | b"M4VP" | b"f4v " => "mp4",
+        _ => return None,
+    })
+}
+
+/// File extension for a downloaded attachment: the message type first, then
+/// the original file name, then the server's content type, then the bytes.
+fn media_extension(
+    mime: Option<&str>,
+    file_name: Option<&str>,
+    content_type: Option<&str>,
+    head: &[u8],
+) -> &'static str {
+    fn from_mime(mime: &str) -> Option<&'static str> {
+        let base = mime
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        Some(match base.as_str() {
+            "image/png" => "png",
+            "image/jpeg" => "jpg",
+            "image/webp" => "webp",
+            "image/gif" => "gif",
+            "video/mp4" => "mp4",
+            "video/webm" => "webm",
+            "video/quicktime" => "mov",
+            "audio/ogg" => "ogg",
+            "audio/mpeg" => "mp3",
+            "audio/mp4" | "audio/x-m4a" => "m4a",
+            "application/pdf" => "pdf",
+            _ => return None,
+        })
+    }
+    if let Some(ext) = mime.and_then(from_mime) {
+        return ext;
+    }
+    if let Some(ext) = file_name
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .and_then(|ext| match ext.as_str() {
+            "png" => Some("png"),
+            "jpg" | "jpeg" => Some("jpg"),
+            "webp" => Some("webp"),
+            "gif" => Some("gif"),
+            "mp4" | "m4v" => Some("mp4"),
+            "mov" => Some("mov"),
+            "webm" => Some("webm"),
+            "ogg" => Some("ogg"),
+            "mp3" => Some("mp3"),
+            "m4a" => Some("m4a"),
+            "pdf" => Some("pdf"),
+            _ => None,
+        })
+    {
+        return ext;
+    }
+    if let Some(ext) = content_type.and_then(from_mime) {
+        return ext;
+    }
+    if head.len() >= 12 && &head[4..8] == b"ftyp" {
+        // The major brand says what the ISO media file is; ftyp alone also
+        // covers audio, HEIC and AVIF. When the major brand is unknown (for
+        // example iso8), the compatible brands that follow it decide.
+        let size = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
+        let end = if size >= 16 {
+            size.min(head.len())
+        } else {
+            head.len()
+        };
+        let compatible = (16..end).step_by(4).filter_map(|at| head.get(at..at + 4));
+        return std::iter::once(&head[8..12])
+            .chain(compatible)
+            .find_map(iso_brand_extension)
+            .unwrap_or("bin");
+    }
+    if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        // EBML is Matroska and WebM alike; the DocType sits in the header.
+        let window = &head[..head.len().min(64)];
+        let has = |needle: &[u8]| window.windows(needle.len()).any(|w| w == needle);
+        return if has(b"webm") {
+            "webm"
+        } else if has(b"matroska") {
+            "mkv"
+        } else {
+            "bin"
+        };
+    }
+    if head.starts_with(b"\x89PNG") {
+        return "png";
+    }
+    if head.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return "jpg";
+    }
+    if head.starts_with(b"GIF8") {
+        return "gif";
+    }
+    if head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP" {
+        return "webp";
+    }
+    if head.starts_with(b"OggS") {
+        return "ogg";
+    }
+    if head.starts_with(b"%PDF") {
+        return "pdf";
+    }
+    "bin"
 }
 
 pub fn cache_budget(dirs: &AccountDirs) -> u64 {
@@ -1061,7 +1203,12 @@ impl Api {
                 }
             }
         }
-        let mut chat = map_chat(wire, label);
+        let own = self
+            .own_ids
+            .lock()
+            .ok()
+            .and_then(|ids| ids.get(&wire.account_id).cloned());
+        let mut chat = map_chat_for(wire, label, own.as_deref());
         chat.backend_origin = Some(self.base_url.clone());
         if chat.last.is_none()
             && let Some(preview) = wire.preview.as_ref().filter(|p| is_empty_preview(p))
@@ -1282,10 +1429,24 @@ impl Api {
         dirs: &AccountDirs,
         manual: bool,
     ) -> Result<std::path::PathBuf, String> {
+        self.download_media_at(chat, message, 0, dirs, manual)
+    }
+
+    fn download_media_at(
+        &self,
+        chat: &str,
+        message: &str,
+        index: usize,
+        dirs: &AccountDirs,
+        manual: bool,
+    ) -> Result<std::path::PathBuf, String> {
         let _guard = self.cache_lock.lock().map_err(|_| "Cache is busy")?;
         let budget = cache_budget(dirs);
         let m: BeeperMessage = self.get_message(chat, message)?;
-        let attachment = m.attachments.first().ok_or("Message has no attachment")?;
+        let attachment = m
+            .attachments
+            .get(index)
+            .ok_or("Message attachment is no longer available")?;
         if attachment
             .size
             .as_ref()
@@ -1327,18 +1488,32 @@ impl Api {
         }
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         (chat, message, source).hash(&mut hasher);
-        let ext = match attachment.mime_type.as_deref().unwrap_or("") {
-            "image/png" => "png",
-            "image/jpeg" => "jpg",
-            "image/webp" => "webp",
-            "image/gif" => "gif",
-            "video/mp4" => "mp4",
-            "video/webm" => "webm",
-            "audio/ogg" => "ogg",
-            "audio/mpeg" => "mp3",
-            "application/pdf" => "pdf",
-            _ => "bin",
-        };
+        let mut head = Vec::with_capacity(64);
+        let mut ext = media_extension(
+            attachment.mime_type.as_deref(),
+            attachment.file_name.as_deref(),
+            None,
+            &[],
+        );
+        if ext == "bin" {
+            // Telegram often sends no usable type. Read the content type and the
+            // first bytes before choosing the name so the file opens normally.
+            let header = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            (&mut response)
+                .take(64)
+                .read_to_end(&mut head)
+                .map_err(|_| "Media transfer failed")?;
+            ext = media_extension(
+                attachment.mime_type.as_deref(),
+                attachment.file_name.as_deref(),
+                header.as_deref(),
+                &head,
+            );
+        }
         let directory = dirs.media_cache_dir();
         std::fs::create_dir_all(&directory).map_err(|_| "Could not create media cache")?;
         let path = directory.join(format!("beeper-{:016x}.{ext}", hasher.finish()));
@@ -1372,7 +1547,12 @@ impl Api {
             let mut output = options
                 .open(&temporary)
                 .map_err(|_| "Could not create media file")?;
-            let copied = std::io::copy(&mut (&mut response).take(limit), &mut output)
+            output.write_all(&head).map_err(|_| "Media write failed")?;
+            let copied = head.len() as u64
+                + std::io::copy(
+                    &mut (&mut response).take(limit.saturating_sub(head.len() as u64)),
+                    &mut output,
+                )
                 .map_err(|_| "Media transfer failed")?;
             let mut excess = [0u8; 1];
             if copied == limit
@@ -1391,6 +1571,179 @@ impl Api {
             let _ = std::fs::remove_file(temporary);
         }
         result.map_err(str::to_string)
+    }
+
+    fn plan_forwards(
+        &self,
+        items: Vec<crate::composed_forward::Item>,
+    ) -> Vec<crate::composed_forward::Item> {
+        use crate::composed_forward::State;
+        let mut expanded = Vec::new();
+        for mut item in items {
+            if item.origin != self.base_url {
+                item.state = State::FailedBeforeSend(
+                    "Source belongs to another server; nothing submitted".into(),
+                );
+                expanded.push(item);
+                continue;
+            }
+            if item.planned {
+                expanded.push(item);
+                continue;
+            }
+            match self.get_message(&item.source_chat, &item.source_message) {
+                Ok(message) if !message.attachments.is_empty() => {
+                    for attachment in 0..message.attachments.len() {
+                        let mut copy = item.clone();
+                        copy.attachment = Some(attachment);
+                        copy.planned = true;
+                        if attachment > 0 {
+                            copy.text = item.text.lines().next().unwrap_or("").to_owned();
+                        }
+                        expanded.push(copy);
+                    }
+                }
+                Ok(message) => {
+                    if !forwardable_text(&message) {
+                        item.state = State::FailedBeforeSend(
+                            "This source type has no supported text or attachment to forward"
+                                .into(),
+                        );
+                    }
+                    item.planned = true;
+                    expanded.push(item);
+                }
+                Err(error) => {
+                    let mut copy = item;
+                    copy.state = State::FailedBeforeSend(error);
+                    expanded.push(copy);
+                }
+            }
+        }
+        expanded
+    }
+
+    /// Only failures before the message POST are safely retryable. Once that
+    /// POST begins, even a malformed response must not invite a duplicate send.
+    fn send_forward(
+        &self,
+        item: &crate::composed_forward::Item,
+        dirs: &AccountDirs,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<SendAccepted, crate::composed_forward::State> {
+        use crate::composed_forward::State;
+        let prepare = || -> Result<serde_json::Value, String> {
+            if item.origin != self.base_url {
+                return Err("Source belongs to another server; nothing submitted".into());
+            }
+            if self.read_only || upload_stopped(Some(cancel)) {
+                return Err("Forward was not submitted: read-only or session closed".into());
+            }
+            let source = self.get_chat(&item.source_chat)?;
+            let destination = self.get_chat(&item.destination)?;
+            if source.account_id != item.source_account
+                || destination.account_id != item.destination_account
+                || destination.id != item.destination
+                || source.id != item.source_chat
+                || destination.is_read_only
+            {
+                return Err(
+                    "Source or destination identity changed; forward was not submitted".into(),
+                );
+            }
+            let message = self.get_message(&item.source_chat, &item.source_message)?;
+            if message.is_hidden
+                || message.is_deleted
+                || message.id != item.source_message
+                || message.chat_id != item.source_chat
+                || message.account_id != item.source_account
+            {
+                return Err("Source message is no longer available; nothing submitted".into());
+            }
+            if item.attachment.is_none()
+                && (!forwardable_text(&message) || item.text.lines().count() < 2)
+            {
+                return Err("This message has no supported text or attachment to forward".into());
+            }
+            let mut payload = serde_json::json!({"text": item.text});
+            if let Some(index) = item.attachment {
+                let path = self.download_media_at(
+                    &item.source_chat,
+                    &item.source_message,
+                    index,
+                    dirs,
+                    true,
+                )?;
+                use base64::Engine;
+                let bytes = read_attachment_bounded(&path, 32 * 1024 * 1024)?;
+                let filename = message
+                    .attachments
+                    .get(index)
+                    .and_then(|a| a.file_name.as_deref())
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("attachment");
+                let response = self.http.post(format!("{}/v1/assets/upload/base64", self.base_url))
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(serde_json::json!({"content": base64::engine::general_purpose::STANDARD.encode(bytes), "fileName": filename}).to_string())
+                    .send().map_err(|_| "Asset upload failed; message was not submitted")?;
+                if !response.status().is_success() {
+                    return Err(format!(
+                        "Asset upload returned {}; message was not submitted",
+                        response.status()
+                    ));
+                }
+                let uploaded: serde_json::Value =
+                    serde_json::from_str(&bounded_json_body(response)?)
+                        .map_err(|_| "Asset upload response invalid; message was not submitted")?;
+                if uploaded
+                    .get("error")
+                    .and_then(|error| error.as_str())
+                    .is_some_and(|error| !error.is_empty())
+                {
+                    return Err("Asset upload was rejected; message was not submitted".into());
+                }
+                let id = uploaded
+                    .get("uploadID")
+                    .and_then(|id| id.as_str())
+                    .ok_or("Asset upload ID missing; message was not submitted")?;
+                payload["attachment"] = serde_json::json!({"uploadID": id, "fileName": filename});
+            }
+            if upload_stopped(Some(cancel)) {
+                return Err("Session closed; message was not submitted".into());
+            }
+            Ok(payload)
+        };
+        let payload = prepare().map_err(State::FailedBeforeSend)?;
+        let response = self
+            .http
+            .post(format!(
+                "{}/v1/chats/{}/messages",
+                self.base_url,
+                encode_segment(&item.destination)
+            ))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(payload.to_string())
+            .send()
+            .map_err(|_| {
+                State::Uncertain(
+                    "Send outcome unknown; check destination history before retrying".into(),
+                )
+            })?;
+        if !response.status().is_success() {
+            return Err(State::Uncertain(safe_send_error(response)));
+        }
+        let body = bounded_json_body(response).map_err(State::Uncertain)?;
+        let accepted: SendAccepted = serde_json::from_str(&body).map_err(|_| {
+            State::Uncertain(
+                "Send response unreadable; check destination history before retrying".into(),
+            )
+        })?;
+        if accepted.pending_id.is_empty() || accepted.chat != item.destination {
+            return Err(State::Uncertain(
+                "Unexpected send identity; check destination history before retrying".into(),
+            ));
+        }
+        Ok(accepted)
     }
 
     fn send_text(
@@ -1473,6 +1826,21 @@ impl Api {
         reply: Option<&str>,
         cancel: Option<&std::sync::atomic::AtomicBool>,
     ) -> Result<SendAccepted, String> {
+        self.send_attachment_tracked(chat, path, kind, caption, reply, cancel, None, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn send_attachment_tracked(
+        &self,
+        chat: &str,
+        path: &std::path::Path,
+        kind: Attachment,
+        caption: Option<&str>,
+        reply: Option<&str>,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        post_started: Option<&std::sync::atomic::AtomicBool>,
+        expected: Option<&crate::merged::Member>,
+    ) -> Result<SendAccepted, String> {
         if upload_stopped(cancel) {
             return Err("Upload worker stopped; message was not submitted".into());
         }
@@ -1487,7 +1855,12 @@ impl Api {
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("attachment");
-        let body = serde_json::json!({ "content": base64::engine::general_purpose::STANDARD.encode(bytes), "fileName": filename });
+        let mut body = serde_json::json!({ "content": base64::engine::general_purpose::STANDARD.encode(bytes), "fileName": filename });
+        // Our recorded clips are known Ogg/Opus, not arbitrary Ogg audio.
+        // WhatsApp voice capabilities distinguish this from generic audio/ogg.
+        if matches!(kind, Attachment::Voice(_)) {
+            body["mimeType"] = "audio/ogg; codecs=opus".into();
+        }
         if upload_stopped(cancel) {
             return Err("Upload worker stopped; message was not submitted".into());
         }
@@ -1509,6 +1882,13 @@ impl Api {
                 .map_err(|e| format!("{e}; attachment message was not submitted"))?,
         )
         .map_err(|_| "Upload response invalid; attachment message was not submitted")?;
+        if upload
+            .get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| !e.is_empty())
+        {
+            return Err("Asset upload rejected; message was not submitted".into());
+        }
         let id = upload
             .get("uploadID")
             .and_then(|s| s.as_str())
@@ -1526,6 +1906,7 @@ impl Api {
             Attachment::Sticker => attachment["type"] = "sticker".into(),
             Attachment::Voice(seconds) => {
                 attachment["type"] = "voice-note".into();
+                attachment["mimeType"] = "audio/ogg; codecs=opus".into();
                 attachment["duration"] = seconds.into();
             }
         }
@@ -1538,6 +1919,21 @@ impl Api {
         }
         if let Some(reply) = reply {
             message["replyToMessageID"] = reply.into();
+        }
+        if let Some(expected) = expected {
+            let current = self.get_chat(chat)?;
+            if current.id != expected.chat
+                || current.account_id != expected.account
+                || current.is_read_only
+            {
+                return Err("Destination changed before submission; nothing submitted".into());
+            }
+            if upload_stopped(cancel) {
+                return Err("Session closed; nothing submitted".into());
+            }
+        }
+        if let Some(started) = post_started {
+            started.store(true, std::sync::atomic::Ordering::Release);
         }
         let response = self
             .http
@@ -1559,6 +1955,89 @@ impl Api {
             format!("{e}; attachment send outcome unknown, check history before retrying")
         })?)
         .map_err(|_| "Attachment confirmation invalid; check history before retrying".into())
+    }
+
+    fn send_pending_media(
+        &self,
+        job: &crate::pending_media::Job,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<SendAccepted, crate::pending_media::State> {
+        use crate::pending_media::{Payload, State};
+        let prepare = || -> Result<(), String> {
+            if job.member.origin != self.base_url || self.read_only || upload_stopped(Some(cancel))
+            {
+                return Err("Destination unavailable or session closed; nothing submitted".into());
+            }
+            let chat = self.get_chat(&job.member.chat)?;
+            if chat.id != job.member.chat
+                || chat.account_id != job.member.account
+                || chat.is_read_only
+            {
+                return Err(
+                    "Destination identity changed or is read-only; nothing submitted".into(),
+                );
+            }
+            if job
+                .quoting
+                .as_ref()
+                .is_some_and(|q| q.source_chat(&job.member.chat) != job.member.chat)
+            {
+                return Err("Cross-chat quote unsupported; nothing submitted".into());
+            }
+            Ok(())
+        };
+        prepare().map_err(State::NotSubmitted)?;
+        let temporary;
+        let (path, kind) = match &job.payload {
+            Payload::File { path, document } => (
+                path.as_path(),
+                if *document {
+                    Attachment::Document
+                } else {
+                    Attachment::Auto
+                },
+            ),
+            Payload::Picture {
+                width,
+                height,
+                rgba,
+            } => {
+                temporary =
+                    encode_pasted_image(*width, *height, rgba).map_err(State::NotSubmitted)?;
+                (temporary.as_path(), Attachment::Auto)
+            }
+        };
+        let started = std::sync::atomic::AtomicBool::new(false);
+        let result = self.send_attachment_tracked(
+            &job.member.chat,
+            path,
+            kind,
+            job.caption.as_deref(),
+            job.quoting.as_ref().map(|q| q.id.as_str()),
+            Some(cancel),
+            Some(&started),
+            Some(&job.member),
+        );
+        // The job retains pasted pixels for safe retry; never remove user files.
+        if matches!(job.payload, Payload::Picture { .. }) {
+            discard_temp_upload(path);
+        }
+        match result {
+            Ok(mut accepted)
+                if (accepted.chat.is_empty() || accepted.chat == job.member.chat)
+                    && !accepted.pending_id.is_empty() =>
+            {
+                accepted.chat = job.member.chat.clone();
+                Ok(accepted)
+            }
+            Ok(_) => Err(State::Unknown(
+                "Unexpected acceptance identity; check chat history".into(),
+            )),
+            Err(error) if started.load(std::sync::atomic::Ordering::Acquire) => {
+                Err(State::Unknown(error))
+            }
+            Err(error) => Err(State::NotSubmitted(error)),
+        }
     }
 
     fn mark_read(&self, chat: &str) -> Result<(), String> {
@@ -1779,6 +2258,11 @@ fn plain_rich_text(raw: &str) -> String {
         "h2",
         "h3",
         "tr",
+        "del",
+        "s",
+        "strike",
+        "code",
+        "pre",
     ];
     let looks_html = lower.match_indices('<').any(|(start, _)| {
         let tail = lower[start + 1..].trim_start_matches('/');
@@ -1811,6 +2295,31 @@ fn plain_rich_text(raw: &str) -> String {
     let mut blocked: Option<String> = None;
     let mut link: Option<String> = None;
     let mut link_label: Option<usize> = None;
+    // Semantic styles survive as the WhatsApp-style markup the renderer
+    // already parses: markers are emitted where the tags sit, so properly
+    // nested HTML styles correctly, and overlapping tags style by their
+    // spans. Raw HTML is never emitted.
+    let mut in_pre = false;
+    let mut quote_depth: usize = 0;
+    // Styles covering the current text position, oldest first. Markers
+    // materialize lazily, at the first text char they cover, and close at
+    // line ends because the renderer parses styles per line. A line or
+    // pair without styled text never sees a marker at all.
+    let mut styles: Vec<char> = Vec::new();
+    // The prefix of `styles` whose markers are emitted on this line.
+    let mut emitted: Vec<char> = Vec::new();
+    // Inside inline code, backticks and backslashes are escaped so code
+    // content cannot close its own span.
+    let mut in_code = false;
+    // Fenced content buffers so a content line that would collide with
+    // the fence gets the backslash escape the renderer resolves.
+    let mut pre_content = String::new();
+    // Set when a style marker just closed: a zero-width space before a
+    // following alphanumeric keeps the marker a closer at the renderer's
+    // word-boundary rules without a visible character. The hint fires
+    // only while the closed marker is still the last emitted char, so
+    // neutral tags in between break nothing.
+    let mut pending_boundary: Option<char> = None;
     while !rest.is_empty() {
         if rest.starts_with('<') {
             // A quoted > is an attribute value, not the end of a tag.
@@ -1850,6 +2359,121 @@ fn plain_rich_text(raw: &str) -> String {
                         blocked = Some(name);
                     }
                 } else if blocked.is_none() {
+                    if !in_pre {
+                        let marker = match name.as_str() {
+                            "strong" | "b" => Some('*'),
+                            "em" | "i" => Some('_'),
+                            "del" | "s" | "strike" => Some('~'),
+                            "code" => Some('`'),
+                            _ => None,
+                        };
+                        if let Some(marker) = marker {
+                            if closing {
+                                match styles.iter().rposition(|open| *open == marker) {
+                                    // The style never covered text: no
+                                    // marker pair is emitted at all.
+                                    Some(at) if at >= emitted.len() => {
+                                        styles.remove(at);
+                                    }
+                                    Some(at) => {
+                                        styles.remove(at);
+                                        emitted.remove(at);
+                                        out.push(marker);
+                                        pending_boundary = Some(marker);
+                                    }
+                                    // A close for a marker that never
+                                    // opened stays a literal character.
+                                    None => out.push(marker),
+                                }
+                                if marker == '`' {
+                                    in_code = false;
+                                }
+                            } else {
+                                styles.push(marker);
+                                if marker == '`' {
+                                    in_code = true;
+                                }
+                            }
+                        }
+                    }
+                    if name == "pre" {
+                        if closing {
+                            if in_pre {
+                                in_pre = false;
+                                // Escape a content line that would collide
+                                // with the fence: the backslash goes right
+                                // before the backticks, so the renderer
+                                // resolves it and any indentation survives.
+                                let trimmed = pre_content.trim_end_matches('\n');
+                                for (n, line) in trimmed.split('\n').enumerate() {
+                                    if n > 0 {
+                                        out.push('\n');
+                                    }
+                                    if line.trim() == "```" {
+                                        let at = line.find("```").unwrap_or(0);
+                                        out.push_str(&line[..at]);
+                                        out.push('\\');
+                                        out.push_str(&line[at..]);
+                                    } else {
+                                        out.push_str(line);
+                                    }
+                                }
+                                pre_content.clear();
+                                if !out.ends_with('\n') {
+                                    out.push('\n');
+                                }
+                                out.push_str("```\n");
+                                // Styles suspended for the block re-emit
+                                // lazily at the next text char.
+                            }
+                        } else if !in_pre {
+                            in_pre = true;
+                            pre_content.clear();
+                            // Styles emitted on this line close before the
+                            // fence line; they re-emit lazily after it.
+                            for marker in emitted.iter().rev() {
+                                out.push(*marker);
+                            }
+                            emitted.clear();
+                            if !out.ends_with('\n') {
+                                out.push('\n');
+                            }
+                            out.push_str("```\n");
+                        }
+                    }
+                    if name == "blockquote" && !in_pre {
+                        if closing {
+                            quote_depth = quote_depth.saturating_sub(1);
+                            // An empty trailing quote line adds nothing.
+                            if out.ends_with("> ") {
+                                out.truncate(out.len() - 2);
+                            }
+                            let broke = !out.ends_with('\n');
+                            if broke {
+                                for marker in emitted.iter().rev() {
+                                    out.push(*marker);
+                                }
+                                emitted.clear();
+                                out.push('\n');
+                            }
+                            // Text after a nested quote still belongs to
+                            // the outer one: its bar stays.
+                            if quote_depth > 0 && !out.ends_with("> ") {
+                                out.push_str("> ");
+                            }
+                        } else {
+                            let broke = !out.ends_with('\n') && !out.ends_with("> ");
+                            if broke {
+                                for marker in emitted.iter().rev() {
+                                    out.push(*marker);
+                                }
+                                emitted.clear();
+                                out.push('\n');
+                            }
+                            quote_depth += 1;
+                            out.push_str("> ");
+                        }
+                    }
                     if name == "a" {
                         if closing {
                             let label_start = link_label.take();
@@ -1857,13 +2481,15 @@ fn plain_rich_text(raw: &str) -> String {
                                 // A matrix.to mention link already carries the
                                 // person's name as its text; the raw URL is noise.
                                 if !url.starts_with("https://matrix.to/#/@") {
+                                    // Entities in the attribute decode here,
+                                    // where the URL is emitted.
+                                    let url = decode_entities(&url);
                                     // A link whose text already is the address -
                                     // a pasted URL the bridge marked up - keeps
                                     // just the text; repeating the address in
                                     // parentheses would show such links twice.
                                     let shows_address = label_start.is_some_and(|start| {
-                                        let label = decode_entities(&out[start..]);
-                                        let label = label.trim();
+                                        let label = out[start..].trim();
                                         label == url
                                             || label.trim_end_matches('/')
                                                 == url.trim_end_matches('/')
@@ -1890,10 +2516,18 @@ fn plain_rich_text(raw: &str) -> String {
                     }
                     if matches!(
                         name.as_str(),
-                        "br" | "p" | "div" | "li" | "blockquote" | "tr" | "h1" | "h2" | "h3"
+                        "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3"
                     ) {
-                        if !out.ends_with('\n') {
+                        let broke = !out.ends_with('\n') && !out.ends_with("> ");
+                        if broke {
+                            for marker in emitted.iter().rev() {
+                                out.push(*marker);
+                            }
+                            emitted.clear();
                             out.push('\n');
+                        }
+                        if quote_depth > 0 && !in_pre && !out.ends_with("> ") {
+                            out.push_str("> ");
                         }
                         if name == "li" && !closing {
                             out.push_str("• ");
@@ -1904,13 +2538,67 @@ fn plain_rich_text(raw: &str) -> String {
                 continue;
             }
         }
-        let ch = rest.chars().next().unwrap();
-        if blocked.is_none() {
+        // A text run up to the next tag. Entities decode here, before
+        // the code escaping sees the text, so an entity-encoded backtick
+        // or fence line cannot slip past the escaping.
+        let end = rest.find('<').unwrap_or(rest.len());
+        let (taken, run) = if end == 0 {
+            // A '<' that opens no known tag is literal text.
+            let ch = rest.chars().next().unwrap();
+            (ch.len_utf8(), ch.to_string())
+        } else {
+            (end, decode_entities(&rest[..end]))
+        };
+        rest = &rest[taken..];
+        if blocked.is_some() {
+            continue;
+        }
+        for ch in run.chars() {
+            if in_pre {
+                pre_content.push(ch);
+                continue;
+            }
+            if ch == '\n' {
+                // A break closes the styles emitted on this line; they
+                // re-emit lazily at the next text char.
+                pending_boundary = None;
+                for marker in emitted.iter().rev() {
+                    out.push(*marker);
+                }
+                emitted.clear();
+                out.push('\n');
+                if quote_depth > 0 {
+                    out.push_str("> ");
+                }
+                continue;
+            }
+            // Markers covering this char materialize now: after a break,
+            // after a neutral tag, wherever the text actually is. A
+            // style that opens mid-word gets the zero-width boundary
+            // hint so the renderer accepts the marker.
+            while emitted.len() < styles.len() {
+                let marker = styles[emitted.len()];
+                if out.ends_with(char::is_alphanumeric) {
+                    out.push('\u{200B}');
+                }
+                out.push(marker);
+                emitted.push(marker);
+            }
+            if let Some(closed) = pending_boundary.take()
+                && ch.is_alphanumeric()
+                && out.ends_with(closed)
+            {
+                out.push('\u{200B}');
+            }
+            if in_code && matches!(ch, '`' | '\\') {
+                out.push('\\');
+            }
             out.push(ch);
         }
-        rest = &rest[ch.len_utf8()..];
     }
-    decode_entities(&out).trim().to_owned()
+    // Text runs and URLs decode at emission, so `out` is already decoded:
+    // a second pass would misdecode literal entity-looking text.
+    out.trim().to_owned()
 }
 
 /// A message with nothing to show: no text, no attachment, and a type that
@@ -1965,6 +2653,14 @@ fn newest_content_message(items: Vec<BeeperMessage>) -> Option<BeeperMessage> {
                 )
         })
         .max_by_key(|m| unix(&Some(m.timestamp.clone())))
+}
+
+fn forwardable_text(message: &BeeperMessage) -> bool {
+    matches!(message.message_type.as_deref(), None | Some("TEXT"))
+        && message
+            .text
+            .as_ref()
+            .is_some_and(|text| !text.trim().is_empty())
 }
 
 fn body_of(m: &BeeperMessage) -> (String, bool) {
@@ -2112,6 +2808,64 @@ fn delivery_of(m: &BeeperMessage) -> Delivery {
     }
 }
 
+/// Synthetic wire fixture exercises the real mapper for offline review captures.
+#[cfg(any(test, feature = "demo"))]
+pub(crate) fn supplied_preview_demo(chat: &str) -> Message {
+    let wire: BeeperMessage = serde_json::from_value(serde_json::json!({
+        "id":"ada-link", "chatID": chat,
+        "senderID": chat,
+        "text":"Summer plans (https://example.com/trips?utm_source=chat#july)",
+        "links":[{"title":"Summer plans", "summary":"A few ideas for the long summer evenings.", "url":"https://example.com/trips", "originalURL":"https://example.com/trips?utm_source=chat#july", "img":"https://example.com/not-fetched.jpg"}]
+    })).expect("synthetic preview wire fixture");
+    map_message(&wire, chat)
+}
+
+#[cfg(test)]
+thread_local! {
+    static SUPPLIED_PREVIEW_BODY_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Associate supplied metadata only with a link actually present in the body.
+/// Keep that original destination for opening/copying: a resolved or canonical
+/// metadata URL is not permission to change where the message sends the user.
+fn supplied_link_preview(message: &BeeperMessage, body: &str) -> Option<crate::model::LinkPreview> {
+    if message.links.is_empty() {
+        return None;
+    }
+    fn label(value: Option<&str>, max: usize) -> Option<String> {
+        let text: String = value?
+            .chars()
+            .filter(|ch| !ch.is_control() || ch.is_whitespace())
+            .take(max)
+            .collect();
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        (!text.is_empty()).then_some(text)
+    }
+    #[cfg(test)]
+    SUPPLIED_PREVIEW_BODY_PARSES.with(|count| count.set(count.get() + 1));
+    for original in crate::markup::links(body) {
+        let Some(valid) = crate::safety::preview_url(&original) else {
+            continue;
+        };
+        let Some(preview) = message.links.iter().take(16).find(|preview| {
+            let source = preview.original_url.as_deref().unwrap_or(&preview.url);
+            crate::safety::preview_url(source).as_ref() == Some(&valid)
+        }) else {
+            continue;
+        };
+        let title = label(preview.title.as_deref(), 240);
+        let description = label(preview.summary.as_deref(), 600);
+        if title.is_some() || description.is_some() {
+            return Some(crate::model::LinkPreview {
+                url: original,
+                title,
+                description,
+            });
+        }
+    }
+    None
+}
+
 fn map_message(m: &BeeperMessage, fallback_chat: &str) -> Message {
     let (body, _labelled) = body_of(m);
     let status = delivery_of(m);
@@ -2138,9 +2892,9 @@ fn map_message(m: &BeeperMessage, fallback_chat: &str) -> Message {
         from_me: m.is_sender.unwrap_or(false),
         timestamp: unix(&Some(m.timestamp.clone())),
         history_order: None,
-        content: attachment_content(m).unwrap_or(Content::Text {
+        content: attachment_content(m).unwrap_or_else(|| Content::Text {
+            preview: supplied_link_preview(m, &body),
             text: body,
-            preview: None,
         }),
         status,
         delivered_at: None,
@@ -2175,7 +2929,18 @@ fn map_message(m: &BeeperMessage, fallback_chat: &str) -> Message {
     }
 }
 
+#[cfg(test)]
 fn map_chat(c: &BeeperChat, network_label: &dyn Fn(&BeeperChat) -> String) -> Chat {
+    map_chat_for(c, network_label, None)
+}
+
+/// `own` is the account's own user id when known: that participant's handles
+/// are never the other person's, even if the server leaves `isSelf` out.
+fn map_chat_for(
+    c: &BeeperChat,
+    network_label: &dyn Fn(&BeeperChat) -> String,
+    own: Option<&str>,
+) -> Chat {
     let title = if c.title.trim().is_empty() || opaque_identity(&c.title) {
         c.participants
             .as_ref()
@@ -2224,6 +2989,33 @@ fn map_chat(c: &BeeperChat, network_label: &dyn Fn(&BeeperChat) -> String) -> Ch
                     .map(|name| (u.id.clone(), name))
             })
             .collect();
+    }
+    if chat.kind == ChatKind::Direct
+        && let Some(participants) = &c.participants
+    {
+        // Only the other person's handles: ours would be in every chat. A
+        // participant id counts only when it is a phone number; opaque ids
+        // such as "contact42" never identify anyone across networks.
+        let mut handles: Vec<String> = participants
+            .items
+            .iter()
+            .filter(|u| u.is_self != Some(true) && own != Some(u.id.as_str()))
+            .flat_map(|u| {
+                [
+                    u.phone_number
+                        .as_deref()
+                        .and_then(crate::suggest::normalized_phone),
+                    crate::suggest::normalized_phone(&u.id),
+                    u.username
+                        .as_deref()
+                        .and_then(crate::suggest::normalized_username),
+                ]
+            })
+            .flatten()
+            .collect();
+        handles.sort();
+        handles.dedup();
+        chat.handles = handles;
     }
     chat.network = Some(network_label(c));
     chat.backend_account = Some(c.account_id.clone());
@@ -2507,6 +3299,8 @@ pub fn run(
         emit(Event::Info(format!("Cache cleanup failed: {e}")));
     }
 
+    let gallery_tx = gallery::worker(api.clone(), events.clone(), waker.clone());
+
     // Bounded single download worker: a slow image must not block typing,
     // read state, history or send confirmations on the control worker.
     let (media_tx, media_rx) =
@@ -2579,6 +3373,105 @@ pub fn run(
     );
     let (upload_tx, upload_rx) = std::sync::mpsc::sync_channel::<UploadBatch>(2);
     let (accepted_tx, accepted_rx) = std::sync::mpsc::channel::<(ChatId, String)>();
+    let (pending_media_tx, pending_media_rx) =
+        std::sync::mpsc::sync_channel::<crate::pending_media::Job>(8);
+    let (pending_media_accepted_tx, pending_media_accepted_rx) = std::sync::mpsc::channel();
+    let pending_api = api.clone();
+    let pending_events = events.clone();
+    let pending_waker = waker.clone();
+    let pending_cancel = upload_cancel.clone();
+    std::thread::Builder::new()
+        .name("beeper-pending-media".into())
+        .spawn(move || {
+            while let Ok(job) = pending_media_rx.recv() {
+                let result = pending_api.send_pending_media(&job, &pending_cancel);
+                let state = match result {
+                    Ok(accepted) => {
+                        let _ = pending_media_accepted_tx.send((
+                            job.local.clone(),
+                            job.member.clone(),
+                            accepted.pending_id.clone(),
+                        ));
+                        crate::pending_media::State::Accepted {
+                            pending: accepted.pending_id,
+                        }
+                    }
+                    Err(state) => state,
+                };
+                let _ = pending_events.send(Event::BeeperMediaProgress {
+                    local: job.local,
+                    member: job.member,
+                    state,
+                });
+                pending_waker.wake();
+            }
+        })
+        .expect("pending media worker");
+    let (forward_tx, forward_rx) =
+        std::sync::mpsc::sync_channel::<(u64, bool, Vec<(usize, crate::composed_forward::Item)>)>(
+            1,
+        );
+    let (forward_accepted_tx, forward_accepted_rx) =
+        std::sync::mpsc::channel::<(String, String, String)>();
+    let forward_api = api.clone();
+    let forward_dirs = dirs.clone();
+    let forward_events = events.clone();
+    let forward_waker = waker.clone();
+    let forward_cancel = upload_cancel.clone();
+    std::thread::Builder::new()
+        .name("beeper-forward".into())
+        .spawn(move || {
+            use crate::composed_forward::State;
+            while let Ok((generation, prepared, mut items)) = forward_rx.recv() {
+                if !prepared {
+                    let expanded = forward_api
+                        .plan_forwards(items.into_iter().map(|(_, item)| item).collect());
+                    let _ = forward_events.send(Event::BeeperForwardPrepared {
+                        generation,
+                        items: expanded.clone(),
+                    });
+                    forward_waker.wake();
+                    items = expanded.into_iter().enumerate().collect();
+                }
+                for (index, item) in items {
+                    if !matches!(item.state, State::Waiting) {
+                        continue;
+                    }
+                    if upload_stopped(Some(&forward_cancel)) {
+                        return;
+                    }
+                    let send_state = |state| {
+                        let _ = forward_events.send(Event::BeeperForwardProgress {
+                            generation,
+                            index,
+                            state,
+                        });
+                        forward_waker.wake();
+                    };
+                    send_state(State::Sending);
+                    match forward_api.send_forward(&item, &forward_dirs, &forward_cancel) {
+                        Ok(accepted) => {
+                            let _ = forward_events.send(Event::BeeperForwardMarked {
+                                origin: forward_api.base_url.clone(),
+                                account: item.destination_account.clone(),
+                                chat: item.destination.clone(),
+                                message: accepted.pending_id.clone(),
+                            });
+                            let _ = forward_accepted_tx.send((
+                                item.destination.clone(),
+                                accepted.pending_id.clone(),
+                                item.destination_account.clone(),
+                            ));
+                            send_state(State::Accepted {
+                                pending_id: accepted.pending_id,
+                            });
+                        }
+                        Err(state) => send_state(state),
+                    }
+                }
+            }
+        })
+        .expect("Beeper forward worker");
     let typed_accepted_tx = accepted_tx.clone();
     let upload_api = api.clone();
     let upload_events = events.clone();
@@ -2853,12 +3746,25 @@ pub fn run(
     let mut last_msg_poll = Instant::now();
     let mut last_receipt_refresh = Instant::now();
     let mut pending_sends: Vec<(ChatId, String, Instant)> = Vec::new();
+    let mut tracked_media: HashMap<(String, String), (String, crate::merged::Member)> =
+        HashMap::new();
+    let mut forward_pending = HashMap::new();
     let mut pending_storage: Option<(u64, bool)> = None;
     // Set by Command::Resumed: after a wake every poll timer is due at once,
     // so a link the server dropped during sleep is noticed on the next tick.
     let mut refresh_after_wake = false;
+    // Downloads the worker's queue had no room for wait here, not fail.
+    let mut media_backlog = MediaBacklog::default();
 
     loop {
+        for (card, chat, message) in media_backlog.flush(&media_tx) {
+            emit(Event::Media {
+                card,
+                chat,
+                message,
+                result: Err("Media queue is busy; retry after current downloads finish".into()),
+            });
+        }
         loop {
             let cmd = match commands.try_recv() {
                 Ok(command) => command,
@@ -2879,6 +3785,21 @@ pub fn run(
                 cmd => (cmd, None),
             };
             match cmd {
+                Command::BeeperMedia(job) => {
+                    if let Err(error) = pending_media_tx.try_send(job) {
+                        let job = match error {
+                            std::sync::mpsc::TrySendError::Full(job)
+                            | std::sync::mpsc::TrySendError::Disconnected(job) => job,
+                        };
+                        emit(Event::BeeperMediaProgress {
+                            local: job.local,
+                            member: job.member,
+                            state: crate::pending_media::State::NotSubmitted(
+                                "Upload queue unavailable; nothing submitted".into(),
+                            ),
+                        });
+                    }
+                }
                 Command::Shutdown => return,
                 Command::SaveDraft { chat, text } => {
                     if draft_store.is_none() && !text.trim().is_empty() {
@@ -3180,6 +4101,38 @@ pub fn run(
                             more: true,
                             silent: false,
                         });
+                    }
+                }
+                Command::BeeperResumeForwards(marks) => {
+                    for mark in crate::composed_forward::unresolved_marks(marks, &api.base_url) {
+                        let key = (mark.member.chat.clone(), mark.message.clone());
+                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                            forward_pending.entry(key)
+                        {
+                            entry.insert(mark.member.account);
+                            pending_sends.push((mark.member.chat, mark.message, Instant::now()));
+                        }
+                    }
+                }
+                Command::BeeperForward {
+                    generation,
+                    prepared,
+                    items,
+                } => {
+                    if let Err(error) = forward_tx.try_send((generation, prepared, items)) {
+                        let (generation, _, items) = match error {
+                            std::sync::mpsc::TrySendError::Full(value)
+                            | std::sync::mpsc::TrySendError::Disconnected(value) => value,
+                        };
+                        for (index, _) in items {
+                            emit(Event::BeeperForwardProgress {
+                                generation,
+                                index,
+                                state: crate::composed_forward::State::FailedBeforeSend(
+                                    "Forward queue is busy; nothing submitted for this item".into(),
+                                ),
+                            });
+                        }
                     }
                 }
                 Command::SendText {
@@ -3861,17 +4814,34 @@ pub fn run(
                         }),
                     }
                 }
+                Command::LoadChatMedia {
+                    chat,
+                    around,
+                    fresh,
+                } => {
+                    if let Err(error) = gallery_tx.try_send((chat, around, fresh)) {
+                        let (chat, around, _) = match error {
+                            std::sync::mpsc::TrySendError::Full(request)
+                            | std::sync::mpsc::TrySendError::Disconnected(request) => request,
+                        };
+                        emit(Event::BeeperViewerMedia {
+                            chat,
+                            around,
+                            result: Err("Media history is busy; try the arrow again".into()),
+                        });
+                    }
+                }
                 Command::Download {
                     manual,
                     card,
                     chat,
                     message,
                 } => {
-                    if let Err(error) = media_tx.try_send((manual, card, chat, message)) {
-                        let (_, card, chat, message) = match error {
-                            std::sync::mpsc::TrySendError::Full(value)
-                            | std::sync::mpsc::TrySendError::Disconnected(value) => value,
-                        };
+                    // A full queue parks the request; it is sent as slots free.
+                    // Only an overflowing backlog or a dead worker reports failure.
+                    if let Some((card, chat, message)) =
+                        media_backlog.submit(&media_tx, (manual, card, chat, message))
+                    {
                         emit(Event::Media {
                             card,
                             chat,
@@ -3938,6 +4908,17 @@ pub fn run(
             pending_storage = None;
         }
 
+        while let Ok((local, member, pending_id)) = pending_media_accepted_rx.try_recv() {
+            tracked_media.insert(
+                (member.chat.clone(), pending_id.clone()),
+                (local, member.clone()),
+            );
+            pending_sends.push((member.chat, pending_id, Instant::now()));
+        }
+        while let Ok((chat, pending_id, account)) = forward_accepted_rx.try_recv() {
+            forward_pending.insert((chat.clone(), pending_id.clone()), account);
+            pending_sends.push((chat, pending_id, Instant::now()));
+        }
         while let Ok((chat, pending_id)) = accepted_rx.try_recv() {
             pending_sends.push((chat, pending_id, Instant::now()));
         }
@@ -3957,7 +4938,36 @@ pub fn run(
                 }
             }
             pending_sends.retain(|(chat, pending_id, started)| {
-                poll_pending_send(&api, chat, pending_id, started.elapsed(), &emit)
+                let key = (chat.clone(), pending_id.clone());
+                if let Some((local, member)) = tracked_media.get(&key).cloned() {
+                    let keep = poll_media_send(
+                        &api,
+                        &local,
+                        &member,
+                        pending_id,
+                        started.elapsed(),
+                        &emit,
+                    );
+                    if !keep {
+                        tracked_media.remove(&key);
+                    }
+                    keep
+                } else if let Some(account) = forward_pending.get(&key).cloned() {
+                    let keep = poll_forward_mark(
+                        &api,
+                        chat,
+                        pending_id,
+                        &account,
+                        started.elapsed(),
+                        &emit,
+                    );
+                    if !keep {
+                        forward_pending.remove(&key);
+                    }
+                    keep
+                } else {
+                    poll_pending_send(&api, chat, pending_id, started.elapsed(), &emit)
+                }
             });
         }
         if last_chat_refresh.elapsed() >= CHAT_REFRESH {
@@ -4089,6 +5099,102 @@ fn run_chat_search_cached(
     let result =
         chat_search_params(&chat, &query, from, until).and_then(|params| cache.next(api, params));
     emit_chat_search(api, chat, query, from, until, emit, result, cache.pages);
+}
+
+type MediaJob = (bool, Option<usize>, ChatId, String);
+
+/// Download requests the bounded worker queue had no room for. Without it a
+/// screenful of auto-downloading videos filled the queue and every overflow
+/// became a permanent "Media queue is busy" failure, with no retry.
+#[derive(Default)]
+struct MediaBacklog {
+    waiting: std::collections::VecDeque<MediaJob>,
+}
+
+impl MediaBacklog {
+    const LIMIT: usize = 256;
+
+    /// Queues the job, or hands back what must be reported as failed.
+    fn submit(
+        &mut self,
+        tx: &std::sync::mpsc::SyncSender<MediaJob>,
+        job: MediaJob,
+    ) -> Option<(Option<usize>, ChatId, String)> {
+        use std::sync::mpsc::TrySendError;
+        if self.waiting.is_empty() {
+            match tx.try_send(job) {
+                Ok(()) => return None,
+                Err(TrySendError::Disconnected((_, card, chat, message))) => {
+                    return Some((card, chat, message));
+                }
+                Err(TrySendError::Full(job)) => return self.park(job),
+            }
+        }
+        self.park(job)
+    }
+
+    fn park(&mut self, job: MediaJob) -> Option<(Option<usize>, ChatId, String)> {
+        if let Some(index) = self
+            .waiting
+            .iter()
+            .position(|waiting| (&waiting.2, &waiting.3, waiting.1) == (&job.2, &job.3, job.1))
+        {
+            // A click upgrades an automatic request, including the permission
+            // to download media which automatic-download settings may forbid.
+            if !job.0 || self.waiting[index].0 {
+                return None;
+            }
+            self.waiting.remove(index);
+        } else if self.waiting.len() >= Self::LIMIT {
+            // Keep accepted automatic work in FIFO order; a new click may
+            // replace one automatic job, but never another accepted click.
+            if job.0
+                && let Some(index) = self.waiting.iter().rposition(|waiting| !waiting.0)
+            {
+                let (_, card, chat, message) = self.waiting.remove(index).expect("index in range");
+                self.insert(job);
+                return Some((card, chat, message));
+            }
+            return Some((job.1, job.2, job.3));
+        }
+        self.insert(job);
+        None
+    }
+
+    fn insert(&mut self, job: MediaJob) {
+        if job.0 {
+            let index = self
+                .waiting
+                .iter()
+                .position(|waiting| !waiting.0)
+                .unwrap_or(self.waiting.len());
+            self.waiting.insert(index, job);
+        } else {
+            self.waiting.push_back(job);
+        }
+    }
+
+    /// Moves waiting jobs into freed queue slots; returns those the worker can no longer take.
+    fn flush(
+        &mut self,
+        tx: &std::sync::mpsc::SyncSender<MediaJob>,
+    ) -> Vec<(Option<usize>, ChatId, String)> {
+        use std::sync::mpsc::TrySendError;
+        let mut failed = Vec::new();
+        while let Some(job) = self.waiting.pop_front() {
+            match tx.try_send(job) {
+                Ok(()) => {}
+                Err(TrySendError::Full(job)) => {
+                    self.waiting.push_front(job);
+                    break;
+                }
+                Err(TrySendError::Disconnected((_, card, chat, message))) => {
+                    failed.push((card, chat, message));
+                }
+            }
+        }
+        failed
+    }
 }
 
 #[cfg(test)]
@@ -4259,6 +5365,123 @@ fn refresh_inventory(api: &Api, accounts: &mut Vec<BeeperAccount>, emit: &dyn Fn
     }
 }
 
+fn poll_media_send(
+    api: &Api,
+    local: &str,
+    member: &crate::merged::Member,
+    pending_id: &str,
+    elapsed: Duration,
+    emit: &dyn Fn(Event),
+) -> bool {
+    let mut keep = true;
+    if let Ok(wire) = api.get_message(&member.chat, pending_id)
+        && wire.account_id == member.account
+        && wire.chat_id == member.chat
+        && wire.is_sender == Some(true)
+    {
+        let message = api.map_message(&wire, &member.chat);
+        // Delivery evidence is independent of attachment metadata availability.
+        let complete = wire.send_status.as_ref().is_some_and(|s| {
+            s.status == "SUCCESS"
+                || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
+        });
+        emit(Event::BeeperMediaResolved {
+            local: local.to_owned(),
+            member: member.clone(),
+            message: Box::new(message),
+            complete,
+        });
+        if complete {
+            keep = false;
+        } else if wire
+            .send_status
+            .as_ref()
+            .is_some_and(|s| s.status.starts_with("FAIL_"))
+        {
+            emit(Event::BeeperMediaProgress {
+                local: local.to_owned(),
+                member: member.clone(),
+                state: crate::pending_media::State::Unknown(
+                    "Bridge reports failure; check history before sending again".into(),
+                ),
+            });
+            keep = false;
+        }
+    }
+    if keep && elapsed >= Duration::from_secs(60) {
+        emit(Event::BeeperMediaProgress {
+            local: local.to_owned(),
+            member: member.clone(),
+            state: crate::pending_media::State::Unknown(
+                "Confirmation timed out; check chat history".into(),
+            ),
+        });
+        keep = false;
+    }
+    keep
+}
+
+fn poll_forward_mark(
+    api: &Api,
+    chat: &ChatId,
+    pending: &str,
+    account: &str,
+    elapsed: Duration,
+    emit: &dyn Fn(Event),
+) -> bool {
+    if let Ok(wire) = api.get_message(chat, pending)
+        && wire.chat_id == *chat
+        && wire.account_id == account
+        && wire.is_sender == Some(true)
+    {
+        let confirmed = wire.send_status.as_ref().is_some_and(|s| {
+            s.status == "SUCCESS"
+                || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
+        });
+        let mapped = api.map_message(&wire, chat);
+        let failed = matches!(mapped.status, Delivery::Failed);
+        if confirmed {
+            emit(Event::BeeperSendConfirmed {
+                origin: api.base_url.clone(),
+                account: account.into(),
+                chat: chat.clone(),
+            });
+        }
+        if (confirmed || failed) && !wire.id.is_empty() {
+            emit(Event::BeeperForwardResolved {
+                origin: api.base_url.clone(),
+                account: account.into(),
+                chat: chat.clone(),
+                pending: pending.into(),
+                final_id: wire.id.clone(),
+            });
+        }
+        if failed {
+            emit(Event::Info(
+                "Beeper reports that a message failed to send".into(),
+            ));
+        }
+        emit(Event::Messages {
+            chat: chat.clone(),
+            messages: vec![mapped],
+            older: false,
+            complete: false,
+        });
+        if confirmed || failed {
+            return false;
+        }
+    }
+    // Timeout never prunes persisted identity: a later startup resolves it.
+    if elapsed >= Duration::from_secs(60) {
+        emit(Event::Info(
+            "Beeper forward confirmation timed out; check history before retrying".into(),
+        ));
+        false
+    } else {
+        true
+    }
+}
+
 fn poll_pending_send(
     api: &Api,
     chat: &ChatId,
@@ -4269,8 +5492,10 @@ fn poll_pending_send(
     let message: Result<BeeperMessage, String> = api.get_message(chat, pending_id);
     match message {
         Ok(m) => {
-            let explicit_success = m.id == pending_id
-                && m.chat_id == *chat
+            // Retrieving by pendingMessageID may resolve to the final ID.
+            // The authenticated exact-chat lookup binds that alias; comparing
+            // the returned ID with the pending ID rejects valid SUCCESS replies.
+            let explicit_success = m.chat_id == *chat
                 && m.is_sender == Some(true)
                 && m.send_status.as_ref().is_some_and(|s| {
                     s.status == "SUCCESS"
@@ -4297,7 +5522,7 @@ fn poll_pending_send(
                 complete: false,
             });
             if !complete && elapsed >= Duration::from_secs(60) {
-                emit(Event::Info("Beeper still reports this message pending after 60 seconds; delivery is unconfirmed, check history before retrying".into()));
+                emit(Event::Info("Beeper has not confirmed this send after 60 seconds; check history before retrying".into()));
                 false
             } else {
                 !complete
@@ -4442,6 +5667,288 @@ mod tests {
     //! distinguishable, background startup/polling causes NO mutating HTTP
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
 
+    #[test]
+    fn supplied_preview_parsing_only_runs_for_text_with_metadata() {
+        for (attachment, metadata, expected_parses) in [
+            (false, false, 0),
+            (true, false, 0),
+            (true, true, 0),
+            (false, true, 1),
+        ] {
+            let mut raw = serde_json::json!({
+                "id":"parse-gate", "text":"https://example.org/story"
+            });
+            if metadata {
+                raw["links"] = serde_json::json!([{
+                    "url":"https://example.org/story", "title":"Story"
+                }]);
+            }
+            if attachment {
+                raw["attachments"] = serde_json::json!([{
+                    "type":"img", "id":"mxc://example/image", "mimeType":"image/png"
+                }]);
+            }
+            let wire: BeeperMessage = serde_json::from_value(raw).unwrap();
+            SUPPLIED_PREVIEW_BODY_PARSES.with(|count| count.set(0));
+            let message = map_message(&wire, "chat");
+            assert_eq!(
+                SUPPLIED_PREVIEW_BODY_PARSES.with(|count| count.get()),
+                expected_parses,
+                "attachment={attachment}, metadata={metadata}"
+            );
+            if attachment {
+                assert!(matches!(message.content, Content::Image { .. }));
+            } else {
+                let Content::Text { text, preview } = message.content else {
+                    panic!("text")
+                };
+                assert_eq!(text, "https://example.org/story");
+                assert_eq!(preview.is_some(), metadata);
+            }
+        }
+    }
+
+    #[test]
+    fn supplied_previews_are_bound_to_original_message_links_without_fetching() {
+        let raw = serde_json::json!({
+            "id":"preview", "text":"A title (https://example.org/news?utm_source=chat#part)",
+            "links":[{"title":"  Article\nheadline  ", "summary":"Short description", "url":"https://redirected.example/article", "originalURL":"https://example.org/news?utm_source=chat#part", "img":"http://127.0.0.1/private", "favicon":"file:///secret"}]
+        });
+        let wire: BeeperMessage = serde_json::from_value(raw.clone()).unwrap();
+        let message = map_message(&wire, "chat");
+        let Content::Text {
+            text,
+            preview: Some(preview),
+        } = message.content
+        else {
+            panic!("supplied preview");
+        };
+        assert_eq!(
+            text,
+            "A title (https://example.org/news?utm_source=chat#part)"
+        );
+        assert_eq!(preview.url, "https://example.org/news?utm_source=chat#part");
+        assert_eq!(preview.title.as_deref(), Some("Article headline"));
+        assert_eq!(preview.description.as_deref(), Some("Short description"));
+        assert!(
+            message.thumbnail.is_none(),
+            "supplied remote image URLs must never cause a network fetch"
+        );
+        for url in [
+            "file:///secret",
+            "https://unrelated.example/",
+            "javascript:alert(1)",
+        ] {
+            let mut raw = raw.clone();
+            raw["links"][0]["originalURL"] = url.into();
+            let wire: BeeperMessage = serde_json::from_value(raw).unwrap();
+            assert!(matches!(
+                map_message(&wire, "chat").content,
+                Content::Text { preview: None, .. }
+            ));
+        }
+        let wire: BeeperMessage =
+            serde_json::from_str(r#"{"id":"plain","text":"https://example.org/"}"#).unwrap();
+        assert!(matches!(
+            map_message(&wire, "chat").content,
+            Content::Text { preview: None, .. }
+        ));
+    }
+
+    #[test]
+    fn supplied_original_url_is_authoritative_over_resolved_url() {
+        let raw = serde_json::json!({"id":"preview", "text":"https://example.org/story", "links":[{"originalURL":"https://unrelated.example/redirect", "url":"https://example.org/story", "title":"Wrong article"}]});
+        let wire: BeeperMessage = serde_json::from_value(raw.clone()).unwrap();
+        assert!(matches!(
+            map_message(&wire, "chat").content,
+            Content::Text { preview: None, .. }
+        ));
+        let mut raw = raw;
+        raw["links"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("originalURL");
+        let wire: BeeperMessage = serde_json::from_value(raw).unwrap();
+        assert!(matches!(
+            map_message(&wire, "chat").content,
+            Content::Text {
+                preview: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn supplied_preview_chooses_body_link_order_and_bounds_metadata() {
+        let wire: BeeperMessage = serde_json::from_value(serde_json::json!({"id":"multi", "text":"https://first.example/ then https://second.example/", "links":[
+            {"url":"https://second.example/", "title":"second"},
+            {"url":"https://first.example/", "title":"x".repeat(2000), "summary":"y".repeat(3000)}
+        ]})).unwrap();
+        let Content::Text {
+            preview: Some(preview),
+            ..
+        } = map_message(&wire, "chat").content
+        else {
+            panic!()
+        };
+        assert_eq!(preview.url, "https://first.example/");
+        assert_eq!(preview.title.unwrap().len(), 240);
+        assert_eq!(preview.description.unwrap().len(), 600);
+    }
+
+    #[test]
+    fn own_user_and_opaque_ids_never_become_handles() {
+        let wire: BeeperChat = serde_json::from_str(
+            r#"{"id":"c2","accountID":"a","network":"Signal","title":"Anna Example","type":"single",
+            "participants":{"items":[
+              {"id":"@me:beeper.local","username":"my_name","phoneNumber":"+358401111111"},
+              {"id":"contact42","fullName":"Anna Example"},
+              {"id":"+358 40 222 2222"}]}}"#,
+        )
+        .unwrap();
+        let chat = map_chat_for(&wire, &|c| c.network.clone(), Some("@me:beeper.local"));
+        assert_eq!(chat.handles, ["+358402222222"]);
+    }
+
+    #[test]
+    fn direct_chats_keep_only_the_other_persons_handles() {
+        let wire: BeeperChat = serde_json::from_str(
+            r#"{"id":"c1","accountID":"a","network":"Signal","title":"Anna Example","type":"single",
+            "participants":{"items":[
+              {"id":"@me:beeper.local","fullName":"Me","phoneNumber":"+358401111111","isSelf":true},
+              {"id":"@anna:beeper.local","fullName":"Anna Example","phoneNumber":"+358 40 222 2222","username":"anna_x"}]}}"#,
+        )
+        .unwrap();
+        let chat = map_chat(&wire, &|c| c.network.clone());
+        assert_eq!(chat.handles, ["+358402222222", "anna_x"]);
+    }
+
+    #[test]
+    fn full_media_queue_parks_downloads_and_sends_them_as_slots_free() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<MediaJob>(1);
+        let mut backlog = MediaBacklog::default();
+        let job = |m: &str, manual| (manual, None, "c".to_string(), m.to_string());
+        assert!(backlog.submit(&tx, job("a", false)).is_none());
+        // Queue is full: these wait instead of failing.
+        assert!(backlog.submit(&tx, job("b", false)).is_none());
+        assert!(
+            backlog.submit(&tx, job("b", false)).is_none(),
+            "duplicate ignored"
+        );
+        assert!(backlog.submit(&tx, job("click", true)).is_none());
+        assert_eq!(backlog.waiting.len(), 2);
+        assert!(backlog.flush(&tx).is_empty());
+        assert_eq!(rx.recv().unwrap().3, "a");
+        assert!(backlog.flush(&tx).is_empty());
+        assert_eq!(
+            rx.recv().unwrap().3,
+            "click",
+            "a click goes before automatic ones"
+        );
+        assert!(backlog.flush(&tx).is_empty());
+        assert_eq!(rx.recv().unwrap().3, "b");
+        assert!(backlog.waiting.is_empty());
+    }
+
+    #[test]
+    fn media_click_promotes_a_duplicate_and_preserves_click_fifo_at_capacity() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<MediaJob>(1);
+        let mut backlog = MediaBacklog::default();
+        let job = |message: &str, manual| (manual, None, "c".to_owned(), message.to_owned());
+        backlog.submit(&tx, job("in-flight", false));
+        backlog.submit(&tx, job("auto", false));
+        backlog.submit(&tx, job("first-click", true));
+        backlog.submit(&tx, job("auto", true));
+        backlog.submit(&tx, job("auto", false));
+        assert_eq!(backlog.waiting.len(), 2);
+        rx.recv().unwrap();
+        backlog.flush(&tx);
+        assert_eq!(rx.recv().unwrap().3, "first-click");
+        backlog.flush(&tx);
+        let upgraded = rx.recv().unwrap();
+        assert_eq!(upgraded.3, "auto");
+        assert!(upgraded.0, "a click retains manual download permission");
+        backlog.submit(&tx, job("in-flight", false));
+        for index in 0..MediaBacklog::LIMIT {
+            backlog.submit(&tx, job(&format!("auto-{index}"), false));
+        }
+        let refused = backlog.submit(&tx, job("overflow-auto", false)).unwrap();
+        assert_eq!(refused.2, "overflow-auto");
+        let displaced = backlog.submit(&tx, job("priority-click", true)).unwrap();
+        assert_eq!(displaced.2, format!("auto-{}", MediaBacklog::LIMIT - 1));
+        assert!(backlog.waiting.front().unwrap().0);
+        assert_eq!(backlog.waiting.len(), MediaBacklog::LIMIT);
+    }
+
+    #[test]
+    fn media_backlog_is_bounded_and_reports_a_dead_worker() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<MediaJob>(1);
+        let mut backlog = MediaBacklog::default();
+        let job = |m: String| (false, None, "c".to_string(), m);
+        assert!(backlog.submit(&tx, job("first".into())).is_none());
+        for i in 0..MediaBacklog::LIMIT {
+            assert!(backlog.submit(&tx, job(format!("m{i}"))).is_none());
+        }
+        assert!(backlog.submit(&tx, job("over".into())).is_some());
+        assert_eq!(backlog.waiting.len(), MediaBacklog::LIMIT);
+        drop(rx);
+        assert_eq!(backlog.flush(&tx).len(), MediaBacklog::LIMIT);
+        assert!(backlog.submit(&tx, job("dead".into())).is_some());
+    }
+
+    #[test]
+    fn downloads_without_a_message_type_get_an_extension_from_name_header_or_bytes() {
+        let mp4 = *b"\0\0\0\x18ftypisom\0\0\0\0";
+        assert_eq!(media_extension(Some("video/mp4"), None, None, &[]), "mp4");
+        assert_eq!(media_extension(None, Some("IMG_1.MOV"), None, &[]), "mov");
+        assert_eq!(
+            media_extension(Some(""), None, Some("video/mp4; x=1"), &[]),
+            "mp4"
+        );
+        assert_eq!(media_extension(None, None, None, &mp4), "mp4");
+        let iphone = *b"\0\0\0\x14ftypqt  \0\0\0\0";
+        assert_eq!(media_extension(None, None, None, &iphone), "mov");
+        let ebml = |doc: &[u8]| {
+            let mut head = vec![0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x82, 0x84];
+            head.extend_from_slice(doc);
+            head
+        };
+        assert_eq!(
+            media_extension(None, Some("noext"), None, &ebml(b"webm")),
+            "webm"
+        );
+        assert_eq!(media_extension(None, None, None, &ebml(b"matroska")), "mkv");
+        assert_eq!(media_extension(None, None, None, &ebml(b"????")), "bin");
+        // A major brand the table does not know falls back to the compatible brands.
+        let mut iso8 = b"\0\0\0\x18ftypiso8\0\0\0\0".to_vec();
+        iso8.extend_from_slice(b"iso8mp41");
+        assert_eq!(media_extension(None, None, None, &iso8), "mp4");
+        let mut m4a8 = b"\0\0\0\x18ftypzzzz\0\0\0\0".to_vec();
+        m4a8.extend_from_slice(b"M4A zzzz");
+        assert_eq!(media_extension(None, None, None, &m4a8), "m4a");
+        for (brand, ext) in [
+            (b"M4A ", "m4a"),
+            (b"heic", "heic"),
+            (b"avif", "avif"),
+            (b"3gp4", "3gp"),
+            (b"mp42", "mp4"),
+            (b"zzzz", "bin"),
+        ] {
+            let mut head = b"\0\0\0\x18ftyp".to_vec();
+            head.extend_from_slice(brand);
+            head.extend_from_slice(&[0; 8]);
+            assert_eq!(
+                media_extension(None, None, None, &head),
+                ext,
+                "brand {brand:?}"
+            );
+        }
+        assert_eq!(
+            media_extension(None, None, Some("application/octet-stream"), b"junk"),
+            "bin"
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -4459,6 +5966,641 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+
+    fn pending_media_fixture(
+        responses: Vec<(&'static str, u16, String)>,
+    ) -> (Api, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (expected, status, body) in responses {
+                let start = Instant::now();
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && start.elapsed() < Duration::from_secs(10) =>
+                        {
+                            std::thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(error) => panic!("waiting for {expected}: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut buf = [0; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                let header = String::from_utf8_lossy(&request[..header_end]);
+                assert!(header.starts_with(expected), "unexpected request: {header}");
+                let length: usize = header
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|n| n.trim().parse().unwrap())
+                    })
+                    .unwrap_or(0);
+                while request.len() < header_end + length {
+                    let mut buf = [0; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                }
+                requests.push(String::from_utf8(request).unwrap());
+                write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+            requests
+        });
+        (
+            Api::new(&BeeperConfig {
+                base_url,
+                token: "fixture".into(),
+            })
+            .unwrap(),
+            worker,
+        )
+    }
+    fn pending_media_job(origin: &str, path: &std::path::Path) -> crate::pending_media::Job {
+        crate::pending_media::Job {
+            local: "local-fixture".into(),
+            temporary: false,
+            member: crate::merged::Member {
+                origin: origin.into(),
+                account: "signal".into(),
+                chat: "target".into(),
+            },
+            payload: crate::pending_media::Payload::File {
+                path: path.into(),
+                document: false,
+            },
+            caption: None,
+            quoting: None,
+        }
+    }
+    #[test]
+    fn pending_media_submission_boundary_is_not_inferred_from_error_words() {
+        for (upload_status, send_status, expected_unknown) in
+            [(503, 200, false), (200, 503, true), (200, 200, false)]
+        {
+            let mut responses = vec![
+                (
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ),
+                (
+                    "POST /v1/assets/upload/base64 ",
+                    upload_status,
+                    r#"{"uploadID":"asset"}"#.into(),
+                ),
+            ];
+            if upload_status == 200 {
+                responses.push((
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ));
+                responses.push((
+                    "POST /v1/chats/target/messages ",
+                    send_status,
+                    r#"{"chatID":"target","pendingMessageID":"pending"}"#.into(),
+                ));
+            }
+            let (api, server) = pending_media_fixture(responses);
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), b"synthetic").unwrap();
+            let result = api.send_pending_media(
+                &pending_media_job(&api.base_url, file.path()),
+                &AtomicBool::new(false),
+            );
+            match result {
+                Ok(accepted) => {
+                    assert_eq!(send_status, 200);
+                    assert_eq!(upload_status, 200);
+                    assert_eq!(accepted.pending_id, "pending");
+                }
+                Err(crate::pending_media::State::NotSubmitted(_)) => assert!(!expected_unknown),
+                Err(crate::pending_media::State::Unknown(_)) => assert!(expected_unknown),
+                other => panic!("unexpected {other:?}"),
+            }
+            server.join().unwrap();
+        }
+    }
+    #[test]
+    fn pending_media_acceptance_uses_requested_chat_when_omitted() {
+        for (chat_field, pending, accepted) in [
+            ("", "pending", true),
+            (",\"chatID\":\"target\"", "pending", true),
+            (",\"chatID\":\"foreign\"", "pending", false),
+            ("", "", false),
+        ] {
+            let response = format!("{{\"pendingMessageID\":\"{pending}\"{chat_field}}}");
+            let (api, server) = pending_media_fixture(vec![
+                (
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ),
+                (
+                    "POST /v1/assets/upload/base64 ",
+                    200,
+                    r#"{"uploadID":"asset"}"#.into(),
+                ),
+                (
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ),
+                ("POST /v1/chats/target/messages ", 200, response),
+            ]);
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), b"synthetic").unwrap();
+            let result = api.send_pending_media(
+                &pending_media_job(&api.base_url, file.path()),
+                &AtomicBool::new(false),
+            );
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "chat field {chat_field:?}, pending {pending:?}"
+            );
+            if let Ok(result) = result {
+                assert_eq!(result.chat, "target");
+            }
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn pending_media_poll_requires_exact_account_and_binds_final_id() {
+        for (account, sender, expect_resolved) in [
+            ("foreign", true, false),
+            ("signal", false, false),
+            ("signal", true, true),
+        ] {
+            let body = serde_json::json!({"id":"final","chatID":"target","accountID":account,"isSender":sender,"attachments":[{"type":"audio","id":"asset","isVoiceNote":true,"duration":1}],"sendStatus":{"status":"SUCCESS"}}).to_string();
+            let (api, server) =
+                pending_media_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let member = pending_media_job(&api.base_url, std::path::Path::new("unused")).member;
+            let events = Mutex::new(Vec::new());
+            let keep = poll_media_send(
+                &api,
+                "local",
+                &member,
+                "pending",
+                Duration::from_secs(61),
+                &|event| events.lock().unwrap().push(event),
+            );
+            assert!(!keep);
+            let events = events.into_inner().unwrap();
+            assert_eq!(events.iter().any(|e| matches!(e, Event::BeeperMediaResolved { local, message, complete: true, .. } if local == "local" && message.id == "final")), expect_resolved);
+            assert_eq!(
+                events.iter().any(|e| matches!(
+                    e,
+                    Event::BeeperMediaProgress {
+                        state: crate::pending_media::State::Unknown(_),
+                        ..
+                    }
+                )),
+                !expect_resolved
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn pending_media_sparse_success_is_confirmed_not_unknown_at_timeout() {
+        let (api, server) = pending_media_fixture(vec![("GET /v1/chats/target/messages/pending ", 200,
+            r#"{"id":"final","chatID":"target","accountID":"signal","isSender":true,"sendStatus":{"status":"SUCCESS"}}"#.into())]);
+        let member = pending_media_job(&api.base_url, std::path::Path::new("unused")).member;
+        let events = Mutex::new(Vec::new());
+        assert!(!poll_media_send(
+            &api,
+            "local",
+            &member,
+            "pending",
+            Duration::from_secs(61),
+            &|e| events.lock().unwrap().push(e)
+        ));
+        let events = events.into_inner().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::BeeperMediaResolved { complete: true, .. }))
+        );
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::BeeperMediaProgress {
+                state: crate::pending_media::State::Unknown(_),
+                ..
+            }
+        )));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn pending_media_destination_mismatch_refuses_before_upload() {
+        let (api, server) = pending_media_fixture(vec![(
+            "GET /v1/chats/target ",
+            200,
+            r#"{"id":"target","accountID":"foreign"}"#.into(),
+        )]);
+        let result = api.send_pending_media(
+            &pending_media_job(&api.base_url, std::path::Path::new("not-read")),
+            &AtomicBool::new(false),
+        );
+        assert!(matches!(
+            result,
+            Err(crate::pending_media::State::NotSubmitted(_))
+        ));
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    fn forward_fixture_item(origin: &str) -> crate::composed_forward::Item {
+        crate::composed_forward::Item {
+            origin: origin.into(),
+            planned: true,
+            source_chat: "source".into(),
+            source_message: "message".into(),
+            source_account: "telegram".into(),
+            destination_account: "signal".into(),
+            attachment: None,
+            destination: "target".into(),
+            text: "Forwarded from Ada (Telegram), date:\nhello @somebody".into(),
+            state: crate::composed_forward::State::Waiting,
+        }
+    }
+
+    /// A finite, timeout-bounded server. Assert every network request and payload,
+    /// so a premature message POST cannot pass as a safe preparation failure.
+    fn forward_fixture(
+        responses: Vec<(&'static str, u16, String)>,
+    ) -> (Api, std::thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (expected, status, body) in responses {
+                let start = Instant::now();
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && start.elapsed() < Duration::from_secs(10) =>
+                        {
+                            std::thread::sleep(Duration::from_millis(5))
+                        }
+                        Err(error) => panic!("waiting for {expected}: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let header_end = loop {
+                    let mut buf = [0; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break end + 4;
+                    }
+                };
+                let header = String::from_utf8_lossy(&request[..header_end]);
+                assert!(header.starts_with(expected), "unexpected request: {header}");
+                let length: usize = header
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|n| n.trim().parse().unwrap())
+                    })
+                    .unwrap_or(0);
+                while request.len() < header_end + length {
+                    let mut buf = [0; 8192];
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                }
+                requests.push(String::from_utf8(request).unwrap());
+                write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+            requests
+        });
+        (
+            Api::new(&BeeperConfig {
+                base_url,
+                token: "fixture".into(),
+            })
+            .unwrap(),
+            worker,
+        )
+    }
+    fn forward_identity_responses() -> Vec<(&'static str, u16, String)> {
+        vec![
+            ("GET /v1/chats/source ", 200, r#"{"id":"source","accountID":"telegram"}"#.into()),
+            ("GET /v1/chats/target ", 200, r#"{"id":"target","accountID":"signal"}"#.into()),
+            ("GET /v1/chats/source/messages/message ", 200, r#"{"id":"message","chatID":"source","accountID":"telegram","text":"hello @somebody"}"#.into()),
+        ]
+    }
+    fn forward_test_dirs() -> AccountDirs {
+        AppDirs::under(
+            &std::env::temp_dir().join(format!("solmu-forward-fixture-{}", std::process::id())),
+        )
+        .account(&"1".into())
+    }
+    #[test]
+    fn composed_forward_accepts_pending_id_and_drops_source_mentions() {
+        let mut responses = forward_identity_responses();
+        responses.push((
+            "POST /v1/chats/target/messages ",
+            200,
+            r#"{"pendingMessageID":"queued","chatID":"target"}"#.into(),
+        ));
+        let (api, server) = forward_fixture(responses);
+        let item = forward_fixture_item(&api.base_url);
+        let accepted = api
+            .send_forward(&item, &forward_test_dirs(), &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(accepted.pending_id, "queued");
+        let requests = server.join().unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_str(requests.last().unwrap().split("\r\n\r\n").nth(1).unwrap())
+                .unwrap();
+        assert_eq!(payload, serde_json::json!({"text":item.text}));
+        assert!(payload.get("mentions").is_none());
+    }
+
+    #[test]
+    fn composed_forward_reuploads_only_the_selected_attachment_with_original_filename() {
+        let mut responses = forward_identity_responses();
+        let message = r#"{"id":"message","chatID":"source","accountID":"telegram","attachments":[{"id":"mxc://first","fileName":"first.txt","mimeType":"text/plain"},{"id":"mxc://second","fileName":"second.txt","mimeType":"text/plain"}]}"#;
+        responses.last_mut().unwrap().2 = message.into();
+        responses.extend([
+            (
+                "GET /v1/chats/source/messages/message ",
+                200,
+                message.into(),
+            ),
+            (
+                "GET /v1/assets/serve?url=mxc%3A%2F%2Fsecond ",
+                200,
+                "second attachment".into(),
+            ),
+            (
+                "POST /v1/assets/upload/base64 ",
+                200,
+                r#"{"uploadID":"uploaded-second"}"#.into(),
+            ),
+            (
+                "POST /v1/chats/target/messages ",
+                200,
+                r#"{"pendingMessageID":"queued","chatID":"target"}"#.into(),
+            ),
+        ]);
+        let (api, server) = forward_fixture(responses);
+        let mut item = forward_fixture_item(&api.base_url);
+        item.attachment = Some(1);
+        let accepted = api
+            .send_forward(&item, &forward_test_dirs(), &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(accepted.pending_id, "queued");
+        let requests = server.join().unwrap();
+        let json = |index: usize| {
+            serde_json::from_str::<serde_json::Value>(
+                requests[index].split("\r\n\r\n").nth(1).unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            json(5),
+            serde_json::json!({"content":"c2Vjb25kIGF0dGFjaG1lbnQ=","fileName":"second.txt"})
+        );
+        assert_eq!(
+            json(6),
+            serde_json::json!({"text":item.text,"attachment":{"uploadID":"uploaded-second","fileName":"second.txt"}})
+        );
+        let _ = std::fs::remove_dir_all(forward_test_dirs().cache);
+    }
+
+    #[test]
+    fn composed_forward_post_errors_and_sparse_acceptance_are_not_retryable() {
+        for (status, body) in [
+            (500, "{}"),
+            (200, "{}"),
+            (200, r#"{"pendingMessageID":"queued","chatID":"wrong"}"#),
+        ] {
+            let mut responses = forward_identity_responses();
+            responses.push(("POST /v1/chats/target/messages ", status, body.into()));
+            let (api, server) = forward_fixture(responses);
+            assert!(matches!(
+                api.send_forward(
+                    &forward_fixture_item(&api.base_url),
+                    &forward_test_dirs(),
+                    &AtomicBool::new(false)
+                ),
+                Err(crate::composed_forward::State::Uncertain(_))
+            ));
+            server.join().unwrap();
+        }
+    }
+    #[test]
+    fn composed_forward_source_identity_failure_never_posts() {
+        let mut responses = forward_identity_responses();
+        responses.last_mut().unwrap().2 =
+            r#"{"id":"message","chatID":"other","accountID":"telegram"}"#.into();
+        let (api, server) = forward_fixture(responses);
+        assert!(matches!(
+            api.send_forward(
+                &forward_fixture_item(&api.base_url),
+                &forward_test_dirs(),
+                &AtomicBool::new(false)
+            ),
+            Err(crate::composed_forward::State::FailedBeforeSend(_))
+        ));
+        assert_eq!(server.join().unwrap().len(), 3);
+    }
+    #[test]
+    fn composed_forward_refuses_display_placeholders_from_nontext_sources() {
+        for kind in ["LOCATION", "POLL", "CALL", "NOTICE", "IMAGE"] {
+            let body = serde_json::json!({"id":"message","chatID":"source","accountID":"telegram","type":kind}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/source/messages/message ", 200, body)]);
+            let mut item = forward_fixture_item(&api.base_url);
+            item.planned = false;
+            let planned = api.plan_forwards(vec![item]);
+            assert!(
+                matches!(
+                    planned[0].state,
+                    crate::composed_forward::State::FailedBeforeSend(_)
+                ),
+                "{kind}"
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn composed_forward_poll_preserves_confirmation_failure_and_progress_feedback() {
+        for (status, keep, confirmed, failed) in [
+            ("SUCCESS", false, true, false),
+            ("FAIL_SEND", false, false, true),
+            ("PENDING", true, false, false),
+        ] {
+            let body = serde_json::json!({"id":"final", "chatID":"target", "accountID":"signal", "isSender":true, "sendStatus":{"status":status}}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let events = Mutex::new(Vec::new());
+            assert_eq!(
+                poll_forward_mark(
+                    &api,
+                    &"target".into(),
+                    "pending",
+                    "signal",
+                    Duration::ZERO,
+                    &|e| events.lock().unwrap().push(e)
+                ),
+                keep,
+                "{status}"
+            );
+            let events = events.into_inner().unwrap();
+            assert_eq!(events.iter().any(|e| matches!(e, Event::BeeperSendConfirmed { account, chat, .. } if account == "signal" && chat == "target")), confirmed, "{status}");
+            assert!(events.iter().any(|e| matches!(e, Event::Messages { chat, messages, .. } if chat == "target" && messages.len() == 1)), "{status}: missing chat feedback");
+            assert_eq!(events.iter().any(|e| matches!(e, Event::Messages { messages, .. } if messages.iter().any(|m| matches!(m.status, Delivery::Failed)))), failed, "{status}");
+            assert_eq!(
+                events.iter().any(|e| matches!(e, Event::Info(_))),
+                failed,
+                "{status}"
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .any(|e| matches!(e, Event::BeeperForwardResolved { .. })),
+                confirmed || failed,
+                "{status}"
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn composed_forward_feedback_rejects_foreign_message_identity() {
+        for (chat, account, sender) in [
+            ("foreign", "signal", true),
+            ("target", "foreign", true),
+            ("target", "signal", false),
+        ] {
+            let body = serde_json::json!({"id":"final", "chatID":chat, "accountID":account, "isSender":sender, "sendStatus":{"status":"SUCCESS"}}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let events = Mutex::new(Vec::new());
+            assert!(poll_forward_mark(
+                &api,
+                &"target".into(),
+                "pending",
+                "signal",
+                Duration::ZERO,
+                &|e| events.lock().unwrap().push(e)
+            ));
+            assert!(events.into_inner().unwrap().is_empty());
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn composed_forward_restart_reloads_exact_pending_identity_and_resolves_final_mark() {
+        for (account, sender, expected) in [
+            ("signal", true, true),
+            ("foreign", true, false),
+            ("signal", false, false),
+        ] {
+            let body=serde_json::json!({"id":"final","chatID":"target","accountID":account,"isSender":sender,"sendStatus":{"status":"SUCCESS"}}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("settings.json");
+            let mark = crate::composed_forward::ForwardedMessage {
+                member: crate::merged::Member {
+                    origin: api.base_url.clone(),
+                    account: "signal".into(),
+                    chat: "target".into(),
+                },
+                message: "pending".into(),
+                pending: true,
+            };
+            std::fs::write(
+                &path,
+                serde_json::json!({"beeper":{"forwarded_messages":[mark]}}).to_string(),
+            )
+            .unwrap();
+            let saved: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let marks: Vec<crate::composed_forward::ForwardedMessage> =
+                serde_json::from_value(saved["beeper"]["forwarded_messages"].clone()).unwrap();
+            let restored = crate::composed_forward::unresolved_marks(marks.clone(), &api.base_url);
+            assert_eq!(restored.len(), 1);
+            assert!(crate::composed_forward::unresolved_marks(marks, "foreign-origin").is_empty());
+            let events = Mutex::new(Vec::new());
+            assert!(!poll_forward_mark(
+                &api,
+                &restored[0].member.chat,
+                &restored[0].message,
+                &restored[0].member.account,
+                Duration::from_secs(61),
+                &|e| events.lock().unwrap().push(e)
+            ));
+            assert_eq!(events.into_inner().unwrap().iter().any(|e| matches!(e,Event::BeeperForwardResolved {pending,final_id,..} if pending=="pending" && final_id=="final")),expected);
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn composed_forward_retry_replans_failed_preparation_without_losing_accepted_rows() {
+        let (api, server) = forward_fixture(vec![
+            ("GET /v1/chats/source/messages/message ", 503, "{}".into()),
+            (
+                "GET /v1/chats/source/messages/message ",
+                200,
+                r#"{"id":"message","attachments":[{"id":"mxc://one"},{"id":"mxc://two"}]}"#.into(),
+            ),
+        ]);
+        let mut item = forward_fixture_item(&api.base_url);
+        item.planned = false;
+        let mut items = api.plan_forwards(vec![item]);
+        assert!(!items[0].planned);
+        assert!(matches!(
+            items[0].state,
+            crate::composed_forward::State::FailedBeforeSend(_)
+        ));
+        let mut accepted = forward_fixture_item(&api.base_url);
+        accepted.state = crate::composed_forward::State::Accepted {
+            pending_id: "previous".into(),
+        };
+        items.insert(0, accepted.clone());
+        crate::composed_forward::retry_failed(&mut items);
+        let expanded = api.plan_forwards(items);
+        assert_eq!(expanded.len(), 3);
+        assert_eq!(expanded[0], accepted);
+        assert_eq!(expanded[1].attachment, Some(0));
+        assert_eq!(expanded[2].attachment, Some(1));
+        assert_eq!(expanded[2].text.lines().count(), 1);
+        assert!(expanded[1].planned && expanded[2].planned);
+        server.join().unwrap();
+    }
 
     #[test]
     fn queue_confirmation_requires_explicit_success_not_pending_failure_or_sparse_echo() {
@@ -4688,6 +6830,252 @@ mod tests {
             plain_rich_text("ordinary < comparison > text"),
             "ordinary < comparison > text"
         );
+    }
+
+    /// Bridge-labelled fixture matrix: the normalized-HTML shapes each
+    /// network's bridge is expected to deliver through Beeper's `text`
+    /// field, plus the raw/plain/Markdown fallbacks seen when a bridge does
+    /// no conversion at all. Each expectation is the WhatsApp-style markup
+    /// string the renderer (`crate::markup`) turns back into styled spans.
+    /// These prove parser behaviour only; only live captures per bridge
+    /// prove every bridge really sends these shapes.
+    #[test]
+    fn rich_text_style_fixture_matrix() {
+        let fixtures: &[(&str, &str, &str)] = &[
+            // WhatsApp: *bold*, _italic_, ~strike~, `mono` arrive as tags.
+            ("whatsapp bold", "<p><strong>bold</strong></p>", "*bold*"),
+            ("whatsapp bold b", "<p><b>bold</b></p>", "*bold*"),
+            ("whatsapp italics", "<p><em>italics</em></p>", "_italics_"),
+            ("whatsapp italics i", "<p><i>italics</i></p>", "_italics_"),
+            (
+                "whatsapp overstrike",
+                "<p><del>overstrike</del></p>",
+                "~overstrike~",
+            ),
+            ("telegram strike s", "<p><s>gone</s></p>", "~gone~"),
+            (
+                "signal strike strike",
+                "<p><strike>gone</strike></p>",
+                "~gone~",
+            ),
+            (
+                "inline code",
+                "<p>run <code>make test</code> now</p>",
+                "run `make test` now",
+            ),
+            (
+                "pre block",
+                "<pre>line one\nline two</pre>",
+                "```\nline one\nline two\n```",
+            ),
+            (
+                "pre wrapping code",
+                "<pre><code>fn main() {}</code></pre>",
+                "```\nfn main() {}\n```",
+            ),
+            ("blockquote", "<blockquote>quoted</blockquote>", "> quoted"),
+            (
+                "blockquote paragraphs",
+                "<blockquote><p>one</p><p>two</p></blockquote>",
+                "> one\n> two",
+            ),
+            (
+                "blockquote raw newline",
+                "<blockquote>one\ntwo</blockquote>",
+                "> one\n> two",
+            ),
+            (
+                "nested bold italic",
+                "<p><strong>bold <em>both</em></strong></p>",
+                "*bold _both_*",
+            ),
+            (
+                "styled entities",
+                "<p><strong>a &amp; b</strong></p>",
+                "*a & b*",
+            ),
+            (
+                "bullet list",
+                "<ul><li>one</li><li>two</li></ul>",
+                "\u{2022} one\n\u{2022} two",
+            ),
+            (
+                "numbered list keeps bullets",
+                "<ol><li>one</li><li>two</li></ol>",
+                "\u{2022} one\n\u{2022} two",
+            ),
+            (
+                "styled link label",
+                r#"<a href="https://example.com/page"><strong>Fixture</strong></a>"#,
+                "*Fixture* (https://example.com/page)",
+            ),
+            // Raw fallbacks: no tags, so the field passes through untouched
+            // and the renderer applies WhatsApp rules as it always has.
+            (
+                "raw whatsapp markers",
+                "*bold* _italics_ ~overstrike~",
+                "*bold* _italics_ ~overstrike~",
+            ),
+            ("raw bullet list", "* one\n* two", "* one\n* two"),
+            (
+                "markdown fallback stays literal",
+                "**bold** and __italic__",
+                "**bold** and __italic__",
+            ),
+            (
+                "entity-escaped tags stay literal",
+                "&lt;del&gt;literal&lt;/del&gt;",
+                "<del>literal</del>",
+            ),
+            // A style that starts or ends mid-word gets a zero-width
+            // boundary hint: the renderer's markers only open and close at
+            // word boundaries, so a bare `a*b*c` would stay literal.
+            (
+                "bold mid-word",
+                "<p>a<strong>b</strong>c</p>",
+                "a\u{200B}*b*\u{200B}c",
+            ),
+            (
+                "bold ending before a digit",
+                "<p><strong>x</strong>2</p>",
+                "*x*\u{200B}2",
+            ),
+            // The renderer parses styles per line, so a style spanning a
+            // break closes at the line end and reopens on the next line.
+            (
+                "bold across a break",
+                "<p><strong>one<br>two</strong></p>",
+                "*one*\n*two*",
+            ),
+            (
+                "bold across a raw newline",
+                "<p><strong>one\ntwo</strong></p>",
+                "*one*\n*two*",
+            ),
+            // Code content that carries backticks or fence lines is
+            // backslash-escaped so it cannot close its own span or block.
+            (
+                "inline code with backticks",
+                "<p><code>foo`bar`baz</code></p>",
+                "`foo\\`bar\\`baz`",
+            ),
+            (
+                "inline code with a backslash",
+                "<p><code>a\\b</code></p>",
+                "`a\\\\b`",
+            ),
+            (
+                "pre holding a fence line",
+                "<pre>first\n```\nsecond</pre>",
+                "```\nfirst\n\\```\nsecond\n```",
+            ),
+            // A native backslash line keeps its bytes: only an exact
+            // fence line is escaped.
+            (
+                "pre holding a backslash line",
+                "<pre>\\home\\user</pre>",
+                "```\n\\home\\user\n```",
+            ),
+            // Entities decode before escaping, so an entity-encoded
+            // backtick or fence line cannot slip past it.
+            (
+                "entity backtick in code",
+                "<p><code>foo&#96;bar</code></p>",
+                "`foo\\`bar`",
+            ),
+            (
+                "entity fence in pre",
+                "<pre>a\n&#96;&#96;&#96;\nb</pre>",
+                "```\na\n\\```\nb\n```",
+            ),
+            // The escape sits right before the backticks so the renderer
+            // resolves it while the indentation survives.
+            (
+                "indented fence in pre",
+                "<pre>  ```</pre>",
+                "```\n  \\```\n```",
+            ),
+            // A neutral tag between a close and the next word keeps the
+            // boundary hint; an empty style never emits a marker pair.
+            (
+                "neutral span keeps the boundary",
+                "<strong>a</strong><span>b</span>",
+                "*a*\u{200B}b",
+            ),
+            (
+                "empty styled line stays clean",
+                "<strong><br>word</strong>",
+                "*word*",
+            ),
+            (
+                "empty style pair vanishes",
+                "<p><strong></strong>b</p>",
+                "b",
+            ),
+            // Nested quotes keep the outer bar once the inner quote ends.
+            (
+                "nested blockquotes keep the outer bar",
+                "<blockquote>outer<blockquote>inner</blockquote>tail</blockquote>",
+                "> outer\n> inner\n> tail",
+            ),
+        ];
+        for (label, raw, expected) in fixtures {
+            assert_eq!(&plain_rich_text(raw), expected, "{label}");
+        }
+    }
+
+    /// The exact shapes behind the 2026-11-11 WhatsApp self-chat report:
+    /// "*bold*", "_italics_", "~overstrike~" and a "* " bullet list
+    /// arrived as unstyled plain text, overstrike as literal "<del>" tags.
+    #[test]
+    fn whatsapp_self_message_styles_survive() {
+        let raw = "<p><strong>bold</strong></p><p><em>italics</em></p><p><del>overstrike</del></p><ul><li>one</li><li>two</li></ul>";
+        assert_eq!(
+            plain_rich_text(raw),
+            "*bold*\n_italics_\n~overstrike~\n\u{2022} one\n\u{2022} two"
+        );
+    }
+
+    /// Styling must never become an injection channel: blocked elements stay
+    /// dropped, unsafe URLs stay label-only, event attributes never reach the
+    /// output, and the mapper never emits raw HTML of its own.
+    #[test]
+    fn rich_text_styles_stay_safe() {
+        assert_eq!(
+            plain_rich_text("<p>a</p><script>alert(1)</script><p><strong>b</strong></p>"),
+            "a\n*b*"
+        );
+        assert_eq!(
+            plain_rich_text("<style>* { color: red }</style><p><em>x</em></p>"),
+            "_x_"
+        );
+        assert_eq!(
+            plain_rich_text(r#"<a href="https://example.com" onclick="alert(1)">x</a>"#),
+            "x (https://example.com)"
+        );
+        assert_eq!(
+            plain_rich_text(r#"<del><a href="javascript:alert(1)">x</a></del>"#),
+            "~x~"
+        );
+        // An unknown tag stays literal text; styles around it still apply.
+        assert_eq!(
+            plain_rich_text("<strong>a</strong> <foo>bar</foo>"),
+            "*a* <foo>bar</foo>"
+        );
+    }
+
+    /// Malformed and crossing tags degrade to literal marker characters the
+    /// renderer leaves unstyled, never to panics or raw HTML.
+    #[test]
+    fn rich_text_malformed_tags_degrade_safely() {
+        assert_eq!(plain_rich_text("<strong>bold"), "*bold");
+        // Overlapping styles style by their spans: a is bold, b is bold
+        // and italic, c is italic; boundary hints keep the markers parsing.
+        assert_eq!(
+            plain_rich_text("<b>a<i>b</b>c</i>"),
+            "*a\u{200B}_b*\u{200B}c_"
+        );
+        assert_eq!(plain_rich_text("<strong>ok</strong> <del"), "*ok* <del");
     }
 
     #[test]
@@ -5345,6 +7733,20 @@ mod tests {
         reply: Option<&str>,
         kind: Attachment,
     ) -> (Result<SendAccepted, String>, String) {
+        let (result, requests) = capture_typed_send_both(reply, kind);
+        let last = requests
+            .split("\n--NEXT--\n")
+            .filter(|s| !s.is_empty())
+            .last()
+            .unwrap_or_default()
+            .to_owned();
+        (result, last)
+    }
+
+    fn capture_typed_send_both(
+        reply: Option<&str>,
+        kind: Attachment,
+    ) -> (Result<SendAccepted, String>, String) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
         let worker = std::thread::spawn(move || {
@@ -5378,7 +7780,8 @@ mod tests {
                         break;
                     }
                 }
-                sent = String::from_utf8_lossy(&request).to_string();
+                sent.push_str(&String::from_utf8_lossy(&request));
+                sent.push_str("\n--NEXT--\n");
                 write!(
                     stream,
                     "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -5493,6 +7896,40 @@ mod tests {
         assert!(request.contains(r#""type":"voice-note""#), "{request}");
         assert!(request.contains(r#""duration":7"#), "{request}");
         assert!(!request.contains("replyToMessageID"), "{request}");
+    }
+
+    #[test]
+    fn recorded_voice_declares_opus_mime_on_upload_and_message() {
+        let (result, requests) = capture_typed_send_both(None, Attachment::Voice(7));
+        assert!(result.is_ok());
+        let requests: Vec<_> = requests
+            .split("\n--NEXT--\n")
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(requests.len(), 2);
+        let upload: serde_json::Value =
+            serde_json::from_str(requests[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+        let send: serde_json::Value =
+            serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(upload["mimeType"], "audio/ogg; codecs=opus");
+        assert_eq!(send["attachment"]["mimeType"], "audio/ogg; codecs=opus");
+        assert_eq!(send["attachment"]["type"], "voice-note");
+        assert_eq!(send["attachment"]["duration"], 7);
+    }
+
+    #[test]
+    fn ordinary_audio_upload_keeps_auto_detected_mime() {
+        let (result, requests) = capture_typed_send_both(None, Attachment::Auto);
+        assert!(result.is_ok());
+        for request in requests.split("\n--NEXT--\n").filter(|s| !s.is_empty()) {
+            let body: serde_json::Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert!(body.get("mimeType").is_none());
+            assert!(
+                body.get("attachment")
+                    .is_none_or(|a| a.get("mimeType").is_none() && a.get("type").is_none())
+            );
+        }
     }
 
     #[test]
@@ -5614,6 +8051,65 @@ mod tests {
                 .any(|e| matches!(e, Event::Link(LinkStatus::Connected)))
         );
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn pending_lookup_accepts_final_id_but_not_foreign_or_unconfirmed_messages() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for (chat, sender, status) in [
+                ("chat", true, Some("SUCCESS")),
+                ("foreign", true, Some("SUCCESS")),
+                ("chat", false, Some("SUCCESS")),
+                ("chat", true, Some("PENDING")),
+                ("chat", true, None),
+            ] {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let length = stream.read(&mut request).unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..length])
+                        .starts_with("GET /v1/chats/chat/messages/pending-fixture ")
+                );
+                let mut body = serde_json::json!({"id":"final-fixture", "chatID":chat,
+                    "accountID":"work", "isSender":sender});
+                if let Some(status) = status {
+                    body["sendStatus"] = serde_json::json!({"status":status});
+                }
+                let body = body.to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        for success in [true, false, false, false, false] {
+            let events = Mutex::new(Vec::new());
+            assert!(!poll_pending_send(
+                &api,
+                &"chat".into(),
+                "pending-fixture",
+                Duration::from_secs(61),
+                &|event| events.lock().unwrap().push(event)
+            ));
+            let events = events.into_inner().unwrap();
+            assert_eq!(events.iter().any(|event| matches!(event, Event::BeeperSendConfirmed { account, chat, .. } if account == "work" && chat == "chat")), success);
+            assert_eq!(
+                events.iter().any(
+                    |event| matches!(event, Event::Info(text) if text.contains("check history before retrying"))
+                ),
+                !success
+            );
+        }
+        server.join().unwrap();
     }
 
     #[test]
@@ -6022,10 +8518,11 @@ mod tests {
     }
 
     #[test]
-    fn rich_html_is_text_only_and_opaque_names_are_not_presented_as_names() {
+    fn rich_html_stays_safe_and_opaque_names_are_not_presented_as_names() {
+        // Styles survive as renderer markup; scripts and raw HTML never do.
         assert_eq!(
             plain_rich_text("<p>Hi &amp; welcome</p><br><p>Next <b>bold</b></p>"),
-            "Hi & welcome\nNext bold"
+            "Hi & welcome\nNext *bold*"
         );
         assert_eq!(
             plain_rich_text(

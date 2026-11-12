@@ -27,6 +27,39 @@ pub struct Person {
     pub primary: Option<Member>,
 }
 impl Person {
+    /// Avatar candidates are local, exact identities: primary first, then the
+    /// saved member order. Never expose a locked, ambiguous or replaced chat.
+    /// This is display-only fallback, not a message-routing decision.
+    pub fn avatar_members<'a>(&'a self, chats: &[Chat], current: &Chat) -> Vec<&'a Member> {
+        let valid = |member: &&Member| {
+            self.members.contains(member)
+                && chats.iter().filter(|chat| chat.id == member.chat).count() == 1
+                && chats.iter().any(|chat| {
+                    member.matches(chat)
+                        && !chat.locked
+                        && chat.kind == crate::model::ChatKind::Direct
+                        && chat.backend_origin == current.backend_origin
+                })
+        };
+        if current.locked
+            || chats.iter().filter(|chat| chat.id == current.id).count() != 1
+            || current.kind != crate::model::ChatKind::Direct
+            || !self.members.iter().any(|member| member.matches(current))
+        {
+            return Vec::new();
+        }
+        self.primary
+            .iter()
+            .filter(valid)
+            .chain(self.members.iter().filter(valid))
+            .fold(Vec::new(), |mut ordered, member| {
+                if !ordered.contains(&member) {
+                    ordered.push(member);
+                }
+                ordered
+            })
+    }
+
     pub fn default_destination<'a>(
         &'a self,
         available: &[Member],
@@ -233,6 +266,82 @@ pub fn ordered(mut messages: Vec<Message>) -> Vec<Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn avatar_fixture() -> (Person, Vec<Chat>) {
+        let chats: Vec<_> = ["first", "primary", "last"]
+            .into_iter()
+            .map(|id| {
+                let mut chat = Chat::new(id.into(), id.into());
+                chat.backend_origin = Some("local".into());
+                chat.backend_account = Some(id.into());
+                chat
+            })
+            .collect();
+        let members: Vec<_> = chats.iter().map(|chat| Member::of(chat).unwrap()).collect();
+        (
+            Person {
+                name: "Synthetic person".into(),
+                primary: Some(members[1].clone()),
+                members,
+            },
+            chats,
+        )
+    }
+
+    #[test]
+    fn linked_avatar_primary_precedes_saved_member_order_for_every_representative() {
+        let (mut person, chats) = avatar_fixture();
+        for current in &chats {
+            let ids: Vec<_> = person
+                .avatar_members(&chats, current)
+                .iter()
+                .map(|m| m.chat.as_str())
+                .collect();
+            assert_eq!(ids, ["primary", "first", "last"]);
+        }
+        person.primary = None;
+        assert_eq!(
+            person.avatar_members(&chats, &chats[2]),
+            person.members.iter().collect::<Vec<_>>()
+        );
+        person.primary = Some(Member {
+            chat: "foreign".into(),
+            ..person.members[0].clone()
+        });
+        assert_eq!(
+            person.avatar_members(&chats, &chats[0]),
+            person.members.iter().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn linked_avatar_rejects_locked_replaced_missing_ambiguous_and_foreign_sources() {
+        let (person, chats) = avatar_fixture();
+        for variant in 0..6 {
+            let mut changed = chats.clone();
+            match variant {
+                0 => changed[1].locked = true,
+                1 => changed[1].backend_account = Some("replacement".into()),
+                2 => changed[1].backend_origin = Some("another server".into()),
+                3 => {
+                    changed.remove(1);
+                }
+                4 => changed.push(changed[1].clone()),
+                _ => changed[1].kind = crate::model::ChatKind::Group,
+            }
+            let ids: Vec<_> = person
+                .avatar_members(&changed, &changed[0])
+                .iter()
+                .map(|m| m.chat.as_str())
+                .collect();
+            assert_eq!(ids, ["first", "last"], "variant {variant}");
+        }
+        let mut locked = chats[0].clone();
+        locked.locked = true;
+        assert!(person.avatar_members(&chats, &locked).is_empty());
+        let foreign = Chat::new("not linked".into(), "Foreign".into());
+        assert!(person.avatar_members(&chats, &foreign).is_empty());
+    }
+
     #[test]
     fn network_mark_shows_on_first_and_on_network_change_only() {
         // First loaded message always carries the mark.

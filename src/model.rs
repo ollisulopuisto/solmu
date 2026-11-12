@@ -312,6 +312,9 @@ pub struct Chat {
     /// capabilities. Informational only: the API has no poll content or
     /// vote endpoint to use it with yet.
     pub poll_capability: Option<i8>,
+    /// The other person's phone numbers and usernames in a direct chat, as the
+    /// network reports them. Used only to suggest links on this computer.
+    pub handles: Vec<String>,
 }
 
 /// A group's permissions and admins, as its metadata says. Kept in the
@@ -410,6 +413,7 @@ impl Chat {
             backend_origin: None,
             backend_network: None,
             poll_capability: None,
+            handles: Vec::new(),
         }
     }
 
@@ -637,12 +641,41 @@ pub struct MentionRef {
     pub id: String,
 }
 
-/// Link metadata attached by WhatsApp.
+/// Link metadata supplied with a message. Rendering it does not fetch the site.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LinkPreview {
     pub url: String,
     pub title: Option<String>,
     pub description: Option<String>,
+}
+
+impl LinkPreview {
+    /// Match the same canonical address used by Content::web_links, without
+    /// changing the original click/copy target or merging distinct queries.
+    pub fn covers_url(&self, url: &str) -> bool {
+        let normalise =
+            |value: &str| crate::safety::preview_url(value).unwrap_or_else(|| value.to_owned());
+        normalise(&self.url) == normalise(url)
+    }
+}
+
+#[cfg(test)]
+mod local_preview_identity_tests {
+    use super::LinkPreview;
+    #[test]
+    fn supplied_card_equivalence_keeps_distinct_links_separate() {
+        let card = LinkPreview {
+            url: "https://example.com/".into(),
+            title: None,
+            description: None,
+        };
+        assert!(card.covers_url("https://example.com"));
+        assert!(card.covers_url("HTTPS://EXAMPLE.COM:443/"));
+        assert!(!card.covers_url("https://example.com/other"));
+        assert!(!card.covers_url("https://example.com/?query=exact"));
+        assert!(!card.covers_url("http://example.com/"));
+        assert_eq!(card.url, "https://example.com/");
+    }
 }
 
 impl Message {
@@ -1499,7 +1532,22 @@ impl Content {
     /// left out.
     pub fn gallery_kind(&self) -> Option<GalleryKind> {
         match self {
-            Self::Image { .. } => Some(GalleryKind::Photo),
+            Self::Image { media, .. } => {
+                // Before the file downloads there is no extension to check,
+                // so the declared MIME decides: a format the image crate is
+                // not built to draw (a GIF, a TIFF, a BMP) stays in its own
+                // surface instead of opening the viewer and failing. An
+                // unknown or missing MIME keeps the old behavior and lets
+                // the downloaded-path check decide.
+                let mime = media.mime.to_ascii_lowercase();
+                let mime = mime.split(';').next().unwrap_or("").trim();
+                match mime {
+                    "" | "image/jpeg" | "image/jpg" | "image/pjpeg" | "image/png"
+                    | "image/webp" => Some(GalleryKind::Photo),
+                    _ if mime.starts_with("image/") => None,
+                    _ => Some(GalleryKind::Photo),
+                }
+            }
             Self::Video { gif: false, .. } => Some(GalleryKind::Video),
             _ => None,
         }
@@ -2503,6 +2551,9 @@ pub struct InviteInfo {
 pub enum ToastKind {
     Info,
     Error,
+    /// An info toast with an Undo button; holds the chats that link added,
+    /// so undoing it leaves every other link alone.
+    Undo(Vec<crate::merged::Member>),
 }
 
 /// Info toasts fade after a few seconds; errors stay until dismissed so they
@@ -2544,6 +2595,7 @@ pub fn forward_limit(frequently_forwarded: bool) -> usize {
 /// Actions queued by views and applied after drawing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    RetryPendingMedia(String),
     TranslateLocally(String),
     Open(Page),
     /// Opens settings, or closes them when they are already showing.
@@ -2802,10 +2854,25 @@ pub enum Action {
         files: Vec<(PathBuf, String)>,
     },
     OpenUrl(String),
+    /// A URL copy, distinct from copying original message text.
+    CopyLink(String),
+    FetchLinkPreview {
+        account: String,
+        chat: ChatId,
+        message: String,
+        url: String,
+        automatic: bool,
+        retry: bool,
+    },
+    ClearLinkPreviews,
+    LinkPreviewPreferences,
     CopyText(String),
     CopyImage(PathBuf),
     /// Closes the toast at this index. Only errors wait to be dismissed.
     DismissToast(usize),
+    /// Puts the people list back as it was before a link suggestion was
+    /// accepted, from the Undo toast: takes only those chats back out.
+    UndoLinks(Vec<crate::merged::Member>),
     /// Starts a reply to a message in the open chat.
     Reply(String),
     /// Opens the group sender's direct chat with this message quoted.
@@ -2826,6 +2893,7 @@ pub enum Action {
     /// Forwards to the chosen recipients: one at once, several after
     /// their confirmation.
     ConfirmForward,
+    RetryComposedForward,
     /// Starts selecting messages in the open chat, beginning with this one.
     SelectMessage(String),
     /// Adds a message to the selection or removes it.
@@ -3004,9 +3072,15 @@ pub enum Action {
     ShowDialog(Dialog),
     CloseDialog,
     ToggleSidebar,
+    ToggleFlatGroups,
     SetChatFilter(ChatFilter),
     /// Picks the label the chat list shows; `None` shows every chat.
     SelectLabel(Option<String>),
+    /// Shows one automatic category in the chat list; `None` shows every chat.
+    SelectAutoCategory(Option<crate::categories::AutoCategory>),
+    /// Moves a chat to a category for good, or back to the automatic rules
+    /// with `None`. Local only.
+    SetChatCategory(ChatId, Option<crate::categories::AutoCategory>),
     /// Replaces the labels worn by one chat.
     SetChatLabels {
         chat: ChatId,
@@ -3824,6 +3898,23 @@ mod tests {
         };
         assert_eq!(clip(false).gallery_kind(), Some(GalleryKind::Video));
         assert_eq!(clip(true).gallery_kind(), None, "a GIF plays inline");
+        // Beeper can send a still `img` attachment whose format the viewer
+        // cannot draw (a GIF, a TIFF); with no downloaded path the extension
+        // check cannot run, so the declared MIME keeps it out of the album.
+        for mime in ["image/gif", "image/tiff", "image/bmp"] {
+            let mut still = media();
+            still.mime = mime.into();
+            let picture = Content::Image {
+                caption: None,
+                media: still,
+                motion: None,
+            };
+            assert_eq!(
+                picture.gallery_kind(),
+                None,
+                "{mime} is not a drawable photo"
+            );
+        }
         let file = Content::Document {
             media: media(),
             file_name: "holiday.jpg".into(),

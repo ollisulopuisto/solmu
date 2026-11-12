@@ -1,10 +1,12 @@
 name: CI
 
 # Fast portable feedback first; expensive checks selected by changed inputs.
-# Policy always reports separately. Routine main source merges run portable
-# checks, quality and Ubuntu tests; full platform matrices (macOS/Windows
-# tests, Debian 12, Windows ARM, all three Nix systems) belong to version
-# tags, merge queues and manual full runs.
+# Policy always reports separately. On pull requests and routine main source
+# merges the macOS test leg is the merge gate: it starts right after the
+# portable checks, and quality, Ubuntu tests and the Nix package wait for it
+# and report later. Full platform matrices (macOS/Windows tests, Debian 12,
+# Windows ARM, all three Nix systems) belong to version tags, merge queues
+# and manual full runs, and are unchanged.
 on:
   push:
     branches: [main]
@@ -52,6 +54,7 @@ jobs:
         run: |
           python3 .github/scripts/test-ci-scope.py
           python3 .github/scripts/test-ci-workflows.py
+          python3 .github/scripts/test-install-ubuntu-build-deps.py
       - name: Select changed inputs
         id: scope
         env:
@@ -88,6 +91,7 @@ jobs:
           python-version: '3.13'
       - run: python3 contrib/beeper-tools/check_adapter.py
       - run: python3 -m unittest discover -s contrib/beeper-tools -p 'test_*.py'
+      - run: python3 packaging/dmg/test_layout.py
 
   audit:
     needs: [changes, portable]
@@ -104,8 +108,11 @@ jobs:
         run: cargo audit
 
   quality:
-    needs: [changes, portable]
-    if: ${{ !cancelled() && !failure() && needs.changes.outputs.native == 'true' }}
+    needs: [changes, portable, mac-test]
+    # Runs after the macOS gate on pull requests and routine main pushes. On
+    # tags, merge queues and manual runs mac-test is skipped and quality
+    # starts immediately. A failed macOS leg does not hide Linux feedback.
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && needs.portable.result == 'success' && needs.mac-test.result != 'cancelled' && needs.changes.outputs.native == 'true' }}
     name: quality
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -116,8 +123,7 @@ jobs:
           components: rustfmt, clippy
       - name: GUI build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpipewire-0.3-dev clang libclang-dev cmake perl
+          sudo python3 .github/scripts/install-ubuntu-build-deps.py             libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev             libpipewire-0.3-dev clang libclang-dev cmake perl
       # After the toolchain, so the cache key follows the pinned rustc. The
       # key carries no job name, so each job sets its own generation. Saves
       # only on pushes to main; pull requests restore.
@@ -136,8 +142,10 @@ jobs:
         run: mbx doc --locked --all-features --no-deps
 
   test:
-    needs: [changes, portable]
-    if: ${{ !cancelled() && !failure() && needs.changes.outputs.native == 'true' }}
+    needs: [changes, portable, mac-test]
+    # Same stagger as quality: after the macOS gate on pull requests and
+    # routine main pushes, immediately on tags, merge queues and manual runs.
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && needs.portable.result == 'success' && needs.mac-test.result != 'cancelled' && needs.changes.outputs.native == 'true' }}
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # A cold Windows build passed both suites in 59 minutes, then timed out
@@ -153,8 +161,7 @@ jobs:
       - name: GUI build dependencies
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpipewire-0.3-dev clang libclang-dev cmake perl
+          sudo python3 .github/scripts/install-ubuntu-build-deps.py             libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev             libpipewire-0.3-dev clang libclang-dev cmake perl
       - uses: jdx/mr-boxington-action@v1
         with:
           cache-generation: test-v1
@@ -184,6 +191,54 @@ jobs:
           done
       - name: macOS preview
         if: runner.os == 'macOS' && vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-preview
+          path: ${{ runner.temp }}/solmu-*.png
+
+  # The merge gate on pull requests and routine main pushes: macOS tests,
+  # demo build and the window smoke test, starting right after the portable
+  # checks. Tags, merge queues and manual full runs skip this job; the test
+  # matrix still carries macos-latest on those events, so coverage is
+  # unchanged and no second macOS leg runs there.
+  mac-test:
+    name: test (macos-latest)
+    needs: [changes, portable]
+    if: ${{ !cancelled() && !failure() && needs.changes.outputs.native == 'true' && (github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/'))) }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # Own cache generation: the key carries no job name, so each job sets
+      # its own generation. Saves only on pushes to main; pull requests
+      # restore.
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          cache-generation: mac-test-v1
+      - name: Tests (default features)
+        run: mbx test --locked --all-targets
+      - name: Tests (all features)
+        run: mbx test --locked --all-targets --all-features
+      - name: Build macOS demo
+        run: mbx build --locked --features demo
+      - name: macOS window smoke test
+        timeout-minutes: 8
+        run: |
+          target/debug/solmu --demo --demo-shot "$RUNNER_TEMP/solmu-content.png" --demo-shot-delay 8000 &
+          demo_pid=$!
+          sleep 6
+          screencapture -x "$RUNNER_TEMP/solmu-window.png" || true
+          wait "$demo_pid"
+          test -s "$RUNNER_TEMP/solmu-content.png"
+          # Synthetic evidence: stamps, receipts, linked loading and shortcuts.
+          for page in history-date message-info-direct linked linked-loading shortcuts; do
+            target/debug/solmu --demo --demo-page "$page" \
+              --demo-shot "$RUNNER_TEMP/solmu-$page.png" --demo-shot-delay 8000
+            test -s "$RUNNER_TEMP/solmu-$page.png"
+          done
+      - name: macOS preview
+        if: vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: macos-preview
@@ -229,8 +284,9 @@ jobs:
       - run: mbx check --locked --all-targets --all-features --target aarch64-pc-windows-msvc
 
   nix:
-    needs: [changes, portable]
-    if: ${{ !cancelled() && !failure() && needs.changes.outputs.nix == 'true' }}
+    needs: [changes, portable, mac-test]
+    # Same stagger as quality and test.
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && needs.portable.result == 'success' && needs.mac-test.result != 'cancelled' && needs.changes.outputs.nix == 'true' }}
     name: Nix package (${{ matrix.system }})
     runs-on: ${{ matrix.os }}
     # Uncached, aarch64-darwin takes about 53 minutes, Linux about 22.

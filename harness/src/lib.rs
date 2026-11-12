@@ -5,6 +5,8 @@ pub mod app;
 pub mod app_lock;
 pub mod archive;
 pub mod backend;
+pub mod composed_forward;
+pub mod categories;
 pub mod group_admin;
 pub mod i18n;
 pub mod markup;
@@ -12,16 +14,20 @@ pub mod mentions;
 pub mod model;
 pub mod new_group;
 pub mod paths;
+pub mod pending_media;
 pub mod privacy;
+pub mod run_widths;
 pub mod safety;
 pub mod scheduler;
 pub mod scheduler_client;
 pub mod settings;
+pub mod text_replace;
 pub mod ui;
 pub mod updates;
 pub mod util;
 
 pub mod merged;
+pub mod suggest;
 
 // Credential access is outside this portable adapter harness; source sign-in harness tests it separately.
 pub mod beeper_signin { pub fn stored(_: &str) -> Result<String, String> { Ok(String::new()) } }

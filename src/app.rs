@@ -151,6 +151,8 @@ impl ScrollRoute {
 const COMPOSING_TIMEOUT: Duration = Duration::from_secs(4);
 /// How long an info toast stays, including its fade.
 pub const INFO_TOAST_LIFETIME: Duration = Duration::from_millis(3200);
+/// An Undo toast stays long enough to read and reach.
+pub const UNDO_TOAST_LIFETIME: Duration = Duration::from_secs(8);
 /// Error toasts kept on screen at once; older ones give way to newer ones.
 const MAX_ERROR_TOASTS: usize = 3;
 /// Typing-state timeout when no stop event arrives.
@@ -186,6 +188,10 @@ pub struct Conversation {
     /// The height each row last took, keyed by message id, so the transcript
     /// can skip rows far from the viewport instead of laying them out.
     pub(crate) rows: HashMap<String, RowHeight>,
+    /// Settled neighbour-aware widths, keyed by message id. Decisions stick
+    /// while the chat and width cap stay the same, so appends and prepends
+    /// never resize loaded runs.
+    pub(crate) width_book: crate::run_widths::WidthBook,
     /// The keyboard page, Home, or End scroll under way in the message list.
     pub(crate) key_scroll: Option<KeyScroll>,
 }
@@ -258,12 +264,21 @@ impl Conversation {
         for message in incoming {
             match positions.get(&message.id) {
                 Some(&index) => {
+                    let width_stale = self.messages[index].content != message.content
+                        || self.messages[index].mentions != message.mentions
+                        || self.messages[index].quoted != message.quoted
+                        || self.messages[index].forwarded != message.forwarded;
                     let existing = &mut self.messages[index];
                     let media = existing
                         .content
                         .media()
                         .map(|media| (media.state.clone(), media.path.clone()));
                     *existing = message;
+                    if width_stale {
+                        // An edit replaced the text under the same id, so the
+                        // frozen bubble width is obsolete; settle again.
+                        self.width_book.invalidate(&existing.id);
+                    }
                     // Keep downloads in flight and files absent from a freshly
                     // classified copy. An incoming path takes precedence.
                     if let (Some((state, path)), Some(media)) =
@@ -399,6 +414,9 @@ pub struct App {
     pub local_ai: crate::backend::local_ai::State,
     pub dirs: AppDirs,
     pub settings: Settings,
+    pub link_previews: Option<crate::preview_worker::Worker>,
+    preview_context: Option<(String, Option<ChatId>, bool, bool, bool)>,
+    preview_sources: HashSet<(ChatId, String, String)>,
     /// Writes settings and the account roster on a thread of its own, so
     /// a save never stalls the window; flushed at exit and before a suspend.
     pub files: fastframe_file::Writer,
@@ -451,6 +469,10 @@ pub struct App {
     composer_mentions: Vec<ComposerMention>,
     /// Byte offset of the `:` starting the active emoji query.
     pub emoji_start: Option<usize>,
+    /// The user's text replacements (System Settings > Keyboard > Text
+    /// Replacements), loaded on first composer use and reloaded when the
+    /// window regains focus. None until loaded.
+    pub text_replacements: Option<Vec<crate::text_replace::Replacement>>,
     /// Keyboard-highlighted emoji in suggestions or the full picker.
     pub emoji_selected: usize,
     /// Byte offset of the `@` starting the active mention query.
@@ -650,6 +672,9 @@ pub struct App {
     /// Photos and playable videos of the open chat, oldest first, as the viewer
     /// album lists them. Loaded when the viewer opens.
     pub viewer_media: Vec<crate::model::MediaItem>,
+    pub viewer_media_more: bool,
+    pub viewer_media_loading: bool,
+    viewer_step_pending: Option<i8>,
     /// Chat whose album `viewer_media` belongs to, so a late answer for another
     /// chat is dropped instead of shown.
     pub viewer_media_chat: Option<ChatId>,
@@ -718,6 +743,7 @@ pub struct App {
     pub forward_recipients: Vec<ChatId>,
     /// Whether the forwarding dialog shows its recipients for confirmation.
     pub forward_reviewing: bool,
+    pub forward_include_group: bool,
     /// How many recipients the forwarding dialog's messages may have.
     pub forward_limit: usize,
     /// The group name being typed in the group info dialog.
@@ -729,6 +755,7 @@ pub struct App {
     #[cfg(any(test, feature = "demo"))]
     pub open_list_menu: Option<(ChatId, String)>,
     /// Name typed in the label manager.
+    pub flat_group_ui: crate::ui::flat_groups::State,
     pub label_name: String,
     /// Colour the manager will use for the next label.
     pub label_color: String,
@@ -736,9 +763,14 @@ pub struct App {
     pub label_editing: Option<(String, String)>,
     /// Label the chat list shows; `None` shows every chat.
     pub label_filter: Option<String>,
+    /// Automatic category the chat list shows; `None` shows every chat.
+    pub auto_category_filter: Option<crate::categories::AutoCategory>,
     /// Chats opened from the Unread list, kept there until the filter changes.
     unread_kept: HashSet<ChatId>,
     pub toasts: Vec<Toast>,
+    /// Link suggestions for the current chats, people and dismissals, kept
+    /// until one of them changes.
+    link_suggestions_cache: Option<(u64, Vec<crate::suggest::Suggestion>)>,
     pub actions: Vec<Action>,
     /// Invalidates editor history when a composer closes and reopens before
     /// another frame, including a new session reusing the same account id.
@@ -1260,9 +1292,11 @@ impl std::ops::DerefMut for App {
 impl App {
     pub fn connect_beeper_session(&mut self, cfg: crate::backend::beeper::BeeperConfig) {
         crate::backend::beeper::BeeperConfig::set_session(&cfg);
+        let forward_marks = self.settings.beeper.forwarded_messages.clone();
         let waker = self.waker.clone();
         let account = &mut self.accounts[self.active];
         let replacement = Backend::spawn_beeper(account.dirs.clone(), waker, cfg);
+        replacement.send(Command::BeeperResumeForwards(forward_marks));
         let mut previous = std::mem::replace(&mut account.backend, replacement);
         std::thread::spawn(move || previous.shutdown());
         account.link = LinkStatus::Connecting;
@@ -1451,6 +1485,9 @@ impl App {
             local_ai: Default::default(),
             dirs,
             settings,
+            link_previews: None,
+            preview_context: None,
+            preview_sources: HashSet::new(),
             locale,
             settings_dirty: false,
             last_settings_save: Instant::now(),
@@ -1480,6 +1517,7 @@ impl App {
             beeper_search_state: None,
             composer_mentions: Vec::new(),
             emoji_start: None,
+            text_replacements: None,
             emoji_selected: 0,
             mention_start: None,
             mention_selected: 0,
@@ -1577,6 +1615,9 @@ impl App {
             motion_playing: None,
             sticker_view: None,
             viewer_media: Vec::new(),
+            viewer_media_more: true,
+            viewer_media_loading: false,
+            viewer_step_pending: None,
             viewer_media_chat: None,
             viewer_media_state: HashMap::new(),
             copy_rows: Default::default(),
@@ -1606,18 +1647,22 @@ impl App {
             forward_search: String::new(),
             forward_recipients: Vec::new(),
             forward_reviewing: false,
+            forward_include_group: false,
             forward_limit: crate::model::FORWARD_LIMIT,
             group_name_edit: None,
             new_contact_to_phone: true,
             sidebar_visible: true,
             #[cfg(any(test, feature = "demo"))]
             open_list_menu: None,
+            flat_group_ui: Default::default(),
             label_name: String::new(),
             label_color: crate::archive::DEFAULT_COLOR.to_owned(),
             label_editing: None,
             label_filter: None,
+            auto_category_filter: None,
             unread_kept: HashSet::new(),
             toasts: Vec::new(),
+            link_suggestions_cache: None,
             actions: Vec::new(),
             composer_undo_epoch: 0,
             prefilled: None,
@@ -1813,6 +1858,8 @@ impl App {
         let abandoned =
             (self.adding_account && !self.is_linked()).then(|| self.account().id.clone());
         self.park_composer();
+        self.forward_dialog_hidden =
+            matches!(self.dialog, Some(Dialog::Forward { .. })) || self.composed_forward_running();
         self.clear_account_ui();
         self.active = index;
         self.adding_account = false;
@@ -1820,6 +1867,19 @@ impl App {
             self.remove_account(abandoned);
         }
         self.restore_composer();
+        if (self.forward_dialog_hidden || self.composed_forward_running())
+            && let Some(first) = self.forward_items.first()
+        {
+            let chat = first.source_chat.clone();
+            let mut messages = Vec::new();
+            for item in &self.forward_items {
+                if !messages.contains(&item.source_message) {
+                    messages.push(item.source_message.clone());
+                }
+            }
+            self.dialog = Some(Dialog::Forward { chat, messages });
+            self.forward_reviewing = true;
+        }
         // Labels belong to their account: show the one this account showed.
         self.label_filter = self.remembered_label();
         self.page = Page::Chats;
@@ -1849,11 +1909,17 @@ impl App {
 
     /// Drops App-owned pointers into the previous account's chats and media.
     fn clear_account_ui(&mut self) {
+        if let Some(worker) = &self.link_previews {
+            worker.cancel();
+        }
+        self.preview_context = None;
+        self.preview_sources.clear();
         self.discard_gif_thumbnails();
         self.gif_pending = false;
         self.invalidate_composer_undo();
         self.forward_recipients.clear();
         self.forward_reviewing = false;
+        // Batch state belongs to its account; hidden progress must survive.
         // The locked folder and the picker show the previous account's chats
         // and stickers.
         if self.locked_folder {
@@ -3302,6 +3368,40 @@ impl App {
         })
     }
 
+    /// The category a chat is in: the one the user moved it to, otherwise
+    /// the one the rules give it. Groups have none; they stay in Groups.
+    pub fn chat_category(&self, chat: &Chat) -> Option<crate::categories::AutoCategory> {
+        if chat.kind == crate::model::ChatKind::Group {
+            return None;
+        }
+        let member = self.later_key(chat);
+        self.settings
+            .beeper
+            .category_overrides
+            .iter()
+            .find(|(saved, _)| saved == &member)
+            .map(|(_, category)| *category)
+            .or_else(|| crate::categories::automatic(chat, crate::util::now()))
+    }
+
+    /// Moves a chat to a category for good, or hands it back to the rules
+    /// with `None`. The move is this chat's alone and local only.
+    fn set_chat_category(&mut self, id: &str, category: Option<crate::categories::AutoCategory>) {
+        let Some(chat) = self.chat(id) else {
+            return;
+        };
+        if chat.kind == crate::model::ChatKind::Group {
+            return;
+        }
+        let member = self.later_key(chat);
+        let overrides = &mut self.settings.beeper.category_overrides;
+        overrides.retain(|(saved, _)| saved != &member);
+        if let Some(category) = category {
+            overrides.push((member, category));
+        }
+        self.mark_settings_dirty();
+    }
+
     pub fn toggle_reply_later(&mut self) {
         let Some(chat) = self.current_chat() else {
             return;
@@ -3348,6 +3448,121 @@ impl App {
         self.later_contains(&self.settings.beeper.reply_later, chat)
     }
 
+    pub fn composed_forward_running(&self) -> bool {
+        self.forward_items.iter().any(|item| {
+            matches!(
+                item.state,
+                crate::composed_forward::State::Waiting | crate::composed_forward::State::Sending
+            )
+        })
+    }
+
+    fn is_composed_forward(&self, message: &Message) -> bool {
+        message.from_me
+            && self
+                .chat(&message.chat)
+                .and_then(crate::merged::Member::of)
+                .is_some_and(|member| {
+                    self.settings
+                        .beeper
+                        .forwarded_messages
+                        .iter()
+                        .any(|mark| mark.member == member && mark.message == message.id)
+                })
+    }
+
+    fn prepare_composed_forward(
+        &self,
+        source: &str,
+        ids: &[String],
+    ) -> Result<Vec<crate::composed_forward::Item>, String> {
+        let source_chat = self
+            .chat(source)
+            .filter(|chat| !chat.locked)
+            .ok_or("Source chat is unavailable or locked")?;
+        let member = crate::merged::Member::of(source_chat).ok_or("Source identity unavailable")?;
+        if self.chats.iter().filter(|chat| chat.id == source).count() != 1 {
+            return Err("Source identity is ambiguous".into());
+        }
+        let conversation = self
+            .conversations
+            .get(source)
+            .ok_or("Source messages are not loaded")?;
+        let mut messages = Vec::new();
+        for id in ids {
+            let message = conversation
+                .message(id)
+                .filter(|message| {
+                    message.chat == source && crate::app::can_select(&message.content)
+                })
+                .ok_or("A selected message is no longer available")?;
+            messages.push(message);
+        }
+        messages.sort_by_key(|message| (message.timestamp, message.history_order, &message.id));
+        messages.dedup_by_key(|message| &message.id);
+        let mut items = Vec::new();
+        for message in messages {
+            let sender = if message.from_me {
+                "You".into()
+            } else {
+                self.display_name_or(&message.sender, message.sender_name.as_deref())
+            };
+            let body = match &message.content {
+                Content::Text { text, .. } | Content::Interactive { text, .. } => text.as_str(),
+                Content::Image { caption, .. }
+                | Content::Video { caption, .. }
+                | Content::Document { caption, .. } => caption.as_deref().unwrap_or_default(),
+                _ => "",
+            };
+            let text = crate::composed_forward::compose(
+                &sender,
+                source_chat
+                    .backend_network
+                    .as_deref()
+                    .or(source_chat.network.as_deref())
+                    .unwrap_or("Unknown network"),
+                &crate::util::full_stamp(message.timestamp),
+                (self.forward_include_group && source_chat.kind == crate::model::ChatKind::Group)
+                    .then_some(source_chat.name.as_str()),
+                body,
+            );
+            for destination in &self.forward_recipients {
+                let target = self
+                    .chat(destination)
+                    .filter(|chat| crate::ui::dialogs::forwardable(chat))
+                    .ok_or("A destination is no longer writable")?;
+                let target_member = crate::merged::Member::of(target)
+                    .filter(|target| target.origin == member.origin)
+                    .ok_or("Destination identity unavailable or belongs to another server")?;
+                if self
+                    .chats
+                    .iter()
+                    .filter(|chat| chat.id == *destination)
+                    .count()
+                    != 1
+                {
+                    return Err("Destination identity ambiguous".into());
+                }
+                items.push(crate::composed_forward::Item {
+                    origin: member.origin.clone(),
+                    planned: false,
+                    source_chat: source.into(),
+                    source_message: message.id.clone(),
+                    source_account: member.account.clone(),
+                    destination_account: target_member.account,
+                    destination: destination.clone(),
+                    attachment: None,
+                    text: text.clone(),
+                    state: crate::composed_forward::State::Waiting,
+                });
+            }
+        }
+        if items.is_empty() {
+            return Err("No messages selected".into());
+        }
+        Ok(items)
+    }
+
     pub fn read_later_contains(&self, chat: &Chat) -> bool {
         self.later_contains(&self.settings.beeper.read_later, chat)
     }
@@ -3374,6 +3589,7 @@ impl App {
         !self.show_archived
             && self.chat_filter == ChatFilter::All
             && self.label_filter.is_none()
+            && self.auto_category_filter.is_none()
             && self.chats.iter().any(|c| c.backend_account.is_some())
     }
 
@@ -3482,9 +3698,11 @@ impl App {
             && (self.show_archived
                 || (queue == ChatFilter::All
                     && (self.category_filter == Some(ChatFilter::Channels)
-                        || self.label_filter.is_some()))
+                        || self.label_filter.is_some()
+                        || self.auto_category_filter.is_some()))
                 || (queue == ChatFilter::Unread
-                    && self.category_filter == Some(ChatFilter::Channels)
+                    && (self.category_filter == Some(ChatFilter::Channels)
+                        || (self.auto_category_filter.is_some() && chat.is_channel()))
                     && chat.looks_unread())
                 || self.filter_matches(queue, chat)
                 || (queue == ChatFilter::Unread && self.unread_kept.contains(&chat.id)))
@@ -3492,6 +3710,9 @@ impl App {
                 .category_filter
                 .is_none_or(|filter| filter.matches(chat))
             && (!self.favorites_only || chat.favorite)
+            && self
+                .auto_category_filter
+                .is_none_or(|category| self.chat_category(chat) == Some(category))
             && self
                 .label_filter
                 .as_ref()
@@ -3511,6 +3732,7 @@ impl App {
             || self.category_filter.is_some()
             || self.favorites_only
             || self.label_filter.is_some()
+            || self.auto_category_filter.is_some()
             || self.beeper_unreplied
     }
 
@@ -3564,6 +3786,7 @@ impl App {
         self.category_filter = None;
         self.favorites_only = false;
         self.label_filter = None;
+        self.auto_category_filter = None;
         self.beeper_unreplied = false;
         self.select_beeper_scope(None, None);
         self.remember_list_filter();
@@ -4055,12 +4278,49 @@ impl App {
         self.avatars.insert(id.to_owned(), Some(path));
     }
 
+    /// Resolve a linked person's picture without changing its representative
+    /// chat, destination, or source caches. Recompute on every lookup so a
+    /// changed default or an asynchronously loaded picture takes effect.
+    fn linked_avatar_ids(&self, id: &str) -> Option<Vec<String>> {
+        let chat = self.chat(id)?;
+        let person = self
+            .settings
+            .beeper
+            .people
+            .iter()
+            .find(|person| person.members.iter().any(|member| member.matches(chat)))?;
+        Some(
+            person
+                .avatar_members(&self.chats, chat)
+                .into_iter()
+                .map(|member| member.chat.clone())
+                .collect(),
+        )
+    }
+
     pub fn avatar(&mut self, id: &str) -> Option<PathBuf> {
+        if let Some(ids) = self.linked_avatar_ids(id) {
+            return ids
+                .into_iter()
+                .find_map(|id| self.account_mut().avatar(&id));
+        }
         self.account_mut().avatar(id)
     }
 
-    /// Returns or requests a full-size profile picture.
+    /// Full-size and thumbnail use the same primary-first order. A primary
+    /// thumbnail beats another network's full-size picture while it loads.
     pub fn avatar_full(&mut self, id: &str) -> Option<PathBuf> {
+        if let Some(ids) = self.linked_avatar_ids(id) {
+            return ids.into_iter().find_map(|id| {
+                self.source_avatar_full(&id)
+                    .or_else(|| self.account_mut().avatar(&id))
+            });
+        }
+        self.source_avatar_full(id)
+    }
+
+    /// Returns or requests one source's full-size profile picture.
+    fn source_avatar_full(&mut self, id: &str) -> Option<PathBuf> {
         if let Some(known) = self.avatars_full.get(id) {
             return known.clone();
         }
@@ -4195,6 +4455,157 @@ impl App {
 
     fn apply_backend_event(&mut self, event: Event, live: bool) {
         match event {
+            Event::BeeperMediaProgress {
+                local,
+                member,
+                state,
+            } => {
+                if let Some(record) = self
+                    .pending_media
+                    .get_mut(&local)
+                    .filter(|r| r.job.member == member)
+                {
+                    let visible = record.visible.clone();
+                    let delivery = match &state {
+                        crate::pending_media::State::NotSubmitted(_) => Delivery::Failed,
+                        crate::pending_media::State::Unknown(_) => Delivery::Unknown,
+                        crate::pending_media::State::Confirmed => Delivery::Sent,
+                        _ => Delivery::Pending,
+                    };
+                    record.state = state;
+                    if let Some(message) = self
+                        .conversations
+                        .get_mut(&member.chat)
+                        .and_then(|c| c.message_mut(&visible))
+                    {
+                        message.status = delivery;
+                    }
+                }
+            }
+            Event::BeeperMediaResolved {
+                local,
+                member,
+                message,
+                complete,
+            } => {
+                if let Some(record) = self
+                    .pending_media
+                    .get(&local)
+                    .filter(|r| r.job.member == member)
+                    && message.chat == member.chat
+                    && message.from_me
+                {
+                    let visible = record.visible.clone();
+                    let resolved_id = message.id.clone();
+                    let has_attachment = message.content.media().is_some();
+                    let release_preview = complete && has_attachment;
+                    if let Some(conversation) = self.conversations.get_mut(&member.chat) {
+                        // Replace identity/content in the same slot. Do not add another row.
+                        conversation
+                            .messages
+                            .retain(|m| m.id == visible || m.id != message.id);
+                        if let Some(index) =
+                            conversation.messages.iter().position(|m| m.id == visible)
+                        {
+                            let mut message = *message;
+                            // Sparse pending echoes bind identity, not content. Preserve
+                            // the staged preview/caption until the actual attachment arrives.
+                            if !has_attachment {
+                                message.content = conversation.messages[index].content.clone();
+                                message.quoted = conversation.messages[index].quoted.clone();
+                                message.thumbnail = conversation.messages[index].thumbnail.clone();
+                            }
+                            // Keep the dispatch position while the server's clock differs.
+                            message.timestamp = conversation.messages[index].timestamp;
+                            conversation.messages[index] = message;
+                        }
+                        conversation.rows.remove(&visible);
+                    }
+                    if release_preview {
+                        if let Some(record) = self.pending_media.remove(&local)
+                            && record.job.temporary
+                            && let crate::pending_media::Payload::File { path, .. } =
+                                record.job.payload
+                        {
+                            crate::backend::beeper::discard_temp_upload(&path);
+                        }
+                    } else if let Some(record) = self.pending_media.get_mut(&local) {
+                        record.visible = resolved_id;
+                        if complete {
+                            record.state = crate::pending_media::State::Confirmed;
+                        }
+                    }
+                }
+            }
+            Event::BeeperForwardPrepared { generation, items } => {
+                if generation == self.forward_generation {
+                    self.forward_items = items;
+                }
+            }
+            Event::BeeperForwardProgress {
+                generation,
+                index,
+                state,
+            } => {
+                if generation == self.forward_generation
+                    && let Some(item) = self.forward_items.get_mut(index)
+                {
+                    item.state = state;
+                }
+            }
+            Event::BeeperForwardMarked {
+                origin,
+                account,
+                chat,
+                message,
+            } => {
+                let mark = crate::settings::ForwardedMessage {
+                    member: crate::merged::Member {
+                        origin,
+                        account,
+                        chat,
+                    },
+                    message,
+                    pending: true,
+                };
+                if !self.settings.beeper.forwarded_messages.contains(&mark) {
+                    self.settings.beeper.forwarded_messages.push(mark);
+                    self.mark_settings_dirty();
+                }
+            }
+            Event::BeeperForwardResolved {
+                origin,
+                account,
+                chat,
+                pending,
+                final_id,
+            } => {
+                let member = crate::merged::Member {
+                    origin,
+                    account,
+                    chat: chat.clone(),
+                };
+                let pending_message = self
+                    .settings
+                    .beeper
+                    .forwarded_messages
+                    .iter()
+                    .any(|mark| mark.member == member && mark.message == pending);
+                if pending_message {
+                    let mark = crate::settings::ForwardedMessage {
+                        member: member.clone(),
+                        message: final_id,
+                        pending: false,
+                    };
+                    self.settings.beeper.forwarded_messages.retain(|mark| {
+                        !(mark.member == member && mark.message == pending && mark.pending)
+                    });
+                    if !self.settings.beeper.forwarded_messages.contains(&mark) {
+                        self.settings.beeper.forwarded_messages.push(mark);
+                        self.mark_settings_dirty();
+                    }
+                }
+            }
             Event::BeeperAccounts { origin, accounts } => {
                 self.beeper_accounts.insert(origin, accounts);
             }
@@ -4407,11 +4818,114 @@ impl App {
                     }
                 }
             }
+            Event::BeeperViewerMedia {
+                chat,
+                around,
+                result,
+            } => {
+                if live && self.viewer_media_chat.as_deref() == Some(chat.as_str()) {
+                    self.viewer_media_loading = false;
+                    let pending = self.viewer_step_pending.take();
+                    match result {
+                        Ok((mut items, more)) => {
+                            for item in &mut items {
+                                if let Some(local) = self
+                                    .conversations
+                                    .get(&chat)
+                                    .and_then(|conversation| conversation.message(&item.id))
+                                    .and_then(|message| {
+                                        crate::model::MediaItem::of_message(message)
+                                            .into_iter()
+                                            .find(|local| local.card == item.card)
+                                    })
+                                {
+                                    item.path = local.path;
+                                    item.thumbnail = local.thumbnail;
+                                }
+                                if let Some(known) = self
+                                    .viewer_media
+                                    .iter()
+                                    .find(|old| old.id == item.id && old.card == item.card)
+                                {
+                                    item.path = known.path.clone().or(item.path.take());
+                                }
+                                if let Some(preview) = &self.image_preview
+                                    && preview.message() == item.id
+                                    && preview.card() == item.card
+                                {
+                                    item.path = preview
+                                        .path()
+                                        .map(std::path::Path::to_path_buf)
+                                        .or(item.path.take());
+                                }
+                            }
+                            self.viewer_media = items;
+                            self.viewer_media_more = more;
+                            if let Some(step) = pending
+                                && self.image_preview.as_ref().is_some_and(|preview| {
+                                    Some(preview.message()) == around.as_deref()
+                                })
+                            {
+                                // Apply only if this page actually supplied a neighbour.
+                                let can_step = self
+                                    .image_preview
+                                    .as_ref()
+                                    .and_then(|p| p.position(&self.viewer_media))
+                                    .and_then(|i| i.checked_add_signed(isize::from(step)))
+                                    .is_some_and(|i| i < self.viewer_media.len());
+                                if can_step {
+                                    self.actions.push(Action::ViewerStep(step));
+                                }
+                            }
+                        }
+                        // The gallery worker reports plain-English strings;
+                        // translate the known ones here, where the locale is
+                        // known. Each stays a literal gettext call so the
+                        // catalogs regenerated on main pick the strings up.
+                        Err(error) => {
+                            let localized = match error.as_str() {
+                                "Media history is busy; try the arrow again" => {
+                                    crate::i18n::gettext(
+                                        self.locale,
+                                        "Media history is busy; try the arrow again",
+                                    )
+                                    .into_owned()
+                                }
+                                "Media history reached its 20000-item safety limit" => {
+                                    crate::i18n::gettext(
+                                        self.locale,
+                                        "Media history reached its 20000-item safety limit",
+                                    )
+                                    .into_owned()
+                                }
+                                "Media history cursor repeated; earlier items are kept" => {
+                                    crate::i18n::gettext(
+                                        self.locale,
+                                        "Media history cursor repeated; earlier items are kept",
+                                    )
+                                    .into_owned()
+                                }
+                                "Media history did not match the requested chat" => {
+                                    crate::i18n::gettext(
+                                        self.locale,
+                                        "Media history did not match the requested chat",
+                                    )
+                                    .into_owned()
+                                }
+                                _ => error,
+                            };
+                            self.toast_error(localized)
+                        }
+                    }
+                }
+            }
             Event::ChatMedia { chat, items, .. } => {
                 // An album for a chat the viewer has already left, or from an
                 // account that is not on screen, arrives too late to matter.
                 if live && self.viewer_media_chat.as_deref() == Some(chat.as_str()) {
                     self.viewer_media = items;
+                    self.viewer_media_loading = false;
+                    self.viewer_media_more = false;
                 }
             }
             Event::ChatUpdated(chat) => {
@@ -4424,10 +4938,53 @@ impl App {
             }
             Event::Messages {
                 chat,
-                messages,
+                mut messages,
                 older,
                 complete,
             } => {
+                let exact_member = self.chats.iter().filter(|c| c.id == chat).count() == 1;
+                let member = exact_member
+                    .then(|| self.chat(&chat).and_then(crate::merged::Member::of))
+                    .flatten();
+                let completed: Vec<_> = self
+                    .pending_media
+                    .iter()
+                    .filter(|(_, record)| {
+                        record.state == crate::pending_media::State::Confirmed
+                            && member.as_ref() == Some(&record.job.member)
+                            && messages.iter().any(|message| {
+                                message.id == record.visible
+                                    && message.chat == chat
+                                    && message.from_me
+                                    && message.content.media().is_some()
+                            })
+                    })
+                    .map(|(local, _)| local.clone())
+                    .collect();
+                for local in completed {
+                    if let Some(record) = self.pending_media.remove(&local)
+                        && record.job.temporary
+                        && let crate::pending_media::Payload::File { path, .. } = record.job.payload
+                    {
+                        // A history merge normally preserves a downloaded path.
+                        // This path is an owned preview being retired, not a cache
+                        // entry. Clear only that exact path before merge can copy it.
+                        if let Some(media) = self
+                            .conversations
+                            .get_mut(&chat)
+                            .and_then(|c| c.message_mut(&record.visible))
+                            .and_then(|m| m.content.media_mut())
+                            && media.path.as_ref() == Some(&path)
+                        {
+                            media.path = None;
+                            media.state = crate::model::MediaState::Idle;
+                        }
+                        crate::backend::beeper::discard_temp_upload(&path);
+                    }
+                }
+                for message in &mut messages {
+                    message.forwarded |= self.is_composed_forward(message);
+                }
                 for message in &messages {
                     if !message.from_me
                         && let Some(name) =
@@ -4736,7 +5293,8 @@ impl App {
                 }
             }
             Event::MessageUpdated(message) => {
-                let message = *message;
+                let mut message = *message;
+                message.forwarded |= self.is_composed_forward(&message);
                 // The starred panel holds its own copy. An edit has to
                 // replace that row, or the open list keeps the old text.
                 let in_starred = self.starred.iter().any(|entry| {
@@ -4974,6 +5532,7 @@ impl App {
                 }
                 if let Some(conversation) = self.conversations.get_mut(&chat) {
                     conversation.messages.retain(|message| message.id != id);
+                    conversation.width_book.invalidate(&id);
                 }
                 if live && self.editing.as_deref() == Some(id.as_str()) {
                     self.editing = None;
@@ -5309,7 +5868,18 @@ impl App {
                     });
                 }
             }
-            Event::Info(message) => self.toast(message),
+            Event::Info(message) => {
+                let message = match message.as_str() {
+                    "Beeper reports that a message failed to send" => crate::i18n::gettext(self.locale,
+                        "Beeper reports that a message failed to send").into_owned(),
+                    "Beeper forward confirmation timed out; check history before retrying" => crate::i18n::gettext(self.locale,
+                        "Beeper forward confirmation timed out; check history before retrying").into_owned(),
+                    "Beeper has not confirmed this send after 60 seconds; check history before retrying" => crate::i18n::gettext(self.locale,
+                        "Beeper has not confirmed this send after 60 seconds; check history before retrying").into_owned(),
+                    _ => message,
+                };
+                self.toast(message);
+            }
             Event::QuoteResolved {
                 chat,
                 message,
@@ -5830,6 +6400,13 @@ impl App {
                 self.notifications.clear_account(&account);
                 self.chats.clear();
                 self.conversations.clear();
+                for (_, record) in self.pending_media.drain() {
+                    if record.job.temporary
+                        && let crate::pending_media::Payload::File { path, .. } = record.job.payload
+                    {
+                        crate::backend::beeper::discard_temp_upload(&path);
+                    }
+                }
                 self.contacts.clear();
                 self.avatars.clear();
                 self.starred.clear();
@@ -6029,6 +6606,11 @@ impl App {
 
     /// Rechecks source-chat authorization for every retained private quote.
     fn reply_source_visible(&self, target: &crate::model::ReplyTarget, destination: &str) -> bool {
+        if self.pending_media.values().any(|record| {
+            record.job.member.chat == target.source_chat(destination) && record.visible == target.id
+        }) {
+            return false;
+        }
         target.chat.is_none()
             || self
                 .chat(target.source_chat(destination))
@@ -6712,6 +7294,7 @@ impl App {
         self.backend.send(Command::LoadChatMedia {
             chat: chat.to_owned(),
             around,
+            fresh: true,
         });
     }
 
@@ -6882,6 +7465,80 @@ impl App {
             self.reconcile_linked_read_scope(&id);
         }
         self.mark_settings_dirty();
+    }
+
+    fn refresh_linked_scopes(&mut self) {
+        let ids: Vec<_> = self.conversations.keys().cloned().collect();
+        for id in ids {
+            self.reconcile_linked_read_scope(&id);
+        }
+    }
+
+    /// Pairs of chats on different networks that look like one person. Local
+    /// only: names and handles already loaded, never a request.
+    pub fn link_suggestions(&mut self) -> Vec<crate::suggest::Suggestion> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for chat in &self.chats {
+            (&chat.id, &chat.name, &chat.handles, &chat.backend_network).hash(&mut hasher);
+            (chat.kind == crate::model::ChatKind::Direct, chat.locked).hash(&mut hasher);
+            (&chat.backend_origin, &chat.backend_account).hash(&mut hasher);
+        }
+        self.settings.beeper.people.hash(&mut hasher);
+        self.settings.beeper.dismissed_links.hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some((known, found)) = &self.link_suggestions_cache
+            && *known == key
+        {
+            return found.clone();
+        }
+        let found = crate::suggest::suggestions(
+            &self.chats,
+            &self.settings.beeper.people,
+            &self.settings.beeper.dismissed_links,
+        );
+        self.link_suggestions_cache = Some((key, found.clone()));
+        found
+    }
+
+    /// Links the suggested pair, with an Undo toast that takes back only this link.
+    pub fn accept_link_suggestion(&mut self, suggestion: &crate::suggest::Suggestion) {
+        let before = self.settings.beeper.people.clone();
+        let added = crate::suggest::added_by(&before, suggestion);
+        let name = self
+            .chat(&suggestion.a.chat)
+            .map(|chat| chat.name.clone())
+            .unwrap_or_default();
+        // Joining a person that earlier links built makes those links
+        // foundations of this one. Their Undo would take this join with it
+        // while this toast still offers it, so only the newest Undo stays.
+        let extended = before
+            .iter()
+            .find(|p| p.members.contains(&suggestion.a) || p.members.contains(&suggestion.b))
+            .cloned();
+        if let Some(person) = extended {
+            self.toasts.retain(|toast| match &toast.kind {
+                ToastKind::Undo(earlier) => !crate::suggest::depends_on(&person, earlier),
+                _ => true,
+            });
+        }
+        self.settings.beeper.people = crate::suggest::accepted(before, suggestion, name.trim());
+        self.refresh_linked_scopes();
+        self.mark_settings_dirty();
+        let message = crate::i18n::gettext(self.locale, "Linked as one person").into_owned();
+        self.toast(message);
+        if let Some(toast) = self.toasts.last_mut() {
+            toast.kind = ToastKind::Undo(added);
+        }
+    }
+
+    /// Remembers that this pair is not the same person.
+    pub fn dismiss_link_suggestion(&mut self, suggestion: &crate::suggest::Suggestion) {
+        let pair = suggestion.pair();
+        if !self.settings.beeper.dismissed_links.contains(&pair) {
+            self.settings.beeper.dismissed_links.push(pair);
+            self.mark_settings_dirty();
+        }
     }
 
     pub(crate) fn person_history_error(&self, chat: &str) -> Option<String> {
@@ -7363,9 +8020,14 @@ impl App {
             // Keep inactive transcript caches small. A revisited conversation
             // fetches its page again from Beeper; no remote history is deleted.
             // Only the open chat is active; a recent chat refetches on return.
+            let unresolved: std::collections::HashSet<_> = self
+                .pending_media
+                .values()
+                .map(|record| record.job.member.chat.clone())
+                .collect();
             let mut kept = 0usize;
             self.conversations.retain(|chat, _| {
-                if chat == &id {
+                if chat == &id || unresolved.contains(chat) {
                     true
                 } else {
                     kept += 1;
@@ -7373,9 +8035,11 @@ impl App {
                 }
             });
             for (chat, conversation) in self.conversations.iter_mut() {
-                if chat != &id && conversation.messages.len() > 200 {
+                if chat != &id && !unresolved.contains(chat) && conversation.messages.len() > 200 {
                     let remove = conversation.messages.len() - 200;
-                    conversation.messages.drain(..remove);
+                    for trimmed in conversation.messages.drain(..remove) {
+                        conversation.width_book.invalidate(&trimmed.id);
+                    }
                     conversation.rows.clear();
                     conversation.complete = false;
                     conversation.requested = false;
@@ -7595,18 +8259,17 @@ impl App {
             let beeper = self
                 .chat(&chat)
                 .is_some_and(|chat| chat.backend_account.is_some());
-            if !beeper
-                && let Some(message) = self
-                    .conversations
-                    .get_mut(&chat)
-                    .and_then(|conversation| conversation.message_mut(&id))
-            {
-                message.content = Content::text(text.clone());
-                message.edited = true;
-                message.mentions = mention_refs(&mentions);
-                if mention_everyone {
-                    crate::mentions::push_everyone(&mut message.mentions);
+            if !beeper && let Some(conversation) = self.conversations.get_mut(&chat) {
+                if let Some(message) = conversation.message_mut(&id) {
+                    message.content = Content::text(text.clone());
+                    message.edited = true;
+                    message.mentions = mention_refs(&mentions);
+                    if mention_everyone {
+                        crate::mentions::push_everyone(&mut message.mentions);
+                    }
                 }
+                // The text changed under a frozen width; let it settle again.
+                conversation.width_book.invalidate(&id);
             }
             self.backend.send(Command::EditText {
                 chat,
@@ -7758,6 +8421,127 @@ impl App {
     }
 
     /// Sends pending files, attaching the caption to the first.
+    pub(crate) fn dispatch_pending_media(
+        &mut self,
+        member: crate::merged::Member,
+        staged: Staged,
+        caption: Option<String>,
+        quoting: Option<crate::model::ReplyTarget>,
+    ) {
+        use crate::pending_media::{Job, Payload, Record, State};
+        let local = format!("solmu-local-media-{}-{}", crate::util::now(), staged.id);
+        let temporary = self.attachment_temporary_paths.remove(&staged.id).is_some();
+        let document = matches!(&staged.item, Pending::Document(_));
+        let (payload, content) = match staged.item {
+            Pending::File(path) | Pending::Document(path) => {
+                let media = crate::model::Media {
+                    mime: "application/octet-stream".into(),
+                    size: 0,
+                    width: None,
+                    height: None,
+                    album: None,
+                    path: Some(path.clone()),
+                    state: Default::default(),
+                };
+                let image = !document
+                    && path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|ext| {
+                            ["png", "jpg", "jpeg", "webp", "bmp", "gif"]
+                                .contains(&ext.to_ascii_lowercase().as_str())
+                        });
+                let content = if image {
+                    Content::Image {
+                        caption: caption.clone(),
+                        media,
+                        motion: None,
+                    }
+                } else {
+                    Content::Document {
+                        media,
+                        file_name: path
+                            .file_name()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "Attachment".into()),
+                        caption: caption.clone(),
+                        pages: None,
+                    }
+                };
+                (Payload::File { path, document }, content)
+            }
+            Pending::Picture {
+                width,
+                height,
+                rgba,
+                ..
+            } => {
+                let media = crate::model::Media {
+                    mime: "image/png".into(),
+                    size: rgba.len() as u64,
+                    width: Some(width as u32),
+                    height: Some(height as u32),
+                    album: None,
+                    path: None,
+                    state: Default::default(),
+                };
+                (
+                    Payload::Picture {
+                        width: width as u32,
+                        height: height as u32,
+                        rgba,
+                    },
+                    Content::Image {
+                        caption: caption.clone(),
+                        media,
+                        motion: None,
+                    },
+                )
+            }
+        };
+        let job = Job {
+            temporary,
+            local: local.clone(),
+            member: member.clone(),
+            payload,
+            caption,
+            quoting,
+        };
+        let message = Message {
+            id: local.clone(),
+            chat: member.chat.clone(),
+            sender: self.me.clone().unwrap_or_default(),
+            sender_name: None,
+            from_me: true,
+            timestamp: crate::util::now(),
+            history_order: None,
+            content,
+            status: crate::model::Delivery::Pending,
+            delivered_at: None,
+            read_at: None,
+            quoted: None,
+            reactions: Vec::new(),
+            edited: false,
+            mentions: Vec::new(),
+            forwarded: false,
+            thumbnail: None,
+        };
+        self.conversations
+            .entry(member.chat.clone())
+            .or_default()
+            .messages
+            .push(message);
+        self.pending_media.insert(
+            local.clone(),
+            Record {
+                visible: local,
+                job: job.clone(),
+                state: State::Sending,
+            },
+        );
+        self.backend.send(Command::BeeperMedia(job));
+    }
+
     fn send_pending(
         &mut self,
         account: AccountId,
@@ -7842,7 +8626,6 @@ impl App {
             return;
         }
         let view_once = self.pending_view_once;
-        self.pending_view_once = false;
         if !selected.is_empty()
             && self
                 .pending
@@ -7852,6 +8635,43 @@ impl App {
             self.toast_error(crate::i18n::gettext(self.locale, "GIF and sticker captions cannot carry selected mentions. Remove the mentions or send them separately; media kept.").into_owned());
             return;
         }
+        let pending_member = self.chat(&chat).and_then(crate::merged::Member::of);
+        if pending_member.is_some()
+            && (self.chats.iter().filter(|known| known.id == chat).count() != 1
+                || self
+                    .chat(&chat)
+                    .is_none_or(|known| !known.can_send() || known.locked))
+        {
+            self.restore_text(&owner, caption);
+            self.toast_error(
+                crate::i18n::gettext(
+                    self.locale,
+                    "Destination unavailable, ambiguous or read-only; files kept.",
+                )
+                .into_owned(),
+            );
+            return;
+        }
+        if pending_member.is_some() && (view_once || !selected.is_empty()) {
+            self.restore_text(&owner, caption);
+            self.toast_error(
+                crate::i18n::gettext(
+                    self.locale,
+                    "Beeper attachments cannot carry view-once or selected mentions; files kept.",
+                )
+                .into_owned(),
+            );
+            return;
+        }
+        if pending_member.is_some() && self.pending_media.len() + self.pending.len() > 128 {
+            self.restore_text(&owner, caption);
+            self.toast_error(
+                crate::i18n::gettext(self.locale, "Too many pending media items; files kept.")
+                    .into_owned(),
+            );
+            return;
+        }
+        self.pending_view_once = false;
         self.drafts.remove(&owner);
         self.draft_mentions.remove(&owner);
         self.store_draft(&owner, "");
@@ -7868,6 +8688,12 @@ impl App {
         // Files go in runs of one kind, in the order they were staged.
         let mut runs: Vec<(bool, Vec<PathBuf>)> = Vec::new();
         for staged in std::mem::take(&mut self.pending) {
+            if let Some(member) = pending_member.clone()
+                && !self.attachment_kinds.contains_key(&staged.id)
+            {
+                self.dispatch_pending_media(member, staged, caption.take(), quoting.take());
+                continue;
+            }
             if self.attachment_kinds.contains_key(&staged.id)
                 || matches!(&staged.item, Pending::Picture { .. })
             {
@@ -7980,8 +8806,10 @@ impl App {
             typers.retain(|(_, since)| now.duration_since(*since) < TYPING_TIMEOUT);
         }
         self.typing.retain(|_, typers| !typers.is_empty());
-        self.toasts.retain(|toast| {
-            toast.kind == ToastKind::Error || toast.created.elapsed() < INFO_TOAST_LIFETIME
+        self.toasts.retain(|toast| match toast.kind {
+            ToastKind::Error => true,
+            ToastKind::Undo(_) => toast.created.elapsed() < UNDO_TOAST_LIFETIME,
+            ToastKind::Info => toast.created.elapsed() < INFO_TOAST_LIFETIME,
         });
         if self.settings.check_for_updates
             && !self.backend.is_offline()
@@ -8333,7 +9161,7 @@ impl App {
     }
 
     /// Applies one model action after drawing the views, respecting the app lock and account state.
-    fn apply(&mut self, action: Action, ctx: &egui::Context) {
+    pub(crate) fn apply(&mut self, action: Action, ctx: &egui::Context) {
         if self.app_lock.is_locked() && !allowed_while_locked(&action) {
             // A clicked notification opens its message once unlocked, and a
             // link opens the chat it named; the rest would show or change
@@ -8395,6 +9223,36 @@ impl App {
             self.toast_error(error.into_owned());
             return;
         }
+        let local_media = |chat: &str, id: &str| {
+            self.pending_media
+                .values()
+                .any(|r| r.job.member.chat == chat && r.visible == id)
+        };
+        let touches_pending = match &action {
+            Action::Reply(id)
+            | Action::Edit(id)
+            | Action::SelectMessage(id)
+            | Action::ToggleSelected(id) => self
+                .open_chat
+                .as_deref()
+                .is_some_and(|chat| local_media(chat, id)),
+            Action::DeleteForMe { chat, id }
+            | Action::DeleteForEveryone { chat, id }
+            | Action::SetStar {
+                chat, message: id, ..
+            }
+            | Action::React {
+                chat, message: id, ..
+            } => local_media(chat, id),
+            Action::ShowDialog(Dialog::Forward { chat, messages }) => {
+                messages.iter().any(|id| local_media(chat, id))
+            }
+            _ => false,
+        };
+        if touches_pending {
+            self.toast_error(crate::i18n::gettext(self.locale, "This media item has no confirmed message identity yet. Check its sending status.").into_owned());
+            return;
+        }
         let media_destination = crate::ui::merged::attachment_destination(self, ctx)
             .ok()
             .flatten();
@@ -8434,6 +9292,37 @@ impl App {
             return;
         }
         match action {
+            Action::RetryPendingMedia(local) => {
+                let job = self
+                    .pending_media
+                    .get(&local)
+                    .filter(|r| r.retryable())
+                    .map(|r| r.job.clone());
+                if let Some(job) = job {
+                    let exact = self
+                        .chats
+                        .iter()
+                        .filter(|chat| chat.id == job.member.chat)
+                        .count()
+                        == 1
+                        && self.chat(&job.member.chat).is_some_and(|chat| {
+                            job.member.matches(chat) && !chat.locked && chat.can_send()
+                        });
+                    if !exact {
+                        self.toast_error(
+                            crate::i18n::gettext(
+                                self.locale,
+                                "Original destination is unavailable; not retried.",
+                            )
+                            .into_owned(),
+                        );
+                        return;
+                    }
+                    self.pending_media.get_mut(&local).unwrap().state =
+                        crate::pending_media::State::Sending;
+                    self.backend.send(Command::BeeperMedia(job));
+                }
+            }
             Action::Open(page) => {
                 let opens_chats = page == Page::Chats;
                 // Privacy can change on the phone at any time, and nothing
@@ -8993,6 +9882,7 @@ impl App {
                     return;
                 }
                 let Some(index) = preview.position(&self.viewer_media) else {
+                    self.request_viewer_page(step);
                     return;
                 };
                 // Stepping stops at either end of the album, as it always has.
@@ -9000,6 +9890,9 @@ impl App {
                     .checked_add_signed(isize::from(step))
                     .filter(|next| *next < self.viewer_media.len())
                 else {
+                    if step < 0 {
+                        self.request_viewer_page(step);
+                    }
                     return;
                 };
                 let item = self.viewer_media[next].clone();
@@ -9047,6 +9940,7 @@ impl App {
                 }
             }
             Action::OpenUrl(url) => {
+                let url = self.link_action_url(&url);
                 if let Some(code) = crate::safety::group_invite_code(&url) {
                     self.invite = Some(crate::model::GroupInvite {
                         code: code.clone(),
@@ -9060,12 +9954,72 @@ impl App {
                     self.toast_error("This link type cannot be opened from Solmu");
                 }
             }
+            Action::CopyLink(url) => {
+                ctx.copy_text(self.link_action_url(&url));
+                self.toast("Copied");
+            }
+            Action::LinkPreviewPreferences => {
+                self.apply(Action::Open(Page::Settings), ctx);
+                self.settings_search = "Privacy".into();
+            }
+            Action::ClearLinkPreviews => {
+                crate::image_cache::forget_prefix(ctx, "bytes://local-link-preview/");
+                if let Some(worker) = &self.link_previews {
+                    worker.clear();
+                }
+                self.preview_sources.clear();
+                self.toast("Cached previews cleared");
+            }
+            Action::FetchLinkPreview {
+                account,
+                chat,
+                message,
+                url,
+                automatic,
+                retry,
+            } => {
+                if account != self.account().id.0
+                    || !self.chat_view()
+                    || self.window_hidden
+                    || (automatic && (!self.settings.auto_link_previews || !self.window_focused))
+                    || !self.preview_chat_visible(&chat)
+                    || !self.preview_source_exists(&chat, &message, &url)
+                {
+                    return;
+                }
+                if !self.settings.proxy.trim().is_empty() {
+                    if !automatic {
+                        self.toast_error(
+                            "Link previews are unavailable while a proxy is configured",
+                        );
+                    }
+                    return;
+                }
+                self.sync_link_previews();
+                let request_url = self.link_action_url(&url);
+                let worker = self
+                    .link_previews
+                    .get_or_insert_with(crate::preview_worker::Worker::new);
+                if worker.request(&account, &request_url, retry) {
+                    self.preview_sources.insert((chat, message, url));
+                    ctx.request_repaint_after(Duration::from_millis(100));
+                }
+            }
             Action::CopyText(text) => {
                 ctx.copy_text(text);
                 self.toast("Copied");
             }
             Action::CopyImage(path) => {
                 self.backend.send(Command::PrepareClipboardImage(path));
+            }
+            Action::UndoLinks(added) => {
+                let people = std::mem::take(&mut self.settings.beeper.people);
+                self.settings.beeper.people = crate::suggest::undone(people, &added);
+                self.toasts
+                    .retain(|toast| toast.kind != ToastKind::Undo(added.clone()));
+                self.refresh_linked_scopes();
+                self.mark_settings_dirty();
+                self.toast("Link undone");
             }
             Action::DismissToast(index) => {
                 if index < self.toasts.len() {
@@ -9183,7 +10137,35 @@ impl App {
                 }
             }
             Action::BackToForwardSelection => self.forward_reviewing = false,
+            Action::RetryComposedForward => {
+                if !self.forward_items.iter().any(|item| {
+                    matches!(
+                        item.state,
+                        crate::composed_forward::State::FailedBeforeSend(_)
+                    )
+                }) {
+                    return;
+                }
+                if self.forward_items.iter().any(|item| {
+                    matches!(
+                        item.state,
+                        crate::composed_forward::State::Sending
+                            | crate::composed_forward::State::Waiting
+                    )
+                }) {
+                    return;
+                }
+                crate::composed_forward::retry_failed(&mut self.forward_items);
+                self.backend.send(Command::BeeperForward {
+                    generation: self.forward_generation,
+                    prepared: false,
+                    items: self.forward_items.iter().cloned().enumerate().collect(),
+                });
+            }
             Action::ConfirmForward => {
+                if !self.forward_items.is_empty() {
+                    return;
+                }
                 let Some(Dialog::Forward { chat, messages }) = self.dialog.clone() else {
                     return;
                 };
@@ -9219,6 +10201,25 @@ impl App {
                     return;
                 }
                 let to_chats = std::mem::take(&mut self.forward_recipients);
+                if self
+                    .chat(&chat)
+                    .is_some_and(|source| source.backend_origin.is_some())
+                {
+                    self.forward_recipients = to_chats;
+                    match self.prepare_composed_forward(&chat, &messages) {
+                        Ok(items) => {
+                            self.forward_generation = self.forward_generation.wrapping_add(1);
+                            self.forward_items = items;
+                            self.backend.send(Command::BeeperForward {
+                                generation: self.forward_generation,
+                                prepared: false,
+                                items: self.forward_items.iter().cloned().enumerate().collect(),
+                            });
+                        }
+                        Err(error) => self.toast_error(error),
+                    }
+                    return;
+                }
                 self.backend.send(Command::Forward {
                     from_chat: chat,
                     messages,
@@ -10244,6 +11245,25 @@ impl App {
                     self.toast(crate::i18n::gettext(self.locale, "Marked to reply later"));
                 }
             }
+            Action::SelectAutoCategory(category) => {
+                if self.locked_folder {
+                    self.close_locked_folder();
+                    self.search.clear();
+                    self.search_hits.clear();
+                }
+                self.auto_category_filter = category;
+                self.show_archived = false;
+                self.unread_kept.clear();
+            }
+            Action::SetChatCategory(id, category) => {
+                self.set_chat_category(&id, category);
+                let text = match category {
+                    Some(category) => crate::i18n::gettext(self.locale, "Moved to {category}")
+                        .replace("{category}", &category.label(self.locale)),
+                    None => crate::i18n::gettext(self.locale, "Sorted automatically").into_owned(),
+                };
+                self.toast(text);
+            }
             Action::ToggleReadLater(id) => {
                 let Some(chat) = self.chat(&id) else {
                     return;
@@ -10256,6 +11276,10 @@ impl App {
                 }
             }
             Action::ShowDialog(dialog) => {
+                if self.composed_forward_running() {
+                    self.toast_error("The forward batch is still running. Wait for its results.");
+                    return;
+                }
                 if dialog == Dialog::SendLater && self.has_unsent_media_here() {
                     self.toast_error(crate::i18n::gettext(self.locale, "Send Later cannot include attachments. Remove the staged files before scheduling text.").into_owned());
                     return;
@@ -10318,6 +11342,9 @@ impl App {
                     self.forward_search.clear();
                     self.forward_recipients.clear();
                     self.forward_reviewing = false;
+                    self.forward_include_group = false;
+                    self.forward_items.clear();
+                    self.forward_generation = self.forward_generation.wrapping_add(1);
                     // Until the worker has read the messages' forwarding
                     // scores; it refuses a batch over the real limit anyway.
                     self.forward_limit = crate::model::FORWARD_LIMIT;
@@ -10345,6 +11372,10 @@ impl App {
                 self.dialog = Some(dialog);
             }
             Action::CloseDialog => {
+                if self.composed_forward_running() {
+                    self.toast_error("The forward batch is still running. Wait for its results.");
+                    return;
+                }
                 self.cancel_contact_dialog_request();
                 self.clear_chat_lock_entry();
                 if self.dialog == Some(Dialog::WhatsNew) {
@@ -10352,6 +11383,7 @@ impl App {
                     self.settings_dirty = true;
                 }
                 self.dialog = None;
+                self.forward_dialog_hidden = false;
                 self.invite = None;
                 self.forward_search.clear();
                 self.forward_recipients.clear();
@@ -10417,6 +11449,11 @@ impl App {
                     first_name,
                     to_phone: to_phone.unwrap_or(self.account().settings.save_contacts_to_phone),
                 });
+            }
+            Action::ToggleFlatGroups => {
+                self.settings.flat_groups.grouped_view = !self.settings.flat_groups.grouped_view;
+                self.sidebar_visible = true;
+                self.mark_settings_dirty();
             }
             Action::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
             Action::SetChatFilter(filter) => {
@@ -10911,6 +11948,7 @@ impl App {
                 self.mark_settings_dirty();
             }
             Action::SettingsChanged => {
+                self.sync_link_previews();
                 self.mark_settings_dirty();
                 let address = self.settings.transcription_wyoming.trim().to_string();
                 if address != self.transcriber_address {
@@ -11640,6 +12678,61 @@ impl App {
         }
     }
 
+    pub fn link_action_url(&self, url: &str) -> String {
+        if self.settings.remove_link_tracking {
+            crate::link_policy::without_tracking(url)
+        } else {
+            url.to_owned()
+        }
+    }
+
+    fn preview_chat_visible(&self, chat: &str) -> bool {
+        if self.open_chat.as_deref() == Some(chat) {
+            return true;
+        }
+        let Some(open) = self.current_chat() else {
+            return false;
+        };
+        self.settings.beeper.people.iter().any(|person| {
+            person.members.iter().any(|member| member.matches(open))
+                && self.chat(chat).is_some_and(|source| {
+                    person.members.iter().any(|member| member.matches(source))
+                })
+        })
+    }
+
+    fn preview_source_exists(&self, chat: &str, message: &str, url: &str) -> bool {
+        self.chat(chat).is_some_and(|c| !c.locked)
+            && self.conversations.get(chat).and_then(|c| c.message(message))
+                .is_some_and(|message| matches!(&message.content,
+                    Content::Text { text, .. } if crate::markup::links(text).iter().any(|u| u == url)))
+    }
+
+    fn sync_link_previews(&mut self) {
+        let blocked = self.app_lock.is_locked()
+            || self.window_hidden
+            || !self.chat_view()
+            || !self.settings.proxy.trim().is_empty();
+        let context = (
+            self.account().id.0.clone(),
+            self.open_chat.clone(),
+            self.settings.auto_link_previews,
+            self.settings.remove_link_tracking,
+            blocked,
+        );
+        let missing = self
+            .preview_sources
+            .iter()
+            .any(|(chat, message, url)| !self.preview_source_exists(chat, message, url));
+        if self.preview_context.as_ref() != Some(&context) || missing {
+            if let Some(worker) = &self.link_previews {
+                worker.cancel();
+            }
+            self.preview_sources.clear();
+            self.preview_context = Some(context);
+        }
+    }
+
     /// Processes app state shared by windowed and headless modes.
     pub fn background_frame(&mut self, ctx: &egui::Context) {
         // Events are drained before frame_ui observes focus. Losing focus in
@@ -11672,6 +12765,7 @@ impl App {
         self.tick_audio(ctx);
         self.tick_video(ctx);
         self.apply_actions(ctx);
+        self.sync_link_previews();
         self.sync_prefetch();
         self.hold_media();
         self.follow_receipts();
@@ -11814,6 +12908,9 @@ impl App {
     /// window: media stops, a recording is discarded, the locked-chats folder
     /// closes, and notifications already on the desktop are withdrawn.
     pub fn lock_app(&mut self) {
+        if let Some(worker) = &self.link_previews {
+            worker.cancel();
+        }
         if self.settings.app_lock_hash.is_none() || self.app_lock.is_locked() {
             return;
         }
@@ -12108,6 +13205,22 @@ impl App {
         }
     }
 
+    fn request_viewer_page(&mut self, step: i8) {
+        if self.viewer_media_loading || !self.viewer_media_more {
+            return;
+        }
+        let Some(preview) = &self.image_preview else {
+            return;
+        };
+        self.viewer_step_pending = Some(step);
+        self.viewer_media_loading = true;
+        self.backend.send(Command::LoadChatMedia {
+            chat: preview.chat().to_owned(),
+            around: Some(preview.message().to_owned()),
+            fresh: false,
+        });
+    }
+
     /// Opens the full-window viewer on `preview`, and asks for the album
     /// around it, so stepping through the chat's photos and clips works from
     /// the first frame.
@@ -12120,9 +13233,13 @@ impl App {
         self.viewer_media.clear();
         self.viewer_media_state.clear();
         self.viewer_media_chat = Some(preview.chat().to_owned());
+        self.viewer_media_more = true;
+        self.viewer_media_loading = true;
+        self.viewer_step_pending = None;
         self.backend.send(Command::LoadChatMedia {
             chat: preview.chat().to_owned(),
             around: Some(preview.message().to_owned()),
+            fresh: true,
         });
         self.image_preview = Some(preview);
         self.dialog = None;
@@ -12505,6 +13622,11 @@ impl App {
         {
             self.refocus_composer(ctx);
         }
+        // Text replacements may have changed in System Settings while Solmu
+        // was away; the composer reloads the table on its next use.
+        if regained_focus {
+            self.text_replacements = None;
+        }
         self.window_focused = focused;
         self.report_presence();
         if locked {
@@ -12518,6 +13640,7 @@ impl App {
         }
         crate::ui::show(self, ui);
         self.apply_actions(ctx);
+        self.sync_link_previews();
         // The old colours, if a change is being revealed, go over everything.
         self.theme_transition.paint(ctx);
         // Release the image caches of everything that scrolled away.
@@ -12532,8 +13655,33 @@ impl App {
         }
     }
 
+    /// Replaces the composer's selection with `text`; returns false when
+    /// there is no selection, leaving the cursor path to the caller.
+    pub(crate) fn replace_composer_selection(&mut self, ctx: &egui::Context, text: &str) -> bool {
+        let id = egui::Id::new("composer-text");
+        let Some(range) =
+            egui::TextEdit::load_state(ctx, id).and_then(|state| state.cursor.char_range())
+        else {
+            return false;
+        };
+        let [start, end] = range.sorted_cursors();
+        let (start, end) = (start.index.0, end.index.0);
+        if start == end {
+            return false;
+        }
+        let byte = |at: usize| {
+            self.composer
+                .char_indices()
+                .nth(at)
+                .map_or(self.composer.len(), |(byte, _)| byte)
+        };
+        self.composer.replace_range(byte(start)..byte(end), text);
+        self.set_composer_cursor(ctx, start + text.chars().count());
+        true
+    }
+
     /// Inserts text at the composer cursor or end.
-    fn insert_in_composer(&mut self, ctx: &egui::Context, text: &str) {
+    pub(crate) fn insert_in_composer(&mut self, ctx: &egui::Context, text: &str) {
         let id = egui::Id::new("composer-text");
         let at = egui::TextEdit::load_state(ctx, id)
             .and_then(|state| state.cursor.char_range())
@@ -12576,7 +13724,7 @@ impl App {
         }
     }
 
-    fn set_composer_cursor(&self, ctx: &egui::Context, at: usize) {
+    pub(crate) fn set_composer_cursor(&self, ctx: &egui::Context, at: usize) {
         let id = egui::Id::new("composer-text");
         let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();
         state
@@ -12842,6 +13990,15 @@ impl App {
         }
         for account in &mut self.accounts {
             account.backend.shutdown();
+        }
+        for account in &mut self.accounts {
+            for (_, record) in account.pending_media.drain() {
+                if record.job.temporary
+                    && let crate::pending_media::Payload::File { path, .. } = record.job.payload
+                {
+                    crate::backend::beeper::discard_temp_upload(&path);
+                }
+            }
         }
         crate::backend::beeper::flush_temp_cleanup();
         self.files.flush(fastframe_file::FLUSH_TIMEOUT);
@@ -13791,6 +14948,447 @@ mod tests {
         App::headless(AppDirs::under(&root), Settings::default()).0
     }
 
+    fn seed_pending_media(app: &mut App) -> String {
+        let mut chat = Chat::new("pending-target".into(), "Synthetic target".into());
+        chat.backend_origin = Some("https://synthetic.invalid".into());
+        chat.backend_account = Some("signal".into());
+        let member = crate::merged::Member::of(&chat).unwrap();
+        app.chats.push(chat);
+        let id = app.next_attachment_id();
+        app.dispatch_pending_media(
+            member,
+            Staged {
+                id,
+                item: Pending::File("synthetic.pdf".into()),
+            },
+            Some("caption".into()),
+            None,
+        );
+        app.pending_media.keys().next().unwrap().clone()
+    }
+    #[test]
+    fn pending_media_staged_send_drains_into_a_visible_row_without_optimistic_delivery() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let mut chat = Chat::new("pending-target".into(), "Synthetic".into());
+        chat.backend_origin = Some("https://synthetic.invalid".into());
+        chat.backend_account = Some("signal".into());
+        app.chats.push(chat);
+        app.open_chat = Some("pending-target".into());
+        app.at_bottom = false;
+        app.scroll_to_bottom = false;
+        app.stage(Pending::File("synthetic.pdf".into()));
+        let account = app.account().id.clone();
+        app.send_pending(account, "pending-target".into(), "caption".into(), vec![]);
+        assert!(app.pending.is_empty());
+        assert_eq!(app.pending_media.len(), 1);
+        assert_eq!(app.conversations["pending-target"].messages.len(), 1);
+        assert!(
+            !app.scroll_to_bottom,
+            "sending from older history preserves the viewport"
+        );
+        let sent: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok())
+            .filter(|c| matches!(c, Command::BeeperMedia(_)))
+            .collect();
+        assert_eq!(sent.len(), 1);
+    }
+
+    #[test]
+    fn pending_media_exists_at_dispatch_and_acceptance_is_not_delivery() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let local = seed_pending_media(&mut app);
+        assert!(matches!(commands.try_recv(), Ok(Command::BeeperMedia(_))));
+        assert_eq!(app.conversations["pending-target"].messages.len(), 1);
+        assert_eq!(
+            app.conversations["pending-target"].messages[0].status,
+            Delivery::Pending
+        );
+        let member = app.pending_media[&local].job.member.clone();
+        app.apply_backend_event(
+            Event::BeeperMediaProgress {
+                local: local.clone(),
+                member,
+                state: crate::pending_media::State::Accepted {
+                    pending: "pending".into(),
+                },
+            },
+            true,
+        );
+        assert_eq!(app.conversations["pending-target"].messages[0].id, local);
+        assert!(!app.pending_media[&local].retryable());
+    }
+    #[test]
+    fn pending_media_unknown_cannot_retry_and_safe_retry_is_single_dispatch() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let local = seed_pending_media(&mut app);
+        commands.try_recv().unwrap();
+        let ctx = egui::Context::default();
+        app.pending_media.get_mut(&local).unwrap().state =
+            crate::pending_media::State::Unknown("timeout".into());
+        app.apply(Action::RetryPendingMedia(local.clone()), &ctx);
+        assert!(commands.try_recv().is_err());
+        app.pending_media.get_mut(&local).unwrap().state =
+            crate::pending_media::State::NotSubmitted("upload".into());
+        app.apply(Action::RetryPendingMedia(local.clone()), &ctx);
+        app.apply(Action::RetryPendingMedia(local), &ctx);
+        assert!(matches!(commands.try_recv(), Ok(Command::BeeperMedia(_))));
+        assert!(commands.try_recv().is_err());
+    }
+    #[test]
+    fn pending_media_replaces_exact_local_row_and_ignores_foreign_account() {
+        let mut app = app();
+        let local = seed_pending_media(&mut app);
+        let member = app.pending_media[&local].job.member.clone();
+        let mut real = app.conversations["pending-target"].messages[0].clone();
+        real.id = "final".into();
+        real.status = Delivery::Sent;
+        let mut foreign = member.clone();
+        foreign.account = "foreign".into();
+        app.apply_backend_event(
+            Event::BeeperMediaResolved {
+                local: local.clone(),
+                member: foreign,
+                message: Box::new(real.clone()),
+                complete: true,
+            },
+            true,
+        );
+        assert_eq!(app.conversations["pending-target"].messages[0].id, local);
+        app.conversations
+            .get_mut("pending-target")
+            .unwrap()
+            .messages
+            .push(real.clone());
+        app.apply_backend_event(
+            Event::BeeperMediaResolved {
+                local: local.clone(),
+                member,
+                message: Box::new(real),
+                complete: true,
+            },
+            true,
+        );
+        assert_eq!(app.conversations["pending-target"].messages.len(), 1);
+        assert_eq!(app.conversations["pending-target"].messages[0].id, "final");
+        assert!(!app.pending_media.contains_key(&local));
+    }
+
+    #[test]
+    fn pending_media_survives_cache_eviction_and_inactive_trimming() {
+        let mut app = app();
+        let (backend, _commands) = Backend::recording();
+        app.backend = backend;
+        let local = seed_pending_media(&mut app);
+        let member = app.pending_media[&local].job.member.clone();
+        let template = app.conversations["pending-target"].messages[0].clone();
+        for n in 0..210 {
+            let mut message = template.clone();
+            message.id = format!("history-{n}");
+            app.conversations
+                .get_mut("pending-target")
+                .unwrap()
+                .messages
+                .push(message);
+        }
+        for n in 0..20 {
+            let id = format!("other-{n}");
+            app.chats.push(Chat::new(id.clone(), "Other".into()));
+            app.conversations.entry(id.clone()).or_default();
+            app.open_chat(id);
+            assert!(
+                app.conversations
+                    .get("pending-target")
+                    .is_some_and(|c| c.message(&local).is_some()),
+                "unresolved row must survive cache rotation"
+            );
+        }
+        app.apply_backend_event(
+            Event::BeeperMediaProgress {
+                local: local.clone(),
+                member,
+                state: crate::pending_media::State::NotSubmitted("upload".into()),
+            },
+            true,
+        );
+        app.open_chat("pending-target".into());
+        assert!(app.pending_media[&local].retryable());
+        assert_eq!(
+            app.conversations["pending-target"]
+                .message(&local)
+                .unwrap()
+                .status,
+            Delivery::Failed
+        );
+    }
+
+    #[test]
+    fn pending_media_sparse_echo_keeps_preview_and_caption_until_real_attachment() {
+        let mut app = app();
+        let local = seed_pending_media(&mut app);
+        let member = app.pending_media[&local].job.member.clone();
+        let mut echo = app.conversations["pending-target"].messages[0].clone();
+        echo.id = "pending".into();
+        echo.content = Content::Text {
+            text: "[message]".into(),
+            preview: None,
+        };
+        app.apply_backend_event(
+            Event::BeeperMediaResolved {
+                local: local.clone(),
+                member: member.clone(),
+                message: Box::new(echo.clone()),
+                complete: false,
+            },
+            true,
+        );
+        let preview = app.conversations["pending-target"]
+            .message("pending")
+            .unwrap();
+        assert!(
+            matches!(&preview.content, Content::Document { file_name, caption: Some(caption), .. } if file_name == "synthetic.pdf" && caption == "caption")
+        );
+        assert_eq!(app.pending_media[&local].visible, "pending");
+        // Even a success with sparse content must not turn a file into generic text.
+        echo.id = "final".into();
+        app.apply_backend_event(
+            Event::BeeperMediaResolved {
+                local: local.clone(),
+                member,
+                message: Box::new(echo),
+                complete: true,
+            },
+            true,
+        );
+        assert!(matches!(
+            app.conversations["pending-target"]
+                .message("final")
+                .unwrap()
+                .content,
+            Content::Document { .. }
+        ));
+        assert_eq!(
+            app.pending_media[&local].state,
+            crate::pending_media::State::Confirmed
+        );
+        assert!(!app.pending_media[&local].retryable());
+        let real = app.conversations["pending-target"]
+            .message("final")
+            .unwrap()
+            .clone();
+        app.apply_backend_event(
+            Event::BeeperMediaResolved {
+                local: local.clone(),
+                member: app.pending_media[&local].job.member.clone(),
+                message: Box::new(real),
+                complete: true,
+            },
+            true,
+        );
+        assert!(!app.pending_media.contains_key(&local));
+    }
+
+    #[test]
+    fn pending_media_confirmed_preview_retires_on_exact_full_history_refresh() {
+        let mut app = app();
+        let local = seed_pending_media(&mut app);
+        let member = app.pending_media[&local].job.member.clone();
+        let mut full = app.conversations["pending-target"].messages[0].clone();
+        full.id = "final".into();
+        full.status = Delivery::Sent;
+        let mut sparse = full.clone();
+        sparse.content = Content::Text {
+            text: "[message]".into(),
+            preview: None,
+        };
+        app.apply_backend_event(
+            Event::BeeperMediaResolved {
+                local: local.clone(),
+                member: member.clone(),
+                message: Box::new(sparse),
+                complete: true,
+            },
+            true,
+        );
+        assert_eq!(
+            app.pending_media[&local].state,
+            crate::pending_media::State::Confirmed
+        );
+        // Foreign identity cannot retire the original job even with a matching ID.
+        app.chats
+            .iter_mut()
+            .find(|c| c.id == member.chat)
+            .unwrap()
+            .backend_account = Some("foreign".into());
+        app.apply_backend_event(
+            Event::Messages {
+                chat: member.chat.clone(),
+                messages: vec![full.clone()],
+                older: false,
+                complete: false,
+            },
+            true,
+        );
+        assert!(app.pending_media.contains_key(&local));
+        app.chats
+            .iter_mut()
+            .find(|c| c.id == member.chat)
+            .unwrap()
+            .backend_account = Some(member.account.clone());
+        let mut incoming = full.clone();
+        incoming.from_me = false;
+        app.apply_backend_event(
+            Event::Messages {
+                chat: member.chat.clone(),
+                messages: vec![incoming],
+                older: false,
+                complete: false,
+            },
+            true,
+        );
+        assert!(app.pending_media.contains_key(&local));
+        app.apply_backend_event(
+            Event::Messages {
+                chat: member.chat,
+                messages: vec![full],
+                older: false,
+                complete: false,
+            },
+            true,
+        );
+        assert!(!app.pending_media.contains_key(&local));
+    }
+
+    #[test]
+    fn confirmed_history_never_inherits_a_retired_temporary_preview_path() {
+        for (temporary, cached) in [(true, false), (false, false), (true, true)] {
+            let mut app = app();
+            let local = seed_pending_media(&mut app);
+            let dir = tempfile::tempdir().unwrap();
+            let owned = dir.path().join("preview.pdf");
+            let cache = dir.path().join("download.pdf");
+            std::fs::write(&owned, b"preview").unwrap();
+            std::fs::write(&cache, b"download").unwrap();
+            if temporary {
+                crate::backend::beeper::register_temp_upload(&owned);
+            }
+            let record = app.pending_media.get_mut(&local).unwrap();
+            record.job.temporary = temporary;
+            if let crate::pending_media::Payload::File { path, .. } = &mut record.job.payload {
+                *path = owned.clone();
+            }
+            let member = record.job.member.clone();
+            let media = app
+                .conversations
+                .get_mut("pending-target")
+                .unwrap()
+                .messages[0]
+                .content
+                .media_mut()
+                .unwrap();
+            media.path = Some(if cached { cache.clone() } else { owned.clone() });
+            let mut full = app.conversations["pending-target"].messages[0].clone();
+            full.id = "final".into();
+            full.content.media_mut().unwrap().path = None;
+            let mut sparse = full.clone();
+            sparse.content = Content::Text {
+                text: "[message]".into(),
+                preview: None,
+            };
+            app.apply_backend_event(
+                Event::BeeperMediaResolved {
+                    local: local.clone(),
+                    member: member.clone(),
+                    message: Box::new(sparse),
+                    complete: true,
+                },
+                true,
+            );
+            app.apply_backend_event(
+                Event::Messages {
+                    chat: member.chat,
+                    messages: vec![full],
+                    older: false,
+                    complete: false,
+                },
+                true,
+            );
+            assert!(!app.pending_media.contains_key(&local));
+            let path = &app.conversations["pending-target"]
+                .message("final")
+                .unwrap()
+                .content
+                .media()
+                .unwrap()
+                .path;
+            if temporary && !cached {
+                assert!(
+                    path.is_none(),
+                    "retired temporary path cannot reach remote attachment"
+                );
+            } else {
+                assert_eq!(path.as_ref(), Some(if cached { &cache } else { &owned }));
+            }
+            crate::backend::beeper::flush_temp_cleanup();
+            assert_eq!(owned.exists(), !temporary);
+            assert!(cache.exists());
+        }
+    }
+
+    #[test]
+    fn pending_media_refusal_preserves_view_once_and_staged_photo() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let mut chat = Chat::new("target".into(), "Target".into());
+        chat.backend_origin = Some("local".into());
+        chat.backend_account = Some("whatsapp".into());
+        app.chats.push(chat);
+        app.open_chat = Some("target".into());
+        app.stage(Pending::Picture {
+            width: 1,
+            height: 1,
+            rgba: std::sync::Arc::new(vec![1, 2, 3, 255]),
+            texture: None,
+        });
+        app.pending_view_once = true;
+        let account = app.account().id.clone();
+        app.send_pending(account, "target".into(), "caption".into(), vec![]);
+        assert!(
+            app.pending_view_once,
+            "refusal cannot downgrade a private photo"
+        );
+        assert_eq!(app.pending.len(), 1);
+        assert_eq!(app.composer, "caption");
+        assert!(
+            !std::iter::from_fn(|| commands.try_recv().ok())
+                .any(|c| matches!(c, Command::BeeperMedia(_) | Command::SendImage { .. }))
+        );
+    }
+
+    #[test]
+    fn pending_media_guard_literals_are_extractable_translations() {
+        let source = include_str!("app.rs");
+        let normalized = source.split_whitespace().collect::<Vec<_>>().join(" ");
+        for literal in [
+            "Destination unavailable, ambiguous or read-only; files kept.",
+            "Beeper attachments cannot carry view-once or selected mentions; files kept.",
+            "Too many pending media items; files kept.",
+            "Original destination is unavailable; not retried.",
+            "This media item has no confirmed message identity yet. Check its sending status.",
+        ] {
+            assert!(
+                normalized.contains(&format!("gettext(self.locale, \"{literal}\")"))
+                    || normalized.contains(&format!("gettext( self.locale, \"{literal}\", )")),
+                "untranslated guard: {literal}"
+            );
+        }
+    }
+
     #[test]
     fn opening_an_offline_chat_preserves_seeded_history() {
         let root = tempfile::tempdir().unwrap();
@@ -14515,6 +16113,196 @@ mod tests {
             chat: "source".into(),
             messages: messages.iter().map(|id| (*id).to_owned()).collect(),
         }
+    }
+
+    #[test]
+    fn composed_forward_keeps_in_flight_results_visible_and_refuses_duplicate_confirmation() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let ctx = egui::Context::default();
+        let dialog = forward_dialog(&["m"]);
+        app.dialog = Some(dialog.clone());
+        app.forward_items.push(crate::composed_forward::Item {
+            origin: "synthetic".into(),
+            planned: true,
+            source_chat: "source".into(),
+            source_message: "m".into(),
+            source_account: "a".into(),
+            destination_account: "b".into(),
+            attachment: None,
+            destination: "target".into(),
+            text: "header\nbody".into(),
+            state: crate::composed_forward::State::Sending,
+        });
+        app.apply(Action::CloseDialog, &ctx);
+        assert_eq!(app.dialog, Some(dialog.clone()));
+        app.apply(Action::ShowDialog(forward_dialog(&["another"])), &ctx);
+        assert_eq!(app.dialog, Some(dialog));
+        app.apply(Action::ConfirmForward, &ctx);
+        assert!(commands.try_recv().is_err());
+        app.forward_items[0].state = crate::composed_forward::State::Accepted {
+            pending_id: "pending".into(),
+        };
+        app.apply(Action::CloseDialog, &ctx);
+        assert!(app.dialog.is_none());
+    }
+
+    #[test]
+    fn forward_failure_notices_are_extractable_translations() {
+        let source = include_str!("app.rs");
+        let normalized = source.split_whitespace().collect::<Vec<_>>().join(" ");
+        for literal in [
+            "Beeper reports that a message failed to send",
+            "Beeper forward confirmation timed out; check history before retrying",
+        ] {
+            assert!(
+                normalized.contains(&format!("gettext(self.locale, \"{literal}\")"))
+                    || normalized.contains(&format!("gettext( self.locale, \"{literal}\", )")),
+                "{literal}"
+            );
+        }
+    }
+
+    #[test]
+    fn dismissed_forward_results_stay_closed_after_account_round_trip() {
+        let mut app = app();
+        let (second, _) = Account::detached(
+            &app.dirs,
+            AccountId::parse("2").unwrap(),
+            Default::default(),
+        )
+        .unwrap();
+        app.accounts.push(second);
+        let owner = app.account().id.clone();
+        app.dialog = Some(forward_dialog(&["m"]));
+        app.forward_items.push(crate::composed_forward::Item {
+            origin: "local".into(),
+            planned: true,
+            source_chat: "source".into(),
+            source_message: "m".into(),
+            source_account: "a".into(),
+            destination_account: "b".into(),
+            attachment: None,
+            destination: "target".into(),
+            text: "body".into(),
+            state: crate::composed_forward::State::Accepted {
+                pending_id: "p".into(),
+            },
+        });
+        app.apply(Action::CloseDialog, &egui::Context::default());
+        assert!(app.dialog.is_none());
+        app.switch_account(&AccountId::parse("2").unwrap());
+        app.switch_account(&owner);
+        assert!(
+            app.dialog.is_none(),
+            "dismissed results must stay dismissed"
+        );
+        assert_eq!(app.forward_items.len(), 1, "keep provenance and batch rows");
+    }
+
+    #[test]
+    fn composed_forward_survives_account_switch_and_hidden_progress() {
+        let mut app = app();
+        let (second, _) = Account::detached(
+            &app.dirs,
+            AccountId::parse("2").unwrap(),
+            Default::default(),
+        )
+        .unwrap();
+        app.accounts.push(second);
+        let owner = app.account().id.clone();
+        app.forward_generation = 9;
+        app.forward_items.push(crate::composed_forward::Item {
+            origin: "local".into(),
+            planned: true,
+            source_chat: "source".into(),
+            source_message: "m".into(),
+            source_account: "a".into(),
+            destination_account: "b".into(),
+            attachment: None,
+            destination: "target".into(),
+            text: "header\nbody".into(),
+            state: crate::composed_forward::State::Sending,
+        });
+        app.switch_account(&AccountId::parse("2").unwrap());
+        assert!(app.forward_items.is_empty());
+        let visible = app.active;
+        app.active = 0;
+        app.apply_backend_event(
+            Event::BeeperForwardProgress {
+                generation: 9,
+                index: 0,
+                state: crate::composed_forward::State::FailedBeforeSend("upload".into()),
+            },
+            false,
+        );
+        app.apply_backend_event(
+            Event::BeeperForwardMarked {
+                origin: "local".into(),
+                account: "b".into(),
+                chat: "target".into(),
+                message: "pending".into(),
+            },
+            false,
+        );
+        app.active = visible;
+        app.switch_account(&owner);
+        assert_eq!(app.forward_generation, 9);
+        assert!(
+            matches!(&app.dialog, Some(Dialog::Forward { chat, messages }) if chat == "source" && messages == &["m"])
+        );
+        assert!(matches!(
+            app.forward_items[0].state,
+            crate::composed_forward::State::FailedBeforeSend(_)
+        ));
+        assert!(
+            app.settings
+                .beeper
+                .forwarded_messages
+                .iter()
+                .any(|m| m.message == "pending")
+        );
+    }
+
+    #[test]
+    fn composed_forward_retry_preserves_nonretryable_rows_for_stable_progress_indices() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let ctx = egui::Context::default();
+        let item = crate::composed_forward::Item {
+            origin: "synthetic".into(),
+            planned: true,
+            source_chat: "source".into(),
+            source_message: "m".into(),
+            source_account: "a".into(),
+            destination_account: "b".into(),
+            attachment: None,
+            destination: "target".into(),
+            text: "header\nbody".into(),
+            state: crate::composed_forward::State::Accepted {
+                pending_id: "previous".into(),
+            },
+        };
+        app.forward_items = vec![item.clone(), item.clone(), item];
+        app.forward_items[1].state =
+            crate::composed_forward::State::FailedBeforeSend("download".into());
+        app.forward_items[2].state = crate::composed_forward::State::Uncertain("timeout".into());
+        app.apply(Action::RetryComposedForward, &ctx);
+        let Command::BeeperForward { items, .. } = commands.try_recv().unwrap() else {
+            panic!("expected retry");
+        };
+        assert_eq!(items.len(), 3);
+        assert!(matches!(
+            items[0].1.state,
+            crate::composed_forward::State::Accepted { .. }
+        ));
+        assert_eq!(items[1].1.state, crate::composed_forward::State::Waiting);
+        assert!(matches!(
+            items[2].1.state,
+            crate::composed_forward::State::Uncertain(_)
+        ));
     }
 
     #[test]
@@ -27731,6 +29519,81 @@ mod person_tests {
     }
 
     #[test]
+    fn linked_avatar_follows_primary_falls_back_and_recovers_without_cache_poisoning() {
+        let mut app = linked_unread_app();
+        app.settings.beeper.people[0].primary = Some(Member::of(&app.chats[1]).unwrap());
+        let root = app.account().dirs.media_cache_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        let wa = root.join("synthetic-wa-avatar.png");
+        let tg = root.join("synthetic-tg-avatar.png");
+        std::fs::write(&wa, b"synthetic fixture").unwrap();
+        std::fs::write(&tg, b"synthetic fixture").unwrap();
+        app.adopt_avatar("ada-wa", wa.clone());
+        app.avatars.insert("ada-tg".into(), None);
+        assert_eq!(
+            app.avatar("ada-wa"),
+            Some(wa.clone()),
+            "missing primary falls back"
+        );
+        app.adopt_avatar("ada-tg", tg.clone());
+        assert_eq!(
+            app.avatar("ada-wa"),
+            Some(tg.clone()),
+            "primary arriving asynchronously wins"
+        );
+        assert_eq!(app.avatar("ada-tg"), Some(tg.clone()));
+        app.avatars_full.insert("ada-wa".into(), Some(wa.clone()));
+        assert_eq!(
+            app.avatar_full("ada-wa"),
+            Some(tg),
+            "primary thumbnail beats fallback full size"
+        );
+        app.settings.beeper.people[0].primary = Some(Member::of(&app.chats[0]).unwrap());
+        assert_eq!(
+            app.avatar("ada-tg"),
+            Some(wa.clone()),
+            "new default applies immediately"
+        );
+        assert_eq!(
+            app.avatars.get("ada-wa"),
+            Some(&Some(wa)),
+            "source cache is not overwritten"
+        );
+        app.avatars.insert("ada-wa".into(), None);
+        app.avatars.insert("ada-tg".into(), None);
+        assert_eq!(
+            app.avatar("ada-wa"),
+            None,
+            "initials only when none has a picture"
+        );
+    }
+
+    #[test]
+    fn linked_avatar_requests_primary_first_and_ordinary_avatar_stays_unchanged() {
+        let mut app = linked_unread_app();
+        app.settings.beeper.people[0].primary = Some(Member::of(&app.chats[1]).unwrap());
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        assert_eq!(app.avatar("ada-wa"), None);
+        let requests: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok())
+            .filter_map(|command| {
+                if let Command::FetchAvatar { id, full: false } = command {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(requests, ["ada-tg", "ada-wa"]);
+        app.settings.beeper.people.clear();
+        let source = PathBuf::from("ordinary-avatar");
+        // No Beeper chat inventory for this ordinary non-Beeper fixture.
+        app.chats.clear();
+        app.adopt_avatar("ordinary", source.clone());
+        assert_eq!(app.avatar("ordinary"), Some(source));
+    }
+
+    #[test]
     fn explicit_read_clears_all_exact_linked_members_and_sends_each_source() {
         let mut app = linked_unread_app();
         let (backend, mut commands) = Backend::recording();
@@ -29372,15 +31235,37 @@ mod linked_attachment_tests {
             &ctx,
         );
         let sent: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok()).collect();
-        assert!(sent.iter().any(
-            |c| matches!(c, Command::SendImage { chat, caption: Some(caption), .. }
-            if chat == "default" && caption == "Synthetic caption")
+        let jobs: Vec<_> = sent
+            .iter()
+            .filter_map(|c| match c {
+                Command::BeeperMedia(job) => Some(job),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(jobs.len(), 2);
+        assert!(jobs.iter().all(|job| job.member.chat == "default"
+            && job.member.account == "signal"
+            && job.member.origin == "local"));
+        assert!(matches!(
+            jobs[0].payload,
+            crate::pending_media::Payload::Picture { .. }
         ));
+        assert_eq!(jobs[0].caption.as_deref(), Some("Synthetic caption"));
         assert!(
-            sent.iter()
-                .any(|c| matches!(c, Command::SendFiles { chat, .. } if chat == "default"))
+            matches!(&jobs[1].payload, crate::pending_media::Payload::File { path, document: false } if path == std::path::Path::new("synthetic.pdf"))
         );
-        assert!(!sent.iter().any(|c| matches!(c, Command::SendImage { chat, .. } | Command::SendFiles { chat, .. } if chat == "visible")));
+        assert!(jobs[1].caption.is_none());
+        assert!(
+            !sent
+                .iter()
+                .any(|c| matches!(c, Command::SendImage { .. } | Command::SendFiles { .. }))
+        );
+        assert_eq!(app.conversations["default"].messages.len(), 2);
+        assert!(
+            app.conversations
+                .get("visible")
+                .is_none_or(|c| c.messages.is_empty())
+        );
         assert_eq!(app.open_chat.as_deref(), Some("visible"));
         assert_eq!(
             app.drafts.get("default").map(String::as_str),
@@ -29415,8 +31300,10 @@ mod linked_attachment_tests {
         assert_eq!(app.pending.len(), 1);
         assert_eq!(app.composer, "Keep caption");
         assert!(
-            !std::iter::from_fn(|| commands.try_recv().ok())
-                .any(|c| matches!(c, Command::SendImage { .. } | Command::SendFiles { .. }))
+            !std::iter::from_fn(|| commands.try_recv().ok()).any(|c| matches!(
+                c,
+                Command::SendImage { .. } | Command::SendFiles { .. } | Command::BeeperMedia(_)
+            ))
         );
         app.chats[0].locked = true;
         assert!(crate::ui::merged::attachment_destination(&app, &ctx).is_err());
@@ -29453,7 +31340,7 @@ mod linked_attachment_tests {
         assert_eq!(app.composer, "Returned caption");
         assert!(
             !std::iter::from_fn(|| commands.try_recv().ok())
-                .any(|c| matches!(c, Command::SendFiles { .. }))
+                .any(|c| matches!(c, Command::SendFiles { .. } | Command::BeeperMedia(_)))
         );
         app.settings.beeper.people[0].primary =
             Some(app.settings.beeper.people[0].members[1].clone());
@@ -29589,9 +31476,20 @@ mod linked_attachment_tests {
             },
             &ctx,
         );
-        assert!(std::iter::from_fn(|| picked.try_recv().ok()).any(
-            |c| matches!(c, Command::SendFiles { chat, documents: true, .. } if chat == "default")
-        ));
+        let jobs: Vec<_> = std::iter::from_fn(|| picked.try_recv().ok())
+            .filter_map(|c| match c {
+                Command::BeeperMedia(job) => Some(job),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].member.chat, "default");
+        assert_eq!(jobs[0].member.account, "signal");
+        assert_eq!(jobs[0].member.origin, "local");
+        assert!(
+            matches!(&jobs[0].payload, crate::pending_media::Payload::File { path, document: true } if path == std::path::Path::new("synthetic.pdf"))
+        );
+        assert_eq!(app.conversations["default"].messages.len(), 1);
         assert!(commands.try_recv().is_err());
     }
     fn send_staged(app: &mut App, ctx: &egui::Context, destination: &str) {
@@ -29648,7 +31546,23 @@ mod linked_attachment_tests {
     fn linked_voice_uses_default_and_never_sends_on_a_missing_route() {
         let (_root, mut app, ctx, mut commands) = fixture();
         app.recording = Some(crate::audio::Recorder::simulated(app.waker.clone()));
-        std::thread::sleep(Duration::from_millis(700));
+        // The simulated recorder records in real time, one level per 50 ms,
+        // and its thread can start late on a loaded runner: a fixed sleep can
+        // finish the take below the half-second minimum, which drops it
+        // silently. Wait for enough audio, with a bound, instead. Twelve
+        // levels are 600 ms of samples, safely over the minimum.
+        let wait = Instant::now();
+        while app
+            .recording
+            .as_ref()
+            .is_some_and(|recorder| recorder.levels().len() < 12)
+        {
+            assert!(
+                wait.elapsed() < Duration::from_secs(10),
+                "the simulated recorder produced no audio"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
         app.apply(Action::SendRecording, &ctx);
         assert!(
             matches!(commands.try_recv(), Ok(Command::SendVoice { chat, samples, .. }) if chat == "default" && !samples.is_empty())
@@ -29917,5 +31831,46 @@ mod linked_attachment_tests {
         crate::backend::beeper::flush_temp_cleanup();
         assert!(!path.exists());
         assert!(!late.exists());
+    }
+}
+
+#[cfg(test)]
+mod link_tracking_tests {
+    use super::*;
+    #[test]
+    fn link_tracking_is_opt_in_and_never_changes_message_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(directory.path()), Settings::default());
+        let ctx = egui::Context::default();
+        let original = "https://example.com/a?q=stay%20exact&utm_source=chat#part";
+        assert!(!app.settings.remove_link_tracking);
+        assert_eq!(app.link_action_url(original), original);
+        app.settings.remove_link_tracking = true;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.actions.extend([
+                Action::CopyLink(original.into()),
+                Action::CopyText(original.into()),
+                Action::OpenUrl(original.into()),
+            ]);
+            app.background_frame(ui.ctx());
+        });
+        output.textures_delta.clear();
+        let mut copies = Vec::new();
+        let mut opened = Vec::new();
+        for command in &output.platform_output.commands {
+            match command {
+                egui::OutputCommand::CopyText(text) => copies.push(text.as_str()),
+                egui::OutputCommand::OpenUrl(url) => opened.push(url.url.as_str()),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            copies,
+            ["https://example.com/a?q=stay%20exact#part", original]
+        );
+        assert_eq!(opened, ["https://example.com/a?q=stay%20exact#part"]);
+        let signed = "https://example.com/a?utm_source=chat&X-Amz-Signature=exact#part";
+        assert_eq!(app.link_action_url(signed), signed);
+        assert!(!Settings::default().remove_link_tracking);
     }
 }

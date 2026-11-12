@@ -202,3 +202,10 @@ stack separator borders. Reactions and time share a wrapping footer row.
 one shared320pt content width, a reply and preview sharing the next400pt
 step, plus plain text at80/160/240pt and longer text on the same320/400pt
 grid. Both text and cards grow in80pt steps up to the viewport cap. Use `,light` and a narrow `--demo-size` to check viewport caps.
+
+Use `--demo-page link-menu` to right-click a synthetic named web link through
+the normal pointer handler. Its compact menu keeps only Open link and Copy
+link for the clicked destination, including the original query and fragment.
+`--demo-page supplied-preview` maps a fixed synthetic Beeper `links[]` payload
+through the real adapter into the card renderer. Its image URL is deliberately
+not fetched. No account or public website is contacted.

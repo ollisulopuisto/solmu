@@ -18,6 +18,11 @@ to make Enter add a line and send with Ctrl+Enter (Command+Enter on macOS).
 like WhatsApp, and a message of nothing but emoji shows large.
 Paste text with Ctrl+V (Command+V on macOS) or Shift+Insert, as in other
 Linux applications.
+On macOS the field uses the system's text replacements (System Settings >
+Keyboard > Text Replacements): a shortcut expands to its phrase when you
+type a space, return, or punctuation after it, and just before the message
+sends. Changes made in System Settings apply when Solmu's window next
+gains focus.
 Mentions in a group are written with `@`. Choose **all** to mention
 everyone when the group's member list is available: the message shows `@all`,
 highlighted like any other mention.
@@ -37,6 +42,10 @@ Right-click a message to reply, react with any emoji, edit, forward, delete, or
 check when it was sent, delivered, and read. The reaction row has a **+** that
 opens the full emoji picker. Hover over a reaction to see who added it. When
 someone reacts to one of your messages, the chat moves to the top of the list.
+Right-clicking a web link in message text opens only **Open link** and **Copy
+link**, for that exact destination. Copy keeps its query and fragment. The
+shortened destination can be read in full by hovering it. Right-clicking other
+message text, padding, or a link-preview card still opens the message menu.
 Editing uses the composer. Press Escape to cancel. If WhatsApp refuses an
 edit, the message keeps its earlier text.
 
@@ -212,6 +221,12 @@ The sticker is a 512 × 512 WebP under WhatsApp's 100 KB limit.
 
 ## Attachments
 
+When saving an attachment, Solmu replaces colons with underscores, so
+`photo.png:stream` becomes `photo.png_stream` rather than a hidden NTFS alternate
+data stream. Reserved Windows device stems, including `CONIN$` and `CONOUT$`,
+become `attachment` while retaining their extension: `CONIN$.txt` becomes
+`attachment.txt`.
+
 Paste a picture or copied files, drop files on the window, or select them with
 the paperclip.
 A pasted or dropped attachment is ready at once, so the send key sends it even
@@ -276,7 +291,10 @@ items with the same protocol album identity, sender and local calendar date
 are grouped. **Download all** downloads every item that is not on this
 computer yet, whatever its size, as clicking each one would, and shows
 individual failures; **Save all…** copies downloaded files to a folder
-without replacing existing files. Open an item to view it individually, and
+without replacing existing files. Saved names are made safe: folders, trailing
+spaces and dots are dropped, and a name that Windows reserves for a device
+(such as CON or NUL) becomes `attachment` with its extension kept, so
+`CON.pdf` is saved as `attachment.pdf`. Open an item to view it individually, and
 right-click it to reply to, react to, forward or delete that item alone. A
 download that fails marks only its own item; click it to retry.
 
@@ -664,6 +682,10 @@ on the left above **Settings**, opens the archived chats in the list, and
 shows how many of them are unread. A chip with unread chats shows how many it
 has. Click the active chip again, or **All**, to see every chat. The
 filter applies only to this list: search and the archive still show everything.
+Filters also has an **Automatic category**: People, Quiet people and
+Notifications, sorted by plain rules on this computer (see
+[chat categories](../chat-categories.md)). A chat's menu has **Move to…** to
+override the rules for good.
 Solmu remembers the chip or label each account last showed and comes back
 to it at the next start.
 As on the phone, the list leaves out people you have never exchanged a
@@ -902,7 +924,7 @@ rail, the chat list's header, search and the chat filters, then returns to the
 input. Shift+Tab goes back; hidden controls are skipped. Single messages,
 reactions and chat rows are not stops; Alt+Up/Down switches conversations.
 
-Cmd+D (Ctrl+D elsewhere) toggles the right-hand info sidebar for the open
+Cmd+Option+I (Ctrl+Alt+I elsewhere) toggles the right-hand info sidebar for the open
 chat. Cmd+B still toggles the left chat list; Cmd+I marks Reply later.
 
 ### Numbered sidebar shortcuts
@@ -922,3 +944,10 @@ open chat it does nothing; it never switches to settings or global search.
 `Ctrl+K` (`Cmd+K`) still jumps between recent chats. On macOS both searches are
 listed separately in Edit, using those same shortcuts. Click Settings' search
 field to search settings. Focus does not change either search shortcut's scope.
+
+### Large link-suggestion lists
+
+The Filters link-suggestion list scrolls through every pending pair. Each row
+has a single-line name and its Link / Not the same person buttons. Long names
+are shortened to fit the menu; hover the name to read the full pair. Only rows
+in view are drawn, so offscreen pairs do not build widgets or scan the chat list.

@@ -141,8 +141,21 @@ class WorkflowTests(unittest.TestCase):
 
     def test_expensive_checks_follow_selection_and_portable_failure(self):
         text = workflow('ci.yml')
-        self.assertEqual(text.count('needs: [changes, portable]'), 6)
+        self.assertEqual(text.count('needs: [changes, portable]'), 4)
+        self.assertEqual(text.count('needs: [changes, portable, mac-test]'), 3)
         self.assertIn('!cancelled() && !failure()', text)
+
+    def test_macos_leg_gates_pull_requests_and_keeps_tag_coverage(self):
+        text = workflow('ci.yml')
+        # The macOS gate reports under the same name the tag matrix leg uses.
+        self.assertIn('name: test (macos-latest)', text)
+        block = text.split('  mac-test:', 1)[1].split('  # Linux releases build', 1)[0]
+        self.assertIn("github.event_name == 'pull_request'", block)
+        self.assertIn("!startsWith(github.ref, 'refs/tags/')", block)
+        # Quality, Ubuntu tests and the Nix package report after the gate.
+        self.assertEqual(block.count('needs: [changes, portable]'), 1)
+        # The tag/merge-queue/manual test matrix still carries macOS.
+        self.assertIn('["ubuntu-latest", "macos-latest", "windows-latest"]', text)
         self.assertIn("vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true'", text)
         self.assertIn('cancel-in-progress: true', workflow('flatpak.yml'))
         self.assertIn("upload-artifact: ${{ vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true' }}", workflow('flatpak.yml'))

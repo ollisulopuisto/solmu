@@ -540,6 +540,7 @@ fn action(id: &str) -> Option<Action> {
         "search-all" => Action::FocusSearch,
         "sidebar" => Action::ToggleSidebar,
         "info-sidebar" => Action::ToggleInfoSidebar,
+        "flat-groups" => Action::ToggleFlatGroups,
         "whats-new" => Action::ShowDialog(Dialog::WhatsNew),
         "shortcuts" => Action::ShowDialog(Dialog::Shortcuts),
         "help" => Action::OpenUrl("https://zapfast.rocks/using-zapfast/".into()),

@@ -19,6 +19,9 @@ use crate::settings::AccountSettings;
 /// One WhatsApp account's runtime state.
 pub struct Account {
     pub id: AccountId,
+    pub forward_dialog_hidden: bool,
+    pub forward_generation: u64,
+    pub forward_items: Vec<crate::composed_forward::Item>,
     pub dirs: AccountDirs,
     pub settings: AccountSettings,
     pub(crate) settings_dirty: bool,
@@ -36,6 +39,7 @@ pub struct Account {
     pub favorites: Option<Vec<ChatId>>,
     pub contacts: HashMap<String, Contact>,
     pub conversations: HashMap<ChatId, Conversation>,
+    pub pending_media: HashMap<String, crate::pending_media::Record>,
     pub open_chat: Option<ChatId>,
     /// Recently opened chats, most recent last; `open_chat` is the open
     /// one and is always a member. Feeds the Cmd+K switcher; was the tab
@@ -173,6 +177,9 @@ impl Account {
         let chat_filter = settings.chat_queue.unwrap_or(chat_filter);
         Self {
             id,
+            forward_dialog_hidden: false,
+            forward_generation: 0,
+            forward_items: Vec::new(),
             dirs,
             settings,
             settings_dirty: false,
@@ -188,6 +195,7 @@ impl Account {
             favorites: None,
             contacts: HashMap::new(),
             conversations: HashMap::new(),
+            pending_media: HashMap::new(),
             open_chat,
             open_tabs,
             prefetch_sent: None,
@@ -298,6 +306,9 @@ impl Account {
             crate::backend::beeper::BeeperConfig::from_env()
                 .expect("Beeper session or environment config"),
         );
+        backend.send(crate::backend::Command::BeeperResumeForwards(
+            legacy.beeper.forwarded_messages.clone(),
+        ));
         Ok(Self::new(id, dirs, settings, backend))
     }
 
