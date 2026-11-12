@@ -255,7 +255,13 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                 .data_mut(|data| data.insert_temp(header_row_id(), row.response.rect));
             ui.add_space(6.0);
             if app.global_search {
-                ui.label(egui::RichText::new("Search all chats and messages").small());
+                ui.label(
+                    egui::RichText::new(crate::i18n::gettext(
+                        app.locale,
+                        "Search all chats and messages",
+                    ))
+                    .small(),
+                );
             } else {
                 scope_row(app, ui);
             }
@@ -3443,11 +3449,11 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
     }
     let queued = app.reply_later_contains(chat) || app.read_later_contains(chat);
     let label = if queued {
-        "Clear deal with later"
+        crate::i18n::gettext(locale, "Clear deal with later")
     } else {
-        "Deal with later"
+        crate::i18n::gettext(locale, "Deal with later")
     };
-    if widgets::menu_item(ui, palette, Some(Icon::Clock), label) {
+    if widgets::menu_item(ui, palette, Some(Icon::Clock), &label) {
         app.actions.push(Action::ToggleDealLater(chat.id.clone()));
     }
     // Move a one-to-one chat out of its automatic category for good. The
@@ -3734,7 +3740,10 @@ fn mute_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &Chat, n
     let items = ["Mute until tomorrow", "Mute forever"];
     widgets::submenu(ui, palette, Icon::BellOff, "Mute", &items, |ui| {
         if chat.backend_account.is_some() {
-            ui.small("Timed mute applies only in Solmu.");
+            ui.small(crate::i18n::gettext(
+                app.locale,
+                "Timed mute applies only in Solmu.",
+            ));
         }
         if let Some(end) = tomorrow
             && widgets::menu_item(ui, palette, None, items[0])

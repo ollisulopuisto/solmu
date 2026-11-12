@@ -85,6 +85,7 @@ pub struct AccountSettings {
     pub chat_category: Option<crate::model::ChatFilter>,
     pub favorites_only: bool,
     pub chat_queue: Option<crate::model::ChatFilter>,
+    pub list_mode: Option<crate::model::ListMode>,
     pub call_filter: Option<String>,
 }
 

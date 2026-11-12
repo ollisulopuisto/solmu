@@ -4051,7 +4051,8 @@ impl App {
                     }
             })
             .filter(|chat| {
-                !self.beeper_unreplied
+                (self.global_search && !needle.is_empty())
+                    || !self.beeper_unreplied
                     || chat.last.as_ref().is_some_and(|last| {
                         !last.from_me
                             && !last.sender.is_empty()
@@ -11472,7 +11473,7 @@ impl App {
                 self.settings.beeper.reply_later.retain(|m| m != &member);
                 self.settings.beeper.read_later.retain(|m| m != &member);
                 if !queued {
-                    self.settings.beeper.reply_later.push(member);
+                    self.settings.beeper.read_later.push(member);
                 }
                 self.mark_settings_dirty();
             }
@@ -31308,6 +31309,38 @@ mod conversation_palette_tests {
         assert!(!app.mode_matches_at(&app.chats[0], ListMode::NeedsMe, 101));
         app.apply(Action::ToggleDealLater("chat-1".into()), &ctx);
         assert!(app.mode_matches_at(&app.chats[0], ListMode::NeedsMe, 101));
+    }
+
+    #[test]
+    fn deal_later_survives_send_confirmation() {
+        let mut app = app();
+        app.chats = vec![later_chat("chat-1", 10)];
+        app.apply(
+            Action::ToggleDealLater("chat-1".into()),
+            &egui::Context::default(),
+        );
+        let member = crate::merged::Member::of(&app.chats[0]).unwrap();
+        app.apply_backend_event(
+            Event::BeeperSendConfirmed {
+                origin: member.origin,
+                account: member.account,
+                chat: member.chat,
+            },
+            true,
+        );
+        assert!(app.needs_me_at(&app.chats[0], crate::util::now()));
+    }
+
+    #[test]
+    fn global_find_bypasses_unreplied_for_names_and_message_hits() {
+        let mut app = app();
+        app.chats = vec![later_chat("chat-1", 10)];
+        app.beeper_unreplied = true;
+        app.global_search = true;
+        app.search = "chat".into();
+        app.search_hits = vec![crate::archive::tests::message("chat-1", "hit", 10, false)];
+        assert_eq!(app.visible_chats().len(), 1);
+        assert_eq!(app.scoped_search_hits().len(), 1);
     }
 
     fn later_person(name: &str, ids: [&str; 2]) -> crate::merged::Person {

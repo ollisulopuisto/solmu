@@ -286,7 +286,9 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
             {
                 ui.add_sized(
                     [ui.available_width(), 36.0],
-                    egui::Label::new(egui::RichText::new("Other").strong()),
+                    egui::Label::new(
+                        egui::RichText::new(crate::i18n::gettext(app.locale, "Other")).strong(),
+                    ),
                 );
             }
             virtual_aliases(app, ui, &ungrouped, ("other", 0));
@@ -335,7 +337,7 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
             "Choose one group. Chat history stays where it is.",
         ));
         let mut home = selected.first().copied();
-        ui.radio_value(&mut home, None, "Other");
+        ui.radio_value(&mut home, None, crate::i18n::gettext(app.locale, "Other"));
         for group in &app.settings.flat_groups.items {
             ui.radio_value(&mut home, Some(group.id), &group.name);
         }
