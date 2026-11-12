@@ -110,17 +110,22 @@ pub fn row_near_view(
 ) -> bool {
     top + height >= view_top - overscan && top <= view_bottom + overscan
 }
-/// Checks whether `text` contains `query_lower` (which is already lowercase),
-/// avoiding string allocations when `is_ascii` is true.
-fn case_contains(text: &str, query_lower: &str, is_ascii: bool) -> bool {
-    if is_ascii {
-        // Zero-allocation byte-level sliding window ASCII case-insensitive search.
-        let q_bytes = query_lower.as_bytes();
+/// ASCII case-insensitive contains. Byte-scans without allocating when the
+/// candidate text is ASCII. Non-ASCII text can lowercase to ASCII (U+212A
+/// KELVIN SIGN -> "k", U+0130 -> "i" + combining dot above), which a byte
+/// scan of the original bytes would miss, so those candidates are lowercased
+/// first, preserving the pre-optimization semantics.
+fn ascii_case_contains(text: &str, query: &str) -> bool {
+    let q = query.as_bytes();
+    if text.is_ascii() {
         text.as_bytes()
-            .windows(q_bytes.len())
-            .any(|w| w.eq_ignore_ascii_case(q_bytes))
+            .windows(q.len())
+            .any(|w| w.eq_ignore_ascii_case(q))
     } else {
-        text.to_lowercase().contains(query_lower)
+        text.to_lowercase()
+            .as_bytes()
+            .windows(q.len())
+            .any(|w| w.eq_ignore_ascii_case(q))
     }
 }
 
@@ -132,15 +137,21 @@ pub fn search_matches(body: &str, query: &str, network: &str, sender: &str) -> b
     }
     // Performance optimization:
     // 1. Return immediately when `query.trim()` is empty without lowercase conversion.
-    // 2. When `query` is ASCII, match without allocating lowercased Strings for
-    //    `body`, `network`, and `sender`.
+    // 2. An ASCII query against ASCII candidates matches with zero allocations;
+    //    non-ASCII candidates are lowercased first (they can fold onto ASCII),
+    //    and non-ASCII queries take the lowercasing path for both sides.
     // 3. Short-circuit across `[body, network, sender]` sequentially to avoid
     //    redundant checks and allocations once a match is found.
-    let is_ascii = query.is_ascii();
-    let query_lower = query.to_lowercase();
-    [body, network, sender]
-        .into_iter()
-        .any(|value| case_contains(value, &query_lower, is_ascii))
+    if query.is_ascii() {
+        [body, network, sender]
+            .into_iter()
+            .any(|value| ascii_case_contains(value, query))
+    } else {
+        let query_lower = query.to_lowercase();
+        [body, network, sender]
+            .into_iter()
+            .any(|value| value.to_lowercase().contains(&query_lower))
+    }
 }
 /// Keyboard-focusable fallback operates on the same filtered, ordered rows as the view.
 pub fn latest_replyable<'a>(messages: &[&'a Message]) -> Option<&'a Message> {
@@ -433,6 +444,18 @@ mod tests {
         assert!(!search_matches("plain text", "signal", "Work", "friend"));
         assert!(!search_matches("plain text", ".*", "Work", "friend"));
         assert!(search_matches("plain text", "  ", "Work", "friend"));
+    }
+    #[test]
+    fn loaded_search_matches_unicode_that_lowercases_to_ascii() {
+        // U+212A KELVIN SIGN lowercases to ASCII "k".
+        assert!(search_matches("temp is 300\u{212A}", "k", "Work", "friend"));
+        // U+0130 lowercases to "i" + combining dot above.
+        assert!(search_matches("\u{0130}stanbul", "i", "Work", "friend"));
+        // ASCII candidates keep matching through the fast path.
+        assert!(search_matches("Kernel", "k", "Net", "pal"));
+        assert!(!search_matches("Kernel", "z", "Net", "pal"));
+        // Non-ASCII text that does not lowercase onto the query still misses.
+        assert!(!search_matches("Hyvää yötä", "k", "Net", "pal"));
     }
     #[test]
     fn borrowed_timeline_preserves_sources_without_copying_payloads() {
