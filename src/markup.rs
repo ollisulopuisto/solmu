@@ -566,18 +566,24 @@ fn unescape_code(chars: &[char]) -> String {
     out
 }
 
-/// A bracket, slash or backslash. An underscore against one is text, not
-/// emphasis: the shrug `¯\_(ツ)_/¯` keeps its underscores.
+/// A slash or backslash. An underscore against one is text, not emphasis:
+/// the shrug `¯\_(ツ)_/¯` keeps its underscores. Brackets do not block, so
+/// `_(hello)_` stays italic, as Beeper's `<em>(hello)</em>` arrives.
 fn blocks_underscore(c: char) -> bool {
-    matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '\\' | '/')
+    matches!(c, '\\' | '/')
+}
+
+/// An underscore with a slash or backslash on either side.
+fn against_slash(chars: &[char], i: usize) -> bool {
+    chars[i] == '_'
+        && ((i > 0 && blocks_underscore(chars[i - 1]))
+            || chars
+                .get(i + 1)
+                .is_some_and(|next| blocks_underscore(*next)))
 }
 
 fn is_opener(chars: &[char], i: usize) -> bool {
-    if chars[i] == '_'
-        && chars
-            .get(i + 1)
-            .is_some_and(|next| blocks_underscore(*next))
-    {
+    if against_slash(chars, i) {
         return false;
     }
     let before_ok = i == 0 || !chars[i - 1].is_alphanumeric();
@@ -588,7 +594,7 @@ fn is_opener(chars: &[char], i: usize) -> bool {
 }
 
 fn is_closer(chars: &[char], i: usize) -> bool {
-    if chars[i] == '_' && i > 0 && blocks_underscore(chars[i - 1]) {
+    if against_slash(chars, i) {
         return false;
     }
     let before_ok = i > 0 && !chars[i - 1].is_whitespace() && chars[i - 1] != chars[i];
@@ -1335,8 +1341,11 @@ mod tests {
         assert!(parse(shrug, &[]).iter().all(|span| !span.italic));
         let sentence = format!("well {shrug} ok");
         assert_eq!(plain(&sentence, &[]), sentence);
+        // A later emphasis does not pair with the shrug's underscores.
+        let both = format!("{shrug} and _word_");
+        assert_eq!(plain(&both, &[]), format!("{shrug} and word"));
         // Emphasis around words still works, also in brackets and before
-        // punctuation; a bracket against the underscore is not emphasis.
+        // punctuation, and around a bracketed phrase (Beeper's <em>(hi)</em>).
         assert!(parse("_note_", &[]).iter().any(|span| span.italic));
         assert!(
             parse("(_note_)", &[])
@@ -1344,8 +1353,8 @@ mod tests {
                 .any(|span| span.italic && span.text == "note")
         );
         assert!(parse("_wow!_", &[]).iter().any(|span| span.italic));
-        assert_eq!(plain("_(x)_", &[]), "_(x)_");
-        assert!(parse("_(x)_", &[]).iter().all(|span| !span.italic));
+        assert_eq!(plain("_(x)_", &[]), "(x)");
+        assert!(parse("_(x)_", &[]).iter().any(|span| span.italic));
     }
 
     #[test]
