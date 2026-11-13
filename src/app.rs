@@ -4607,9 +4607,15 @@ impl App {
                             }
                             // Keep the dispatch position while the server's clock differs.
                             message.timestamp = conversation.messages[index].timestamp;
-                            conversation.messages[index] = message;
+                            // The poller re-emits the same incomplete echo every few
+                            // seconds. Only a real change replaces the message and
+                            // drops the cached row; an identical echo must not
+                            // rebuild the row (it reloaded the media each time).
+                            if conversation.messages[index] != message {
+                                conversation.messages[index] = message;
+                                conversation.rows.remove(&visible);
+                            }
                         }
-                        conversation.rows.remove(&visible);
                     }
                     if release_preview {
                         if let Some(record) = self.pending_media.remove(&local)
@@ -15362,6 +15368,56 @@ mod tests {
         assert_eq!(app.conversations["pending-target"].messages.len(), 1);
         assert_eq!(app.conversations["pending-target"].messages[0].id, "final");
         assert!(!app.pending_media.contains_key(&local));
+    }
+
+    #[test]
+    fn pending_media_identical_incomplete_echo_keeps_row_cache() {
+        let mut app = app();
+        let local = seed_pending_media(&mut app);
+        let member = app.pending_media[&local].job.member.clone();
+        let mut echo = app.conversations["pending-target"].messages[0].clone();
+        echo.id = "final".into();
+        echo.status = Delivery::Pending;
+        let send = |app: &mut App, echo: &Message| {
+            app.apply_backend_event(
+                Event::BeeperMediaResolved {
+                    local: local.clone(),
+                    member: member.clone(),
+                    message: Box::new(echo.clone()),
+                    complete: false,
+                },
+                true,
+            );
+        };
+        send(&mut app, &echo);
+        assert_eq!(app.conversations["pending-target"].messages[0].id, "final");
+        // Simulate the row cache the UI rebuilt after the first echo.
+        app.conversations
+            .get_mut("pending-target")
+            .unwrap()
+            .rows
+            .insert(
+                "final".into(),
+                RowHeight {
+                    height: 10.0,
+                    pass: None,
+                },
+            );
+        send(&mut app, &echo);
+        assert!(
+            app.conversations["pending-target"]
+                .rows
+                .contains_key("final"),
+            "an identical echo must not drop the cached row"
+        );
+        echo.status = Delivery::Sent;
+        send(&mut app, &echo);
+        assert!(
+            !app.conversations["pending-target"]
+                .rows
+                .contains_key("final"),
+            "a real change still rebuilds the row"
+        );
     }
 
     #[test]

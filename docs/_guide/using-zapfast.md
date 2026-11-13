@@ -617,6 +617,9 @@ you want. Press `Cmd+C` on macOS or `Ctrl+C` elsewhere. The clipboard includes
 only the selected messages, in chat order, using the same sharing format,
 even if some have scrolled off-screen. Attachments contribute a text label and
 any caption; their files are not copied. Copying keeps the selection open.
+The hyphens and line breaks that [balanced wrapping](../balanced-wrapping.md)
+adds on screen never reach the clipboard: copied text is the original
+message.
 
 ## Chats
 

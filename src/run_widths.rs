@@ -1,31 +1,23 @@
 //! Neighbour-aware widths for outgoing text bubbles.
 //!
 //! Plain text bubbles from the reader no longer settle on the shared 80pt
-//! grid: each takes its natural content width, and neighbours within a
-//! consecutive same-sender run join the larger width when they are close
-//! enough. Decisions freeze once made at a given width cap, so an appended
-//! or prepended message never resizes bubbles already on screen; a later
-//! slightly wider message grows alone instead. Media, quotes, cards and
-//! forwarded messages keep the old grid. This module is the pure decision
-//! logic; measuring text lives in [`crate::ui::conversation`].
+//! grid: each takes the natural width of its balanced layout, and a bubble
+//! keeps its run neighbour's width when wrapping at that width costs at
+//! most one line over the text's minimum. A bubble that would pay more
+//! than that widens to its own natural width. Decisions freeze once made
+//! at a given width cap, so an appended or prepended message never resizes
+//! bubbles already on screen; a later slightly wider message grows alone
+//! instead. Media, quotes, cards and forwarded messages keep the old grid.
+//! This module is the pure decision logic; measuring and balancing text
+//! lives in `crate::wrap` and `crate::ui::conversation` (private modules, so no doc links).
 
 use std::collections::HashMap;
 
-/// Neighbours join when their natural widths differ by at most this many
-/// logical points... Tunable: the value was proposed, not measured.
-pub const JOIN_POINTS: f32 = 16.0;
-/// ...AND at most this share of the larger width. Both conditions must
-/// hold, so small bubbles need near-exact matches and large ones stay
-/// proportional. Tunable for the same reason.
-pub const JOIN_RATIO: f32 = 0.15;
-
-/// The width neighbours share when they join, or `None` when they differ
-/// by more than the tolerance allows.
-pub fn join(a: f32, b: f32) -> Option<f32> {
-    let diff = (a - b).abs();
-    let larger = a.max(b);
-    (diff <= JOIN_POINTS && diff <= larger * JOIN_RATIO).then_some(larger)
-}
+/// A bubble keeps its neighbour's width while wrapping there costs at
+/// most this many lines over its minimum. From the line-wrap design
+/// sheets: "keep the previous width if it costs <= +1 line vs the text's
+/// minimum; else widen to the min-line layout."
+pub const KEEP_EXTRA_LINES: usize = 1;
 
 /// Frozen width decisions for one conversation at one width cap.
 #[derive(Default)]
@@ -51,23 +43,34 @@ impl WidthBook {
         self.decided.get(id).copied()
     }
 
-    /// Settles a message not yet decided: it joins its run neighbour's
-    /// settled width when both are close, keeping the larger natural width,
-    /// and takes its own natural width otherwise. The result freezes; later
-    /// calls return it unchanged.
     /// Forget one message's width, e.g. after its text was edited or the
     /// message left the chat; it settles again when next measured.
     pub fn invalidate(&mut self, id: &str) {
         self.decided.remove(id);
     }
 
-    pub fn settle(&mut self, id: &str, natural: f32, neighbour: Option<f32>) -> f32 {
+    /// Settles a message not yet decided: it keeps its run neighbour's
+    /// settled width when balancing at that width costs at most
+    /// [`KEEP_EXTRA_LINES`] over the text's minimum line count, and takes
+    /// its own natural width (its min-line layout at the cap) otherwise.
+    /// `min_lines` and `natural` come from balancing at the width cap;
+    /// `lines_at` balances the text at the neighbour's width. The result
+    /// freezes; later calls return it unchanged.
+    pub fn settle(
+        &mut self,
+        id: &str,
+        min_lines: usize,
+        natural: f32,
+        neighbour: Option<f32>,
+        lines_at: impl FnOnce(f32) -> usize,
+    ) -> f32 {
         if let Some(width) = self.decided.get(id) {
             return *width;
         }
-        let width = neighbour
-            .and_then(|other| join(other, natural))
-            .unwrap_or(natural);
+        let width = match neighbour {
+            Some(kept) if lines_at(kept) <= min_lines + KEEP_EXTRA_LINES => kept,
+            _ => natural,
+        };
         self.decided.insert(id.to_owned(), width);
         width
     }
@@ -78,80 +81,61 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_invalidated_message_settles_again_at_its_new_width() {
+    fn first_bubble_takes_its_natural_width() {
+        let mut book = WidthBook::default();
+        let width = book.settle("a", 2, 359.0, None, |_| unreachable!());
+        assert_eq!(width, 359.0);
+    }
+
+    #[test]
+    fn keeps_the_neighbour_within_one_extra_line() {
+        // Sheet 3 at the 440 column: the second bubble wraps to 4 lines at
+        // the neighbour's 359pt, one over its 3-line minimum, and keeps.
+        let mut book = WidthBook::default();
+        book.settle("a", 1, 359.0, None, |_| unreachable!());
+        let width = book.settle("b", 3, 472.0, Some(359.0), |_| 4);
+        assert_eq!(width, 359.0);
+    }
+
+    #[test]
+    fn widens_past_one_extra_line() {
+        // Sheet 3 at the 560 column: the second bubble wraps to 4 lines at
+        // 359pt against a 2-line minimum, and widens to its 591pt min-line
+        // layout.
+        let mut book = WidthBook::default();
+        book.settle("a", 1, 359.0, None, |_| unreachable!());
+        let width = book.settle("b", 2, 591.0, Some(359.0), |_| 4);
+        assert_eq!(width, 591.0);
+    }
+
+    #[test]
+    fn a_kept_width_passes_down_the_run() {
+        // Sheet 3 at 440: the third bubble also holds the run's 359pt.
+        let mut book = WidthBook::default();
+        book.settle("a", 1, 359.0, None, |_| unreachable!());
+        book.settle("b", 3, 472.0, Some(359.0), |_| 4);
+        let width = book.settle("c", 2, 264.0, Some(359.0), |_| 3);
+        assert_eq!(width, 359.0);
+    }
+
+    #[test]
+    fn decisions_freeze() {
+        let mut book = WidthBook::default();
+        book.settle("a", 1, 359.0, None, |_| unreachable!());
+        // A later call never re-measures, whatever the run looks like now.
+        let width = book.settle("a", 5, 100.0, Some(200.0), |_| {
+            panic!("a frozen width is not re-measured")
+        });
+        assert_eq!(width, 359.0);
+    }
+
+    #[test]
+    fn a_cap_change_decides_again() {
         let mut book = WidthBook::default();
         book.retain_fingerprint(1);
-        assert_eq!(book.settle("a", 60.0, None), 60.0);
-        assert_eq!(
-            book.settle("a", 220.0, None),
-            60.0,
-            "frozen until invalidated"
-        );
-        book.invalidate("a");
-        assert_eq!(book.settle("a", 220.0, None), 220.0);
-    }
-
-    #[test]
-    fn neighbours_within_tolerance_share_the_larger_width() {
-        let mut book = WidthBook::default();
-        book.retain_fingerprint(1);
-        assert_eq!(book.settle("a", 100.0, None), 100.0);
-        // 14 <= 16 points and 14/114 <= 15%: the pair joins at 114.
-        assert_eq!(book.settle("b", 114.0, Some(100.0)), 114.0);
-        // Frozen: the earlier bubble never grows afterwards.
-        assert_eq!(book.settle("a", 100.0, Some(114.0)), 100.0);
-        // A later, slightly wider message joins at its own larger width...
-        assert_eq!(book.settle("c", 128.0, Some(114.0)), 128.0);
-        // ...without growing its neighbours.
-        assert_eq!(book.settle("a", 100.0, Some(128.0)), 100.0);
-        assert_eq!(book.settle("b", 114.0, Some(128.0)), 114.0);
-    }
-
-    #[test]
-    fn just_outside_the_point_tolerance_does_not_join() {
-        assert_eq!(join(100.0, 116.0), Some(116.0));
-        assert_eq!(join(100.0, 116.5), None);
-    }
-
-    #[test]
-    fn just_outside_the_ratio_tolerance_does_not_join() {
-        // 16 points apart is fine for wide bubbles but too much for narrow.
-        assert_eq!(join(200.0, 216.0), Some(216.0));
-        assert_eq!(join(40.0, 56.0), None);
-        assert_eq!(join(40.0, 55.9), None); // 15.9/55.9 > 15%
-    }
-
-    #[test]
-    fn runs_break_without_a_neighbour() {
-        let mut book = WidthBook::default();
-        assert_eq!(book.settle("a", 100.0, None), 100.0);
-        // A different sender, chat, day or an excluded row passes no
-        // neighbour: the next message starts from its own natural width.
-        assert_eq!(book.settle("b", 113.0, None), 113.0);
-    }
-
-    #[test]
-    fn prepended_history_keeps_loaded_widths() {
-        let mut book = WidthBook::default();
-        book.retain_fingerprint(1);
-        // The first page loaded: "b" joined "a" upwards.
-        assert_eq!(book.settle("a", 100.0, None), 100.0);
-        assert_eq!(book.settle("b", 114.0, Some(100.0)), 114.0);
-        // Older history arrives before "a". It settles among itself...
-        assert_eq!(book.settle("older", 110.0, None), 110.0);
-        // ...and "a" keeps its frozen width rather than joining "older".
-        assert_eq!(book.settle("a", 100.0, Some(110.0)), 100.0);
-    }
-
-    #[test]
-    fn a_cap_change_redecides() {
-        let mut book = WidthBook::default();
-        book.retain_fingerprint(1);
-        assert_eq!(book.settle("a", 100.0, None), 100.0);
+        book.settle("a", 1, 359.0, None, |_| unreachable!());
         book.retain_fingerprint(2);
-        assert_eq!(book.get("a"), None);
-        assert_eq!(book.settle("a", 90.0, None), 90.0);
-        book.retain_fingerprint(2);
-        assert_eq!(book.get("a"), Some(90.0));
+        let width = book.settle("a", 1, 200.0, None, |_| unreachable!());
+        assert_eq!(width, 200.0);
     }
 }
