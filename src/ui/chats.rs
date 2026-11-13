@@ -217,10 +217,55 @@ fn search_keyboard(app: &mut App, ui: &egui::Ui) {
     }
 }
 
+/// The Bookmarks list's two kinds, as one switch under its header: Starred
+/// (WhatsApp stars) and Saved (local, any network). Pinned messages have no
+/// list across chats, so they are not here.
+fn bookmarks_switch(app: &mut App, ui: &mut egui::Ui) {
+    Frame::new()
+        .inner_margin(Margin::symmetric(14, 0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let width = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
+                let starred = ui.add_sized(
+                    [width, 32.0],
+                    egui::Button::selectable(
+                        app.show_starred,
+                        crate::i18n::gettext(app.locale, "Starred"),
+                    ),
+                );
+                let saved = ui.add_sized(
+                    [width, 32.0],
+                    egui::Button::selectable(
+                        app.show_saved,
+                        crate::i18n::gettext(app.locale, "Saved"),
+                    ),
+                );
+                #[cfg(test)]
+                ui.ctx().data_mut(|d| {
+                    d.insert_temp(egui::Id::new(("bookmarks-switch", "starred")), starred.rect);
+                    d.insert_temp(egui::Id::new(("bookmarks-switch", "saved")), saved.rect);
+                });
+                if starred.clicked() && !app.show_starred {
+                    app.actions.push(Action::ToggleStarred);
+                }
+                if saved.clicked() && !app.show_saved {
+                    app.actions.push(Action::ToggleSaved);
+                }
+            });
+        });
+    ui.add_space(6.0);
+}
+
+/// Size of the Bookmarks icon that ends the mode row.
+const BOOKMARKS_ICON: f32 = 20.0;
+
 /// Search, title and queues, then the composed scope. Shared by every platform.
 fn header(app: &mut App, ui: &mut egui::Ui) {
     if app.show_starred || app.show_saved || app.show_archived || app.locked_folder_open() {
         legacy_header(app, ui);
+        if app.show_starred || app.show_saved {
+            bookmarks_switch(app, ui);
+        }
         super::batch_actions::archive_bar(app, ui);
         return;
     }
@@ -247,7 +292,13 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             super::batch_actions::archive_bar(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
-                let width = (ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0;
+                // Three mode tabs share the row with the Bookmarks icon, which
+                // keeps its own square so the labels still fit at 300 points.
+                let bookmarks_edge = BOOKMARKS_ICON + theme::ICON_BUTTON_PAD;
+                let width = (ui.available_width()
+                    - 3.0 * ui.spacing().item_spacing.x
+                    - bookmarks_edge)
+                    / 3.0;
                 for mode in crate::model::ListMode::EVERY {
                     let response = ui.add_sized(
                         [width, 36.0],
@@ -255,7 +306,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                     );
                     let stop = match mode {
                         crate::model::ListMode::Recent => Stop::Recent,
-                        crate::model::ListMode::Focus => Stop::Focus,
+                        crate::model::ListMode::Unread => Stop::UnreadMode,
                         crate::model::ListMode::NeedsMe => Stop::NeedsMe,
                     };
                     let response = response.tab_stop(stop);
@@ -266,6 +317,24 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                     if response.clicked() {
                         app.actions.push(Action::SetListMode(mode));
                     }
+                }
+                // Bookmarks is the Saved list, not a mode: Cmd+D skips it and
+                // the header swaps to the list's own Back arrow while it is open.
+                let response = theme::icon_button(
+                    ui,
+                    Icon::Bookmark,
+                    BOOKMARKS_ICON,
+                    app.palette.secondary,
+                    app.palette.text,
+                    "Bookmarks",
+                )
+                .tab_stop(Stop::Bookmarks);
+                #[cfg(test)]
+                ui.ctx().data_mut(|d| {
+                    d.insert_temp(egui::Id::new(("list-mode", "bookmarks")), response.rect)
+                });
+                if response.clicked() {
+                    app.actions.push(Action::ToggleSaved);
                 }
             });
             ui.ctx()
@@ -3662,7 +3731,7 @@ mod tests {
                 .rect;
             let rects = [
                 crate::model::ListMode::Recent,
-                crate::model::ListMode::Focus,
+                crate::model::ListMode::Unread,
                 crate::model::ListMode::NeedsMe,
             ]
             .map(|f| {
@@ -3678,6 +3747,45 @@ mod tests {
                 assert_eq!(pair[0].center().y, pair[1].center().y);
                 assert!((pair[0].width() - pair[1].width()).abs() < 0.01);
             }
+            // The Bookmarks icon ends the same row and stays inside the width.
+            let bookmarks = ctx
+                .data(|d| d.get_temp::<Rect>(egui::Id::new(("list-mode", "bookmarks"))))
+                .unwrap();
+            assert!(bookmarks.left() >= rects[2].right());
+            assert!(bookmarks.right() <= width);
+            assert!((bookmarks.center().y - rects[0].center().y).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn the_bookmarks_switch_sits_under_the_list_header_and_fits() {
+        for width in [260.0, 340.0] {
+            let directory = tempfile::tempdir().unwrap();
+            let (mut app, _) = App::headless(AppDirs::under(directory.path()), Settings::default());
+            app.show_saved = true;
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            for _ in 0..2 {
+                let mut out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(width, 600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| header(&mut app, ui),
+                );
+                out.textures_delta.clear();
+            }
+            let rect = |name: &str| {
+                ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("bookmarks-switch", name))))
+                    .unwrap()
+            };
+            let (starred, saved) = (rect("starred"), rect("saved"));
+            assert!(starred.right() <= saved.left());
+            assert!(saved.right() <= width);
+            assert_eq!(starred.center().y, saved.center().y);
         }
     }
 

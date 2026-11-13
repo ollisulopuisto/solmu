@@ -3606,7 +3606,7 @@ impl App {
         use crate::model::ListMode;
         match mode {
             ListMode::Recent => true,
-            ListMode::Focus => chat.favorite || chat.pinned || self.needs_me_at(chat, now),
+            ListMode::Unread => chat.looks_unread(),
             ListMode::NeedsMe => self.needs_me_at(chat, now),
         }
     }
@@ -31425,7 +31425,8 @@ mod conversation_palette_tests {
         assert!(app.mode_matches_at(&chat, ListMode::NeedsMe, 100));
         chat.muted_until = Some(0);
         chat.favorite = true;
-        assert!(app.mode_matches_at(&chat, ListMode::Focus, 101));
+        // Unread keeps a muted chat that Needs me drops.
+        assert!(app.mode_matches_at(&chat, ListMode::Unread, 101));
         assert!(!app.mode_matches_at(&chat, ListMode::NeedsMe, 101));
         assert!(app.mode_matches_at(&chat, ListMode::Recent, 101));
         chat.muted_until = None;
@@ -31438,6 +31439,36 @@ mod conversation_palette_tests {
         assert!(!app.mode_matches_at(&app.chats[0], ListMode::NeedsMe, 101));
         app.apply(Action::ToggleDealLater("chat-1".into()), &ctx);
         assert!(app.mode_matches_at(&app.chats[0], ListMode::NeedsMe, 101));
+    }
+
+    #[test]
+    fn unread_mode_keeps_muted_chats_and_read_chats_leave() {
+        use crate::model::ListMode;
+        let app = app();
+        let mut chat = later_chat("chat-1", 10);
+        chat.unread = 3;
+        chat.muted_until = Some(0);
+        assert!(app.mode_matches_at(&chat, ListMode::Unread, 101));
+        assert!(!app.mode_matches_at(&chat, ListMode::NeedsMe, 101));
+        chat.unread = 0;
+        assert!(!app.mode_matches_at(&chat, ListMode::Unread, 101));
+        chat.marked_unread = true;
+        assert!(app.mode_matches_at(&chat, ListMode::Unread, 101));
+        assert!(app.mode_matches_at(&chat, ListMode::Recent, 101));
+    }
+
+    #[test]
+    fn the_bookmarks_lists_switch_without_going_back_to_the_chat_list() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.apply(Action::ToggleSaved, &ctx);
+        assert!(app.show_saved && !app.show_starred);
+        app.apply(Action::ToggleStarred, &ctx);
+        assert!(app.show_starred && !app.show_saved);
+        app.apply(Action::ToggleSaved, &ctx);
+        assert!(app.show_saved && !app.show_starred);
+        app.apply(Action::ToggleSaved, &ctx);
+        assert!(!app.show_saved && !app.show_starred);
     }
 
     #[test]

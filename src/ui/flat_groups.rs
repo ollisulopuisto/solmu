@@ -972,7 +972,7 @@ mod tests {
             crate::paths::AppDirs::under(root.path()),
             Default::default(),
         );
-        app.list_mode = ListMode::Focus;
+        app.list_mode = ListMode::Unread;
         // Every visible chat grouped means Other is empty: hidden at rest.
         assert!(header_hidden(&app, true));
         // The list keeps it while a chat is being dragged, so a chat can
@@ -998,7 +998,7 @@ mod tests {
         );
         app.list_mode = ListMode::Recent;
         assert!(!header_hidden(&app, true));
-        app.list_mode = ListMode::Focus;
+        app.list_mode = ListMode::Unread;
         assert!(header_hidden(&app, true));
         assert!(!header_hidden(&app, false));
         app.list_mode = ListMode::NeedsMe;

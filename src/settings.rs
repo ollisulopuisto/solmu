@@ -942,7 +942,7 @@ pub struct AccountSettings {
     pub chat_category: Option<crate::model::ChatFilter>,
     pub favorites_only: bool,
     pub chat_queue: Option<crate::model::ChatFilter>,
-    /// The chat list's mode (Recent, Focus or Needs me); `None` is Recent.
+    /// The chat list's mode (All, Unread or Needs me); `None` is All.
     pub list_mode: Option<crate::model::ListMode>,
     /// The chip the Calls page last showed, kept only so older settings
     /// files still load; the native Calls page is gone.
