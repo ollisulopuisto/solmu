@@ -57,3 +57,10 @@ states. cargo check --locked --lib passes. Full native tests and screenshot are
 pending; no macOS/live-network verification claimed. Self-review checked that
 Unknown cannot gain a duplicate-send path and that #322's media preview hunk
 and #323/#324's contrast/line-wrap hunks are untouched.
+
+Send-status native CI follow-up: one baseline Beeper fixture test failed with
+ConnectionReset while 2,149 tests passed. The stub polls a nonblocking listener
+but assumed accepted streams are blocking when using read timeouts. Explicitly
+set accepted fixture sockets blocking so a preconnected or newly accepted
+socket waits for request data rather than being closed on WouldBlock. This
+changes test infrastructure only, not Beeper transport or send-status behavior.
