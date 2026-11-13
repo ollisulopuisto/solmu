@@ -3378,9 +3378,26 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                             } else {
                                 None
                             };
-                            let natural =
-                                natural_text_width(ui, &view, message, text_cap).unwrap_or(0.0);
-                            book.settle(&message.id, natural, neighbour)
+                            // The neighbour rule counts balanced lines:
+                            // keep the run's width while wrapping there
+                            // costs at most one line over the minimum.
+                            match balanced_metrics(ui, &view, message, text_cap) {
+                                Some((measured, at_cap)) => book.settle(
+                                    &message.id,
+                                    at_cap.lines,
+                                    at_cap.width,
+                                    neighbour,
+                                    |width| {
+                                        crate::wrap::balance(
+                                            &measured.items,
+                                            width,
+                                            measured.hyphen,
+                                        )
+                                        .lines
+                                    },
+                                ),
+                                None => book.settle(&message.id, 1, 0.0, neighbour, |_| 1),
+                            }
                         };
                         neighbour_widths.insert(message.id.clone(), settled);
                         run_tail = Some(settled);
@@ -5205,6 +5222,7 @@ fn message_copy_row(
         marker,
         reactions,
         quote,
+        ..Default::default()
     }
 }
 
@@ -6226,6 +6244,28 @@ fn body_for_measurement(content: &Content) -> Option<(&str, bool)> {
         } => Some((caption, false)),
         _ => None,
     }
+}
+
+/// Body text measured for the width book: the balancer tokens and the
+/// min-line plan at the cap.
+fn balanced_metrics(
+    ui: &egui::Ui,
+    view: &View<'_>,
+    message: &Message,
+    cap: f32,
+) -> Option<(markup::Measured, crate::wrap::Plan)> {
+    let palette = view.palette;
+    let (text, grow) = body_for_measurement(&message.content)?;
+    let style = markup::Style {
+        size: BODY_SIZE,
+        color: palette.text,
+        secondary: palette.secondary,
+        link: palette.link,
+        mention: palette.accent,
+    };
+    let measured = markup::measure(ui, text, &mentions_of(view, message), &style, cap, grow);
+    let at_cap = crate::wrap::balance(&measured.items, cap, measured.hyphen);
+    Some((measured, at_cap))
 }
 
 /// Widest wrapped body-text row. Metadata sits outside the bubble.
@@ -9659,7 +9699,7 @@ fn rich_body(
         link: palette.link,
         mention: palette.accent,
     };
-    let laid = markup::layout(ui, text, &mentions, &style, width, grow_emoji);
+    let laid = markup::layout_balanced(ui, text, &mentions, &style, width, grow_emoji);
     let rtl = crate::bidi::message_rtl(text);
     let last_row = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
     // Right-aligned text ends at the block's edge. Like official WhatsApp,
@@ -9677,15 +9717,22 @@ fn rich_body(
     }
     // Register the body for transcript formatting when copying across messages.
     if let Some(copy_rows) = view.copy_rows {
+        let mut row = transcript_row(
+            view,
+            message,
+            laid.unbroken_text().to_owned(),
+            laid.placements().to_vec(),
+        );
+        if let Some(broken) = laid.broken_text() {
+            // A drag selection copies the laid-out text, breaks included;
+            // the row matches against it and drops the inserted characters.
+            row.broken = Some(broken.to_owned());
+            row.inserted = laid.inserted().to_vec();
+        }
         copy_rows
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .push(transcript_row(
-                view,
-                message,
-                laid.galley.text().to_owned(),
-                laid.placements().to_vec(),
-            ));
+            .push(row);
     }
     // Click links and drag to select text.
     // Text selection and web links do not need a sequential Tab stop.
@@ -9821,18 +9868,12 @@ fn rich_body(
     let message_number = crate::i18n::gettext(view.locale, "Message");
     let copy_number = crate::i18n::gettext(view.locale, "Copy number");
     let menu_labels = [message_number.as_ref(), copy_number.as_ref()];
-    for (range, url) in &laid.links {
+    for (link_index, (range, url)) in laid.links.iter().enumerate() {
         let Some(phone) = url.strip_prefix("tel:") else {
             continue;
         };
         let number = phone.strip_prefix('+').unwrap_or(phone);
-        let copy_text: String = laid
-            .galley
-            .text()
-            .chars()
-            .skip(range.start)
-            .take(range.len())
-            .collect();
+        let copy_text = laid.link_copy_text(link_index);
         for (row, bounds) in crate::bidi::char_bounds_by_row(&laid.galley, range.start, range.end) {
             let link = ui
                 .interact(

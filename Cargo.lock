@@ -5786,6 +5786,7 @@ dependencies = [
  "jiff",
  "keyring-core",
  "libc",
+ "libloading",
  "libwebp-sys2 0.2.0",
  "linuxvideo",
  "log",
