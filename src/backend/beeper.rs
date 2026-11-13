@@ -6448,6 +6448,8 @@ mod tests {
                         Err(error) => panic!("waiting for {expected}: {error}"),
                     }
                 };
+                // An accepted socket inherits the listener's non-blocking mode on macOS.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
@@ -6726,6 +6728,8 @@ mod tests {
                         Err(error) => panic!("waiting for {expected}: {error}"),
                     }
                 };
+                // An accepted socket inherits the listener's non-blocking mode on macOS.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
@@ -7630,6 +7634,8 @@ mod tests {
             while !done2.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // An accepted socket inherits the listener's non-blocking mode on macOS.
+                        stream.set_nonblocking(false).unwrap();
                         let mut request = [0u8; 8192];
                         let n = stream.read(&mut request).unwrap();
                         let request = String::from_utf8_lossy(&request[..n]);
@@ -8740,6 +8746,8 @@ mod tests {
                 let until = Instant::now() + Duration::from_millis(250);
                 while Instant::now() < until {
                     if let Ok((mut stream, _)) = listener.accept() {
+                        // An accepted socket inherits the listener's non-blocking mode on macOS.
+                        stream.set_nonblocking(false).unwrap();
                         let mut request = [0u8; 4096];
                         let _ = stream.read(&mut request);
                         let body=serde_json::json!({"items":[{"id":"arrived","text":"fixture","isSender":false}],"hasMore":true,"newestCursor":next}).to_string();
@@ -8868,6 +8876,8 @@ mod tests {
         let server = std::thread::spawn(move || {
             while !done.load(Ordering::Relaxed) {
                 if let Ok((mut stream, _)) = listener.accept() {
+                    // An accepted socket inherits the listener's non-blocking mode on macOS.
+                    stream.set_nonblocking(false).unwrap();
                     stream
                         .set_read_timeout(Some(Duration::from_secs(1)))
                         .unwrap();
@@ -10004,6 +10014,8 @@ mod tests {
                 };
                 let (read2, media2) = (read2.clone(), media2.clone());
                 std::thread::spawn(move || {
+                    // An accepted socket inherits the listener's non-blocking mode on macOS.
+                    stream.set_nonblocking(false).unwrap();
                     let mut buffer = [0u8; 4096];
                     let length = stream.read(&mut buffer).unwrap();
                     let request = String::from_utf8_lossy(&buffer[..length]);
@@ -10105,6 +10117,8 @@ mod tests {
                 };
                 let (read2, media2) = (read2.clone(), media2.clone());
                 std::thread::spawn(move || {
+                    // An accepted socket inherits the listener's non-blocking mode on macOS.
+                    stream.set_nonblocking(false).unwrap();
                     let mut buffer = [0u8; 4096];
                     let length = stream.read(&mut buffer).unwrap();
                     let request = String::from_utf8_lossy(&buffer[..length]);
