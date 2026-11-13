@@ -111,3 +111,10 @@ including virtualized rows. Recent/Focus/Needs me join the deliberate Tab order.
 Migrated retired-chip/mute-duration/favorite-priority assertions to the approved
 modes, 08:00 mute, and activity ordering; kept interaction and viewport coverage.
 The retired saved scope is cleared from account settings as well as session state.
+
+A standalone headless input probe also reproduced ordinary Tab getting stuck
+at the grouped viewport edge on Settings. Rows now retain neighboring geometry
+only while a list row holds focus outside the main chat cycle; group-creation
+controls reveal their focus too. The same probe now reaches previously hidden
+rows with fully visible focus rectangles. The resize-centering test waits for
+sidebar/scrollbar settling rather than sampling a transient layout.

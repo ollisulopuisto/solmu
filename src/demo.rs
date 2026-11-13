@@ -23460,7 +23460,10 @@ mod bubble_detail_tests {
         };
         let mut columns = Vec::new();
         for width in [1400.0, 1800.0] {
-            frames(&mut app, &ctx, egui::vec2(width, 900.0));
+            // A resize settles the sidebar and scrollbars over several frames.
+            for _ in 0..3 {
+                frames(&mut app, &ctx, egui::vec2(width, 900.0));
+            }
             let drawn = column(&ctx);
             assert!((drawn.span() - 640.0).abs() < 0.5, "{drawn:?}");
             columns.push(drawn);

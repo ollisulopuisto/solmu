@@ -105,7 +105,6 @@ fn draw_row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     let response = super::chats::row(app, ui, chat);
     ui.ctx().data_mut(|data| {
         data.insert_temp(super::chats::chat_row_id(&chat.id), response.rect);
-        #[cfg(test)]
         data.insert_temp(
             super::chats::chat_row_id(&chat.id).with("widget"),
             response.id,
@@ -188,7 +187,26 @@ fn virtual_aliases(app: &mut App, ui: &mut egui::Ui, chats: &[&Chat], salt: (&st
         ui.scroll_to_rect(row, Some(egui::Align::Center));
         app.scroll_chat_into_view = None;
     }
-    let range = visible_range(rect.top(), height, chats.len(), ui.clip_rect());
+    // Outside the main chat cycle egui walks ordinary row widgets. Keep
+    // their geometry while a row holds focus so Tab can reach the next row.
+    let row_focus = app.page != crate::model::Page::Chats
+        && ui.ctx().memory(|m| m.focused()).is_some_and(|focused| {
+            chats.iter().any(|chat| {
+                ui.ctx().data(|d| {
+                    d.get_temp::<egui::Id>(super::chats::chat_row_id(&chat.id).with("widget"))
+                }) == Some(focused)
+            })
+        });
+    let range = if row_focus {
+        0..chats.len()
+    } else {
+        visible_range(
+            rect.top(),
+            height,
+            chats.len(),
+            ui.clip_rect().expand2(egui::vec2(0.0, height)),
+        )
+    };
     if range.is_empty() {
         return;
     }
@@ -395,15 +413,16 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
         virtual_aliases(app, ui, &ungrouped, ("other", 0));
         ui.separator();
         ui.horizontal(|ui| {
-            ui.add(
+            let name = ui.add(
                 egui::TextEdit::singleline(&mut app.flat_group_ui.name)
                     .hint_text(crate::i18n::gettext(app.locale, "New group"))
                     .char_limit(80)
                     .desired_width(140.0),
             );
-            if ui
-                .button(crate::i18n::gettext(app.locale, "Create"))
-                .clicked()
+            crate::theme::reveal_focus(&name);
+            let create = ui.button(crate::i18n::gettext(app.locale, "Create"));
+            crate::theme::reveal_focus(&create);
+            if create.clicked()
                 && app
                     .settings
                     .flat_groups
