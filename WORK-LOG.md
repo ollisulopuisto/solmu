@@ -148,3 +148,9 @@ visibility failure: the scroll area's content rectangle can be wider than its
 clip while its scrollbar changes width. Grouped row widgets now cap their
 right edge to the actual viewport clip, preserving fully visible keyboard focus.
 The standalone forward-Tab probe passes after this change.
+
+Fifth native run: all 2,158 library tests pass. The subsequent portable source
+contract still required the retired Filters-menu suggestion list verbatim.
+Chat-level Same person? cards remain in merged.rs, capped at three with accept
+and dismiss actions. Migrated the contract to assert that shipped bounded path
+and that the removed menu stays removed. Standalone rustc execution passes.
