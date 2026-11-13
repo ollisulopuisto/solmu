@@ -102,10 +102,10 @@ fn automatic_category_filter_lists_only_that_category() {
     use solmu::categories::AutoCategory;
     let ctx = egui::Context::default();
     let mut app = category_app(&ctx);
-    // The All list leaves channels out, as the official apps do.
+    // Recent includes all chat types, including followed channels.
     assert_eq!(
         visible_names(&app),
-        vec!["Group", "Long", "Quiet", "Recent"]
+        vec!["Group", "Long", "News", "Quiet", "Recent"]
     );
     for (category, expected) in [
         (AutoCategory::People, vec!["Recent"]),
@@ -121,7 +121,7 @@ fn automatic_category_filter_lists_only_that_category() {
     frame(&mut app, &ctx);
     assert_eq!(
         visible_names(&app),
-        vec!["Group", "Long", "Quiet", "Recent"]
+        vec!["Group", "Long", "News", "Quiet", "Recent"]
     );
 }
 

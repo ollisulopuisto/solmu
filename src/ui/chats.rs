@@ -26,9 +26,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     search_keyboard(app, ui);
     let palette = app.palette;
     let panel = egui::Panel::left("chats")
-        .resizable(true)
-        .default_size(app.settings.sidebar_width)
-        .size_range(260.0..=520.0)
+        // The explicit strip below owns resizing. Keep content minimums
+        // from widening the panel during a leftward pointer drag.
+        .exact_size(app.settings.sidebar_width.clamp(260.0, 520.0))
         .show_separator_line(false)
         .frame(
             Frame::new()
@@ -38,6 +38,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let response = panel.show(ui, |ui| {
         header(app, ui);
         body(app, ui);
+    });
+    #[cfg(any(test, feature = "demo"))]
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            egui::Id::new("chat-panel-right"),
+            response.response.rect.right(),
+        )
     });
     let width = response.response.rect.width();
     if (width - app.settings.sidebar_width).abs() > 1.0 {
@@ -217,7 +224,6 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
         super::batch_actions::archive_bar(app, ui);
         return;
     }
-    let palette = app.palette;
     Frame::new()
         .inner_margin(Margin::symmetric(14, 8))
         .show(ui, |ui| {
@@ -239,29 +245,41 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             }
             search_field(app, ui);
             super::batch_actions::archive_bar(app, ui);
-            super::flat_groups::toggle(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
-                ui.set_min_height(36.0);
-                theme::text(
-                    ui,
-                    crate::i18n::gettext(app.locale, "Chats").as_ref(),
-                    theme::bold(20.0),
-                    palette.text,
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let width = queue_width(ui.available_width());
-                    ui.allocate_ui_with_layout(
-                        vec2(width, 36.0),
-                        Layout::left_to_right(Align::Center),
-                        |ui| facet_row(app, ui),
+                let width = (ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0;
+                for mode in crate::model::ListMode::EVERY {
+                    let response = ui.add_sized(
+                        [width, 36.0],
+                        egui::Button::selectable(app.list_mode == mode, mode.label(app.locale)),
                     );
-                });
+                    let stop = match mode {
+                        crate::model::ListMode::Recent => Stop::Recent,
+                        crate::model::ListMode::Focus => Stop::Focus,
+                        crate::model::ListMode::NeedsMe => Stop::NeedsMe,
+                    };
+                    let response = response.tab_stop(stop);
+                    #[cfg(test)]
+                    ui.ctx().data_mut(|d| {
+                        d.insert_temp(egui::Id::new(("list-mode", mode.key())), response.rect)
+                    });
+                    if response.clicked() {
+                        app.actions.push(Action::SetListMode(mode));
+                    }
+                }
             });
             ui.ctx()
                 .data_mut(|data| data.insert_temp(header_row_id(), row.response.rect));
             ui.add_space(6.0);
-            scope_row(app, ui);
+            if app.global_search {
+                ui.label(
+                    egui::RichText::new(crate::i18n::gettext(
+                        app.locale,
+                        "Search all chats and messages",
+                    ))
+                    .small(),
+                );
+            }
             let count = app.outside_scope_matches();
             if count > 0
                 && ui
@@ -287,253 +305,6 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
 
 fn queue_width(available: f32) -> f32 {
     available.clamp(128.0, 168.0)
-}
-
-fn scope_row(app: &mut App, ui: &mut egui::Ui) {
-    let locale = app.locale;
-    let palette = app.palette;
-    ui.horizontal(|ui| {
-        ui.menu_button(crate::i18n::gettext(locale, "Filters"), |ui| {
-            ui.set_max_width(280.0);
-            ui.label(crate::i18n::gettext(locale, "Chat type"));
-            let mut category = app.category_filter;
-            ui.radio_value(&mut category, None, crate::i18n::gettext(locale, "Any"));
-            for filter in [
-                ChatFilter::Private,
-                ChatFilter::Groups,
-                ChatFilter::Channels,
-            ] {
-                ui.radio_value(&mut category, Some(filter), filter.label(app.locale));
-            }
-            let mut changed = category != app.category_filter;
-            app.category_filter = category;
-            changed |= ui
-                .checkbox(
-                    &mut app.favorites_only,
-                    crate::i18n::gettext(locale, "Favorites only"),
-                )
-                .changed();
-            ui.checkbox(
-                &mut app.beeper_unreplied,
-                crate::i18n::gettext(locale, "Unreplied only"),
-            );
-            ui.separator();
-            ui.label(crate::i18n::gettext(locale, "Automatic category"));
-            if ui
-                .radio(
-                    app.auto_category_filter.is_none(),
-                    crate::i18n::gettext(locale, "Any"),
-                )
-                .clicked()
-            {
-                app.actions.push(Action::SelectAutoCategory(None));
-            }
-            for category in crate::categories::AutoCategory::EVERY {
-                if ui
-                    .radio(
-                        app.auto_category_filter == Some(category),
-                        category.label(locale),
-                    )
-                    .clicked()
-                {
-                    app.actions.push(Action::SelectAutoCategory(Some(category)));
-                }
-            }
-            if changed {
-                app.actions.push(Action::SetChatFilter(app.chat_filter));
-            }
-            ui.separator();
-            ui.label(crate::i18n::gettext(locale, "Network / account"));
-            if ui
-                .selectable_label(
-                    !app.beeper_scope_is_active(),
-                    crate::i18n::gettext(locale, "All networks"),
-                )
-                .clicked()
-            {
-                app.select_beeper_scope(None, None);
-            }
-            for network in app.beeper_browse_networks() {
-                ui.menu_button(&network, |ui| {
-                    if ui
-                        .button(crate::i18n::gettext(locale, "All accounts"))
-                        .clicked()
-                    {
-                        app.select_beeper_scope(Some(network.clone()), None);
-                    }
-                    for (key, name) in app.beeper_network_accounts(&network) {
-                        if ui
-                            .selectable_label(
-                                app.beeper_account_filter.as_ref() == Some(&key),
-                                name,
-                            )
-                            .clicked()
-                        {
-                            app.select_beeper_scope(Some(network.clone()), Some(key));
-                        }
-                    }
-                });
-            }
-            if !app.labels.is_empty() {
-                ui.separator();
-                ui.menu_button(crate::i18n::gettext(locale, "Labels"), |ui| {
-                    if ui
-                        .selectable_label(
-                            app.label_filter.is_none(),
-                            crate::i18n::gettext(locale, "Any"),
-                        )
-                        .clicked()
-                    {
-                        app.actions.push(Action::SelectLabel(None));
-                    }
-                    for label in app.labels.clone() {
-                        if ui
-                            .selectable_label(
-                                app.label_filter.as_ref() == Some(&label.id),
-                                &label.name,
-                            )
-                            .clicked()
-                        {
-                            app.actions
-                                .push(Action::SelectLabel(Some(label.id.clone())));
-                        }
-                    }
-                    if ui
-                        .button(crate::i18n::gettext(locale, "Manage labels"))
-                        .clicked()
-                    {
-                        app.actions.push(Action::ShowDialog(Dialog::Labels));
-                    }
-                });
-            }
-            let suggestions = app.link_suggestions();
-            if !suggestions.is_empty() {
-                ui.separator();
-                let title = format!(
-                    "{} ({})",
-                    crate::i18n::gettext(locale, "Link suggestions"),
-                    suggestions.len()
-                );
-                egui::CollapsingHeader::new(title)
-                    .id_salt("link-suggestions")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        // Index names once per open menu, not once per pair. Own
-                        // the labels so clicking a row can mutate the app safely.
-                        let names: std::collections::HashMap<_, _> = app
-                            .chats
-                            .iter()
-                            .map(|chat| {
-                                (
-                                    chat.id.clone(),
-                                    format!(
-                                        "{} ({})",
-                                        chat.name,
-                                        chat.backend_network.as_deref().unwrap_or_default()
-                                    ),
-                                )
-                            })
-                            .collect();
-                        let row_height = ui.text_style_height(&egui::TextStyle::Body)
-                            + ui.spacing().item_spacing.y
-                            + ui.spacing().interact_size.y;
-                        egui::ScrollArea::vertical().max_height(320.0).show_rows(
-                            ui,
-                            row_height,
-                            suggestions.len(),
-                            |ui, range| {
-                                for suggestion in &suggestions[range] {
-                                    let name = |member: &crate::merged::Member| {
-                                        names.get(&member.chat).map_or("", String::as_str)
-                                    };
-                                    let title = format!(
-                                        "{} = {}",
-                                        name(&suggestion.a),
-                                        name(&suggestion.b)
-                                    );
-                                    ui.push_id((&suggestion.a.chat, &suggestion.b.chat), |ui| {
-                                        ui.allocate_ui_with_layout(
-                                            vec2(ui.available_width(), row_height),
-                                            Layout::top_down(Align::Min),
-                                            |ui| {
-                                                // One line keeps row offsets stable. The full
-                                                // pair stays available on hover, not wrapping.
-                                                let one_line = title.replace(
-                                                    ['\n', '\r', '\u{2028}', '\u{2029}'],
-                                                    " ",
-                                                );
-                                                ui.add(egui::Label::new(one_line).truncate())
-                                                    .on_hover_text(&title);
-                                                ui.horizontal(|ui| {
-                                                    if ui.small_button("Link").clicked() {
-                                                        app.accept_link_suggestion(suggestion);
-                                                    }
-                                                    if ui
-                                                        .small_button("Not the same person")
-                                                        .clicked()
-                                                    {
-                                                        app.dismiss_link_suggestion(suggestion);
-                                                    }
-                                                });
-                                            },
-                                        );
-                                    });
-                                }
-                            },
-                        );
-                    });
-            }
-            ui.separator();
-            if !super::narrow(ui.ctx())
-                && ui
-                    .button(crate::i18n::gettext(locale, "Hide the chat list"))
-                    .clicked()
-            {
-                app.actions.push(Action::ToggleSidebar);
-                ui.close();
-            }
-            if ui
-                .button(crate::i18n::gettext(locale, "Reset view"))
-                .clicked()
-            {
-                app.clear_chat_scope();
-            }
-        })
-        .response
-        .tab_stop(Stop::Filters);
-        let mut parts = vec![
-            app.category_filter
-                .map(|f| f.label(app.locale).into_owned())
-                .unwrap_or_else(|| crate::i18n::gettext(locale, "All types").into_owned()),
-        ];
-        parts.push(
-            app.beeper_network_filter
-                .clone()
-                .unwrap_or_else(|| crate::i18n::gettext(locale, "All networks").into_owned()),
-        );
-        if let Some(key) = &app.beeper_account_filter
-            && let Some(name) = app.beeper_browse_accounts().get(key)
-        {
-            parts.push(name.clone());
-        }
-        if app.favorites_only {
-            parts.push(crate::i18n::gettext(locale, "Favorites").into_owned());
-        }
-        if app.beeper_unreplied {
-            parts.push(crate::i18n::gettext(locale, "Unreplied").into_owned());
-        }
-        if let Some(label) = app.label_filter.as_ref().and_then(|id| app.label(id)) {
-            parts.push(label.name.clone());
-        }
-        if let Some(category) = app.auto_category_filter {
-            parts.push(category.label(locale).into_owned());
-        }
-        ui.add(
-            egui::Label::new(egui::RichText::new(parts.join(" · ")).color(palette.secondary))
-                .truncate(),
-        )
-        .on_hover_text(parts.join(" · "));
-    });
 }
 
 fn legacy_header(app: &mut App, ui: &mut egui::Ui) {
@@ -2040,7 +1811,7 @@ fn section_offsets(rows: &[ChatListRow], row_height: f32) -> Vec<f32> {
     offsets
 }
 
-fn reveal_bounds(current: f32, viewport: f32, top: f32, bottom: f32) -> f32 {
+pub(super) fn reveal_bounds(current: f32, viewport: f32, top: f32, bottom: f32) -> f32 {
     if top < current {
         top
     } else if bottom > current + viewport {
@@ -2101,8 +1872,8 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
         results(app, ui);
         return;
     }
-    if app.settings.flat_groups.grouped_view && !app.show_archived {
-        super::flat_groups::list(app, ui);
+    if !app.show_archived {
+        super::flat_groups::list(app, ui, to_top);
         return;
     }
     // A pin is a shortcut, not a removal: pinned chats keep their rail
@@ -2271,7 +2042,7 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
 /// message's chat there: at most one row down, so its first row still shows
 /// at least in part. A reader further down is working through older chats, and
 /// a send there keeps their place instead of throwing them back to the top.
-fn near_top(ui: &egui::Ui, salt: &str, row_height: f32) -> bool {
+pub(super) fn near_top(ui: &egui::Ui, salt: &str, row_height: f32) -> bool {
     let id = ui.make_persistent_id(egui::IdSalt::new(salt));
     let offset = egui::scroll_area::State::load(ui.ctx(), id)
         .unwrap_or_default()
@@ -2286,7 +2057,7 @@ pub(crate) fn slide_copy_id() -> egui::Id {
 }
 
 /// The real list's scroll offset, for the copies a slide draws.
-fn shared_offset_id() -> egui::Id {
+pub(super) fn shared_offset_id() -> egui::Id {
     egui::Id::new("chat-list-real-offset")
 }
 
@@ -3444,28 +3215,14 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
     {
         app.actions.push(Action::MarkUnread(chat.id.clone()));
     }
-    // Local later flags, one chat at a time: the chat's state decides
-    // the label, and nothing leaves this computer. Any chat can be
-    // marked - Beeper chats by backend member, others by app account.
-    {
-        let queued_reply = app.reply_later_contains(chat);
-        let reply_label = if queued_reply {
-            crate::i18n::gettext(locale, "Clear reply later")
-        } else {
-            crate::i18n::gettext(locale, "Reply later")
-        };
-        if widgets::menu_item(ui, palette, Some(Icon::Clock), reply_label.as_ref()) {
-            app.actions.push(Action::ToggleReplyLater(chat.id.clone()));
-        }
-        let queued_read = app.read_later_contains(chat);
-        let read_label = if queued_read {
-            crate::i18n::gettext(locale, "Clear read later")
-        } else {
-            crate::i18n::gettext(locale, "Read later")
-        };
-        if widgets::menu_item(ui, palette, Some(Icon::ListChecks), read_label.as_ref()) {
-            app.actions.push(Action::ToggleReadLater(chat.id.clone()));
-        }
+    let queued = app.reply_later_contains(chat) || app.read_later_contains(chat);
+    let label = if queued {
+        crate::i18n::gettext(locale, "Clear deal with later")
+    } else {
+        crate::i18n::gettext(locale, "Deal with later")
+    };
+    if widgets::menu_item(ui, palette, Some(Icon::Clock), &label) {
+        app.actions.push(Action::ToggleDealLater(chat.id.clone()));
     }
     // Move a one-to-one chat out of its automatic category for good. The
     // move is local, and the rules never re-sort a chat placed this way.
@@ -3745,34 +3502,29 @@ fn sound_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &Chat) 
     });
 }
 
-/// Mute, with WhatsApp's choices of how long, in a submenu of its own.
+/// Exactly two mute durations. Beeper timed mutes are local to this app.
 fn mute_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &Chat, now: i64) {
-    let locale = app.locale;
-    if chat.backend_account.is_some() {
-        if widgets::menu_item(ui, palette, Some(Icon::BellOff), "Mute indefinitely") {
-            app.actions.push(Action::SetMuted(chat.id.clone(), Some(0)));
+    let morning = crate::util::next_mute_morning(now);
+    let until = crate::i18n::gettext(app.locale, "Until 08:00");
+    let forever = crate::i18n::gettext(app.locale, "Mute forever");
+    let items = [until.as_ref(), forever.as_ref()];
+    widgets::submenu(ui, palette, Icon::BellOff, "Mute", &items, |ui| {
+        if chat.backend_account.is_some() {
+            ui.small(crate::i18n::gettext(
+                app.locale,
+                "Timed mute applies only in Solmu.",
+            ));
         }
-        return;
-    }
-    let options = [
-        (
-            crate::i18n::gettext(locale, "8 hours"),
-            Some(now + 8 * 3600),
-        ),
-        (
-            crate::i18n::gettext(locale, "1 week"),
-            Some(now + 7 * 86_400),
-        ),
-        (crate::i18n::gettext(locale, "Always"), Some(0)),
-    ];
-    let items: Vec<&str> = options.iter().map(|(label, _)| label.as_ref()).collect();
-    let label = crate::i18n::gettext(locale, "Mute");
-    widgets::submenu(ui, palette, Icon::BellOff, &label, &items, |ui| {
-        for (label, until) in &options {
-            if widgets::menu_item(ui, palette, None, label.as_ref()) {
-                app.actions.push(Action::SetMuted(chat.id.clone(), *until));
-                ui.close();
-            }
+        if let Some(end) = morning
+            && widgets::menu_item(ui, palette, None, items[0])
+        {
+            app.actions
+                .push(Action::SetMuted(chat.id.clone(), Some(end)));
+            ui.close();
+        }
+        if widgets::menu_item(ui, palette, None, items[1]) {
+            app.actions.push(Action::SetMuted(chat.id.clone(), Some(0)));
+            ui.close();
         }
     });
 }
@@ -3895,7 +3647,7 @@ mod tests {
     }
 
     #[test]
-    fn queues_share_a_row_below_search_even_while_typing() {
+    fn modes_share_a_row_below_search_even_while_typing() {
         for width in [260.0, 340.0, 520.0] {
             let directory = tempfile::tempdir().unwrap();
             let (mut app, _) = App::headless(AppDirs::under(directory.path()), Settings::default());
@@ -3920,12 +3672,14 @@ mod tests {
                 .unwrap()
                 .rect;
             let rects = [
-                ChatFilter::All,
-                ChatFilter::Unread,
-                ChatFilter::ReplyLater,
-                ChatFilter::ReadLater,
+                crate::model::ListMode::Recent,
+                crate::model::ListMode::Focus,
+                crate::model::ListMode::NeedsMe,
             ]
-            .map(|f| ctx.data(|d| d.get_temp::<Rect>(filter_chip_id(f))).unwrap());
+            .map(|f| {
+                ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("list-mode", f.key()))))
+                    .unwrap()
+            });
             for rect in rects {
                 assert!(rect.top() >= search.bottom());
                 assert!(rect.right() <= width);

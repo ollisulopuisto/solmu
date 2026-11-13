@@ -11804,8 +11804,8 @@ mod tests {
         let parked = ids(&app);
         assert_eq!(parked[0], pinned, "the pinned favorite stays first");
         assert_eq!(
-            parked[7], draft,
-            "the parked draft follows the seven favorites"
+            parked, original,
+            "parking a draft preserves Recent ordering"
         );
         app.actions
             .push(crate::model::Action::OpenChat(draft.into()));
@@ -16904,8 +16904,8 @@ mod tests {
     }
 
     #[test]
-    fn a_filter_chip_narrows_the_chat_list_and_a_second_click_clears_it() {
-        use crate::model::ChatFilter;
+    fn needs_me_narrows_the_chat_list_and_recent_restores_it() {
+        use crate::model::ListMode;
         let mut app = app();
         // Every chip has to be on screen to be clicked, and the row scrolls
         // once the sidebar is too narrow for all of them.
@@ -16915,9 +16915,11 @@ mod tests {
         render(&mut app, &ctx);
         render(&mut app, &ctx);
         let everything = app.visible_chats().len();
-        let click = |app: &mut App, filter| {
+        let click = |app: &mut App, filter: ListMode| {
             let rect = ctx
-                .data(|data| data.get_temp::<egui::Rect>(crate::ui::chats::filter_chip_id(filter)))
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(egui::Id::new(("list-mode", filter.key())))
+                })
                 .expect("the chip is on screen");
             let pos = rect.center();
             let press = |pressed| egui::Event::PointerButton {
@@ -16930,18 +16932,18 @@ mod tests {
             frame_with(app, &ctx, vec![press(false)]);
             render(app, &ctx);
         };
-        click(&mut app, ChatFilter::Unread);
-        assert_eq!(app.chat_filter, ChatFilter::Unread);
+        click(&mut app, ListMode::NeedsMe);
+        assert_eq!(app.list_mode, ListMode::NeedsMe);
         let groups = app.visible_chats();
         assert!(!groups.is_empty() && groups.len() < everything);
         assert!(groups.iter().all(|chat| chat.counts_unread()));
-        click(&mut app, ChatFilter::Unread);
+        click(&mut app, ListMode::NeedsMe);
         assert_eq!(
-            app.chat_filter,
-            ChatFilter::Unread,
-            "queue segments are radio buttons"
+            app.list_mode,
+            ListMode::NeedsMe,
+            "mode segments are radio buttons"
         );
-        click(&mut app, ChatFilter::All);
+        click(&mut app, ListMode::Recent);
         assert_eq!(app.visible_chats().len(), everything);
     }
 
@@ -19650,13 +19652,11 @@ mod tests {
                 vec![egui::Event::PointerMoved(mute.center())],
             );
         }
-        for choice in ["8 hours", "1 week"] {
-            assert!(
-                find(&shapes, choice).is_some(),
-                "the submenu offers {choice}"
-            );
-        }
-        let always = find(&shapes, "Always").expect("the submenu offers Always");
+        assert!(
+            find(&shapes, "Until 08:00").is_some(),
+            "the submenu offers Until 08:00"
+        );
+        let always = find(&shapes, "Mute forever").expect("the submenu offers Mute forever");
         app.actions.clear();
         let [press, release] = click(always.center());
         frame_sized(
@@ -19669,7 +19669,7 @@ mod tests {
         let now = crate::util::now();
         assert!(
             app.chat(&chat).expect("chat").muted(now),
-            "Always mutes the chat"
+            "Mute forever mutes the chat"
         );
 
         // Muted, the menu offers Unmute alone.
@@ -20578,18 +20578,11 @@ mod tests {
                 && (settings.top() - locked.bottom() - 4.0).abs() < 0.5,
             "Locked stacks directly above Settings: {locked:?} {settings:?}"
         );
-        use crate::model::ChatFilter;
-        let chip = |filter: ChatFilter| {
-            ctx.data(|data| data.get_temp::<egui::Rect>(crate::ui::chats::filter_chip_id(filter)))
+        let chip = |mode: crate::model::ListMode| {
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("list-mode", mode.key()))))
                 .unwrap()
         };
-        let facets = [
-            ChatFilter::All,
-            ChatFilter::Unread,
-            ChatFilter::ReplyLater,
-            ChatFilter::ReadLater,
-        ]
-        .map(&chip);
+        let facets = crate::model::ListMode::EVERY.map(&chip);
         for rect in facets {
             assert!(rect.is_positive());
         }
@@ -21709,11 +21702,9 @@ mod tests {
                 Stop::Settings,
                 Stop::Profile,
                 Stop::Search,
-                Stop::All,
-                Stop::Unread,
-                Stop::ReplyLater,
-                Stop::ReadLater,
-                Stop::Filters,
+                Stop::Recent,
+                Stop::Focus,
+                Stop::NeedsMe,
                 Stop::NewChat,
             ];
             assert_eq!(
@@ -22365,12 +22356,11 @@ mod tests {
         assert!(app.reply_to.is_none());
     }
 
-    /// Where the chat list's right edge is: the first chat row spans the
-    /// list's width.
+    /// Panel edge, not a row edge: a fading scrollbar can change row width
+    /// independently of the resizable panel's actual boundary.
     fn chat_list_right(ctx: &egui::Context) -> f32 {
-        ctx.data(|data| data.get_temp::<egui::Rect>(crate::ui::chats::chat_row_id(sample_ids()[0])))
-            .expect("the first chat is listed")
-            .right()
+        ctx.data(|data| data.get_temp::<f32>(egui::Id::new("chat-panel-right")))
+            .expect("the panel is drawn")
     }
 
     /// Drags from `from` through each x in `path` at one height, returning
@@ -23402,14 +23392,11 @@ mod bubble_detail_tests {
         app.attach(&ctx);
         apply_flags(&mut app, Some("drafts"));
         let ordered = app.visible_chats();
-        assert_eq!(ordered[0].id, SAMPLES[0].id, "the pinned favorite leads");
-        assert_eq!(
-            ordered[1].id, SAMPLES[1].id,
-            "favorites follow in bar order"
-        );
-        assert_eq!(
-            ordered[6].id, SAMPLES[6].id,
-            "every favorite sits above drafts and recency"
+        assert!(
+            ordered
+                .windows(2)
+                .all(|pair| pair[0].last_activity >= pair[1].last_activity),
+            "Recent ignores favorite and draft priority"
         );
         let shapes = frames(&mut app, &ctx, egui::vec2(1180.0, 780.0));
         let texts: Vec<(String, egui::Color32)> = shapes
@@ -23472,7 +23459,10 @@ mod bubble_detail_tests {
         };
         let mut columns = Vec::new();
         for width in [1400.0, 1800.0] {
-            frames(&mut app, &ctx, egui::vec2(width, 900.0));
+            // A resize settles the sidebar and scrollbars over several frames.
+            for _ in 0..3 {
+                frames(&mut app, &ctx, egui::vec2(width, 900.0));
+            }
             let drawn = column(&ctx);
             assert!((drawn.span() - 640.0).abs() < 0.5, "{drawn:?}");
             columns.push(drawn);
@@ -23977,7 +23967,7 @@ mod rail_tests {
             let (_app, ctx) = open("chat", macos);
             assert_eq!(
                 in_header(&ctx),
-                [Stop::All, Stop::Unread, Stop::ReplyLater, Stop::ReadLater],
+                [Stop::Recent, Stop::Focus, Stop::NeedsMe],
                 "{macos}"
             );
             let (_app, ctx) = open("starred", macos);

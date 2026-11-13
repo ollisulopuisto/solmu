@@ -64,3 +64,93 @@ but assumed accepted streams are blocking when using read timeouts. Explicitly
 set accepted fixture sockets blocking so a preconnected or newly accepted
 socket waits for request data rather than being closed on WouldBlock. This
 changes test infrastructure only, not Beeper transport or send-status behavior.
+## 2026-11-13 - Final group redesign
+
+Branch feat/group-modes implements the approved consolidated sheet: Recent,
+Focus, Needs me; static group sections; one group per chat; Other last; merged
+manual later mark; next-local-08:00/forever mute; widening find and names-only
+switcher. Beeper timed mute is local because the bridge has no duration API.
+Old multi-memberships use the first saved section, with single-home assignment
+on edits. No hide/collapse/group-focus controls remain.
+
+Self-review caught retained old group toggle shortcuts, stale keyboard tests,
+global-search network filtering, mode restore retaining the old queue, and
+missing expiry repaint scheduling; addressed before push. Existing #322/#323
+conversation changes and line-wrap work are untouched. #286 overlaps app/model/
+keys/chats and may need a later rebase.
+
+Validation: cargo check --locked --lib and --tests passed. Standalone assignment
+probe fails on the unchanged baseline and passes on this branch; production
+next-08:00 probe passes midnight/exact-08:00/DST cases. Initial production edits
+preceded tests, so strict red-first is not claimed for the whole feature.
+Full test linking/native demo code generation exceeds the local 120-second
+execution limit; no test-suite or pixel-verification pass claimed. CI and
+runtime capture remain required. No merge or release claimed.
+
+
+Follow-up: maintainer removed the pre-existing Filters row after the first
+capture. It exposed type/favorite/unreplied/category/network/account/label scopes
+and link suggestions. Shared palette actions and predicates remain, while
+mode selection clears extra scope and startup no longer restores hidden
+type/favorite filters. Captures refreshed and visually inspected in both themes.
+Updated obsolete favorite/draft ordering tests to the approved latest-first
+Recent semantics, preserving legacy favorites-filter ordering. Native demo
+build now passes after local shared-library setup; full tests remain on CI.
+
+
+Maintainer picked sketch A for group headers: static 16-point thin dividers
+with 11-point labels. Implemented the same treatment for Other, preserving
+single-home row order and drop targets, with no click or collapse action.
+Added a geometry/non-click regression (compile-red before helper, check-green
+after). Refreshed native dark/light captures; no B/C/D sketch code shipped.
+
+Native-suite follow-up: the grouped path now shares the list's persisted scroll
+ID, slide-copy offset, gesture routing, near-top send behavior, and row geometry
+instrumentation. Keyboard reveal accounts for static headers before drawing,
+including virtualized rows. Recent/Focus/Needs me join the deliberate Tab order.
+Migrated retired-chip/mute-duration/favorite-priority assertions to the approved
+modes, 08:00 mute, and activity ordering; kept interaction and viewport coverage.
+The retired saved scope is cleared from account settings as well as session state.
+
+A standalone headless input probe also reproduced ordinary Tab getting stuck
+at the grouped viewport edge on Settings. Rows now retain neighboring geometry
+only while a list row holds focus outside the main chat cycle; group-creation
+controls reveal their focus too. The same probe now reaches previously hidden
+rows with fully visible focus rectangles. The resize-centering test waits for
+sidebar/scrollbar settling rather than sampling a transient layout.
+
+The same test-only Beeper fixture socket-mode fix as send-status PR #327 is
+included here to keep the independent native CI legs deterministic. Production
+Beeper transport is unchanged.
+
+Devin correctly flagged the focused Settings-row fallback as unbounded. Replaced
+it with three overscan rows on each viewport edge. The standalone forward Tab
+probe still reaches hidden rows; the 1,000-chat benchmark now explicitly focuses
+a row on Settings and checks four more frames stay below 20 widgets (13 built).
+
+Second native suite: 2,153 passed and two failed. The resize test grabbed a row
+edge, which varies with scrollbar width, instead of the panel resize boundary;
+it now reads the panel edge directly. The mute test's retired Always label now
+matches Mute forever, and the timed choice explicitly says Until 08:00 rather
+than tomorrow (which was inaccurate before today's 08:00). Both new labels use
+literal gettext calls.
+
+Third native suite: 2,156 passed, only left-resize failed. A standalone real-input
+probe reproduced actual width growth, so the previous test-coordinate explanation
+was incomplete. Content minimums were widening egui's resizable Panel during a
+left drag. The existing wider pointer strip now exclusively owns resizing, with
+the panel fixed to its current saved width (260-520 bounds). Probe: starting
+panel edge352, then352/347/342/337/332/327 as the pointer moves left, no widening.
+Rebased onto merged send-status main, preserving both work-log entries and code.
+
+Fourth native suite: 2,157 passed; resize passes. Fixed the final focused-row
+visibility failure: the scroll area's content rectangle can be wider than its
+clip while its scrollbar changes width. Grouped row widgets now cap their
+right edge to the actual viewport clip, preserving fully visible keyboard focus.
+The standalone forward-Tab probe passes after this change.
+
+Fifth native run: all 2,158 library tests pass. The subsequent portable source
+contract still required the retired Filters-menu suggestion list verbatim.
+Chat-level Same person? cards remain in merged.rs, capped at three with accept
+and dismiss actions. Migrated the contract to assert that shipped bounded path
+and that the removed menu stays removed. Standalone rustc execution passes.

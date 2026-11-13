@@ -836,6 +836,7 @@ pub struct App {
     pub(crate) list_focus_deferred: Option<ChatId>,
     pub focus_composer: bool,
     pub focus_search: bool,
+    pub global_search: bool,
     /// What the Settings page is filtered by.
     pub settings_search: String,
     pub focus_settings_search: bool,
@@ -1698,6 +1699,7 @@ impl App {
             list_focus_deferred: None,
             focus_composer: false,
             focus_search: false,
+            global_search: false,
             settings_search: String::new(),
             focus_settings_search: false,
             quit_requested: false,
@@ -2847,21 +2849,19 @@ impl App {
             self.account_mut().settings.list_filter = key;
             self.account_mut().mark_settings_dirty();
         }
+        let mode = self.list_mode;
+        if self.account().settings.list_mode != Some(mode) {
+            self.account_mut().settings.list_mode = Some(mode);
+            self.account_mut().mark_settings_dirty();
+        }
     }
 
     /// The label the active account's chat list showed when it was last
     /// used, which waits for the account's labels to arrive.
     fn remembered_label(&self) -> Option<String> {
-        match self
-            .account()
-            .settings
-            .list_filter
-            .as_deref()
-            .and_then(crate::model::ListFilter::parse)
-        {
-            Some(crate::model::ListFilter::Label(label)) => Some(label),
-            _ => None,
-        }
+        // There is no longer a visible label-scope control in the list.
+        // Saved labels must not silently narrow a newly opened account.
+        None
     }
 
     /// Why a label name cannot be used, if it cannot. `except` is the label
@@ -3589,7 +3589,25 @@ impl App {
         match filter {
             ChatFilter::ReplyLater => self.reply_later_contains(chat),
             ChatFilter::ReadLater => self.read_later_contains(chat),
+            ChatFilter::All => true,
             other => other.matches(chat),
+        }
+    }
+
+    /// One merged later mark; old read/reply marks remain readable.
+    pub fn needs_me_at(&self, chat: &Chat, now: i64) -> bool {
+        !chat.muted(now)
+            && (chat.looks_unread()
+                || self.reply_later_contains(chat)
+                || self.read_later_contains(chat))
+    }
+
+    pub fn mode_matches_at(&self, chat: &Chat, mode: crate::model::ListMode, now: i64) -> bool {
+        use crate::model::ListMode;
+        match mode {
+            ListMode::Recent => true,
+            ListMode::Focus => chat.favorite || chat.pinned || self.needs_me_at(chat, now),
+            ListMode::NeedsMe => self.needs_me_at(chat, now),
         }
     }
 
@@ -3702,6 +3720,9 @@ impl App {
     }
     /// Queue and additional scope share one predicate for chat and message results.
     pub fn chat_scope_matches(&self, chat: &Chat) -> bool {
+        if self.global_search && !self.search.trim().is_empty() {
+            return !chat.locked;
+        }
         self.chat_scope_matches_queue(chat, self.chat_filter)
     }
 
@@ -3739,6 +3760,9 @@ impl App {
     }
 
     pub fn search_scope_active(&self) -> bool {
+        if self.global_search {
+            return false;
+        }
         self.beeper_scope_is_active()
             || self.chat_filter != ChatFilter::All
             || self.category_filter.is_some()
@@ -3991,14 +4015,18 @@ impl App {
         self.chats
             .iter()
             .filter(|chat| {
-                self.beeper_network_filter
-                    .as_ref()
-                    .is_none_or(|network| chat.backend_network.as_ref() == Some(network))
+                (self.global_search && !needle.is_empty())
+                    || self
+                        .beeper_network_filter
+                        .as_ref()
+                        .is_none_or(|network| chat.backend_network.as_ref() == Some(network))
             })
             .filter(|chat| {
-                self.beeper_account_filter
-                    .as_ref()
-                    .is_none_or(|key| chat.backend_settings_key().as_ref() == Some(key))
+                (self.global_search && !needle.is_empty())
+                    || self
+                        .beeper_account_filter
+                        .as_ref()
+                        .is_none_or(|key| chat.backend_settings_key().as_ref() == Some(key))
             })
             .filter(|chat| {
                 matches!(queue, ChatFilter::ReplyLater | ChatFilter::ReadLater)
@@ -4016,7 +4044,8 @@ impl App {
                     }
             })
             .filter(|chat| {
-                !self.beeper_unreplied
+                (self.global_search && !needle.is_empty())
+                    || !self.beeper_unreplied
                     || chat.last.as_ref().is_some_and(|last| {
                         !last.from_me
                             && !last.sender.is_empty()
@@ -4025,7 +4054,11 @@ impl App {
                     })
             })
             .filter(|chat| chat.locked == locked)
-            .filter(|chat| !filtering || self.chat_scope_matches_queue(chat, queue))
+            .filter(|chat| {
+                !filtering
+                    || (self.global_search && !needle.is_empty())
+                    || self.chat_scope_matches_queue(chat, queue)
+            })
             .filter(|chat| locked || chat.archived == self.show_archived || !needle.is_empty())
             // Searching still finds people never written to, and one being
             // opened stays.
@@ -4053,6 +4086,10 @@ impl App {
     /// Visible list, with pins first then parked drafts. Favorites retain phone order.
     pub fn visible_chats(&self) -> Vec<&Chat> {
         let mut chats = self.matching_queue_chats(self.chat_filter);
+        if !self.show_archived && !self.locked_folder_open() && self.search.trim().is_empty() {
+            let now = crate::util::now();
+            chats.retain(|chat| self.mode_matches_at(chat, self.list_mode, now));
+        }
         let favorites_order = self.favorites_order();
         // beeper_person_preview clones the chat and, for linked people, scans
         // every member conversation's messages, so calling it twice per sort
@@ -4078,6 +4115,23 @@ impl App {
         // Favorites - Beeper pins mirrored among them - keep their bar
         // order at the top of the list.
         chats.sort_by(|a, b| {
+            if self.list_mode == crate::model::ListMode::Recent
+                && self.chat_filter != ChatFilter::Favorites
+                && !self.favorites_only
+                && self.search.trim().is_empty()
+            {
+                return person_activity
+                    .get(&b.id)
+                    .copied()
+                    .unwrap_or(b.last_activity)
+                    .cmp(
+                        &person_activity
+                            .get(&a.id)
+                            .copied()
+                            .unwrap_or(a.last_activity),
+                    )
+                    .then(a.id.cmp(&b.id));
+            }
             b.favorite.cmp(&a.favorite).then_with(|| {
                 // Reached only when a.favorite == b.favorite, so the first
                 // disjunct means both are favorites.
@@ -8924,6 +8978,15 @@ impl App {
         // cache the footer and the message menu read, so an expired pin stops
         // painting its mark and stops offering Unpin.
         let stamp = crate::util::now();
+        if let Some(end) = self
+            .chats
+            .iter()
+            .filter_map(|chat| chat.muted_until)
+            .filter(|end| *end > stamp)
+            .min()
+        {
+            ctx.request_repaint_after(Duration::from_secs((end - stamp) as u64));
+        }
         let account = &mut **self;
         for (chat, rows) in &account.chat_pins {
             let Some(ids) = account.pins.get_mut(chat) else {
@@ -9429,6 +9492,7 @@ impl App {
                 self.apply(Action::Open(page), ctx);
             }
             Action::OpenChat(id) => {
+                self.global_search = false;
                 // A chat where someone mentioned us opens at the mention, as
                 // on WhatsApp, rather than at the first unread message.
                 let mention = self
@@ -10854,7 +10918,14 @@ impl App {
                     // they hold here even where the bridge drops them.
                     self.silence_mute(&chat, until);
                 }
-                self.backend.send(Command::SetMuted(chat, until));
+                // Timed Beeper mute is local. Clear any old remote forever
+                // mute so it cannot resurrect when the local deadline ends.
+                let remote = if beeper && until.is_some_and(|end| end > 0) {
+                    None
+                } else {
+                    until
+                };
+                self.backend.send(Command::SetMuted(chat, remote));
             }
             Action::SetLocked(chat, locked) => {
                 if let Some(known) = self.chat_mut(&chat) {
@@ -11390,6 +11461,19 @@ impl App {
                 }
                 self.backend.send(Command::MoveFavorite { chat, position });
             }
+            Action::ToggleDealLater(id) => {
+                let Some(chat) = self.chat(&id) else {
+                    return;
+                };
+                let queued = self.reply_later_contains(chat) || self.read_later_contains(chat);
+                let member = self.later_key(chat);
+                self.settings.beeper.reply_later.retain(|m| m != &member);
+                self.settings.beeper.read_later.retain(|m| m != &member);
+                if !queued {
+                    self.settings.beeper.read_later.push(member);
+                }
+                self.mark_settings_dirty();
+            }
             Action::ToggleReplyLater(id) => {
                 let Some(chat) = self.chat(&id) else {
                     return;
@@ -11610,11 +11694,7 @@ impl App {
                     to_phone: to_phone.unwrap_or(self.account().settings.save_contacts_to_phone),
                 });
             }
-            Action::ToggleFlatGroups => {
-                self.settings.flat_groups.grouped_view = !self.settings.flat_groups.grouped_view;
-                self.sidebar_visible = true;
-                self.mark_settings_dirty();
-            }
+            Action::ToggleFlatGroups => {}
             Action::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
             Action::SetChatFilter(filter) => {
                 if self.locked_folder {
@@ -11632,6 +11712,13 @@ impl App {
                 }
                 self.show_archived = false;
                 self.unread_kept.clear();
+                self.remember_list_filter();
+            }
+            Action::SetListMode(mode) => {
+                self.list_mode = mode;
+                self.clear_chat_scope();
+                self.unread_kept.clear();
+                self.show_archived = false;
                 self.remember_list_filter();
             }
             Action::JoinGroup => {
@@ -11771,6 +11858,7 @@ impl App {
             // between the open tabs.
             Action::FocusSearch => self.actions.push(Action::FocusChatList),
             Action::FocusChatList => {
+                self.global_search = true;
                 // The list search takes over Escape and Enter from the chat's.
                 self.close_chat_search();
                 self.sidebar_visible = true;
@@ -11902,12 +11990,7 @@ impl App {
                 self.jump_highlight = Some(JumpHighlight::new(chat, id.clone()));
                 self.scroll_anchor = Some(id);
             }
-            Action::SwitcherSearch(query) => {
-                self.jump_hits.clear();
-                if !query.trim().is_empty() {
-                    self.backend.send(Command::SearchMessages { query });
-                }
-            }
+            Action::SwitcherSearch(_) => self.jump_hits.clear(),
             Action::SearchMore => {
                 self.backend.send(Command::SearchMessagesMore {
                     query: self.search.trim().into(),
@@ -11926,6 +12009,7 @@ impl App {
                 }
             }
             Action::Search(text) => {
+                self.global_search = !text.trim().is_empty();
                 self.search = text;
                 self.search_selected = None;
                 let query = self.search.trim().to_owned();
@@ -11941,6 +12025,18 @@ impl App {
                 }
             }
             Action::OpenChatSearch => self.open_chat_search(),
+            Action::FindEverywhere => {
+                // The in-chat query carries over to the list's search, which
+                // then covers every chat; take it before the pane closes and
+                // clears it.
+                let query = if self.chat_search_visible() {
+                    self.chat_search.trim().to_owned()
+                } else {
+                    String::new()
+                };
+                self.actions.push(Action::Search(query));
+                self.actions.push(Action::FocusChatList);
+            }
             Action::OpenInfo(chat) => self.open_info(chat),
             Action::ToggleInfoSidebar => {
                 if self.info_visible() {
@@ -20787,7 +20883,7 @@ mod tests {
     /// The chip or label the list showed comes back at the next start, with
     /// its account (#380).
     #[test]
-    fn the_list_filter_survives_a_restart() {
+    fn retired_scopes_do_not_silently_restore_after_restart() {
         let ctx = egui::Context::default();
         let restart = |settings: crate::settings::AccountSettings| {
             let root = tempfile::tempdir().unwrap();
@@ -20816,14 +20912,14 @@ mod tests {
         );
         let (again, _root) = restart(app.account().settings.clone());
         assert_eq!(again.chat_filter, ChatFilter::All);
-        assert_eq!(again.category_filter, Some(ChatFilter::Groups));
+        assert_eq!(again.category_filter, None);
         assert!(again.label_filter.is_none());
 
         app.labels = vec![label("label-1", "Work")];
         app.apply(Action::SelectLabel(Some("label-1".into())), &ctx);
         let (mut again, _root) = restart(app.account().settings.clone());
         assert_eq!(again.chat_filter, ChatFilter::All);
-        assert_eq!(again.label_filter.as_deref(), Some("label-1"));
+        assert_eq!(again.label_filter, None);
 
         // The label is deleted elsewhere: the list shows every chat, now
         // and at the next start.
@@ -26989,7 +27085,11 @@ mod tests {
                 .map(|chat| chat.name.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(names(&app), ["Ada"], "All leaves channels out");
+        assert_eq!(
+            names(&app),
+            ["Ada", "News"],
+            "Recent includes followed channels"
+        );
         assert_eq!(app.unread_chats(ChatFilter::Unread), 1);
         assert_eq!(app.unread_chats(ChatFilter::Channels), 1);
         app.apply(Action::SetChatFilter(ChatFilter::Channels), &ctx);
@@ -27005,7 +27105,7 @@ mod tests {
             "All retains the selected channel scope"
         );
         app.clear_chat_scope();
-        assert_eq!(names(&app), ["Ada"]);
+        assert_eq!(names(&app), ["Ada", "News"]);
     }
 
     #[test]
@@ -27035,7 +27135,7 @@ mod tests {
     }
 
     #[test]
-    fn visible_chats_favorites_first_and_filter() {
+    fn recent_chats_are_latest_first_and_searchable() {
         let mut app = app();
         let mut a = Chat::new("1@s.whatsapp.net".into(), "Ada".into());
         a.last_activity = 10;
@@ -27052,7 +27152,7 @@ mod tests {
             .iter()
             .map(|chat| chat.name.as_str())
             .collect();
-        assert_eq!(names, vec!["Cy", "Bob", "Ada"]);
+        assert_eq!(names, vec!["Bob", "Ada", "Cy"]);
         app.search = "ad".into();
         let names: Vec<&str> = app
             .visible_chats()
@@ -27100,8 +27200,8 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            ["Bob", "Ada", "Cy", "Dee"],
-            "favorites keep their bar order at the top, then recency"
+            ["Ada", "Bob", "Cy", "Dee"],
+            "Recent orders by activity, independent of favorites bar position"
         );
     }
 
@@ -27139,7 +27239,7 @@ mod tests {
             .iter()
             .map(|chat| chat.id.clone())
             .collect();
-        assert_eq!(ids, ["pin-old", "pin-new", "text", "file", "recent"]);
+        assert_eq!(ids, ["recent", "text", "file", "pin-new", "pin-old"]);
     }
 
     /// A new draft moves only on leaving; reopening and clearing a saved
@@ -27164,11 +27264,11 @@ mod tests {
         app.composer = "Typing a new draft".into();
         assert_eq!(ids(&app), ["recent", "draft"]);
         app.open_chat("recent".into());
-        assert_eq!(ids(&app), ["draft", "recent"]);
+        assert_eq!(ids(&app), ["recent", "draft"]);
         app.open_chat("draft".into());
-        assert_eq!(ids(&app), ["draft", "recent"]);
+        assert_eq!(ids(&app), ["recent", "draft"]);
         app.composer.clear();
-        assert_eq!(ids(&app), ["draft", "recent"]);
+        assert_eq!(ids(&app), ["recent", "draft"]);
         app.open_chat("recent".into());
         assert_eq!(ids(&app), ["recent", "draft"]);
     }
@@ -27195,11 +27295,11 @@ mod tests {
             assert_eq!(app.pending.len(), usize::from(staged_attachment));
             assert_eq!(
                 app.visible_chats()[0].id,
-                if staged_attachment { "recent" } else { "draft" },
-                "only the untouched startup composer gains draft priority"
+                "recent",
+                "Recent never promotes a draft over newer activity"
             );
             app.open_chat("recent".into());
-            assert_eq!(app.visible_chats()[0].id, "draft");
+            assert_eq!(app.visible_chats()[0].id, "recent");
         }
     }
 
@@ -27219,12 +27319,12 @@ mod tests {
         app.drafts
             .insert("draft".into(), "First account only".into());
         app.open_chat("draft".into());
-        assert_eq!(app.visible_chats()[0].id, "draft");
+        assert_eq!(app.visible_chats()[0].id, "recent");
         app.switch_account(&second);
         app.open_chat("draft".into());
         assert_eq!(app.visible_chats()[0].id, "recent");
         app.switch_account(&first);
-        assert_eq!(app.visible_chats()[0].id, "draft");
+        assert_eq!(app.visible_chats()[0].id, "recent");
         assert_eq!(app.composer, "First account only");
     }
 
@@ -27297,8 +27397,8 @@ mod tests {
         };
         assert_eq!(
             names(&app),
-            ["Ada", "Bob", "Club"],
-            "channels have their own chip"
+            ["Ada", "Bob", "Club", "News"],
+            "Recent includes channels"
         );
         app.chat_filter = ChatFilter::Channels;
         assert_eq!(names(&app), ["News"]);
@@ -27378,10 +27478,10 @@ mod tests {
         app.open_chat("2@s.whatsapp.net".into());
         assert_eq!(names(&app), ["Ada", "Stranger", "Group"]);
         // A draft left unsent keeps the chat listed once it is closed, and
-        // parked drafts come before other chats.
+        // Recent keeps activity order even for parked drafts.
         app.open_chat = None;
         app.drafts.insert("2@s.whatsapp.net".into(), "hello".into());
-        assert_eq!(names(&app), ["Stranger", "Ada", "Group"]);
+        assert_eq!(names(&app), ["Ada", "Stranger", "Group"]);
     }
 
     #[test]
@@ -27988,7 +28088,7 @@ mod tests {
     }
 
     #[test]
-    fn favorite_order_survives_new_messages() {
+    fn recent_activity_ignores_favorite_bar_order() {
         let mut app = app();
         for (id, position, activity) in [("a", 1, 999), ("b", 0, 1), ("c", 0, 10), ("d", 0, 900)] {
             let mut chat = Chat::new(id.into(), id.into());
@@ -28003,10 +28103,10 @@ mod tests {
                 .map(|chat| chat.id.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(order(&app), ["b", "a", "d", "c"]);
+        assert_eq!(order(&app), ["a", "d", "c", "b"]);
         app.chats[0].last_activity = 10_000;
         app.chats[2].last_activity = 20_000;
-        assert_eq!(order(&app), ["b", "a", "c", "d"]);
+        assert_eq!(order(&app), ["c", "a", "d", "b"]);
     }
 
     #[test]
@@ -31184,6 +31284,64 @@ mod conversation_palette_tests {
         assert_eq!(ids(&app), ["chat-2"]);
         app.chat_filter = ChatFilter::All;
         assert_eq!(ids(&app), ["chat-1", "chat-2", "chat-3"]);
+    }
+
+    #[test]
+    fn final_modes_muted_expiry_and_merged_later_mark() {
+        use crate::model::ListMode;
+        let mut app = app();
+        let mut chat = later_chat("chat-1", 10);
+        chat.unread = 2;
+        chat.muted_until = Some(100);
+        assert!(!app.mode_matches_at(&chat, ListMode::NeedsMe, 99));
+        assert!(app.mode_matches_at(&chat, ListMode::NeedsMe, 100));
+        chat.muted_until = Some(0);
+        chat.favorite = true;
+        assert!(app.mode_matches_at(&chat, ListMode::Focus, 101));
+        assert!(!app.mode_matches_at(&chat, ListMode::NeedsMe, 101));
+        assert!(app.mode_matches_at(&chat, ListMode::Recent, 101));
+        chat.muted_until = None;
+        chat.unread = 0;
+        app.chats = vec![chat];
+        let ctx = egui::Context::default();
+        app.apply(Action::ToggleReadLater("chat-1".into()), &ctx);
+        assert!(app.mode_matches_at(&app.chats[0], ListMode::NeedsMe, 101));
+        app.apply(Action::ToggleDealLater("chat-1".into()), &ctx);
+        assert!(!app.mode_matches_at(&app.chats[0], ListMode::NeedsMe, 101));
+        app.apply(Action::ToggleDealLater("chat-1".into()), &ctx);
+        assert!(app.mode_matches_at(&app.chats[0], ListMode::NeedsMe, 101));
+    }
+
+    #[test]
+    fn deal_later_survives_send_confirmation() {
+        let mut app = app();
+        app.chats = vec![later_chat("chat-1", 10)];
+        app.apply(
+            Action::ToggleDealLater("chat-1".into()),
+            &egui::Context::default(),
+        );
+        let member = crate::merged::Member::of(&app.chats[0]).unwrap();
+        app.apply_backend_event(
+            Event::BeeperSendConfirmed {
+                origin: member.origin,
+                account: member.account,
+                chat: member.chat,
+            },
+            true,
+        );
+        assert!(app.needs_me_at(&app.chats[0], crate::util::now()));
+    }
+
+    #[test]
+    fn global_find_bypasses_unreplied_for_names_and_message_hits() {
+        let mut app = app();
+        app.chats = vec![later_chat("chat-1", 10)];
+        app.beeper_unreplied = true;
+        app.global_search = true;
+        app.search = "chat".into();
+        app.search_hits = vec![crate::archive::tests::message("chat-1", "hit", 10, false)];
+        assert_eq!(app.visible_chats().len(), 1);
+        assert_eq!(app.scoped_search_hits().len(), 1);
     }
 
     fn later_person(name: &str, ids: [&str; 2]) -> crate::merged::Person {

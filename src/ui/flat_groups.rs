@@ -10,8 +10,6 @@ use std::collections::{HashMap, HashSet};
 pub struct State {
     pub name: String,
     pub assigning: Option<(Member, Vec<u64>)>,
-    pub undo: Option<(u64, Member)>,
-    collapsed: HashSet<u64>,
     /// Demo/test instrumentation: actual alias widgets built in the last frame.
     #[cfg(any(test, feature = "demo"))]
     pub built_rows: usize,
@@ -75,6 +73,7 @@ fn membership_rows(app: &App, chats: &[&Chat]) -> Vec<Vec<usize>> {
             aliases.entry(key).or_default().push(index);
         }
     }
+    let mut seen = HashSet::new();
     app.settings
         .flat_groups
         .items
@@ -89,6 +88,7 @@ fn membership_rows(app: &App, chats: &[&Chat]) -> Vec<Vec<usize>> {
                 .collect();
             rows.sort_unstable();
             rows.dedup();
+            rows.retain(|index| seen.insert(*index));
             rows
         })
         .collect()
@@ -103,6 +103,13 @@ fn draw_row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         app.flat_group_ui.built_rows += 1;
     }
     let response = super::chats::row(app, ui, chat);
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(super::chats::chat_row_id(&chat.id), response.rect);
+        data.insert_temp(
+            super::chats::chat_row_id(&chat.id).with("widget"),
+            response.id,
+        );
+    });
     if app.scroll_chat_into_view.as_ref() == Some(&chat.id) && ui.is_enabled() {
         response.scroll_to_me(Some(egui::Align::Center));
         app.scroll_chat_into_view = None;
@@ -126,26 +133,11 @@ pub fn assign(app: &mut App, chat: &Chat) {
     app.flat_group_ui.assigning = Some((target, selected));
 }
 
-pub fn toggle(app: &mut App, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
-        let grouped = app.settings.flat_groups.grouped_view;
-        for (name, mode) in [
-            (crate::i18n::gettext(app.locale, "Latest"), false),
-            (crate::i18n::gettext(app.locale, "Groups"), true),
-        ] {
-            if ui.selectable_label(grouped == mode, name).clicked() && grouped != mode {
-                app.actions.push(Action::ToggleFlatGroups);
-            }
-        }
-    });
-}
-
 /// Keyboard order follows group order, then Ungrouped, deduplicating aliases.
-/// Collapsed sections are expanded by list() when their chat is requested.
+/// Headers are static and never change the navigation order.
 pub fn navigation_chats(app: &App) -> Vec<&Chat> {
     let chats = app.visible_chats();
-    if !app.settings.flat_groups.grouped_view
-        || app.show_archived
+    if app.show_archived
         || app.show_starred
         || app.locked_folder_open()
         || app.secret_code_matched()
@@ -195,13 +187,20 @@ fn virtual_aliases(app: &mut App, ui: &mut egui::Ui, chats: &[&Chat], salt: (&st
         ui.scroll_to_rect(row, Some(egui::Align::Center));
         app.scroll_chat_into_view = None;
     }
-    let range = visible_range(rect.top(), height, chats.len(), ui.clip_rect());
+    // Outside the main chat cycle egui walks ordinary row widgets. Keep
+    // their geometry while a row holds focus so Tab can reach the next row.
+    let range = visible_range(
+        rect.top(),
+        height,
+        chats.len(),
+        ui.clip_rect().expand2(egui::vec2(0.0, height * 3.0)),
+    );
     if range.is_empty() {
         return;
     }
     let visible = egui::Rect::from_min_max(
         rect.min + egui::vec2(0.0, range.start as f32 * height),
-        rect.max,
+        egui::pos2(rect.right().min(ui.clip_rect().right()), rect.bottom()),
     );
     ui.scope_builder(
         egui::UiBuilder::new().id_salt(salt).max_rect(visible),
@@ -216,7 +215,45 @@ fn virtual_aliases(app: &mut App, ui: &mut egui::Ui, chats: &[&Chat], salt: (&st
     );
 }
 
-pub fn list(app: &mut App, ui: &mut egui::Ui) {
+/// A static 16-point divider. It accepts a drop but never a click,
+/// so a group's heading cannot collapse or focus the list.
+fn section_header(
+    ui: &mut egui::Ui,
+    name: &str,
+    palette: &crate::theme::Palette,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), egui::Sense::hover());
+    let painter = ui.painter();
+    let label = painter.layout_no_wrap(
+        name.to_owned(),
+        crate::theme::regular(11.0),
+        palette.secondary,
+    );
+    let at = egui::pos2(rect.left() + 16.0, rect.center().y - label.size().y * 0.5);
+    let gap = egui::Rect::from_min_size(
+        egui::pos2(at.x - 6.0, rect.top()),
+        egui::vec2(label.size().x + 12.0, rect.height()),
+    );
+    let stroke = egui::Stroke::new(1.0, palette.dim);
+    painter.line_segment(
+        [rect.left_center(), egui::pos2(gap.left(), rect.center().y)],
+        stroke,
+    );
+    if gap.right() < rect.right() {
+        painter.line_segment(
+            [
+                egui::pos2(gap.right(), rect.center().y),
+                rect.right_center(),
+            ],
+            stroke,
+        );
+    }
+    painter.galley(at, label, palette.secondary);
+    response
+}
+
+pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
     #[cfg(any(test, feature = "demo"))]
     {
         app.flat_group_ui.built_rows = 0;
@@ -243,150 +280,159 @@ pub fn list(app: &mut App, ui: &mut egui::Ui) {
     let rows = membership_rows(app, &chats.iter().collect::<Vec<_>>());
     let grouped: HashSet<usize> = rows.iter().flatten().copied().collect();
     let mut changed = false;
-    egui::ScrollArea::vertical()
-        .id_salt("flat-group-list")
-        .show(ui, |ui| {
-            ui.label(crate::i18n::gettext(
-                app.locale,
-                "Local only. No parent groups or subgroups.",
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let mut area = egui::ScrollArea::vertical()
+        .id_salt("chat-list")
+        .auto_shrink([false, false]);
+    let row_height = super::chats::chat_row_height(app.settings.beeper.compact_list);
+    if to_top && super::chats::near_top(ui, "chat-list", row_height) {
+        area = area.vertical_scroll_offset(0.0);
+    }
+    if ui.is_enabled()
+        && let Some(target) = app.scroll_chat_into_view.as_ref()
+    {
+        let mut top = 0.0;
+        let mut target_top = None;
+        for indices in &rows {
+            top += 16.0;
+            for index in indices {
+                if &chats[*index].id == target {
+                    target_top = Some(top);
+                }
+                top += row_height;
+            }
+        }
+        top += 16.0;
+        for (_, chat) in chats
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !grouped.contains(i))
+        {
+            if &chat.id == target {
+                target_top = Some(top);
+            }
+            top += row_height;
+        }
+        if let Some(top) = target_top {
+            let id = ui.make_persistent_id(egui::IdSalt::new("chat-list"));
+            let current = egui::scroll_area::State::load(ui.ctx(), id)
+                .unwrap_or_default()
+                .offset
+                .y;
+            area = area.vertical_scroll_offset(super::chats::reveal_bounds(
+                current,
+                ui.available_height(),
+                top,
+                top + row_height,
             ));
-            let unread: Vec<_> = chats
-                .iter()
-                .zip(&keys)
-                .filter(|(c, _)| c.looks_unread())
-                .filter_map(|(_, k)| k.first())
-                .collect();
-            let count = app.settings.flat_groups.unread_total(unread);
-            ui.label(
-                crate::i18n::ngettext(
-                    app.locale,
-                    "{count} unread chat",
-                    "{count} unread chats",
-                    count as u32,
-                )
-                .replace("{count}", &count.to_string()),
+            app.scroll_chat_into_view = None;
+        }
+    }
+    let copy = ui
+        .ctx()
+        .data(|d| d.get_temp::<bool>(super::chats::slide_copy_id()))
+        .is_some();
+    if copy
+        && let Some(offset) = ui
+            .ctx()
+            .data(|d| d.get_temp::<f32>(super::chats::shared_offset_id()))
+    {
+        area = area.vertical_scroll_offset(offset);
+    }
+    let carried = if ui.is_enabled() {
+        app.scroll_route.take(crate::app::ScrollPane::Chats)
+    } else {
+        0.0
+    };
+    let output = area.show(ui, |ui| {
+        if carried != 0.0 {
+            ui.scroll_with_delta_animation(
+                egui::vec2(0.0, carried),
+                egui::style::ScrollAnimation::none(),
             );
-            if let Some((id, target)) = app.flat_group_ui.undo.clone() {
-                ui.horizontal(|ui| {
-                    ui.label(crate::i18n::gettext(app.locale, "Added to group"));
-                    if ui
-                        .button(crate::i18n::gettext(app.locale, "Undo"))
-                        .clicked()
-                    {
-                        app.settings.flat_groups.remove(id, &target);
-                        app.flat_group_ui.undo = None;
-                        changed = true;
-                    }
-                });
-            }
-            for (group, indices) in groups.iter().zip(&rows) {
-                let included: Vec<_> = indices.iter().map(|index| &chats[*index]).collect();
-                let unread = included.iter().filter(|c| c.looks_unread()).count();
-                if app
-                    .scroll_chat_into_view
-                    .as_ref()
-                    .is_some_and(|id| included.iter().any(|chat| &chat.id == id))
+        }
+        for (group, indices) in groups.iter().zip(&rows) {
+            let included: Vec<_> = indices.iter().map(|index| &chats[*index]).collect();
+            let heading = &group.name;
+            let response = section_header(ui, heading, &app.palette);
+            if let Some(target) = response.dnd_release_payload::<Member>() {
+                // A stale drag from another account must not mutate the current view.
+                if keys.iter().any(|row| row.contains(target.as_ref()))
+                    && !indices
+                        .iter()
+                        .any(|index| keys[*index].contains(target.as_ref()))
                 {
-                    app.flat_group_ui.collapsed.remove(&group.id);
-                }
-                let closed = app.flat_group_ui.collapsed.contains(&group.id);
-                let counts = crate::i18n::gettext(app.locale, "{chats} chats / {unread} unread")
-                    .replace("{chats}", &included.len().to_string())
-                    .replace("{unread}", &unread.to_string());
-                let heading = format!(
-                    "{} {}   {}",
-                    if closed { "+" } else { "−" },
-                    group.name,
-                    counts
-                );
-                let response =
-                    ui.add_sized([ui.available_width(), 36.0], egui::Button::new(heading));
-                if response.clicked() {
-                    if closed {
-                        app.flat_group_ui.collapsed.remove(&group.id);
-                    } else {
-                        app.flat_group_ui.collapsed.insert(group.id);
-                    }
-                }
-                if let Some(target) = response.dnd_release_payload::<Member>() {
-                    // A stale drag from another account must not mutate the current view.
-                    if keys.iter().any(|row| row.contains(target.as_ref()))
-                        && !indices
-                            .iter()
-                            .any(|index| keys[*index].contains(target.as_ref()))
-                        && app.settings.flat_groups.add(group.id, (*target).clone())
-                    {
-                        app.flat_group_ui.undo = Some((group.id, (*target).clone()));
-                        changed = true;
-                    }
-                }
-                response.context_menu(|ui| {
-                    ui.label(crate::i18n::gettext(
-                        app.locale,
-                        "Deleting a group never deletes chats or messages.",
-                    ));
-                    if ui
-                        .button(crate::i18n::gettext(app.locale, "Delete group"))
-                        .clicked()
-                    {
-                        app.settings.flat_groups.delete(group.id);
-                        changed = true;
-                        ui.close();
-                    }
-                });
-                if !closed {
-                    ui.push_id(("flat-group", group.id), |ui| {
-                        virtual_aliases(app, ui, &included, ("flat-group", group.id));
-                    });
-                }
-            }
-            let ungrouped: Vec<_> = chats
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| !grouped.contains(index))
-                .map(|(_, chat)| chat)
-                .collect();
-            egui::CollapsingHeader::new(
-                crate::i18n::ngettext(
-                    app.locale,
-                    "Ungrouped · {count} chat",
-                    "Ungrouped · {count} chats",
-                    ungrouped.len() as u32,
-                )
-                .replace("{count}", &ungrouped.len().to_string()),
-            )
-            .id_salt("flat-ungrouped")
-            .open(
-                app.scroll_chat_into_view
-                    .as_ref()
-                    .is_some_and(|id| ungrouped.iter().any(|chat| &chat.id == id))
-                    .then_some(true),
-            )
-            .show(ui, |ui| {
-                virtual_aliases(app, ui, &ungrouped, ("ungrouped", 0));
-            });
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut app.flat_group_ui.name)
-                        .hint_text(crate::i18n::gettext(app.locale, "New group"))
-                        .char_limit(80)
-                        .desired_width(140.0),
-                );
-                if ui
-                    .button(crate::i18n::gettext(app.locale, "Create"))
-                    .clicked()
-                    && app
-                        .settings
+                    let sources = keys
+                        .iter()
+                        .find(|row| row.contains(target.as_ref()))
+                        .cloned()
+                        .unwrap_or_default();
+                    app.settings
                         .flat_groups
-                        .create(&app.flat_group_ui.name)
-                        .is_some()
-                {
-                    app.flat_group_ui.name.clear();
+                        .assign_linked(target.as_ref(), &sources, &[group.id]);
                     changed = true;
                 }
+            }
+            response.context_menu(|ui| {
+                ui.label(crate::i18n::gettext(
+                    app.locale,
+                    "Deleting a group never deletes chats or messages.",
+                ));
+                if ui
+                    .button(crate::i18n::gettext(app.locale, "Delete group"))
+                    .clicked()
+                {
+                    app.settings.flat_groups.delete(group.id);
+                    changed = true;
+                    ui.close();
+                }
             });
+            ui.push_id(("flat-group", group.id), |ui| {
+                virtual_aliases(app, ui, &included, ("flat-group", group.id));
+            });
+        }
+        let ungrouped: Vec<_> = chats
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !grouped.contains(index))
+            .map(|(_, chat)| chat)
+            .collect();
+        section_header(ui, &crate::i18n::gettext(app.locale, "Other"), &app.palette);
+        virtual_aliases(app, ui, &ungrouped, ("other", 0));
+        ui.separator();
+        ui.horizontal(|ui| {
+            let name = ui.add(
+                egui::TextEdit::singleline(&mut app.flat_group_ui.name)
+                    .hint_text(crate::i18n::gettext(app.locale, "New group"))
+                    .char_limit(80)
+                    .desired_width(140.0),
+            );
+            crate::theme::reveal_focus(&name);
+            let create = ui.button(crate::i18n::gettext(app.locale, "Create"));
+            crate::theme::reveal_focus(&create);
+            if create.clicked()
+                && app
+                    .settings
+                    .flat_groups
+                    .create(&app.flat_group_ui.name)
+                    .is_some()
+            {
+                app.flat_group_ui.name.clear();
+                changed = true;
+            }
         });
+    });
+    if !copy {
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(super::chats::shared_offset_id(), output.state.offset.y));
+    }
+    app.scroll_route
+        .place(crate::app::ScrollPane::Chats, output.inner_rect);
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(super::chats::list_offset_id(), output.state.offset.y);
+        d.insert_temp(super::chats::list_offset_id().with("id"), output.id);
+    });
     if changed {
         app.actions.push(Action::SettingsChanged);
     }
@@ -407,17 +453,14 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
         ui.heading(crate::i18n::gettext(app.locale, "Assign groups"));
         ui.label(crate::i18n::gettext(
             app.locale,
-            "Same chat in several groups. No copied history.",
+            "Choose one group. Chat history stays where it is.",
         ));
+        let mut home = selected.first().copied();
+        ui.radio_value(&mut home, None, crate::i18n::gettext(app.locale, "Other"));
         for group in &app.settings.flat_groups.items {
-            let mut checked = selected.contains(&group.id);
-            if ui.checkbox(&mut checked, &group.name).changed() {
-                selected.retain(|id| id != &group.id);
-                if checked {
-                    selected.push(group.id);
-                }
-            }
+            ui.radio_value(&mut home, Some(group.id), &group.name);
         }
+        selected = home.into_iter().collect();
         if app.settings.flat_groups.items.is_empty() {
             ui.label(crate::i18n::gettext(
                 app.locale,
@@ -434,7 +477,6 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
         });
     });
     if apply {
-        app.flat_group_ui.undo = None;
         let targets = app
             .chats
             .iter()
@@ -452,6 +494,19 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn divider_header_is_dense_and_does_not_offer_clicks() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let palette = crate::theme::Palette::dark();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let response = section_header(ui, "Work", &palette);
+            assert_eq!(response.rect.height(), 16.0);
+            assert_eq!(response.sense, egui::Sense::hover());
+        });
+        out.textures_delta.clear();
+    }
+
     #[test]
     fn alias_virtual_range_skips_far_rows_and_keeps_partial_rows() {
         let clip = egui::Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(300.0, 500.0));
@@ -551,7 +606,6 @@ mod tests {
         let work = member(&app, &app.chats[1]);
         app.settings.flat_groups.add(group, work);
         app.settings.flat_groups.grouped_view = true;
-        app.flat_group_ui.collapsed.insert(group);
         assert_eq!(
             navigation_chats(&app)
                 .iter()
@@ -563,22 +617,21 @@ mod tests {
         crate::theme::install(&ctx);
         for target in ["work", "ungrouped"] {
             app.scroll_chat_into_view = Some(target.into());
-            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| list(&mut app, ui));
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| list(&mut app, ui, false));
             output.textures_delta.clear();
             assert!(
                 app.scroll_chat_into_view.is_none(),
                 "keyboard target must be drawn and reveal request consumed"
             );
         }
-        assert!(!app.flat_group_ui.collapsed.contains(&group));
         app.scroll_chat_into_view = Some("work".into());
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.disable();
-            list(&mut app, ui);
+            list(&mut app, ui, false);
         });
         output.textures_delta.clear();
         assert_eq!(app.scroll_chat_into_view.as_deref(), Some("work"));
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| list(&mut app, ui));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| list(&mut app, ui, false));
         output.textures_delta.clear();
         assert!(app.scroll_chat_into_view.is_none());
     }
