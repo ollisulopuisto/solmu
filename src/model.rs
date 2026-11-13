@@ -3554,7 +3554,10 @@ mod tests {
         assert_eq!(read("\"NeedsMe\""), ListMode::NeedsMe);
         assert_eq!(read("\"Focus\""), ListMode::Recent);
         assert_eq!(read("\"Whatever\""), ListMode::Recent);
-        assert_eq!(serde_json::to_string(&ListMode::Unread).unwrap(), "\"Unread\"");
+        assert_eq!(
+            serde_json::to_string(&ListMode::Unread).unwrap(),
+            "\"Unread\""
+        );
     }
 
     /// Checks compatibility with older archived quotes that omitted a source chat.

@@ -295,14 +295,14 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                 // Three mode tabs share the row with the Bookmarks icon, which
                 // keeps its own square so the labels still fit at 300 points.
                 let bookmarks_edge = BOOKMARKS_ICON + theme::ICON_BUTTON_PAD;
-                let width = (ui.available_width()
-                    - 3.0 * ui.spacing().item_spacing.x
-                    - bookmarks_edge)
-                    / 3.0;
+                let width =
+                    (ui.available_width() - 3.0 * ui.spacing().item_spacing.x - bookmarks_edge)
+                        / 3.0;
                 for mode in crate::model::ListMode::EVERY {
                     let response = ui.add_sized(
                         [width, 36.0],
-                        egui::Button::selectable(app.list_mode == mode, mode.label(app.locale)),
+                        egui::Button::selectable(app.list_mode == mode, mode.label(app.locale))
+                            .truncate(),
                     );
                     let stop = match mode {
                         crate::model::ListMode::Recent => Stop::Recent,
