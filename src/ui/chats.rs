@@ -3187,13 +3187,7 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
         super::batch_actions::toggle_chat(app, &chat.id);
         ui.close();
     }
-    if ui
-        .button(crate::i18n::gettext(app.locale, "Assign groups…"))
-        .clicked()
-    {
-        super::flat_groups::assign(app, chat);
-        ui.close();
-    }
+    super::flat_groups::assign_menu(app, ui, chat);
     let locale = app.locale;
     if chat.looks_unread()
         && widgets::menu_item(
