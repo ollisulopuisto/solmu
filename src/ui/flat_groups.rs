@@ -247,7 +247,11 @@ fn section_header(
     } else {
         egui::Sense::click()
     };
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), sense);
+    // Stay inside the clip so a focused heading is fully visible.
+    let width = ui
+        .available_width()
+        .min(ui.clip_rect().right() - ui.next_widget_position().x);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 16.0), sense);
     // Tab can land on a heading now; keep it scrolled into view.
     crate::theme::reveal_focus(&response);
     #[cfg(test)]
