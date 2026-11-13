@@ -859,7 +859,8 @@ mod tests {
         }
         frame(&mut app, vec![button(to, false)]);
         frame(&mut app, Vec::new());
-        let order: Vec<u64> = app.settings.flat_groups.items.iter().map(|g| g.id).collect();
+        let items = &app.settings.flat_groups.items;
+        let order: Vec<u64> = items.iter().map(|g| g.id).collect();
         assert_eq!(order, vec![b, c, a]);
         let saved = app
             .actions
