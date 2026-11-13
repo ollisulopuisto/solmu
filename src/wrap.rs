@@ -387,6 +387,13 @@ pub fn balance(items: &[Item], max_width: f32, hyphen_width: f32) -> Plan {
         }
         width
     };
+    // Prefix count of mandatory breaks: the no-crossing check inside the
+    // dynamic program stays O(1) per candidate instead of rescanning the
+    // line, keeping the whole pass O(n^2).
+    let mut mandatory = vec![0usize; n + 1];
+    for (index, unit) in units.iter().enumerate() {
+        mandatory[index + 1] = mandatory[index] + usize::from(unit.brk == Break::Mandatory);
+    }
     // dp[p][h] = lowest cost laying out units[..p] ending in a break at p,
     // where h records whether that line ended on a hyphen.
     let mut dp = vec![[f32::INFINITY; 2]; n + 1];
@@ -402,10 +409,7 @@ pub fn balance(items: &[Item], max_width: f32, hyphen_width: f32) -> Plan {
                 continue;
             }
             // Never cross a mandatory break inside a line.
-            if units[p..q.saturating_sub(1)]
-                .iter()
-                .any(|unit| unit.brk == Break::Mandatory)
-            {
+            if mandatory[q.saturating_sub(1)] - mandatory[p] > 0 {
                 continue;
             }
             let width = line_width(p, q);

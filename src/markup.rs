@@ -450,8 +450,29 @@ pub fn layout_balanced(
     )
 }
 
-/// Cache key: text, body size, wrap width, font generation.
-type BreaksKey = (String, u32, u32, u32);
+/// Cache key: text, body size, wrap width, font generation, and a hash of
+/// everything else that shapes measurement: section fonts and link ranges.
+type BreaksKey = (String, u32, u32, u32, u64);
+
+/// Hashes the parts of a built job beyond its plain text that change token
+/// widths or break opportunities: each section's font family and size (bold
+/// and monospace render different widths for identical text) and the link
+/// spans (link text never hyphenates and keeps its own break rules).
+fn format_hash(built: &Built) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for section in &built.job.sections {
+        section.byte_range.start.hash(&mut hasher);
+        section.byte_range.end.hash(&mut hasher);
+        section.format.font_id.family.hash(&mut hasher);
+        section.format.font_id.size.to_bits().hash(&mut hasher);
+    }
+    for (range, _) in &built.links {
+        range.start.hash(&mut hasher);
+        range.end.hash(&mut hasher);
+    }
+    hasher.finish()
+}
 
 /// The balancer's breaks for this text at this width, cached: body layout
 /// runs every frame while the text, fonts and width rarely change.
@@ -466,6 +487,7 @@ fn balanced_breaks(
         size.to_bits(),
         max_width.to_bits(),
         crate::theme::font_generation(),
+        format_hash(built),
     );
     type Cache =
         std::sync::Mutex<std::collections::HashMap<BreaksKey, Arc<Vec<crate::wrap::LineBreak>>>>;
@@ -1487,6 +1509,32 @@ mod tests {
                 caption.galley.size().y,
                 layout(ui, "ok", &[], &style, 400.0, false).galley.size().y
             );
+        });
+        output.textures_delta.clear();
+    }
+
+    /// The break cache distinguishes formatting: bold and monospace change
+    /// token widths for identical plain text, so the cache key hashes each
+    /// section's font alongside the text, and the link spans whose break
+    /// rules differ from plain words.
+    #[test]
+    fn break_cache_keys_track_formatting() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let plain = super::build(ui, "hello world", &[], &style, 200.0, false);
+            let bold = super::build(ui, "*hello world*", &[], &style, 200.0, false);
+            assert_eq!(plain.job.text, bold.job.text);
+            assert_ne!(super::format_hash(&plain), super::format_hash(&bold));
+            let mono = super::build(ui, "`hello world`", &[], &style, 200.0, false);
+            assert_eq!(plain.job.text, mono.job.text);
+            assert_ne!(super::format_hash(&plain), super::format_hash(&mono));
         });
         output.textures_delta.clear();
     }

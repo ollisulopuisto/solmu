@@ -151,7 +151,32 @@ pub fn refine(copied: &str, rows: &[Row]) -> Option<String> {
         return None;
     }
     for row in rows {
-        if let Some(start) = row.match_text().find(copied) {
+        // A phrase can repeat inside one message: prefer the occurrence
+        // whose span overlaps the balancer's inserted characters, since
+        // those are what this cleanup strips. Without the preference a
+        // literal "-\n" the sender typed in an earlier occurrence could be
+        // cleaned as if it were the inserted one.
+        let text = row.match_text();
+        let mut first = None;
+        let mut from = 0;
+        while from <= text.len() {
+            let Some(offset) = text[from..].find(copied) else {
+                break;
+            };
+            let start = from + offset;
+            let end = start + copied.len();
+            if row
+                .inserted
+                .iter()
+                .any(|&(pos, len)| pos < end && start < pos + len)
+            {
+                first = Some(start);
+                break;
+            }
+            first = first.or(Some(start));
+            from = start + copied.chars().next().map_or(1, char::len_utf8);
+        }
+        if let Some(start) = first {
             return Some(row.cleaned(start, copied));
         }
     }
@@ -258,6 +283,29 @@ mod tests {
             ),
             row("[18:27, 8/30/2026] Carmine: ", "Sure I'll take a look"),
         ]
+    }
+
+    /// A phrase repeated in one message, once with a literal "-\n" the
+    /// sender typed and once with the balancer's inserted hyphenation:
+    /// cleanup targets the inserted occurrence, not the first match.
+    #[test]
+    fn refine_prefers_the_occurrence_overlapping_inserted_breaks() {
+        let body = "käyttö-\nliittymä ja käyttöliittymä loppuun";
+        let inserted_at = body.find("käyttöliittymä loppuun").unwrap() + "käyttö".len();
+        let mut broken = body.to_owned();
+        broken.insert_str(inserted_at, "-\n");
+        let row = Row {
+            body: body.to_owned(),
+            broken: Some(broken),
+            inserted: vec![(inserted_at, 2)],
+            ..Default::default()
+        };
+        // The selection copied the balanced occurrence; the inserted "-\n"
+        // disappears and the literal one in the first occurrence is untouched.
+        assert_eq!(
+            refine("käyttö-\nliittymä", &[row]).as_deref(),
+            Some("käyttöliittymä")
+        );
     }
 
     #[test]
