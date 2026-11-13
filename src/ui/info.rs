@@ -666,12 +666,7 @@ fn actions(app: &mut App, ui: &mut egui::Ui, shown: &Shown, mine: bool, editable
             } else {
                 "Favorite"
             },
-            if shown.pinned {
-                // A pin mirrored into a favorite leaves through the bridge.
-                vec![Action::SetPinned(id.to_owned(), false)]
-            } else {
-                vec![Action::SetFavorite(id.to_owned(), !shown.favorite)]
-            },
+            vec![Action::SetFavorite(id.to_owned(), !shown.favorite)],
         ));
         buttons.push((
             Icon::Archive,

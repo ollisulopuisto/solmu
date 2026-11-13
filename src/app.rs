@@ -11453,7 +11453,28 @@ impl App {
                 if self.favorites.is_some() {
                     self.favorites = Some(order);
                 }
-                self.backend.send(Command::SetFavorite(chat, favorite));
+                // One concept: a favorite is the local mark, and a Beeper chat
+                // also carries the bridge pin. Favoriting pins it while a pin
+                // is free; unfavoriting unpins it, so the pin cannot bring the
+                // favorite back. Over the pin limit the favorite stays local.
+                let bridge_pin = self
+                    .chat(&chat)
+                    .filter(|known| known.backend_account.is_some())
+                    .map(|known| known.pinned);
+                self.backend.send(Command::SetFavorite(chat.clone(), favorite));
+                if bridge_pin.is_some_and(|pinned| pinned != favorite)
+                    && (!favorite || self.pinned_count() < self.pin_limit)
+                {
+                    if let Some(known) = self.chat_mut(&chat) {
+                        known.pinned = favorite;
+                        known.pinned_at = if favorite {
+                            jiff::Timestamp::now().as_millisecond()
+                        } else {
+                            0
+                        };
+                    }
+                    self.backend.send(Command::SetPinned(chat, favorite));
+                }
             }
             Action::MoveFavorite(chat, position) => {
                 let mut order = self.favorite_order();
@@ -23895,6 +23916,45 @@ mod tests {
             sent.iter()
                 .any(|command| matches!(command, Command::SetFavorite(chat, false) if chat == "a"))
         );
+    }
+
+    /// Favoriting and unfavoriting one Beeper chat is one gesture: the local
+    /// mark and the bridge pin move together, and a full pin budget leaves
+    /// the favorite local.
+    #[test]
+    fn favorite_toggle_carries_the_bridge_pin_with_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let (backend, mut commands, _events) = Backend::recording_with_events();
+        app.backend = backend;
+        app.pin_limit = 1;
+        for id in ["a", "b", "w"] {
+            app.chats.push(Chat {
+                backend_account: (id != "w").then(|| "work".to_owned()),
+                ..Chat::new(id.into(), id.into())
+            });
+        }
+        let ctx = egui::Context::default();
+        let sent = |commands: &mut tokio::sync::mpsc::UnboundedReceiver<Command>| {
+            std::iter::from_fn(|| commands.try_recv().ok()).collect::<Vec<_>>()
+        };
+        app.apply(Action::SetFavorite("a".into(), true), &ctx);
+        assert!(app.chat("a").unwrap().pinned);
+        let first = sent(&mut commands);
+        assert!(first.iter().any(|c| matches!(c, Command::SetPinned(id, true) if id == "a")));
+        // No pin left: the second favorite stays local.
+        app.apply(Action::SetFavorite("b".into(), true), &ctx);
+        assert!(app.chat("b").unwrap().favorite && !app.chat("b").unwrap().pinned);
+        let second = sent(&mut commands);
+        assert!(!second.iter().any(|c| matches!(c, Command::SetPinned(..))));
+        // A chat without a bridge account has no pin to carry.
+        app.apply(Action::SetFavorite("w".into(), true), &ctx);
+        assert!(!sent(&mut commands).iter().any(|c| matches!(c, Command::SetPinned(..))));
+        // Unfavoriting unpins, even though the favorite was marked locally.
+        app.apply(Action::SetFavorite("a".into(), false), &ctx);
+        assert!(!app.chat("a").unwrap().favorite && !app.chat("a").unwrap().pinned);
+        let last = sent(&mut commands);
+        assert!(last.iter().any(|c| matches!(c, Command::SetPinned(id, false) if id == "a")));
     }
 
     /// Dragging a favorite renumbers the bar densely at once and sends the

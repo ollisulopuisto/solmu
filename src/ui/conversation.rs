@@ -785,14 +785,8 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                                 Some(Icon::Heart),
                                 favorite_label.as_ref(),
                             ) {
-                                if chat.pinned {
-                                    // A pin mirrored into a favorite leaves
-                                    // through the bridge.
-                                    app.actions.push(Action::SetPinned(chat.id.clone(), false));
-                                } else {
-                                    app.actions
-                                        .push(Action::SetFavorite(chat.id.clone(), !chat.favorite));
-                                }
+                                app.actions
+                                    .push(Action::SetFavorite(chat.id.clone(), !chat.favorite));
                             }
                             if widgets::menu_item(
                                 ui,
@@ -962,12 +956,8 @@ pub(crate) fn chat_actions_toolbar(app: &mut App, ui: &mut egui::Ui, chat: &Chat
         )
         .clicked()
     {
-        if chat.pinned {
-            app.actions.push(Action::SetPinned(chat.id.clone(), false));
-        } else {
-            app.actions
-                .push(Action::SetFavorite(chat.id.clone(), !chat.favorite));
-        }
+        app.actions
+            .push(Action::SetFavorite(chat.id.clone(), !chat.favorite));
     }
     if header_icon(ui, &palette, Icon::QueueReply, reply, &reply_label).clicked() {
         app.actions.push(Action::ToggleReplyLater(chat.id.clone()));
