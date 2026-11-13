@@ -189,7 +189,8 @@ pub enum ListFilter {
 
 /// The chat list's primary mode: which chats the list is for, before any
 /// scope (type, network, label) narrows it. Groups arrange every mode's
-/// list as sections; a mode never hides a chat's section membership.
+/// list as sections; a mode never hides a chat's section membership, but
+/// outside Recent a section with no chats in it drops its heading.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ListMode {
     /// Everything, latest first: the full list.
@@ -219,6 +220,15 @@ impl ListMode {
             Self::Recent => "recent",
             Self::Focus => "focus",
             Self::NeedsMe => "needs-me",
+        }
+    }
+
+    /// The mode Cmd+D moves to: Recent, then Focus, then Needs me, and round.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Recent => Self::Focus,
+            Self::Focus => Self::NeedsMe,
+            Self::NeedsMe => Self::Recent,
         }
     }
 
@@ -3512,6 +3522,14 @@ mod storage_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn list_mode_next_cycles_recent_focus_needs_me() {
+        use super::ListMode;
+        assert_eq!(ListMode::Recent.next(), ListMode::Focus);
+        assert_eq!(ListMode::Focus.next(), ListMode::NeedsMe);
+        assert_eq!(ListMode::NeedsMe.next(), ListMode::Recent);
+    }
+
     /// Checks compatibility with older archived quotes that omitted a source chat.
     #[test]
     fn archived_quotes_without_a_source_chat_remain_readable() {

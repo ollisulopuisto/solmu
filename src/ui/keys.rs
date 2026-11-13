@@ -218,6 +218,13 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
         let (modifiers, key_code) = SIDEBAR.keys[0];
         key(modifiers, key_code, Action::ToggleSidebar);
+        // Cmd+D steps the chat list through Recent, Focus and Needs me.
+        let (modifiers, key_code) = LIST_MODE.keys[0];
+        key(
+            modifiers,
+            key_code,
+            Action::SetListMode(app.list_mode.next()),
+        );
         let (modifiers, key_code) = SETTINGS.keys[0];
         key(modifiers, key_code, Action::ToggleSettings);
         let (modifiers, key_code) = QUIT.keys[0];
@@ -1354,10 +1361,17 @@ const SIDEBAR: Shortcut = Shortcut {
         accelerator: "Super+KeyB",
     }),
 };
+const LIST_MODE: Shortcut = Shortcut {
+    id: "list-mode",
+    keys: &[(Modifiers::COMMAND, Key::D)],
+    label: Some("Ctrl+D"),
+    description: Some("Switch the chat list between Recent, Focus and Needs me"),
+    menu: None,
+};
 const INFO_SIDEBAR: Shortcut = Shortcut {
     id: "info-sidebar",
     // Shared Postilaatikko/Solmu keymap: the info sidebar lives on
-    // Cmd+Alt+I; Cmd+D is reserved for the groups toggle.
+    // Cmd+Alt+I; Cmd+D cycles the chat-list mode.
     keys: &[(COMMAND_ALT, Key::I)],
     label: Some("Ctrl+Alt+I"),
     description: Some("Show or hide the info sidebar"),
@@ -1579,6 +1593,7 @@ pub static REGISTRY: &[Row] = &[
     ),
     Row::Help("Ctrl+C", "Copy the selected messages"),
     Row::Binding(&SIDEBAR),
+    Row::Binding(&LIST_MODE),
     Row::Binding(&INFO_SIDEBAR),
     Row::Help(
         "Ctrl+End",
@@ -1903,6 +1918,10 @@ mod tests {
             ),
             ("Ctrl+C", "Copy the selected messages"),
             ("Ctrl+B", "Collapse or expand the chat list"),
+            (
+                "Ctrl+D",
+                "Switch the chat list between Recent, Focus and Needs me",
+            ),
             ("Ctrl+Alt+I", "Show or hide the info sidebar"),
             (
                 "Ctrl+End",
@@ -2598,13 +2617,16 @@ mod tests {
     }
 
     #[test]
-    fn command_alt_i_opens_info_and_command_d_has_no_group_toggle() {
+    fn command_alt_i_opens_info_and_command_d_cycles_the_list_mode() {
         let (_root, mut app, ids) = app_with_chats(1);
         app.open_chat = Some(ids[0].clone());
         let ctx = egui::Context::default();
-        // Info stays on Cmd+Alt+I. Cmd+D no longer toggles section layout.
-        assert!(press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
-        assert!(app.actions.is_empty());
+        // Info stays on Cmd+Alt+I. Cmd+D steps Recent > Focus > Needs me.
+        assert!(!press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
+        assert!(matches!(
+            app.actions.as_slice(),
+            [Action::SetListMode(crate::model::ListMode::Focus)]
+        ));
         app.actions.clear();
         // The extra Alt must not leak the press into plain Cmd+I (Reply
         // later): the info binding is consumed before that one.
