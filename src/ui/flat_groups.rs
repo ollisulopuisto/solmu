@@ -135,6 +135,67 @@ pub fn assign(app: &mut App, chat: &Chat) {
     app.flat_group_ui.assigning = Some((target, selected));
 }
 
+/// The chat menu's "Assign groups" submenu: every group at once, one click to
+/// pick (it opens on hover). A chat has one home group, so this replaces the
+/// current one; "Other" removes it. Same effect as the assign window.
+pub fn assign_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
+    let locale = app.locale;
+    let target = member(app, chat);
+    let targets = identities(app, chat);
+    let current = app
+        .settings
+        .flat_groups
+        .items
+        .iter()
+        .find(|group| belongs(group, &targets))
+        .map(|group| group.id);
+    let groups: Vec<(u64, String)> = app
+        .settings
+        .flat_groups
+        .items
+        .iter()
+        .map(|group| (group.id, group.name.clone()))
+        .collect();
+    ui.menu_button(crate::i18n::gettext(locale, "Assign groups"), |ui| {
+        let mut choice: Option<Option<u64>> = None;
+        for (id, name) in &groups {
+            if ui.selectable_label(current == Some(*id), name).clicked() {
+                choice = Some(Some(*id));
+            }
+        }
+        if groups.is_empty() {
+            ui.label(crate::i18n::gettext(
+                locale,
+                "Create a group in the Groups list first.",
+            ));
+        } else {
+            ui.separator();
+        }
+        if ui
+            .selectable_label(current.is_none(), crate::i18n::gettext(locale, "Other"))
+            .clicked()
+        {
+            choice = Some(None);
+        }
+        ui.separator();
+        if ui
+            .button(crate::i18n::gettext(locale, "Choose in a window…"))
+            .clicked()
+        {
+            assign(app, chat);
+            ui.close();
+        }
+        if let Some(choice) = choice {
+            let selected: Vec<u64> = choice.into_iter().collect();
+            app.settings
+                .flat_groups
+                .assign_linked(&target, &targets, &selected);
+            app.actions.push(Action::SettingsChanged);
+            ui.close();
+        }
+    });
+}
+
 /// Keyboard order follows group order, then Ungrouped, deduplicating aliases.
 /// Headers are static and never change the navigation order.
 pub fn navigation_chats(app: &App) -> Vec<&Chat> {
@@ -599,6 +660,15 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
                     app.flat_group_ui.collapsed.remove(&None);
                 } else {
                     app.flat_group_ui.collapsed.insert(None);
+                }
+            }
+            if let Some(target) = response.dnd_release_payload::<Member>() {
+                // Dropping a chat on Other takes it out of its group.
+                if let Some(sources) = keys.iter().find(|row| row.contains(target.as_ref())) {
+                    app.settings
+                        .flat_groups
+                        .assign_linked(target.as_ref(), sources, &[]);
+                    changed = true;
                 }
             }
             response.context_menu(|ui| fold_menu(app, ui, &groups));
