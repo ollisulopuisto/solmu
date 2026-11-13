@@ -9238,6 +9238,10 @@ mod tests {
                 }
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // The listener polls nonblocking. Accepted sockets can
+                        // inherit that mode, so make fixture reads explicitly
+                        // blocking before relying on the read timeout.
+                        stream.set_nonblocking(false).unwrap();
                         stream
                             .set_read_timeout(Some(Duration::from_secs(2)))
                             .unwrap();

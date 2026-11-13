@@ -5791,34 +5791,25 @@ fn bubble_frame(
                 None => content(ui, view, message, cap, reserve, actions),
             }
         };
-        if let Some(record) = pending {
-            use crate::pending_media::State;
-            let label = match &record.state {
-                State::Confirmed => String::new(),
-                State::Sending => crate::i18n::gettext(view.locale, "Sending...").into_owned(),
-                State::Accepted { .. } => {
-                    crate::i18n::gettext(view.locale, "Queued by Beeper. Not yet confirmed.")
-                        .into_owned()
-                }
-                State::NotSubmitted(error) => format!(
-                    "{}: {error}",
-                    crate::i18n::gettext(view.locale, "Not submitted")
-                ),
-                State::Unknown(error) => format!(
-                    "{}: {error}",
-                    crate::i18n::gettext(view.locale, "Check history")
-                ),
+        if let Some(record) = pending
+            && let Some((error, retryable)) = record.state.failure()
+        {
+            let heading = if retryable {
+                crate::i18n::gettext(view.locale, "Not submitted")
+            } else {
+                crate::i18n::gettext(view.locale, "Check history")
             };
-            if !label.is_empty() {
-                ui.label(label);
-            }
-            if record.retryable()
-                && ui
-                    .button(crate::i18n::gettext(view.locale, "Retry"))
-                    .clicked()
-            {
-                actions.push(Action::RetryPendingMedia(record.job.local.clone()));
-            }
+            ui.horizontal_wrapped(|ui| {
+                theme::icon(ui, Icon::CircleAlert, 14.0, palette.danger);
+                ui.label(format!("{heading}: {error}"));
+                if retryable
+                    && ui
+                        .button(crate::i18n::gettext(view.locale, "Retry"))
+                        .clicked()
+                {
+                    actions.push(Action::RetryPendingMedia(record.job.local.clone()));
+                }
+            });
         }
         if matches!(message.content, Content::Poll { .. }) {
             super::polls::results_button(
