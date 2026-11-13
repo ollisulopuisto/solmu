@@ -9,6 +9,11 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- The shrug ¯\_(ツ)_/¯ keeps its underscores in a bubble: an underscore next to a slash or backslash is not emphasis.
+- Archive multiple selected chats without deleting messages.
+- Explicit per-chat bridge-supported message deletion scope and age checks.
+- Unsupported-item preflight and request-correlated per-item outcomes, no auto retry.
+- The composer's send and record circle no longer touches the field's border: it is inset the same on the right, top and bottom, and centred on the field's centre line.
 - Settings no longer shows an About button inside the About section. The button only reopened the About dialog over the section that was already on screen; the dialog remains available from the macOS menu. The section gains a whatsapp-rust chip so the protocol library link the dialog shows only on macOS stays reachable on every platform.
 - Emoji-only messages of up to three emoji draw without a bubble, like stickers: one emoji largest, two or three big, and in group chats under a floating sender name. A message quoting another, carrying a link preview, or mixing text with emoji keeps its bubble.
 - Latest/Groups list views with local-only many-to-many membership.
@@ -17,6 +22,7 @@ version in Cargo.toml is bumped.
 - The info sidebar moves from Cmd-D to Cmd-Option-I under the shared Postilaatikko/Solmu keymap; Cmd-D is reserved for the upcoming groups toggle. The shortcuts dialog and the macOS menu show the new chord.
 - Hide the View once photo toggle on Beeper chats. The send API cannot carry this mode, so offering it led to a refused send. Existing attachment drafts are retained without silently changing their send mode.
 - On macOS the message field applies the system's text replacements (System Settings > Keyboard > Text Replacements): a shortcut typed before a space, return, or punctuation expands to its phrase, including when adding a line or sending. Edits in System Settings apply the next time the window gains focus.
+- A file name like run_widths.rs is no longer linked as http://widths.rs: a bridge's automatic link on a bare name keeps just the text, and a bare name right after an underscore is not a link. Explicit http(s):// and www. links are unchanged.
 
 ## v0.24.21
 

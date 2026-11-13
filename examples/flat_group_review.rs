@@ -82,7 +82,7 @@ fn main() {
                 )),
                 ..Default::default()
             },
-            |ui| flat_groups::list(&mut app, ui),
+            |ui| flat_groups::list(&mut app, ui, false),
         );
         output.textures_delta.clear();
         frames.push(start.elapsed().as_secs_f64() * 1000.);
@@ -106,7 +106,7 @@ fn main() {
                 )),
                 ..Default::default()
             },
-            |ui| flat_groups::list(&mut app, ui),
+            |ui| flat_groups::list(&mut app, ui, false),
         );
         output.textures_delta.clear();
     }
@@ -114,6 +114,34 @@ fn main() {
     assert!(app.flat_group_ui.built_rows < 20);
     println!(
         "far keyboard reveal consumed, alias widgets={}",
+        app.flat_group_ui.built_rows
+    );
+    app.page = solmu::model::Page::Settings;
+    let row = solmu::ui::chats::chat_row_id("chat-998").with("widget");
+    let focused = ctx
+        .data(|d| d.get_temp::<egui::Id>(row))
+        .expect("revealed row widget");
+    ctx.memory_mut(|m| m.request_focus(focused));
+    for _ in 0..4 {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(360., 780.),
+                )),
+                ..Default::default()
+            },
+            |ui| flat_groups::list(&mut app, ui, false),
+        );
+        output.textures_delta.clear();
+        assert!(
+            app.flat_group_ui.built_rows < 20,
+            "focused row built {} widgets",
+            app.flat_group_ui.built_rows
+        );
+    }
+    println!(
+        "focused Settings row stays virtualized: {} widgets",
         app.flat_group_ui.built_rows
     );
 }

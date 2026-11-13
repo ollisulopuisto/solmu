@@ -360,6 +360,32 @@ mod tests {
     }
 
     #[test]
+    fn the_reported_defaults_entries_decode_to_their_characters() {
+        // As `defaults read -g` printed them on the reporting Mac: \\ is one
+        // backslash and \Uhhhh a code point; some values are unquoted.
+        let input = concat!(
+            "(\n{\n on = 1;\n replace = \"shrug,,\";\n",
+            " with = \"\\U00af\\\\_(\\U30c4)_/\\U00af\";\n},\n",
+            "{\n on = 1;\n replace = \"table,,\";\n",
+            " with = \"(\\U256f\\U00b0\\U25a1\\U00b0\\Uff09\\U256f\\Ufe35 ",
+            "\\U253b\\U2501\\U253b\";\n},\n",
+            "{\n on = 1;\n replace = hei;\n with = \"H\\U00e4\\U00e4\";\n},\n",
+            "{\n on = 1;\n replace = omw;\n with = 0503554767;\n}\n)\n"
+        );
+        let table = parse_replacements(input);
+        let with = |replace: &str| {
+            table
+                .iter()
+                .find(|entry| entry.replace == replace)
+                .map(|entry| entry.with.as_str())
+        };
+        assert_eq!(with("shrug,,"), Some("¯\\_(ツ)_/¯"));
+        assert_eq!(with("table,,"), Some("(╯°□°）╯︵ ┻━┻"));
+        assert_eq!(with("hei"), Some("Hää"));
+        assert_eq!(with("omw"), Some("0503554767"));
+    }
+
+    #[test]
     fn parse_skips_switched_off_entries() {
         let input = "({ on = 0; replace = omw; with = \"On my way!\"; })";
         assert_eq!(parse_replacements(input), Vec::new());

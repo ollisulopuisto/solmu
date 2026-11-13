@@ -18,6 +18,8 @@ use crate::settings::AccountSettings;
 
 /// One WhatsApp account's runtime state.
 pub struct Account {
+    /// Pending mutations and outcomes stay with their owning account.
+    pub batch_ui: crate::model::BatchState,
     pub id: AccountId,
     pub forward_dialog_hidden: bool,
     pub forward_generation: u64,
@@ -119,6 +121,8 @@ pub struct Account {
     pub scheduled_messages: Option<Vec<crate::scheduler::ScheduledMessage>>,
     pub show_archived: bool,
     pub chat_filter: ChatFilter,
+    /// The chat list's mode (Recent, Focus or Needs me); Recent by default.
+    pub list_mode: crate::model::ListMode,
     pub category_filter: Option<ChatFilter>,
     pub favorites_only: bool,
     /// The chip the Calls page's history shows.
@@ -155,7 +159,7 @@ impl Account {
     pub fn new(
         id: AccountId,
         dirs: AccountDirs,
-        settings: AccountSettings,
+        mut settings: AccountSettings,
         backend: Backend,
     ) -> Self {
         let open_chat = settings.last_chat.clone();
@@ -173,20 +177,28 @@ impl Account {
             Some(crate::model::ListFilter::Chip(chip)) => chip,
             _ => ChatFilter::All,
         };
-        let category_filter = settings.chat_category.or(match chat_filter {
-            ChatFilter::Private | ChatFilter::Groups | ChatFilter::Channels => Some(chat_filter),
-            _ => None,
-        });
-        let favorites_only = settings.favorites_only || chat_filter == ChatFilter::Favorites;
+        // The retired Filters row must not leave an invisible saved scope.
+        // Explicit palette filters remain available during the session.
+        let category_filter = None;
+        let favorites_only = false;
         let chat_filter = settings.chat_queue.unwrap_or(chat_filter);
+        let list_mode = settings.list_mode.unwrap_or(match chat_filter {
+            ChatFilter::Unread | ChatFilter::ReplyLater | ChatFilter::ReadLater => {
+                crate::model::ListMode::NeedsMe
+            }
+            _ => crate::model::ListMode::Recent,
+        });
+        let retired_scope =
+            settings.list_filter.take().is_some() | settings.chat_category.take().is_some();
         Self {
+            batch_ui: Default::default(),
             id,
             forward_dialog_hidden: false,
             forward_generation: 0,
             forward_items: Vec::new(),
             dirs,
             settings,
-            settings_dirty: false,
+            settings_dirty: retired_scope,
             backend,
             link: LinkStatus::Starting,
             syncing: false,
@@ -253,17 +265,8 @@ impl Account {
             send_later_draft_backup: None,
             scheduled_messages: None,
             show_archived: false,
-            chat_filter: if matches!(
-                chat_filter,
-                ChatFilter::Private
-                    | ChatFilter::Groups
-                    | ChatFilter::Channels
-                    | ChatFilter::Favorites
-            ) {
-                ChatFilter::All
-            } else {
-                chat_filter
-            },
+            chat_filter: ChatFilter::All,
+            list_mode,
             category_filter,
             favorites_only,
             labels: Vec::new(),

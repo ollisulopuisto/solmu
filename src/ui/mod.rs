@@ -1,6 +1,7 @@
 //! Window layout: panels, overlays, keyboard shortcuts.
 
 pub mod accounts;
+pub mod batch_actions;
 pub mod call_log;
 pub mod chats;
 pub mod conversation;
@@ -121,6 +122,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     update::show(app, ctx);
     picker::show(app, ctx);
     dialogs::show(app, ctx);
+    batch_actions::dialogs(app, ctx);
     flat_groups::dialogs(app, ctx);
     image_preview::show(app, ctx);
     image_preview::show_sticker(app, ctx);
@@ -190,7 +192,15 @@ fn main_view(app: &mut App, ui: &mut egui::Ui, list_only: bool) {
             );
             match app.page {
                 Page::Settings => settings::show(app, ui),
-                Page::Chats => conversation::show(app, ui),
+                Page::Chats => {
+                    let global_search = app.global_search;
+                    ui.scope(|ui| {
+                        if global_search {
+                            ui.set_opacity(0.38);
+                        }
+                        conversation::show(app, ui);
+                    });
+                }
                 Page::Wallpaper => settings::wallpaper_show(app, ui),
             }
         });

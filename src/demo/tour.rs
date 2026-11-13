@@ -1949,8 +1949,7 @@ mod tests {
             "sticker search by emoji",
             "sticker search by pack",
             "message info with receipts",
-            "favorites chip",
-            "label chip",
+            "Recent mode",
             "chat menu with labels",
             "voice recorder",
             "sent voice message",
@@ -2007,8 +2006,8 @@ mod tests {
                     app.sticker_search == "bom dia",
                     matches!(app.dialog, Some(Dialog::MessageInfo { .. }))
                         && app.message_receipts.is_some(),
-                    app.favorites_only,
-                    app.label_filter.as_deref() == Some("label-work"),
+                    app.list_mode == crate::model::ListMode::Recent
+                        && tour.labels.contains_key("Recent"),
                     tour.labels.contains_key("Mark as unread")
                         && tour.labels.contains_key("Follow up")
                         && egui::Popup::is_any_open(&ctx),

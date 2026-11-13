@@ -13,6 +13,12 @@ fn jump_keys_reach_chat(editing_text: bool, composer_focused: bool, composer_emp
 
 /// Routes keyboard commands to actions, respecting overlays and text focus.
 pub fn handle(app: &mut App, ctx: &egui::Context) {
+    if app.batch_ui.reviewing_archive {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            app.batch_ui.reviewing_archive = false;
+        }
+        return;
+    }
     if app.flat_group_ui.assigning.is_some() {
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             app.flat_group_ui.assigning = None;
@@ -158,6 +164,11 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         // Checked first: a plain Ctrl+F binding also matches Ctrl+Shift+F.
         let (modifiers, key_code) = SEARCH_CHATS.keys[0];
         key(modifiers, key_code, Action::FocusSearch);
+        key(
+            Modifiers::COMMAND | Modifiers::ALT,
+            Key::F,
+            Action::FindEverywhere,
+        );
         let (modifiers, key_code) = FIND.keys[0];
         key(modifiers, key_code, find);
         // App lock lives on the Option variant, when a PIN is set.
@@ -207,8 +218,6 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
         let (modifiers, key_code) = SIDEBAR.keys[0];
         key(modifiers, key_code, Action::ToggleSidebar);
-        let (modifiers, key_code) = FLAT_GROUPS.keys[0];
-        key(modifiers, key_code, Action::ToggleFlatGroups);
         let (modifiers, key_code) = SETTINGS.keys[0];
         key(modifiers, key_code, Action::ToggleSettings);
         let (modifiers, key_code) = QUIT.keys[0];
@@ -1106,9 +1115,13 @@ fn forward_action(app: &App) -> Option<Action> {
     }))
 }
 
-/// Ctrl+F has one scope: the open chat, never a different search scope.
-fn find_action(_app: &App) -> Action {
-    Action::OpenChatSearch
+/// First find searches the chat; a second find widens globally.
+fn find_action(app: &App) -> Action {
+    if app.chat_search_visible() || app.open_chat.is_none() {
+        Action::FindEverywhere
+    } else {
+        Action::OpenChatSearch
+    }
 }
 
 /// Ctrl+E archives the open chat, or unarchives an archived one, as in
@@ -1129,12 +1142,12 @@ fn archive_action(app: &App) -> Option<Action> {
 
 /// Cmd+U queues the open chat for reading later, as the chat menus do.
 fn read_later_action(app: &App) -> Option<Action> {
-    Some(Action::ToggleReadLater(later_queue_target(app)?))
+    Some(Action::ToggleDealLater(later_queue_target(app)?))
 }
 
 /// Cmd+I queues the open chat for replying later, as the chat menus do.
 fn reply_later_action(app: &App) -> Option<Action> {
-    Some(Action::ToggleReplyLater(later_queue_target(app)?))
+    Some(Action::ToggleDealLater(later_queue_target(app)?))
 }
 
 /// The open chat a later-queue key would mark, when no overlay owns keys.
@@ -1341,18 +1354,6 @@ const SIDEBAR: Shortcut = Shortcut {
         accelerator: "Super+KeyB",
     }),
 };
-// Approved group toggle; the info sidebar moves to Cmd-Option-I in #281.
-const FLAT_GROUPS: Shortcut = Shortcut {
-    id: "flat-groups",
-    keys: &[(Modifiers::COMMAND, Key::D)],
-    label: Some("Ctrl+D"),
-    description: Some("Switch Latest and Groups"),
-    menu: Some(MenuItem {
-        id: "flat-groups",
-        text: "Switch Latest and Groups",
-        accelerator: "Super+KeyD",
-    }),
-};
 const INFO_SIDEBAR: Shortcut = Shortcut {
     id: "info-sidebar",
     // Shared Postilaatikko/Solmu keymap: the info sidebar lives on
@@ -1433,14 +1434,14 @@ const READ_LATER: Shortcut = Shortcut {
     id: "read-later",
     keys: &[(Modifiers::COMMAND, Key::U)],
     label: Some("Ctrl+U"),
-    description: Some("Mark the open chat to read later"),
+    description: Some("Mark the open chat to deal with later"),
     menu: None,
 };
 const REPLY_LATER: Shortcut = Shortcut {
     id: "reply-later",
     keys: &[(Modifiers::COMMAND, Key::I)],
     label: Some("Ctrl+I"),
-    description: Some("Mark the open chat to reply later"),
+    description: Some("Mark the open chat to deal with later"),
     menu: None,
 };
 /// Menu accelerators that edit text natively rather than through `handle`:
@@ -1579,7 +1580,6 @@ pub static REGISTRY: &[Row] = &[
     Row::Help("Ctrl+C", "Copy the selected messages"),
     Row::Binding(&SIDEBAR),
     Row::Binding(&INFO_SIDEBAR),
-    Row::Binding(&FLAT_GROUPS),
     Row::Help(
         "Ctrl+End",
         "Jump to the newest message (when the input is empty)",
@@ -1891,8 +1891,8 @@ mod tests {
             ),
             ("Ctrl+N", "New chat or message yourself"),
             ("Ctrl+E", "Archive or unarchive the open chat"),
-            ("Ctrl+U", "Mark the open chat to read later"),
-            ("Ctrl+I", "Mark the open chat to reply later"),
+            ("Ctrl+U", "Mark the open chat to deal with later"),
+            ("Ctrl+I", "Mark the open chat to deal with later"),
             (
                 "Ctrl+Alt+\u{2192} / Ctrl+Alt+\u{2190}",
                 "Switch to the next / previous linked number",
@@ -1904,7 +1904,6 @@ mod tests {
             ("Ctrl+C", "Copy the selected messages"),
             ("Ctrl+B", "Collapse or expand the chat list"),
             ("Ctrl+Alt+I", "Show or hide the info sidebar"),
-            ("Ctrl+D", "Switch Latest and Groups"),
             (
                 "Ctrl+End",
                 "Jump to the newest message (when the input is empty)",
@@ -2069,14 +2068,14 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_f_never_changes_search_scope_with_the_page() {
+    fn ctrl_f_widens_after_the_chat_search_is_open() {
         let root = tempfile::tempdir().unwrap();
         let mut app = App::headless(
             crate::paths::AppDirs::under(root.path()),
             crate::settings::Settings::default(),
         )
         .0;
-        assert!(matches!(find_action(&app), Action::OpenChatSearch));
+        assert!(matches!(find_action(&app), Action::FindEverywhere));
         app.open_chat = Some("1@s.whatsapp.net".into());
         app.page = Page::Chats;
         assert!(matches!(find_action(&app), Action::OpenChatSearch));
@@ -2599,14 +2598,13 @@ mod tests {
     }
 
     #[test]
-    fn command_alt_i_opens_info_and_command_d_toggles_groups() {
+    fn command_alt_i_opens_info_and_command_d_has_no_group_toggle() {
         let (_root, mut app, ids) = app_with_chats(1);
         app.open_chat = Some(ids[0].clone());
         let ctx = egui::Context::default();
-        // The shared keymap moves the info sidebar to Cmd+Alt+I and reserves
-        // Cmd+D for the groups toggle, so Cmd+D no longer opens info.
-        assert!(!press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
-        assert_eq!(app.actions, [Action::ToggleFlatGroups]);
+        // Info stays on Cmd+Alt+I. Cmd+D no longer toggles section layout.
+        assert!(press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
+        assert!(app.actions.is_empty());
         app.actions.clear();
         // The extra Alt must not leak the press into plain Cmd+I (Reply
         // later): the info binding is consumed before that one.
@@ -2630,7 +2628,7 @@ mod tests {
         );
         assert_eq!(REPLY_LATER.keys, &[(Modifiers::COMMAND, Key::I)]);
         assert_eq!(SIDEBAR.keys, &[(Modifiers::COMMAND, Key::B)]);
-        assert!(REGISTRY.iter().any(|row| matches!(
+        assert!(!REGISTRY.iter().any(|row| matches!(
             row,
             Row::Binding(entry)
                 if entry.id == "flat-groups" && entry.keys.contains(&(Modifiers::COMMAND, Key::D))

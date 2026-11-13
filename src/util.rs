@@ -1951,3 +1951,43 @@ mod international_phone_tests {
         }
     }
 }
+
+/// Next 08:00 in the system timezone, including before today's 08:00.
+pub fn next_mute_morning(now: i64) -> Option<i64> {
+    let local = jiff::Timestamp::from_second(now).ok()?.to_zoned(zone());
+    let mut date = local.date();
+    if local.time() >= jiff::civil::time(8, 0, 0, 0) {
+        date = date.tomorrow().ok()?;
+    }
+    Some(
+        date.at(8, 0, 0, 0)
+            .to_zoned(zone())
+            .ok()?
+            .timestamp()
+            .as_second(),
+    )
+}
+
+#[cfg(test)]
+mod mute_morning_tests {
+    use super::*;
+    #[test]
+    fn next_morning_is_local_eight_across_midnight_and_dst() {
+        for (now, expected) in [
+            ("2026-11-13T00:30:00+02:00", "2026-11-13T08:00:00+02:00"),
+            ("2026-11-13T08:00:00+02:00", "2026-11-14T08:00:00+02:00"),
+            ("2026-10-24T12:00:00+03:00", "2026-10-25T08:00:00+02:00"),
+        ] {
+            let now = now.parse::<Timestamp>().unwrap().as_second();
+            let _clock = fixed_clock::set(fixed_clock::Clock {
+                now,
+                zone: jiff::tz::TimeZone::get("Europe/Helsinki").unwrap(),
+                twelve_hour: false,
+            });
+            assert_eq!(
+                next_mute_morning(now),
+                Some(expected.parse::<Timestamp>().unwrap().as_second())
+            );
+        }
+    }
+}

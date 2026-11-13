@@ -217,30 +217,9 @@ pub(super) fn script() -> Vec<Cue> {
     add(43.7, Click(left));
     add(46.8, esc("Esc · Close message info"));
 
-    // Favorites shortcut and label scope through the real Filters menu.
-    add(
-        47.4,
-        Key(
-            K::Num5,
-            Modifiers {
-                alt: true,
-                ..command()
-            },
-            "Ctrl+Alt+5 · Favorites",
-        ),
-    );
-    add(48.0, Move(Stop(Control::Filters)));
-    add(48.4, Click(left));
-    add(48.8, Move(Label("Labels")));
-    add(49.6, Move(Label("Work")));
-    add(50.0, Click(left));
-    add(50.4, esc("Esc · Close labels"));
-    add(50.6, esc("Esc · Close filters"));
-    add(51.0, Move(Stop(Control::Filters)));
-    add(51.4, Click(left));
-    add(51.8, Move(Label("Reset view")));
-    add(52.2, Click(left));
-    add(52.6, esc("Esc · Close filters"));
+    // The primary modes replace the retired Filters menu.
+    add(47.4, Move(Label("Recent")));
+    add(48.0, Click(left));
     add(53.0, Move(Label("Katherine Johnson")));
     add(53.4, Click(right));
     add(53.8, Move(Label("Labels")));

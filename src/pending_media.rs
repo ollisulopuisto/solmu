@@ -27,6 +27,17 @@ pub enum State {
     NotSubmitted(String),
     Unknown(String),
 }
+impl State {
+    /// Failure-only presentation and the safe retry boundary. Ambiguous
+    /// submissions must be checked in history, never blindly posted twice.
+    pub fn failure(&self) -> Option<(&str, bool)> {
+        match self {
+            Self::NotSubmitted(error) => Some((error, true)),
+            Self::Unknown(error) => Some((error, false)),
+            Self::Sending | Self::Accepted { .. } | Self::Confirmed => None,
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Job {
     pub temporary: bool,
@@ -45,5 +56,30 @@ pub struct Record {
 impl Record {
     pub fn retryable(&self) -> bool {
         matches!(self.state, State::NotSubmitted(_))
+    }
+}
+
+#[cfg(test)]
+mod failure_ui_tests {
+    use super::*;
+    #[test]
+    fn only_failures_have_a_status_indicator() {
+        assert_eq!(State::Sending.failure(), None);
+        assert_eq!(
+            State::Accepted {
+                pending: "id".into()
+            }
+            .failure(),
+            None
+        );
+        assert_eq!(State::Confirmed.failure(), None);
+        assert_eq!(
+            State::NotSubmitted("offline".into()).failure(),
+            Some(("offline", true))
+        );
+        assert_eq!(
+            State::Unknown("timed out".into()).failure(),
+            Some(("timed out", false))
+        );
     }
 }

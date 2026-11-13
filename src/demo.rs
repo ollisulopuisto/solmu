@@ -2381,6 +2381,81 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
     };
     for part in page.split(',').map(str::trim) {
         match part {
+            "delete-review" | "delete-review-unsupported" => {
+                let chat = app.open_chat.clone().unwrap();
+                let known = app.chats.iter_mut().find(|c| c.id == chat).unwrap();
+                known.backend_account = Some("synthetic-account".into());
+                known.backend_origin = Some("http://127.0.0.1:23374".into());
+                known.mutation_capabilities = crate::model::MutationCapabilities {
+                    delete: Some(2),
+                    delete_for_me: Some(true),
+                    delete_max_age: Some(86400),
+                    archive: Some(true),
+                };
+                let messages = &mut app.conversations.get_mut(&chat).unwrap().messages;
+                let ids: Vec<_> = messages
+                    .iter_mut()
+                    .filter(|m| m.from_me)
+                    .take(2)
+                    .map(|m| {
+                        m.timestamp = crate::util::now() - 60;
+                        if part == "delete-review-unsupported" {
+                            m.status = crate::model::Delivery::Pending;
+                        }
+                        m.id.clone()
+                    })
+                    .collect();
+                app.dialog = Some(Dialog::ConfirmDeleteSelection {
+                    chat,
+                    messages: ids,
+                    for_everyone: true,
+                });
+            }
+            "previous-session-results" => {
+                app.batch_ui.owner = app.account().id.0.clone();
+                app.batch_ui.previous_session_results = vec![crate::model::BatchItem {
+                    chat: "Synthetic previous chat".into(),
+                    message: Some("Synthetic message".into()),
+                    everyone: true,
+                    result: Some(Err("Accepted request, confirmation unavailable".into())),
+                }];
+            }
+            "archive-review" | "archived-selection" => {
+                let ids: Vec<_> = app
+                    .chats
+                    .iter_mut()
+                    .take(3)
+                    .map(|chat| {
+                        chat.backend_account = Some("synthetic-account".into());
+                        chat.backend_origin = Some("http://127.0.0.1:23374".into());
+                        chat.mutation_capabilities.archive = Some(true);
+                        if part == "archived-selection" {
+                            chat.archived = true;
+                        }
+                        chat.id.clone()
+                    })
+                    .collect();
+                app.batch_ui.owner = app.account().id.0.clone();
+                app.batch_ui.selected_identities = ids
+                    .iter()
+                    .filter_map(|id| {
+                        app.chat(id)
+                            .and_then(crate::merged::Member::of)
+                            .map(|member| (id.clone(), member))
+                    })
+                    .collect();
+                app.batch_ui.selected_chats = ids;
+                app.batch_ui.reviewing_archive = part == "archive-review";
+                if part == "archived-selection" {
+                    app.show_archived = true;
+                    app.batch_ui.results = vec![crate::ui::batch_actions::Item {
+                        chat: app.batch_ui.selected_chats[0].clone(),
+                        message: None,
+                        everyone: false,
+                        result: Some(Ok(())),
+                    }];
+                }
+            }
             "flat-groups" => {
                 let work = app.settings.flat_groups.create("Work").unwrap();
                 let friends = app.settings.flat_groups.create("Friends").unwrap();
@@ -5852,7 +5927,7 @@ mod tests {
             }
             let mut delay = std::time::Duration::MAX;
             // Avatars and media load on threads that ask for a frame when
-            // they finish; measure once three frames in a row had none
+            // they finish; measure once ten frames in a row (about 100 ms) had none
             // pending.
             let mut settled = 0;
             for frame in 0..400 {
@@ -5861,8 +5936,11 @@ mod tests {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 } else {
                     settled += 1;
+                    // A loader thread that finishes between frames asks
+                    // for an immediate repaint; give it real time to do so.
+                    std::thread::sleep(std::time::Duration::from_millis(10));
                 }
-                if frame >= 8 && settled > 3 {
+                if frame >= 8 && settled > 10 {
                     break;
                 }
                 let input = egui::RawInput {
@@ -11729,8 +11807,8 @@ mod tests {
         let parked = ids(&app);
         assert_eq!(parked[0], pinned, "the pinned favorite stays first");
         assert_eq!(
-            parked[7], draft,
-            "the parked draft follows the seven favorites"
+            parked, original,
+            "parking a draft preserves Recent ordering"
         );
         app.actions
             .push(crate::model::Action::OpenChat(draft.into()));
@@ -16829,8 +16907,8 @@ mod tests {
     }
 
     #[test]
-    fn a_filter_chip_narrows_the_chat_list_and_a_second_click_clears_it() {
-        use crate::model::ChatFilter;
+    fn needs_me_narrows_the_chat_list_and_recent_restores_it() {
+        use crate::model::ListMode;
         let mut app = app();
         // Every chip has to be on screen to be clicked, and the row scrolls
         // once the sidebar is too narrow for all of them.
@@ -16840,9 +16918,11 @@ mod tests {
         render(&mut app, &ctx);
         render(&mut app, &ctx);
         let everything = app.visible_chats().len();
-        let click = |app: &mut App, filter| {
+        let click = |app: &mut App, filter: ListMode| {
             let rect = ctx
-                .data(|data| data.get_temp::<egui::Rect>(crate::ui::chats::filter_chip_id(filter)))
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(egui::Id::new(("list-mode", filter.key())))
+                })
                 .expect("the chip is on screen");
             let pos = rect.center();
             let press = |pressed| egui::Event::PointerButton {
@@ -16855,18 +16935,18 @@ mod tests {
             frame_with(app, &ctx, vec![press(false)]);
             render(app, &ctx);
         };
-        click(&mut app, ChatFilter::Unread);
-        assert_eq!(app.chat_filter, ChatFilter::Unread);
+        click(&mut app, ListMode::NeedsMe);
+        assert_eq!(app.list_mode, ListMode::NeedsMe);
         let groups = app.visible_chats();
         assert!(!groups.is_empty() && groups.len() < everything);
         assert!(groups.iter().all(|chat| chat.counts_unread()));
-        click(&mut app, ChatFilter::Unread);
+        click(&mut app, ListMode::NeedsMe);
         assert_eq!(
-            app.chat_filter,
-            ChatFilter::Unread,
-            "queue segments are radio buttons"
+            app.list_mode,
+            ListMode::NeedsMe,
+            "mode segments are radio buttons"
         );
-        click(&mut app, ChatFilter::All);
+        click(&mut app, ListMode::Recent);
         assert_eq!(app.visible_chats().len(), everything);
     }
 
@@ -19575,13 +19655,11 @@ mod tests {
                 vec![egui::Event::PointerMoved(mute.center())],
             );
         }
-        for choice in ["8 hours", "1 week"] {
-            assert!(
-                find(&shapes, choice).is_some(),
-                "the submenu offers {choice}"
-            );
-        }
-        let always = find(&shapes, "Always").expect("the submenu offers Always");
+        assert!(
+            find(&shapes, "Until 08:00").is_some(),
+            "the submenu offers Until 08:00"
+        );
+        let always = find(&shapes, "Mute forever").expect("the submenu offers Mute forever");
         app.actions.clear();
         let [press, release] = click(always.center());
         frame_sized(
@@ -19594,7 +19672,7 @@ mod tests {
         let now = crate::util::now();
         assert!(
             app.chat(&chat).expect("chat").muted(now),
-            "Always mutes the chat"
+            "Mute forever mutes the chat"
         );
 
         // Muted, the menu offers Unmute alone.
@@ -20503,18 +20581,11 @@ mod tests {
                 && (settings.top() - locked.bottom() - 4.0).abs() < 0.5,
             "Locked stacks directly above Settings: {locked:?} {settings:?}"
         );
-        use crate::model::ChatFilter;
-        let chip = |filter: ChatFilter| {
-            ctx.data(|data| data.get_temp::<egui::Rect>(crate::ui::chats::filter_chip_id(filter)))
+        let chip = |mode: crate::model::ListMode| {
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("list-mode", mode.key()))))
                 .unwrap()
         };
-        let facets = [
-            ChatFilter::All,
-            ChatFilter::Unread,
-            ChatFilter::ReplyLater,
-            ChatFilter::ReadLater,
-        ]
-        .map(&chip);
+        let facets = crate::model::ListMode::EVERY.map(&chip);
         for rect in facets {
             assert!(rect.is_positive());
         }
@@ -21336,9 +21407,22 @@ mod tests {
         let send = ctx.read_response(id).unwrap().rect;
         let right = pill.right() - send.right();
         let bottom = pill.bottom() - send.bottom();
+        let top = send.top() - pill.top();
         assert!(
-            (right - bottom).abs() <= 1.0,
-            "send is {right} from the right and {bottom} from the bottom"
+            (right - bottom).abs() <= 1.0 && (right - top).abs() <= 1.0,
+            "send is {right} from the right, {top} from the top and {bottom} from the bottom"
+        );
+        // It clears the border by more than the old two points, so a hover
+        // growth of five percent cannot reach it.
+        assert!(
+            right >= 4.0 && top >= 4.0 && bottom >= 4.0,
+            "send is {right}/{top}/{bottom} from the right/top/bottom"
+        );
+        let field_middle = (pill.top() + pill.bottom()) / 2.0;
+        assert!(
+            (send.center().y - field_middle).abs() <= 1.0,
+            "send's centre is {} off the field's centre line",
+            send.center().y - field_middle
         );
         // The plus mirrors it in the left end, and emoji stays close by.
         let rect = |stop| {
@@ -21621,11 +21705,9 @@ mod tests {
                 Stop::Settings,
                 Stop::Profile,
                 Stop::Search,
-                Stop::All,
-                Stop::Unread,
-                Stop::ReplyLater,
-                Stop::ReadLater,
-                Stop::Filters,
+                Stop::Recent,
+                Stop::Focus,
+                Stop::NeedsMe,
                 Stop::NewChat,
             ];
             assert_eq!(
@@ -22277,12 +22359,11 @@ mod tests {
         assert!(app.reply_to.is_none());
     }
 
-    /// Where the chat list's right edge is: the first chat row spans the
-    /// list's width.
+    /// Panel edge, not a row edge: a fading scrollbar can change row width
+    /// independently of the resizable panel's actual boundary.
     fn chat_list_right(ctx: &egui::Context) -> f32 {
-        ctx.data(|data| data.get_temp::<egui::Rect>(crate::ui::chats::chat_row_id(sample_ids()[0])))
-            .expect("the first chat is listed")
-            .right()
+        ctx.data(|data| data.get_temp::<f32>(egui::Id::new("chat-panel-right")))
+            .expect("the panel is drawn")
     }
 
     /// Drags from `from` through each x in `path` at one height, returning
@@ -23314,14 +23395,11 @@ mod bubble_detail_tests {
         app.attach(&ctx);
         apply_flags(&mut app, Some("drafts"));
         let ordered = app.visible_chats();
-        assert_eq!(ordered[0].id, SAMPLES[0].id, "the pinned favorite leads");
-        assert_eq!(
-            ordered[1].id, SAMPLES[1].id,
-            "favorites follow in bar order"
-        );
-        assert_eq!(
-            ordered[6].id, SAMPLES[6].id,
-            "every favorite sits above drafts and recency"
+        assert!(
+            ordered
+                .windows(2)
+                .all(|pair| pair[0].last_activity >= pair[1].last_activity),
+            "Recent ignores favorite and draft priority"
         );
         let shapes = frames(&mut app, &ctx, egui::vec2(1180.0, 780.0));
         let texts: Vec<(String, egui::Color32)> = shapes
@@ -23384,7 +23462,10 @@ mod bubble_detail_tests {
         };
         let mut columns = Vec::new();
         for width in [1400.0, 1800.0] {
-            frames(&mut app, &ctx, egui::vec2(width, 900.0));
+            // A resize settles the sidebar and scrollbars over several frames.
+            for _ in 0..3 {
+                frames(&mut app, &ctx, egui::vec2(width, 900.0));
+            }
             let drawn = column(&ctx);
             assert!((drawn.span() - 640.0).abs() < 0.5, "{drawn:?}");
             columns.push(drawn);
@@ -23889,7 +23970,7 @@ mod rail_tests {
             let (_app, ctx) = open("chat", macos);
             assert_eq!(
                 in_header(&ctx),
-                [Stop::All, Stop::Unread, Stop::ReplyLater, Stop::ReadLater],
+                [Stop::Recent, Stop::Focus, Stop::NeedsMe],
                 "{macos}"
             );
             let (_app, ctx) = open("starred", macos);

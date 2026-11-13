@@ -566,7 +566,26 @@ fn unescape_code(chars: &[char]) -> String {
     out
 }
 
+/// A slash or backslash. An underscore against one is text, not emphasis:
+/// the shrug `¯\_(ツ)_/¯` keeps its underscores. Brackets do not block, so
+/// `_(hello)_` stays italic, as Beeper's `<em>(hello)</em>` arrives.
+fn blocks_underscore(c: char) -> bool {
+    matches!(c, '\\' | '/')
+}
+
+/// An underscore with a slash or backslash on either side.
+fn against_slash(chars: &[char], i: usize) -> bool {
+    chars[i] == '_'
+        && ((i > 0 && blocks_underscore(chars[i - 1]))
+            || chars
+                .get(i + 1)
+                .is_some_and(|next| blocks_underscore(*next)))
+}
+
 fn is_opener(chars: &[char], i: usize) -> bool {
+    if against_slash(chars, i) {
+        return false;
+    }
     let before_ok = i == 0 || !chars[i - 1].is_alphanumeric();
     let after_ok = chars
         .get(i + 1)
@@ -575,6 +594,9 @@ fn is_opener(chars: &[char], i: usize) -> bool {
 }
 
 fn is_closer(chars: &[char], i: usize) -> bool {
+    if against_slash(chars, i) {
+        return false;
+    }
     let before_ok = i > 0 && !chars[i - 1].is_whitespace() && chars[i - 1] != chars[i];
     let after_ok = chars.get(i + 1).is_none_or(|next| !next.is_alphanumeric());
     before_ok && after_ok
@@ -648,6 +670,7 @@ fn link_and_mention(span: Span, mentions: &[Mention]) -> Vec<Span> {
             // Links start with a letter or digit. Skip punctuation runs.
             if bytes[i].is_ascii_alphanumeric()
                 && let Some((end, url)) = link_at(text, i)
+                && !bare_after_word_character(text, i, &text[i..end])
             {
                 push_plain(&mut out, &span, &text[plain_start..i]);
                 out.push(Span {
@@ -822,6 +845,18 @@ fn link_at(text: &str, at: usize) -> Option<(usize, String)> {
         return Some((end, format!("https://{token}")));
     }
     None
+}
+
+/// A bare name (no scheme, no `www.`) right after an underscore is part of a
+/// longer identifier such as `run_widths.rs`, not an address. Explicit
+/// `http(s)://` and `www.` links still work after one.
+fn bare_after_word_character(text: &str, at: usize, token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    let explicit = lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("www.")
+        || lower.starts_with("mailto:");
+    !explicit && text[..at].ends_with('_')
 }
 
 /// Whether a token is a hostname without a scheme.
@@ -1313,6 +1348,29 @@ mod tests {
     }
 
     #[test]
+    fn the_shrug_keeps_its_underscores_and_backslash() {
+        let shrug = "¯\\_(ツ)_/¯";
+        assert_eq!(plain(shrug, &[]), shrug);
+        assert!(parse(shrug, &[]).iter().all(|span| !span.italic));
+        let sentence = format!("well {shrug} ok");
+        assert_eq!(plain(&sentence, &[]), sentence);
+        // A later emphasis does not pair with the shrug's underscores.
+        let both = format!("{shrug} and _word_");
+        assert_eq!(plain(&both, &[]), format!("{shrug} and word"));
+        // Emphasis around words still works, also in brackets and before
+        // punctuation, and around a bracketed phrase (Beeper's <em>(hi)</em>).
+        assert!(parse("_note_", &[]).iter().any(|span| span.italic));
+        assert!(
+            parse("(_note_)", &[])
+                .iter()
+                .any(|span| span.italic && span.text == "note")
+        );
+        assert!(parse("_wow!_", &[]).iter().any(|span| span.italic));
+        assert_eq!(plain("_(x)_", &[]), "(x)");
+        assert!(parse("_(x)_", &[]).iter().any(|span| span.italic));
+    }
+
+    #[test]
     fn stray_markers_stay_literal() {
         assert_eq!(plain("2 * 3 = 6", &[]), "2 * 3 = 6");
         assert_eq!(plain("snake_case_name", &[]), "snake_case_name");
@@ -1393,6 +1451,26 @@ mod tests {
         );
         let spans = parse("(see https://example.com)", &[]);
         assert_eq!(spans.last().map(|span| span.text.as_str()), Some(")"));
+    }
+
+    #[test]
+    fn code_names_are_not_linked_after_an_underscore() {
+        let links = |text: &str| -> Vec<String> {
+            parse(text, &[])
+                .into_iter()
+                .filter_map(|span| span.link)
+                .collect()
+        };
+        assert!(links("run_widths.rs").is_empty());
+        assert!(links("see run_widths.rs and main.py, util.js, notes.md, x.sh").is_empty());
+        assert!(links("my_site.com").is_empty());
+        // Explicit links and ordinary bare domains keep working.
+        assert_eq!(
+            links("run_ https://widths.rs/x"),
+            vec!["https://widths.rs/x"]
+        );
+        assert_eq!(links("_www.example.com"), vec!["https://www.example.com"]);
+        assert_eq!(links("go to example.com"), vec!["https://example.com"]);
     }
 
     #[test]
