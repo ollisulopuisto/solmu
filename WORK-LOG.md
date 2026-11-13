@@ -127,3 +127,10 @@ Devin correctly flagged the focused Settings-row fallback as unbounded. Replaced
 it with three overscan rows on each viewport edge. The standalone forward Tab
 probe still reaches hidden rows; the 1,000-chat benchmark now explicitly focuses
 a row on Settings and checks four more frames stay below 20 widgets (13 built).
+
+Second native suite: 2,153 passed and two failed. The resize test grabbed a row
+edge, which varies with scrollbar width, instead of the panel resize boundary;
+it now reads the panel edge directly. The mute test's retired Always label now
+matches Mute forever, and the timed choice explicitly says Until 08:00 rather
+than tomorrow (which was inaccurate before today's 08:00). Both new labels use
+literal gettext calls.

@@ -19656,7 +19656,7 @@ mod tests {
             find(&shapes, "Until 08:00").is_some(),
             "the submenu offers Until 08:00"
         );
-        let always = find(&shapes, "Always").expect("the submenu offers Always");
+        let always = find(&shapes, "Mute forever").expect("the submenu offers Mute forever");
         app.actions.clear();
         let [press, release] = click(always.center());
         frame_sized(
@@ -19669,7 +19669,7 @@ mod tests {
         let now = crate::util::now();
         assert!(
             app.chat(&chat).expect("chat").muted(now),
-            "Always mutes the chat"
+            "Mute forever mutes the chat"
         );
 
         // Muted, the menu offers Unmute alone.
@@ -22356,12 +22356,11 @@ mod tests {
         assert!(app.reply_to.is_none());
     }
 
-    /// Where the chat list's right edge is: the first chat row spans the
-    /// list's width.
+    /// Panel edge, not a row edge: a fading scrollbar can change row width
+    /// independently of the resizable panel's actual boundary.
     fn chat_list_right(ctx: &egui::Context) -> f32 {
-        ctx.data(|data| data.get_temp::<egui::Rect>(crate::ui::chats::chat_row_id(sample_ids()[0])))
-            .expect("the first chat is listed")
-            .right()
+        ctx.data(|data| data.get_temp::<f32>(egui::Id::new("chat-panel-right")))
+            .expect("the panel is drawn")
     }
 
     /// Drags from `from` through each x in `path` at one height, returning

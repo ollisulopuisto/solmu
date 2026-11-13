@@ -39,6 +39,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         header(app, ui);
         body(app, ui);
     });
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            egui::Id::new("chat-panel-right"),
+            response.response.rect.right(),
+        )
+    });
     let width = response.response.rect.width();
     if (width - app.settings.sidebar_width).abs() > 1.0 {
         app.settings.sidebar_width = width;
@@ -3497,8 +3504,10 @@ fn sound_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &Chat) 
 
 /// Exactly two mute durations. Beeper timed mutes are local to this app.
 fn mute_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &Chat, now: i64) {
-    let tomorrow = crate::util::next_mute_morning(now);
-    let items = ["Mute until tomorrow", "Mute forever"];
+    let morning = crate::util::next_mute_morning(now);
+    let until = crate::i18n::gettext(app.locale, "Until 08:00");
+    let forever = crate::i18n::gettext(app.locale, "Mute forever");
+    let items = [until.as_ref(), forever.as_ref()];
     widgets::submenu(ui, palette, Icon::BellOff, "Mute", &items, |ui| {
         if chat.backend_account.is_some() {
             ui.small(crate::i18n::gettext(
@@ -3506,7 +3515,7 @@ fn mute_menu(app: &mut App, ui: &mut egui::Ui, palette: &Palette, chat: &Chat, n
                 "Timed mute applies only in Solmu.",
             ));
         }
-        if let Some(end) = tomorrow
+        if let Some(end) = morning
             && widgets::menu_item(ui, palette, None, items[0])
         {
             app.actions
