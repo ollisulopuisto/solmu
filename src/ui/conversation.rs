@@ -5748,7 +5748,10 @@ fn bubble_frame(
             _ => None,
         });
         let _slot = if let Some((width, height, rgba)) = pasted_preview {
-            let id = ui.id().with(("pending-preview", &message.id));
+            // Keyed by the upload job alone, not by `ui.id()`: that id is derived
+            // from the message row id, which changes when the pending message
+            // resolves, and the preview texture would then reload.
+            let id = egui::Id::new(("pending-preview", &pending.unwrap().job.local));
             let texture = ui
                 .ctx()
                 .data_mut(|data| data.get_temp::<egui::TextureHandle>(id))
@@ -5758,7 +5761,7 @@ fn bubble_frame(
                         rgba,
                     );
                     let texture = ui.ctx().load_texture(
-                        format!("pending-{}", message.id),
+                        format!("pending-{}", pending.unwrap().job.local),
                         image,
                         Default::default(),
                     );

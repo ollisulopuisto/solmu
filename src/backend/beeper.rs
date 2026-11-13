@@ -5678,10 +5678,16 @@ fn poll_media_send(
     {
         let message = api.map_message(&wire, &member.chat);
         // Delivery evidence is independent of attachment metadata availability.
-        let complete = wire.send_status.as_ref().is_some_and(|s| {
+        let explicit_success = wire.send_status.as_ref().is_some_and(|s| {
             s.status == "SUCCESS"
                 || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
         });
+        // Some bridges never attach a sendStatus. A lookup that resolved to a
+        // final ID of ours in this chat with no status at all is no longer a
+        // pending echo and nothing says it failed (same rule as poll_pending_send).
+        let resolved_without_status =
+            wire.id != pending_id && !wire.id.is_empty() && wire.send_status.is_none();
+        let complete = explicit_success || resolved_without_status;
         emit(Event::BeeperMediaResolved {
             local: local.to_owned(),
             member: member.clone(),
@@ -6665,6 +6671,68 @@ mod tests {
             e,
             Event::BeeperMediaProgress {
                 state: crate::pending_media::State::Unknown(_),
+                ..
+            }
+        )));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn pending_media_final_id_without_send_status_is_done_not_a_false_timeout() {
+        let (api, server) = pending_media_fixture(vec![(
+            "GET /v1/chats/target/messages/pending ",
+            200,
+            r#"{"id":"final","chatID":"target","accountID":"signal","isSender":true}"#.into(),
+        )]);
+        let member = pending_media_job(&api.base_url, std::path::Path::new("unused")).member;
+        let events = Mutex::new(Vec::new());
+        let keep = poll_media_send(
+            &api,
+            "local",
+            &member,
+            "pending",
+            Duration::from_secs(61),
+            &|e| events.lock().unwrap().push(e),
+        );
+        assert!(!keep);
+        let events = events.into_inner().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::BeeperMediaResolved { complete: true, message, .. } if message.id == "final"
+        )));
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::BeeperMediaProgress {
+                state: crate::pending_media::State::Unknown(_),
+                ..
+            }
+        )));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn pending_media_still_pending_id_without_status_keeps_polling() {
+        let (api, server) = pending_media_fixture(vec![(
+            "GET /v1/chats/target/messages/pending ",
+            200,
+            r#"{"id":"pending","chatID":"target","accountID":"signal","isSender":true}"#.into(),
+        )]);
+        let member = pending_media_job(&api.base_url, std::path::Path::new("unused")).member;
+        let events = Mutex::new(Vec::new());
+        let keep = poll_media_send(
+            &api,
+            "local",
+            &member,
+            "pending",
+            Duration::from_secs(5),
+            &|e| events.lock().unwrap().push(e),
+        );
+        assert!(keep);
+        let events = events.into_inner().unwrap();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            Event::BeeperMediaResolved {
+                complete: false,
                 ..
             }
         )));
