@@ -246,6 +246,16 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                         [width, 36.0],
                         egui::Button::selectable(app.list_mode == mode, mode.label(app.locale)),
                     );
+                    let stop = match mode {
+                        crate::model::ListMode::Recent => Stop::Recent,
+                        crate::model::ListMode::Focus => Stop::Focus,
+                        crate::model::ListMode::NeedsMe => Stop::NeedsMe,
+                    };
+                    let response = response.tab_stop(stop);
+                    #[cfg(test)]
+                    ui.ctx().data_mut(|d| {
+                        d.insert_temp(egui::Id::new(("list-mode", mode.key())), response.rect)
+                    });
                     if response.clicked() {
                         app.actions.push(Action::SetListMode(mode));
                     }
@@ -1794,7 +1804,7 @@ fn section_offsets(rows: &[ChatListRow], row_height: f32) -> Vec<f32> {
     offsets
 }
 
-fn reveal_bounds(current: f32, viewport: f32, top: f32, bottom: f32) -> f32 {
+pub(super) fn reveal_bounds(current: f32, viewport: f32, top: f32, bottom: f32) -> f32 {
     if top < current {
         top
     } else if bottom > current + viewport {
@@ -1856,7 +1866,7 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     if !app.show_archived {
-        super::flat_groups::list(app, ui);
+        super::flat_groups::list(app, ui, to_top);
         return;
     }
     // A pin is a shortcut, not a removal: pinned chats keep their rail
@@ -2025,7 +2035,7 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
 /// message's chat there: at most one row down, so its first row still shows
 /// at least in part. A reader further down is working through older chats, and
 /// a send there keeps their place instead of throwing them back to the top.
-fn near_top(ui: &egui::Ui, salt: &str, row_height: f32) -> bool {
+pub(super) fn near_top(ui: &egui::Ui, salt: &str, row_height: f32) -> bool {
     let id = ui.make_persistent_id(egui::IdSalt::new(salt));
     let offset = egui::scroll_area::State::load(ui.ctx(), id)
         .unwrap_or_default()
@@ -2040,7 +2050,7 @@ pub(crate) fn slide_copy_id() -> egui::Id {
 }
 
 /// The real list's scroll offset, for the copies a slide draws.
-fn shared_offset_id() -> egui::Id {
+pub(super) fn shared_offset_id() -> egui::Id {
     egui::Id::new("chat-list-real-offset")
 }
 
@@ -3628,7 +3638,7 @@ mod tests {
     }
 
     #[test]
-    fn queues_share_a_row_below_search_even_while_typing() {
+    fn modes_share_a_row_below_search_even_while_typing() {
         for width in [260.0, 340.0, 520.0] {
             let directory = tempfile::tempdir().unwrap();
             let (mut app, _) = App::headless(AppDirs::under(directory.path()), Settings::default());
@@ -3653,12 +3663,14 @@ mod tests {
                 .unwrap()
                 .rect;
             let rects = [
-                ChatFilter::All,
-                ChatFilter::Unread,
-                ChatFilter::ReplyLater,
-                ChatFilter::ReadLater,
+                crate::model::ListMode::Recent,
+                crate::model::ListMode::Focus,
+                crate::model::ListMode::NeedsMe,
             ]
-            .map(|f| ctx.data(|d| d.get_temp::<Rect>(filter_chip_id(f))).unwrap());
+            .map(|f| {
+                ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("list-mode", f.key()))))
+                    .unwrap()
+            });
             for rect in rects {
                 assert!(rect.top() >= search.bottom());
                 assert!(rect.right() <= width);

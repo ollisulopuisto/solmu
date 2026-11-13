@@ -103,3 +103,11 @@ with 11-point labels. Implemented the same treatment for Other, preserving
 single-home row order and drop targets, with no click or collapse action.
 Added a geometry/non-click regression (compile-red before helper, check-green
 after). Refreshed native dark/light captures; no B/C/D sketch code shipped.
+
+Native-suite follow-up: the grouped path now shares the list's persisted scroll
+ID, slide-copy offset, gesture routing, near-top send behavior, and row geometry
+instrumentation. Keyboard reveal accounts for static headers before drawing,
+including virtualized rows. Recent/Focus/Needs me join the deliberate Tab order.
+Migrated retired-chip/mute-duration/favorite-priority assertions to the approved
+modes, 08:00 mute, and activity ordering; kept interaction and viewport coverage.
+The retired saved scope is cleared from account settings as well as session state.

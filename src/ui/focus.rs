@@ -41,6 +41,9 @@ pub enum Stop {
     Back,
     Sidebar,
     Search,
+    Recent,
+    Focus,
+    NeedsMe,
     /// The first chip, All, on the chat list.
     All,
     Unread,

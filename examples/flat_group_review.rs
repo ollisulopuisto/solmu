@@ -82,7 +82,7 @@ fn main() {
                 )),
                 ..Default::default()
             },
-            |ui| flat_groups::list(&mut app, ui),
+            |ui| flat_groups::list(&mut app, ui, false),
         );
         output.textures_delta.clear();
         frames.push(start.elapsed().as_secs_f64() * 1000.);
@@ -106,7 +106,7 @@ fn main() {
                 )),
                 ..Default::default()
             },
-            |ui| flat_groups::list(&mut app, ui),
+            |ui| flat_groups::list(&mut app, ui, false),
         );
         output.textures_delta.clear();
     }

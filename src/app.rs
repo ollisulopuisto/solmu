@@ -27397,8 +27397,8 @@ mod tests {
         };
         assert_eq!(
             names(&app),
-            ["Ada", "Bob", "Club"],
-            "channels have their own chip"
+            ["Ada", "Bob", "Club", "News"],
+            "Recent includes channels"
         );
         app.chat_filter = ChatFilter::Channels;
         assert_eq!(names(&app), ["News"]);
@@ -27478,10 +27478,10 @@ mod tests {
         app.open_chat("2@s.whatsapp.net".into());
         assert_eq!(names(&app), ["Ada", "Stranger", "Group"]);
         // A draft left unsent keeps the chat listed once it is closed, and
-        // parked drafts come before other chats.
+        // Recent keeps activity order even for parked drafts.
         app.open_chat = None;
         app.drafts.insert("2@s.whatsapp.net".into(), "hello".into());
-        assert_eq!(names(&app), ["Stranger", "Ada", "Group"]);
+        assert_eq!(names(&app), ["Ada", "Stranger", "Group"]);
     }
 
     #[test]

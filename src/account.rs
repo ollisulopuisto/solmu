@@ -159,7 +159,7 @@ impl Account {
     pub fn new(
         id: AccountId,
         dirs: AccountDirs,
-        settings: AccountSettings,
+        mut settings: AccountSettings,
         backend: Backend,
     ) -> Self {
         let open_chat = settings.last_chat.clone();
@@ -182,12 +182,14 @@ impl Account {
         let category_filter = None;
         let favorites_only = false;
         let chat_filter = settings.chat_queue.unwrap_or(chat_filter);
-        let list_mode = settings.list_mode.unwrap_or_else(|| match chat_filter {
+        let list_mode = settings.list_mode.unwrap_or(match chat_filter {
             ChatFilter::Unread | ChatFilter::ReplyLater | ChatFilter::ReadLater => {
                 crate::model::ListMode::NeedsMe
             }
             _ => crate::model::ListMode::Recent,
         });
+        let retired_scope =
+            settings.list_filter.take().is_some() | settings.chat_category.take().is_some();
         Self {
             batch_ui: Default::default(),
             id,
@@ -196,7 +198,7 @@ impl Account {
             forward_items: Vec::new(),
             dirs,
             settings,
-            settings_dirty: false,
+            settings_dirty: retired_scope,
             backend,
             link: LinkStatus::Starting,
             syncing: false,
