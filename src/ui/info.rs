@@ -211,7 +211,6 @@ struct Shown {
     can_manage: bool,
     muted_until: Option<i64>,
     muted: bool,
-    pinned: bool,
     favorite: bool,
     archived: bool,
     /// A group's description, when it has one.
@@ -249,7 +248,6 @@ impl Shown {
             can_manage: chat.can_manage_group(),
             muted_until: chat.muted_until,
             muted: chat.muted(crate::util::now()),
-            pinned: chat.pinned,
             favorite: chat.favorite,
             archived: chat.archived,
             description: chat
