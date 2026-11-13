@@ -118,3 +118,7 @@ only while a list row holds focus outside the main chat cycle; group-creation
 controls reveal their focus too. The same probe now reaches previously hidden
 rows with fully visible focus rectangles. The resize-centering test waits for
 sidebar/scrollbar settling rather than sampling a transient layout.
+
+The same test-only Beeper fixture socket-mode fix as send-status PR #327 is
+included here to keep the independent native CI legs deterministic. Production
+Beeper transport is unchanged.
