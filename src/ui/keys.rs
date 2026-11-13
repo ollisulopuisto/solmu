@@ -216,6 +216,11 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             let (modifiers, key_code) = ARCHIVE.keys[0];
             key(modifiers, key_code, archive);
         }
+        // Cmd+Shift+B opens Bookmarks (the Saved list) and closes it again. It is
+        // consumed before plain Cmd+B: consume_key also matches extra modifiers,
+        // so the sidebar toggle would otherwise swallow it.
+        let (modifiers, key_code) = BOOKMARKS.keys[0];
+        key(modifiers, key_code, Action::ToggleSaved);
         let (modifiers, key_code) = SIDEBAR.keys[0];
         key(modifiers, key_code, Action::ToggleSidebar);
         // Cmd+D steps the chat list through All, Unread and Needs me.
@@ -225,9 +230,6 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             key_code,
             Action::SetListMode(app.list_mode.next()),
         );
-        // Cmd+Shift+B opens Bookmarks (the Saved list) and closes it again.
-        let (modifiers, key_code) = BOOKMARKS.keys[0];
-        key(modifiers, key_code, Action::ToggleSaved);
         let (modifiers, key_code) = SETTINGS.keys[0];
         key(modifiers, key_code, Action::ToggleSettings);
         let (modifiers, key_code) = QUIT.keys[0];

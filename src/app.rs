@@ -11810,7 +11810,13 @@ impl App {
                 // The rail, the list header's Back and Escape all land here. The
                 // sidebar has to be open for the list to be visible.
                 self.sidebar_visible = true;
-                self.show_saved = !self.show_saved;
+                // From Settings the list is not on screen: go to the chats first and
+                // open the list, rather than toggling it out of sight.
+                let from_other_page = self.page != Page::Chats;
+                if from_other_page {
+                    self.apply(Action::Open(Page::Chats), ctx);
+                }
+                self.show_saved = from_other_page || !self.show_saved;
                 if self.show_saved {
                     self.show_archived = false;
                     self.show_starred = false;
@@ -31455,6 +31461,23 @@ mod conversation_palette_tests {
         chat.marked_unread = true;
         assert!(app.mode_matches_at(&chat, ListMode::Unread, 101));
         assert!(app.mode_matches_at(&chat, ListMode::Recent, 101));
+    }
+
+    #[test]
+    fn bookmarks_opens_the_saved_list_from_settings_instead_of_hiding_it() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.apply(Action::Open(Page::Settings), &ctx);
+        app.apply(Action::ToggleSaved, &ctx);
+        assert_eq!(app.page, Page::Chats);
+        assert!(app.show_saved);
+        // Already on, but Settings is in front: still lands on the open list.
+        app.apply(Action::Open(Page::Settings), &ctx);
+        app.apply(Action::ToggleSaved, &ctx);
+        assert_eq!(app.page, Page::Chats);
+        assert!(app.show_saved);
+        app.apply(Action::ToggleSaved, &ctx);
+        assert!(!app.show_saved);
     }
 
     #[test]
