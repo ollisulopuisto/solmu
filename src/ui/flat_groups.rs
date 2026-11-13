@@ -250,6 +250,11 @@ fn section_header(
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), sense);
     // Tab can land on a heading now; keep it scrolled into view.
     crate::theme::reveal_focus(&response);
+    #[cfg(test)]
+    {
+        let key = egui::Id::new(("group-heading-rect", name.to_owned()));
+        ui.ctx().data_mut(|data| data.insert_temp(key, rect));
+    }
     let painter = ui.painter();
     let text = if collapsed && unread > 0 {
         format!("{name}  {unread}")
@@ -706,6 +711,66 @@ mod tests {
             assert_eq!(folded.sense, egui::Sense::click());
         });
         out.textures_delta.clear();
+    }
+
+    /// Dragging a heading onto another one reorders the groups and asks the
+    /// app to save the settings; the pointer path covers the real gesture.
+    #[test]
+    fn dragging_a_heading_onto_another_reorders_groups_and_saves() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        app.list_mode = crate::model::ListMode::Recent;
+        let a = app.settings.flat_groups.create("Alpha").unwrap();
+        let b = app.settings.flat_groups.create("Beta").unwrap();
+        let c = app.settings.flat_groups.create("Gamma").unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| list(app, ui, false),
+            );
+            out.textures_delta.clear();
+        };
+        let center = |name: &str| {
+            let key = egui::Id::new(("group-heading-rect", name.to_owned()));
+            let rect = ctx.data(|data| data.get_temp::<egui::Rect>(key));
+            rect.expect("heading was laid out").center()
+        };
+        frame(&mut app, Vec::new());
+        frame(&mut app, Vec::new());
+        let (from, to) = (center("Alpha"), center("Gamma"));
+        let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, vec![egui::Event::PointerMoved(from)]);
+        frame(&mut app, vec![button(from, true)]);
+        for step in 1..=4 {
+            let pos = from + (to - from) * (step as f32 / 4.0);
+            frame(&mut app, vec![egui::Event::PointerMoved(pos)]);
+        }
+        frame(&mut app, vec![button(to, false)]);
+        frame(&mut app, Vec::new());
+        let order: Vec<u64> = app.settings.flat_groups.items.iter().map(|g| g.id).collect();
+        assert_eq!(order, vec![b, c, a]);
+        let saved = app
+            .actions
+            .iter()
+            .any(|action| matches!(action, Action::SettingsChanged));
+        assert!(saved);
     }
 
     #[test]
