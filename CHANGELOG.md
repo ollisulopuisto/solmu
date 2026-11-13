@@ -9,6 +9,7 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- The shrug ¯\_(ツ)_/¯ keeps its underscores in a bubble: an underscore next to a slash or backslash is not emphasis.
 - Archive multiple selected chats without deleting messages.
 - Explicit per-chat bridge-supported message deletion scope and age checks.
 - Unsupported-item preflight and request-correlated per-item outcomes, no auto retry.
