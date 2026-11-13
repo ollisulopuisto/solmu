@@ -5927,7 +5927,7 @@ mod tests {
             }
             let mut delay = std::time::Duration::MAX;
             // Avatars and media load on threads that ask for a frame when
-            // they finish; measure once three frames in a row had none
+            // they finish; measure once ten frames in a row (about 100 ms) had none
             // pending.
             let mut settled = 0;
             for frame in 0..400 {
@@ -5936,8 +5936,11 @@ mod tests {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 } else {
                     settled += 1;
+                    // A loader thread that finishes between frames asks
+                    // for an immediate repaint; give it real time to do so.
+                    std::thread::sleep(std::time::Duration::from_millis(10));
                 }
-                if frame >= 8 && settled > 3 {
+                if frame >= 8 && settled > 10 {
                     break;
                 }
                 let input = egui::RawInput {
