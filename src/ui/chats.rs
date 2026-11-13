@@ -26,9 +26,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     search_keyboard(app, ui);
     let palette = app.palette;
     let panel = egui::Panel::left("chats")
-        .resizable(true)
-        .default_size(app.settings.sidebar_width)
-        .size_range(260.0..=520.0)
+        // The explicit strip below owns resizing. Keep content minimums
+        // from widening the panel during a leftward pointer drag.
+        .exact_size(app.settings.sidebar_width.clamp(260.0, 520.0))
         .show_separator_line(false)
         .frame(
             Frame::new()
@@ -39,7 +39,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         header(app, ui);
         body(app, ui);
     });
-    #[cfg(test)]
+    #[cfg(any(test, feature = "demo"))]
     ui.ctx().data_mut(|d| {
         d.insert_temp(
             egui::Id::new("chat-panel-right"),

@@ -134,3 +134,11 @@ it now reads the panel edge directly. The mute test's retired Always label now
 matches Mute forever, and the timed choice explicitly says Until 08:00 rather
 than tomorrow (which was inaccurate before today's 08:00). Both new labels use
 literal gettext calls.
+
+Third native suite: 2,156 passed, only left-resize failed. A standalone real-input
+probe reproduced actual width growth, so the previous test-coordinate explanation
+was incomplete. Content minimums were widening egui's resizable Panel during a
+left drag. The existing wider pointer strip now exclusively owns resizing, with
+the panel fixed to its current saved width (260-520 bounds). Probe: starting
+panel edge352, then352/347/342/337/332/327 as the pointer moves left, no widening.
+Rebased onto merged send-status main, preserving both work-log entries and code.
