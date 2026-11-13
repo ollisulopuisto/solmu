@@ -10,6 +10,8 @@ use std::collections::{HashMap, HashSet};
 pub struct State {
     pub name: String,
     pub assigning: Option<(Member, Vec<u64>)>,
+    /// Headings folded shut this session: a group's id, or `None` for Other.
+    pub collapsed: HashSet<Option<u64>>,
     /// Demo/test instrumentation: actual alias widgets built in the last frame.
     #[cfg(any(test, feature = "demo"))]
     pub built_rows: usize,
@@ -148,9 +150,19 @@ pub fn navigation_chats(app: &App) -> Vec<&Chat> {
     let groups = membership_rows(app, &chats);
     let mut ordered = Vec::with_capacity(chats.len());
     let mut seen = HashSet::new();
-    for index in groups.into_iter().flatten().chain(0..chats.len()) {
-        if seen.insert(&chats[index].id) {
-            ordered.push(chats[index]);
+    // A folded group's rows are not on screen, so the keyboard skips them.
+    for (group, indices) in app.settings.flat_groups.items.iter().zip(&groups) {
+        let folded = app.flat_group_ui.collapsed.contains(&Some(group.id));
+        for index in indices {
+            if seen.insert(&chats[*index].id) && !folded {
+                ordered.push(chats[*index]);
+            }
+        }
+    }
+    let other_folded = app.flat_group_ui.collapsed.contains(&None);
+    for chat in &chats {
+        if seen.insert(&chat.id) && !other_folded {
+            ordered.push(*chat);
         }
     }
     ordered
@@ -215,31 +227,65 @@ fn virtual_aliases(app: &mut App, ui: &mut egui::Ui, chats: &[&Chat], salt: (&st
     );
 }
 
-/// A static 16-point divider. It accepts a drop but never a click,
-/// so a group's heading cannot collapse or focus the list.
+/// A 16-point divider with a fold chevron. It accepts a drop and a click:
+/// a click folds or unfolds the section. A folded heading carries the number
+/// of unread chats hidden under it.
 fn section_header(
     ui: &mut egui::Ui,
     name: &str,
     palette: &crate::theme::Palette,
+    collapsed: bool,
+    unread: usize,
 ) -> egui::Response {
     let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), egui::Sense::hover());
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), egui::Sense::click());
     let painter = ui.painter();
-    let label = painter.layout_no_wrap(
-        name.to_owned(),
-        crate::theme::regular(11.0),
-        palette.secondary,
-    );
-    let at = egui::pos2(rect.left() + 16.0, rect.center().y - label.size().y * 0.5);
+    let text = if collapsed && unread > 0 {
+        format!("{name}  {unread}")
+    } else {
+        name.to_owned()
+    };
+    let color = if collapsed && unread > 0 {
+        palette.accent
+    } else {
+        palette.secondary
+    };
+    let label = painter.layout_no_wrap(text, crate::theme::regular(11.0), color);
+    let at = egui::pos2(rect.left() + 28.0, rect.center().y - label.size().y * 0.5);
     let gap = egui::Rect::from_min_size(
         egui::pos2(at.x - 6.0, rect.top()),
         egui::vec2(label.size().x + 12.0, rect.height()),
     );
+    // Chevron: points right when folded, down when open.
+    let center = egui::pos2(rect.left() + 14.0, rect.center().y);
+    let points = if collapsed {
+        vec![
+            center + egui::vec2(-2.0, -4.0),
+            center + egui::vec2(3.0, 0.0),
+            center + egui::vec2(-2.0, 4.0),
+        ]
+    } else {
+        vec![
+            center + egui::vec2(-4.0, -2.0),
+            center + egui::vec2(4.0, -2.0),
+            center + egui::vec2(0.0, 3.0),
+        ]
+    };
+    painter.add(egui::Shape::convex_polygon(
+        points,
+        palette.secondary,
+        egui::Stroke::NONE,
+    ));
     let stroke = egui::Stroke::new(1.0, palette.dim);
-    painter.line_segment(
-        [rect.left_center(), egui::pos2(gap.left(), rect.center().y)],
-        stroke,
-    );
+    if gap.left() > rect.left() + 20.0 {
+        painter.line_segment(
+            [
+                egui::pos2(rect.left() + 20.0, rect.center().y),
+                egui::pos2(gap.left(), rect.center().y),
+            ],
+            stroke,
+        );
+    }
     if gap.right() < rect.right() {
         painter.line_segment(
             [
@@ -249,8 +295,54 @@ fn section_header(
             stroke,
         );
     }
-    painter.galley(at, label, palette.secondary);
+    painter.galley(at, label, color);
     response
+}
+
+/// Unread chats among `chats`: the same test Needs me uses, so a muted chat
+/// does not count.
+fn unread_count(chats: &[&Chat]) -> usize {
+    let now = crate::util::now();
+    chats
+        .iter()
+        .filter(|chat| chat.looks_unread() && !chat.muted(now))
+        .count()
+}
+
+/// Folds every section shut, or unfolds them all.
+fn fold_all(app: &mut App, groups: &[crate::flat_groups::Group], fold: bool) {
+    app.flat_group_ui.collapsed.clear();
+    if fold {
+        app.flat_group_ui
+            .collapsed
+            .extend(groups.iter().map(|group| Some(group.id)));
+        app.flat_group_ui.collapsed.insert(None);
+    }
+}
+
+/// The heading menu's fold-everything entries. Shift-click on a chevron does
+/// the same as the entry that applies.
+fn fold_menu(app: &mut App, ui: &mut egui::Ui, groups: &[crate::flat_groups::Group]) {
+    if ui
+        .button(crate::i18n::gettext(app.locale, "Collapse all groups"))
+        .clicked()
+    {
+        fold_all(app, groups, true);
+        ui.close();
+    }
+    if ui
+        .button(crate::i18n::gettext(app.locale, "Expand all groups"))
+        .clicked()
+    {
+        fold_all(app, groups, false);
+        ui.close();
+    }
+}
+
+/// Whether an empty section's heading is dropped: only Recent keeps the
+/// empty ones, since they are drop targets for assigning chats.
+fn header_hidden(app: &App, empty: bool) -> bool {
+    empty && app.list_mode != crate::model::ListMode::Recent
 }
 
 pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
@@ -288,13 +380,37 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
     if to_top && super::chats::near_top(ui, "chat-list", row_height) {
         area = area.vertical_scroll_offset(0.0);
     }
+    // Revealing a chat unfolds the section holding it.
+    if ui.is_enabled()
+        && let Some(target) = app.scroll_chat_into_view.clone()
+    {
+        for (group, indices) in groups.iter().zip(&rows) {
+            if indices.iter().any(|index| chats[*index].id == target) {
+                app.flat_group_ui.collapsed.remove(&Some(group.id));
+            }
+        }
+        if chats
+            .iter()
+            .enumerate()
+            .any(|(index, chat)| !grouped.contains(&index) && chat.id == target)
+        {
+            app.flat_group_ui.collapsed.remove(&None);
+        }
+    }
+    let other_empty = grouped.len() == chats.len();
     if ui.is_enabled()
         && let Some(target) = app.scroll_chat_into_view.as_ref()
     {
         let mut top = 0.0;
         let mut target_top = None;
-        for indices in &rows {
+        for (group, indices) in groups.iter().zip(&rows) {
+            if header_hidden(app, indices.is_empty()) {
+                continue;
+            }
             top += 16.0;
+            if app.flat_group_ui.collapsed.contains(&Some(group.id)) {
+                continue;
+            }
             for index in indices {
                 if &chats[*index].id == target {
                     target_top = Some(top);
@@ -302,11 +418,14 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
                 top += row_height;
             }
         }
-        top += 16.0;
+        if !header_hidden(app, other_empty) {
+            top += 16.0;
+        }
+        let other_folded = app.flat_group_ui.collapsed.contains(&None);
         for (_, chat) in chats
             .iter()
             .enumerate()
-            .filter(|(i, _)| !grouped.contains(i))
+            .filter(|(i, _)| !grouped.contains(i) && !other_folded)
         {
             if &chat.id == target {
                 target_top = Some(top);
@@ -353,8 +472,27 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
         }
         for (group, indices) in groups.iter().zip(&rows) {
             let included: Vec<_> = indices.iter().map(|index| &chats[*index]).collect();
+            if header_hidden(app, included.is_empty()) {
+                continue;
+            }
             let heading = &group.name;
-            let response = section_header(ui, heading, &app.palette);
+            let folded = app.flat_group_ui.collapsed.contains(&Some(group.id));
+            let response = section_header(
+                ui,
+                heading,
+                &app.palette,
+                folded,
+                unread_count(&included),
+            );
+            if response.clicked() {
+                if ui.input(|input| input.modifiers.shift) {
+                    fold_all(app, &groups, !folded);
+                } else if folded {
+                    app.flat_group_ui.collapsed.remove(&Some(group.id));
+                } else {
+                    app.flat_group_ui.collapsed.insert(Some(group.id));
+                }
+            }
             if let Some(target) = response.dnd_release_payload::<Member>() {
                 // A stale drag from another account must not mutate the current view.
                 if keys.iter().any(|row| row.contains(target.as_ref()))
@@ -386,10 +524,13 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
                     changed = true;
                     ui.close();
                 }
+                fold_menu(app, ui, &groups);
             });
-            ui.push_id(("flat-group", group.id), |ui| {
-                virtual_aliases(app, ui, &included, ("flat-group", group.id));
-            });
+            if !folded {
+                ui.push_id(("flat-group", group.id), |ui| {
+                    virtual_aliases(app, ui, &included, ("flat-group", group.id));
+                });
+            }
         }
         let ungrouped: Vec<_> = chats
             .iter()
@@ -397,8 +538,29 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
             .filter(|(index, _)| !grouped.contains(index))
             .map(|(_, chat)| chat)
             .collect();
-        section_header(ui, &crate::i18n::gettext(app.locale, "Other"), &app.palette);
-        virtual_aliases(app, ui, &ungrouped, ("other", 0));
+        if !header_hidden(app, ungrouped.is_empty()) {
+            let folded = app.flat_group_ui.collapsed.contains(&None);
+            let response = section_header(
+                ui,
+                &crate::i18n::gettext(app.locale, "Other"),
+                &app.palette,
+                folded,
+                unread_count(&ungrouped),
+            );
+            if response.clicked() {
+                if ui.input(|input| input.modifiers.shift) {
+                    fold_all(app, &groups, !folded);
+                } else if folded {
+                    app.flat_group_ui.collapsed.remove(&None);
+                } else {
+                    app.flat_group_ui.collapsed.insert(None);
+                }
+            }
+            response.context_menu(|ui| fold_menu(app, ui, &groups));
+            if !folded {
+                virtual_aliases(app, ui, &ungrouped, ("other", 0));
+            }
+        }
         ui.separator();
         ui.horizontal(|ui| {
             let name = ui.add(
@@ -495,16 +657,72 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
 mod tests {
     use super::*;
     #[test]
-    fn divider_header_is_dense_and_does_not_offer_clicks() {
+    fn divider_header_is_dense_and_folds_on_click() {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
         let palette = crate::theme::Palette::dark();
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let response = section_header(ui, "Work", &palette);
-            assert_eq!(response.rect.height(), 16.0);
-            assert_eq!(response.sense, egui::Sense::hover());
+            let open = section_header(ui, "Work", &palette, false, 0);
+            let folded = section_header(ui, "Work", &palette, true, 3);
+            assert_eq!(open.rect.height(), 16.0);
+            assert_eq!(folded.rect.height(), 16.0);
+            assert_eq!(open.sense, egui::Sense::click());
         });
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn unread_count_skips_read_and_muted_chats() {
+        let mut unread = Chat::new("a".into(), "A".into());
+        unread.unread = 2;
+        let read = Chat::new("b".into(), "B".into());
+        let mut marked = Chat::new("c".into(), "C".into());
+        marked.marked_unread = true;
+        assert_eq!(unread_count(&[&unread, &read, &marked]), 2);
+        assert_eq!(unread_count(&[]), 0);
+    }
+
+    #[test]
+    fn fold_all_folds_every_section_and_unfold_clears_them() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        let groups = vec![
+            crate::flat_groups::Group {
+                id: 1,
+                name: "One".into(),
+                members: Vec::new(),
+            },
+            crate::flat_groups::Group {
+                id: 2,
+                name: "Two".into(),
+                members: Vec::new(),
+            },
+        ];
+        fold_all(&mut app, &groups, true);
+        assert_eq!(app.flat_group_ui.collapsed.len(), 3);
+        assert!(app.flat_group_ui.collapsed.contains(&None));
+        fold_all(&mut app, &groups, false);
+        assert!(app.flat_group_ui.collapsed.is_empty());
+    }
+
+    #[test]
+    fn empty_headers_hide_outside_recent_only() {
+        use crate::model::ListMode;
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        app.list_mode = ListMode::Recent;
+        assert!(!header_hidden(&app, true));
+        app.list_mode = ListMode::Focus;
+        assert!(header_hidden(&app, true));
+        assert!(!header_hidden(&app, false));
+        app.list_mode = ListMode::NeedsMe;
+        assert!(header_hidden(&app, true));
     }
 
     #[test]

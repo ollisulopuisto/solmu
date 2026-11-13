@@ -9,6 +9,9 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Cmd+D steps the chat list through Recent, Focus and Needs me.
+- Group headings fold with a click (Shift-click folds or unfolds all, or use the heading's right-click menu); a folded heading shows how many unread chats it hides, and a reveal unfolds the group it needs.
+- Outside Recent, groups with no chats drop their heading.
 - The shrug ¯\_(ツ)_/¯ keeps its underscores in a bubble: an underscore next to a slash or backslash is not emphasis.
 - Archive multiple selected chats without deleting messages.
 - Explicit per-chat bridge-supported message deletion scope and age checks.
