@@ -99,6 +99,24 @@ impl Groups {
         self.items.retain(|g| g.id != id);
     }
 
+    /// Moves group `id` to where group `target` is: dragged up it lands just
+    /// above the target, dragged down just below it. Returns whether the
+    /// order changed; the list order is the saved display order.
+    pub fn move_to(&mut self, id: u64, target: u64) -> bool {
+        let (Some(from), Some(to)) = (
+            self.items.iter().position(|g| g.id == id),
+            self.items.iter().position(|g| g.id == target),
+        ) else {
+            return false;
+        };
+        if from == to {
+            return false;
+        }
+        let group = self.items.remove(from);
+        self.items.insert(to, group);
+        true
+    }
+
     pub fn unread_total<'a>(&self, unread: impl IntoIterator<Item = &'a Member>) -> usize {
         unread.into_iter().collect::<HashSet<_>>().len()
     }
@@ -114,6 +132,22 @@ mod tests {
             bridge_account: Some("signal".into()),
             chat: "same-id".into(),
         }
+    }
+    #[test]
+    fn move_to_reorders_up_and_down_and_ignores_unknown_ids() {
+        let mut groups = Groups::default();
+        let a = groups.create("A").unwrap();
+        let b = groups.create("B").unwrap();
+        let c = groups.create("C").unwrap();
+        let order = |g: &Groups| g.items.iter().map(|x| x.id).collect::<Vec<_>>();
+        assert!(groups.move_to(c, a));
+        assert_eq!(order(&groups), vec![c, a, b]);
+        assert!(groups.move_to(c, b));
+        assert_eq!(order(&groups), vec![a, b, c]);
+        assert!(!groups.move_to(a, a));
+        assert!(!groups.move_to(a, 999));
+        assert!(!groups.move_to(999, a));
+        assert_eq!(order(&groups), vec![a, b, c]);
     }
     #[test]
     fn assigning_moves_to_one_group() {

@@ -227,6 +227,10 @@ fn virtual_aliases(app: &mut App, ui: &mut egui::Ui, chats: &[&Chat], salt: (&st
     );
 }
 
+/// What a dragged group heading carries, so dropping it on another heading
+/// reorders the groups. Chats dragged onto a heading carry a `Member` instead.
+struct GroupDrag(u64);
+
 /// A 16-point divider with a fold chevron. It accepts a drop and a click:
 /// a click folds or unfolds the section. A folded heading carries the number
 /// of unread chats hidden under it.
@@ -236,9 +240,14 @@ fn section_header(
     palette: &crate::theme::Palette,
     collapsed: bool,
     unread: usize,
+    draggable: bool,
 ) -> egui::Response {
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), egui::Sense::click());
+    let sense = if draggable {
+        egui::Sense::click_and_drag()
+    } else {
+        egui::Sense::click()
+    };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), sense);
     let painter = ui.painter();
     let text = if collapsed && unread > 0 {
         format!("{name}  {unread}")
@@ -483,7 +492,42 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
                 &app.palette,
                 folded,
                 unread_count(&included),
+                true,
             );
+            response.dnd_set_drag_payload(GroupDrag(group.id));
+            if let Some(moving) = response.dnd_hover_payload::<GroupDrag>()
+                && moving.0 != group.id
+            {
+                let y = if app
+                    .settings
+                    .flat_groups
+                    .items
+                    .iter()
+                    .position(|g| g.id == moving.0)
+                    < Some(
+                        app.settings
+                            .flat_groups
+                            .items
+                            .iter()
+                            .position(|g| g.id == group.id)
+                            .unwrap_or(0),
+                    )
+                {
+                    response.rect.bottom()
+                } else {
+                    response.rect.top()
+                };
+                ui.painter().hline(
+                    response.rect.x_range(),
+                    y,
+                    egui::Stroke::new(2.0, app.palette.accent),
+                );
+            }
+            if let Some(moving) = response.dnd_release_payload::<GroupDrag>()
+                && app.settings.flat_groups.move_to(moving.0, group.id)
+            {
+                changed = true;
+            }
             if response.clicked() {
                 if ui.input(|input| input.modifiers.shift) {
                     fold_all(app, &groups, !folded);
@@ -546,6 +590,7 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
                 &app.palette,
                 folded,
                 unread_count(&ungrouped),
+                false,
             );
             if response.clicked() {
                 if ui.input(|input| input.modifiers.shift) {
@@ -662,11 +707,12 @@ mod tests {
         crate::theme::install(&ctx);
         let palette = crate::theme::Palette::dark();
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let open = section_header(ui, "Work", &palette, false, 0);
-            let folded = section_header(ui, "Work", &palette, true, 3);
+            let open = section_header(ui, "Work", &palette, false, 0, true);
+            let folded = section_header(ui, "Work", &palette, true, 3, false);
             assert_eq!(open.rect.height(), 16.0);
             assert_eq!(folded.rect.height(), 16.0);
-            assert_eq!(open.sense, egui::Sense::click());
+            assert_eq!(open.sense, egui::Sense::click_and_drag());
+            assert_eq!(folded.sense, egui::Sense::click());
         });
         out.textures_delta.clear();
     }
