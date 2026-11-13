@@ -122,3 +122,8 @@ sidebar/scrollbar settling rather than sampling a transient layout.
 The same test-only Beeper fixture socket-mode fix as send-status PR #327 is
 included here to keep the independent native CI legs deterministic. Production
 Beeper transport is unchanged.
+
+Devin correctly flagged the focused Settings-row fallback as unbounded. Replaced
+it with three overscan rows on each viewport edge. The standalone forward Tab
+probe still reaches hidden rows; the 1,000-chat benchmark now explicitly focuses
+a row on Settings and checks four more frames stay below 20 widgets (13 built).

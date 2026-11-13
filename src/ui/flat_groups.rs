@@ -189,24 +189,12 @@ fn virtual_aliases(app: &mut App, ui: &mut egui::Ui, chats: &[&Chat], salt: (&st
     }
     // Outside the main chat cycle egui walks ordinary row widgets. Keep
     // their geometry while a row holds focus so Tab can reach the next row.
-    let row_focus = app.page != crate::model::Page::Chats
-        && ui.ctx().memory(|m| m.focused()).is_some_and(|focused| {
-            chats.iter().any(|chat| {
-                ui.ctx().data(|d| {
-                    d.get_temp::<egui::Id>(super::chats::chat_row_id(&chat.id).with("widget"))
-                }) == Some(focused)
-            })
-        });
-    let range = if row_focus {
-        0..chats.len()
-    } else {
-        visible_range(
-            rect.top(),
-            height,
-            chats.len(),
-            ui.clip_rect().expand2(egui::vec2(0.0, height)),
-        )
-    };
+    let range = visible_range(
+        rect.top(),
+        height,
+        chats.len(),
+        ui.clip_rect().expand2(egui::vec2(0.0, height * 3.0)),
+    );
     if range.is_empty() {
         return;
     }
