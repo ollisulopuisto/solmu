@@ -140,6 +140,11 @@ impl Row {
 /// Restores emoji and adds headers for multi-message selections. Returns
 /// `None` for unrelated or unchanged copied text.
 pub fn refine(copied: &str, rows: &[Row]) -> Option<String> {
+    // Nothing to restore in an empty copy, and an empty pattern would match
+    // at every byte offset of the scan below.
+    if copied.is_empty() {
+        return None;
+    }
     if let Some(annotated) = annotate(copied, rows) {
         return Some(annotated);
     }
@@ -283,6 +288,22 @@ mod tests {
             ),
             row("[18:27, 8/30/2026] Carmine: ", "Sure I'll take a look"),
         ]
+    }
+
+    /// An empty copy needs no refinement and must not scan: an empty
+    /// pattern matches at every byte offset, including inside a character.
+    #[test]
+    fn refine_ignores_an_empty_copy() {
+        let mut broken = "käyttöliittymä".to_owned();
+        broken.insert_str("käyttöliittymä".find("liittymä").unwrap(), "-\n");
+        let at = "käyttöliittymä".find("liittymä").unwrap();
+        let row = Row {
+            body: "käyttöliittymä".to_owned(),
+            broken: Some(broken),
+            inserted: vec![(at, 2)],
+            ..Default::default()
+        };
+        assert_eq!(refine("", &[row]), None);
     }
 
     /// A phrase repeated in one message, once with a literal "-\n" the
