@@ -11461,7 +11461,8 @@ impl App {
                     .chat(&chat)
                     .filter(|known| known.backend_account.is_some())
                     .map(|known| known.pinned);
-                self.backend.send(Command::SetFavorite(chat.clone(), favorite));
+                self.backend
+                    .send(Command::SetFavorite(chat.clone(), favorite));
                 if bridge_pin.is_some_and(|pinned| pinned != favorite)
                     && (!favorite || self.pinned_count() < self.pin_limit)
                 {
@@ -23941,7 +23942,11 @@ mod tests {
         app.apply(Action::SetFavorite("a".into(), true), &ctx);
         assert!(app.chat("a").unwrap().pinned);
         let first = sent(&mut commands);
-        assert!(first.iter().any(|c| matches!(c, Command::SetPinned(id, true) if id == "a")));
+        assert!(
+            first
+                .iter()
+                .any(|c| matches!(c, Command::SetPinned(id, true) if id == "a"))
+        );
         // No pin left: the second favorite stays local.
         app.apply(Action::SetFavorite("b".into(), true), &ctx);
         assert!(app.chat("b").unwrap().favorite && !app.chat("b").unwrap().pinned);
@@ -23949,12 +23954,19 @@ mod tests {
         assert!(!second.iter().any(|c| matches!(c, Command::SetPinned(..))));
         // A chat without a bridge account has no pin to carry.
         app.apply(Action::SetFavorite("w".into(), true), &ctx);
-        assert!(!sent(&mut commands).iter().any(|c| matches!(c, Command::SetPinned(..))));
+        assert!(
+            !sent(&mut commands)
+                .iter()
+                .any(|c| matches!(c, Command::SetPinned(..)))
+        );
         // Unfavoriting unpins, even though the favorite was marked locally.
         app.apply(Action::SetFavorite("a".into(), false), &ctx);
         assert!(!app.chat("a").unwrap().favorite && !app.chat("a").unwrap().pinned);
         let last = sent(&mut commands);
-        assert!(last.iter().any(|c| matches!(c, Command::SetPinned(id, false) if id == "a")));
+        assert!(
+            last.iter()
+                .any(|c| matches!(c, Command::SetPinned(id, false) if id == "a"))
+        );
     }
 
     /// Dragging a favorite renumbers the bar densely at once and sends the
