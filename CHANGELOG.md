@@ -9,6 +9,7 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Favorite is the one mark: on a Beeper chat it also sets the bridge pin while one is free, and removing the favorite removes the pin, so a pin can no longer keep a chat in your favorites.
 - Cmd+D steps the chat list through Recent, Focus and Needs me.
 - Group headings fold with a click (Shift-click folds or unfolds all, or use the heading's right-click menu); a folded heading shows how many unread chats it hides, and a reveal unfolds the group it needs.
 - Outside Recent, groups with no chats drop their heading.
