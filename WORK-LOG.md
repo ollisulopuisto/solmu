@@ -142,3 +142,9 @@ left drag. The existing wider pointer strip now exclusively owns resizing, with
 the panel fixed to its current saved width (260-520 bounds). Probe: starting
 panel edge352, then352/347/342/337/332/327 as the pointer moves left, no widening.
 Rebased onto merged send-status main, preserving both work-log entries and code.
+
+Fourth native suite: 2,157 passed; resize passes. Fixed the final focused-row
+visibility failure: the scroll area's content rectangle can be wider than its
+clip while its scrollbar changes width. Grouped row widgets now cap their
+right edge to the actual viewport clip, preserving fully visible keyboard focus.
+The standalone forward-Tab probe passes after this change.

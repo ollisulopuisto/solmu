@@ -200,7 +200,7 @@ fn virtual_aliases(app: &mut App, ui: &mut egui::Ui, chats: &[&Chat], salt: (&st
     }
     let visible = egui::Rect::from_min_max(
         rect.min + egui::vec2(0.0, range.start as f32 * height),
-        rect.max,
+        egui::pos2(rect.right().min(ui.clip_rect().right()), rect.bottom()),
     );
     ui.scope_builder(
         egui::UiBuilder::new().id_salt(salt).max_rect(visible),
