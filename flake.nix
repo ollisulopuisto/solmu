@@ -151,6 +151,10 @@
               ]
             );
             SOLMU_TEST_RTL_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf";
+            # The build sandbox has no system time zone database, and jiff
+            # reads one for the mute-morning tests. TZDIR points it at the
+            # nixpkgs copy.
+            TZDIR = "${pkgs.tzdata}/share/zoneinfo";
 
             # The vendored OpenSSL (through rusqlite's bundled SQLCipher) embeds
             # its build line, compiler path included, in the binary. The app
