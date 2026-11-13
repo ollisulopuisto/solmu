@@ -135,12 +135,29 @@ pub fn assign(app: &mut App, chat: &Chat) {
     app.flat_group_ui.assigning = Some((target, selected));
 }
 
+/// Puts a chat (with every linked alias) in one group, or in Other for
+/// `None`, and queues the settings save.
+fn set_home(app: &mut App, chat: &Chat, home: Option<u64>) {
+    let target = member(app, chat);
+    let targets = identities(app, chat);
+    let selected: Vec<u64> = home.into_iter().collect();
+    app.settings
+        .flat_groups
+        .assign_linked(&target, &targets, &selected);
+    app.actions.push(Action::SettingsChanged);
+}
+
+/// Dropping a chat on the Other heading takes it, and its aliases, out of
+/// its group.
+fn drop_on_other(groups: &mut crate::flat_groups::Groups, target: &Member, sources: &[Member]) {
+    groups.assign_linked(target, sources, &[]);
+}
+
 /// The chat menu's "Assign groups" submenu: every group at once, one click to
 /// pick (it opens on hover). A chat has one home group, so this replaces the
 /// current one; "Other" removes it. Same effect as the assign window.
 pub fn assign_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     let locale = app.locale;
-    let target = member(app, chat);
     let targets = identities(app, chat);
     let current = app
         .settings
@@ -186,11 +203,7 @@ pub fn assign_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
             ui.close();
         }
         if let Some(choice) = choice {
-            let selected: Vec<u64> = choice.into_iter().collect();
-            app.settings
-                .flat_groups
-                .assign_linked(&target, &targets, &selected);
-            app.actions.push(Action::SettingsChanged);
+            set_home(app, chat, choice);
             ui.close();
         }
     });
@@ -379,6 +392,12 @@ fn unread_count(chats: &[&Chat]) -> usize {
         .count()
 }
 
+/// Other's heading follows the empty-heading rule, except while a chat is
+/// being dragged: then it stays as the drop target that ungroups.
+fn other_header_hidden(app: &App, empty: bool, dragging_chat: bool) -> bool {
+    header_hidden(app, empty) && !dragging_chat
+}
+
 /// Folds every section shut, or unfolds them all.
 fn fold_all(app: &mut App, groups: &[crate::flat_groups::Group], fold: bool) {
     app.flat_group_ui.collapsed.clear();
@@ -468,6 +487,10 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
         }
     }
     let other_empty = grouped.len() == chats.len();
+    // While a chat is being dragged, Other stays on screen as a drop target
+    // even when it holds nothing, so the chat can always be ungrouped.
+    let dragging_chat = egui::DragAndDrop::has_payload_of_type::<Member>(ui.ctx());
+    let other_hidden = other_header_hidden(app, other_empty, dragging_chat);
     if ui.is_enabled()
         && let Some(target) = app.scroll_chat_into_view.as_ref()
     {
@@ -488,7 +511,7 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
                 top += row_height;
             }
         }
-        if !header_hidden(app, other_empty) {
+        if !other_hidden {
             top += 16.0;
         }
         let other_folded = app.flat_group_ui.collapsed.contains(&None);
@@ -643,7 +666,7 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
             .filter(|(index, _)| !grouped.contains(index))
             .map(|(_, chat)| chat)
             .collect();
-        if !header_hidden(app, ungrouped.is_empty()) {
+        if !other_hidden {
             let folded = app.flat_group_ui.collapsed.contains(&None);
             let response = section_header(
                 ui,
@@ -665,9 +688,7 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
             if let Some(target) = response.dnd_release_payload::<Member>() {
                 // Dropping a chat on Other takes it out of its group.
                 if let Some(sources) = keys.iter().find(|row| row.contains(target.as_ref())) {
-                    app.settings
-                        .flat_groups
-                        .assign_linked(target.as_ref(), sources, &[]);
+                    drop_on_other(&mut app.settings.flat_groups, target.as_ref(), sources);
                     changed = true;
                 }
             }
@@ -822,6 +843,91 @@ mod tests {
         assert!(app.flat_group_ui.collapsed.contains(&None));
         fold_all(&mut app, &groups, false);
         assert!(app.flat_group_ui.collapsed.is_empty());
+    }
+
+    fn linked_pair() -> (App, tempfile::TempDir, Chat, Chat) {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        let mut a = Chat::new("a".into(), "Person".into());
+        a.backend_origin = Some("server".into());
+        a.backend_account = Some("signal".into());
+        let mut b = a.clone();
+        b.id = "b".into();
+        b.backend_account = Some("whatsapp".into());
+        app.settings.beeper.people.push(crate::merged::Person {
+            name: "Person".into(),
+            members: vec![
+                crate::merged::Member::of(&a).unwrap(),
+                crate::merged::Member::of(&b).unwrap(),
+            ],
+            primary: None,
+        });
+        app.chats = vec![a.clone(), b.clone()];
+        (app, root, a, b)
+    }
+
+    #[test]
+    fn menu_choice_moves_a_chat_and_its_alias_between_groups() {
+        let (mut app, _root, a, b) = linked_pair();
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        let family = app.settings.flat_groups.create("Family").unwrap();
+        set_home(&mut app, &a, Some(work));
+        let refs: Vec<&Chat> = app.chats.iter().collect();
+        assert_eq!(membership_rows(&app, &refs), vec![vec![0, 1], vec![]]);
+        // Choosing another group replaces the first; the alias follows.
+        set_home(&mut app, &b, Some(family));
+        let refs: Vec<&Chat> = app.chats.iter().collect();
+        assert_eq!(membership_rows(&app, &refs), vec![vec![], vec![0, 1]]);
+        assert!(matches!(
+            app.actions.last(),
+            Some(Action::SettingsChanged)
+        ));
+    }
+
+    #[test]
+    fn menu_other_and_drop_on_other_ungroup_the_chat_and_its_alias() {
+        let (mut app, _root, a, b) = linked_pair();
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        set_home(&mut app, &a, Some(work));
+        set_home(&mut app, &b, None);
+        let refs: Vec<&Chat> = app.chats.iter().collect();
+        assert_eq!(membership_rows(&app, &refs), vec![vec![]]);
+        // Same result for a drop on the Other heading.
+        set_home(&mut app, &a, Some(work));
+        let target = member(&app, &a);
+        let sources = identities(&app, &a);
+        assert!(sources.len() == 2);
+        drop_on_other(&mut app.settings.flat_groups, &target, &sources);
+        let refs: Vec<&Chat> = app.chats.iter().collect();
+        assert_eq!(membership_rows(&app, &refs), vec![vec![]]);
+        assert!(app.settings.flat_groups.items[0].members.is_empty());
+    }
+
+    #[test]
+    fn other_stays_a_drop_target_during_a_chat_drag_outside_recent() {
+        use crate::model::ListMode;
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        app.list_mode = ListMode::Focus;
+        // Every visible chat grouped means Other is empty: hidden at rest.
+        assert!(header_hidden(&app, true));
+        // The list keeps it while a chat is being dragged, so a chat can
+        // always be dropped on Other to ungroup it.
+        assert!(other_header_hidden(&app, true, false));
+        assert!(!other_header_hidden(&app, true, true));
+        assert!(!other_header_hidden(&app, false, false));
+        let ctx = egui::Context::default();
+        let chat = Chat::new("a".into(), "A".into());
+        egui::DragAndDrop::set_payload(&ctx, member(&app, &chat));
+        assert!(egui::DragAndDrop::has_payload_of_type::<Member>(&ctx));
+        egui::DragAndDrop::clear_payload(&ctx);
+        assert!(!egui::DragAndDrop::has_payload_of_type::<Member>(&ctx));
     }
 
     #[test]
