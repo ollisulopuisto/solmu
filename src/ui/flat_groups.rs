@@ -322,6 +322,8 @@ fn section_header(
         egui::Sense::click()
     };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), sense);
+    // Tab can land on a heading now; keep it scrolled into view.
+    crate::theme::reveal_focus(&response);
     let painter = ui.painter();
     let text = if collapsed && unread > 0 {
         format!("{name}  {unread}")
@@ -582,21 +584,10 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
             if let Some(moving) = response.dnd_hover_payload::<GroupDrag>()
                 && moving.0 != group.id
             {
-                let y = if app
-                    .settings
-                    .flat_groups
-                    .items
-                    .iter()
-                    .position(|g| g.id == moving.0)
-                    < Some(
-                        app.settings
-                            .flat_groups
-                            .items
-                            .iter()
-                            .position(|g| g.id == group.id)
-                            .unwrap_or(0),
-                    )
-                {
+                let items = &app.settings.flat_groups.items;
+                let moving_from = items.iter().position(|g| g.id == moving.0);
+                let here = items.iter().position(|g| g.id == group.id);
+                let y = if moving_from < here {
                     response.rect.bottom()
                 } else {
                     response.rect.top()
