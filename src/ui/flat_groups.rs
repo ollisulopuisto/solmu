@@ -872,10 +872,7 @@ mod tests {
         set_home(&mut app, &b, Some(family));
         let refs: Vec<&Chat> = app.chats.iter().collect();
         assert_eq!(membership_rows(&app, &refs), vec![vec![], vec![0, 1]]);
-        assert!(matches!(
-            app.actions.last(),
-            Some(Action::SettingsChanged)
-        ));
+        assert!(matches!(app.actions.last(), Some(Action::SettingsChanged)));
     }
 
     #[test]
@@ -885,7 +882,7 @@ mod tests {
         set_home(&mut app, &a, Some(work));
         set_home(&mut app, &b, None);
         let refs: Vec<&Chat> = app.chats.iter().collect();
-        assert_eq!(membership_rows(&app, &refs), vec![vec![]]);
+        assert_eq!(membership_rows(&app, &refs), vec![Vec::<usize>::new()]);
         // Same result for a drop on the Other heading.
         set_home(&mut app, &a, Some(work));
         let target = member(&app, &a);
@@ -893,7 +890,7 @@ mod tests {
         assert!(sources.len() == 2);
         drop_on_other(&mut app.settings.flat_groups, &target, &sources);
         let refs: Vec<&Chat> = app.chats.iter().collect();
-        assert_eq!(membership_rows(&app, &refs), vec![vec![]]);
+        assert_eq!(membership_rows(&app, &refs), vec![Vec::<usize>::new()]);
         assert!(app.settings.flat_groups.items[0].members.is_empty());
     }
 
