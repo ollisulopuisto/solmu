@@ -267,108 +267,231 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
     if cancel || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
         return;
     }
-    if send {
-        let now = crate::util::now();
-        let targets: Vec<String> = compose
-            .members
-            .iter()
-            .filter(|member| sendable(app, member))
-            .filter_map(|member| chat_for(app, member).map(|chat| chat.id.clone()))
-            .collect();
-        // Refuse before anything is kept or sent. A send in the main
-        // composer's edit mode would turn the first message into an edit,
-        // and a send clears the target chat's saved draft.
-        let refusal = if app.editing.is_some() {
-            Some(
-                gettext(
-                    app.locale,
-                    "Finish or cancel the message you are editing first.",
-                )
-                .into_owned(),
-            )
-        } else if compose.members.len() > crate::ghost_groups::MAX_MEMBERS {
-            Some(gettext(app.locale, "A ghost group holds up to 50 chats.").into_owned())
-        } else if targets.iter().any(|chat| {
-            app.parked_draft(chat)
-                // The open chat's draft lives in the composer and staged files.
-                || (app.open_chat.as_deref() == Some(chat.as_str())
-                    && (!app.composer.trim().is_empty() || !app.pending.is_empty()))
-        }) {
-            Some(
-                gettext(
-                    app.locale,
-                    "A chat here has an unsent draft. Send or clear it first.",
-                )
-                .into_owned(),
-            )
-        } else if compose.keep
-            && compose.group.is_none()
-            && compose
-                .members
-                .iter()
-                .any(|member| chat_for(app, member).is_some_and(|chat| chat.locked))
-        {
-            // Saved groups sit in settings.json; locked chats stay out of it.
-            Some(
-                gettext(
-                    app.locale,
-                    "Locked chats cannot be kept in a ghost group. Untick Keep or remove them.",
-                )
-                .into_owned(),
-            )
-        } else {
-            None
-        };
-        if let Some(text) = refusal {
-            compose.notice = Some(text);
-            app.ghost_ui.compose = Some(compose);
-            return;
-        }
-        // Keep or reuse the group first: a refusal sends nothing.
-        match compose.group {
-            Some(id) => {
-                if !app.settings.ghost_groups.touch(id, now) {
-                    compose.notice =
-                        Some(gettext(app.locale, "This ghost group has expired.").into_owned());
-                    app.ghost_ui.compose = Some(compose);
-                    return;
-                }
-            }
-            None if compose.keep => {
-                match app
-                    .settings
-                    .ghost_groups
-                    .create(&compose.name, compose.members.clone(), now)
-                {
-                    Ok(_) => {}
-                    Err(refusal) => {
-                        compose.notice = Some(refusal_text(app, refusal));
-                        app.ghost_ui.compose = Some(compose);
-                        return;
-                    }
-                }
-            }
-            None => {}
-        }
-        let text = compose.text.trim().to_owned();
-        for chat in targets {
-            app.actions.push(Action::SendText {
-                chat,
-                text: text.clone(),
-                quoting: None,
-            });
-        }
-        if compose.from_selection {
-            app.batch_ui.selected_chats.clear();
-            app.batch_ui.selected_identities.clear();
-        }
-        app.actions.push(Action::SettingsChanged);
-        // No per-chat result list yet: say where to look so nobody resends all.
-        app.toast(gettext(
-            app.locale,
-            "Queued for each chat. Check each chat for its result, and do not send the same text to all again.",
-        ));
+    if send && submit(app, &mut compose) {
         return;
     }
     app.ghost_ui.compose = Some(compose);
+}
+
+/// Checks the compose state and queues the sends. Returns true when the
+/// messages were queued. On a refusal it sets `compose.notice` and changes
+/// nothing else: no group is kept or touched, nothing is queued and no draft
+/// is cleared.
+fn submit(app: &mut App, compose: &mut Compose) -> bool {
+    let now = crate::util::now();
+    let targets: Vec<String> = compose
+        .members
+        .iter()
+        .filter(|member| sendable(app, member))
+        .filter_map(|member| chat_for(app, member).map(|chat| chat.id.clone()))
+        .collect();
+    // Refuse before anything is kept or sent. A send in the main
+    // composer's edit mode would turn the first message into an edit,
+    // and a send clears the target chat's saved draft.
+    let refusal = if app.editing.is_some() {
+        Some(
+            gettext(
+                app.locale,
+                "Finish or cancel the message you are editing first.",
+            )
+            .into_owned(),
+        )
+    } else if compose.members.len() > crate::ghost_groups::MAX_MEMBERS {
+        Some(gettext(app.locale, "A ghost group holds up to 50 chats.").into_owned())
+    } else if targets.iter().any(|chat| {
+        app.parked_draft(chat)
+            // The open chat's draft lives in the composer and staged files.
+            || (app.open_chat.as_deref() == Some(chat.as_str())
+                && (!app.composer.trim().is_empty() || !app.pending.is_empty()))
+    }) {
+        Some(
+            gettext(
+                app.locale,
+                "A chat here has an unsent draft. Send or clear it first.",
+            )
+            .into_owned(),
+        )
+    } else if compose.keep
+        && compose.group.is_none()
+        && compose
+            .members
+            .iter()
+            .any(|member| chat_for(app, member).is_some_and(|chat| chat.locked))
+    {
+        // Saved groups sit in settings.json; locked chats stay out of it.
+        Some(
+            gettext(
+                app.locale,
+                "Locked chats cannot be kept in a ghost group. Untick Keep or remove them.",
+            )
+            .into_owned(),
+        )
+    } else {
+        None
+    };
+    if let Some(text) = refusal {
+        compose.notice = Some(text);
+        return false;
+    }
+    // Keep or reuse the group first: a refusal sends nothing.
+    match compose.group {
+        Some(id) => {
+            if !app.settings.ghost_groups.touch(id, now) {
+                compose.notice =
+                    Some(gettext(app.locale, "This ghost group has expired.").into_owned());
+                return false;
+            }
+        }
+        None if compose.keep => {
+            match app
+                .settings
+                .ghost_groups
+                .create(&compose.name, compose.members.clone(), now)
+            {
+                Ok(_) => {}
+                Err(refusal) => {
+                    compose.notice = Some(refusal_text(app, refusal));
+                    return false;
+                }
+            }
+        }
+        None => {}
+    }
+    let text = compose.text.trim().to_owned();
+    for chat in targets {
+        app.actions.push(Action::SendText {
+            chat,
+            text: text.clone(),
+            quoting: None,
+        });
+    }
+    if compose.from_selection {
+        app.batch_ui.selected_chats.clear();
+        app.batch_ui.selected_identities.clear();
+    }
+    app.actions.push(Action::SettingsChanged);
+    // No per-chat result list yet: say where to look so nobody resends all.
+    app.toast(gettext(
+        app.locale,
+        "Queued for each chat. Check each chat for its result, and do not send the same text to all again.",
+    ));
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Chat;
+
+    fn app_with(ids: &[&str]) -> (App, tempfile::TempDir) {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        app.chats = ids
+            .iter()
+            .map(|id| Chat::new((*id).into(), (*id).to_uppercase()))
+            .collect();
+        (app, root)
+    }
+
+    fn compose_for(app: &App, ids: &[&str], keep: bool) -> Compose {
+        let members = ids
+            .iter()
+            .map(|id| {
+                let chat = app.chats.iter().find(|chat| chat.id == *id).unwrap();
+                super::super::flat_groups::member(app, chat)
+            })
+            .collect();
+        Compose {
+            group: None,
+            members,
+            name: String::new(),
+            keep,
+            text: "hello".into(),
+            notice: None,
+            from_selection: true,
+        }
+    }
+
+    /// A refusal queues nothing, keeps no group and says why.
+    fn assert_refused(app: &App, compose: &Compose) {
+        assert!(compose.notice.is_some(), "a refusal must tell the user why");
+        assert!(app.actions.is_empty(), "nothing may be queued");
+        assert!(
+            app.settings.ghost_groups.items.is_empty(),
+            "no group may be kept"
+        );
+    }
+
+    #[test]
+    fn a_saved_draft_in_a_target_chat_refuses_and_stays_untouched() {
+        let (mut app, _root) = app_with(&["a", "b"]);
+        app.drafts.insert("a".into(), "half written".into());
+        let mut compose = compose_for(&app, &["a", "b"], true);
+        assert!(!submit(&mut app, &mut compose));
+        assert_refused(&app, &compose);
+        assert_eq!(
+            app.drafts.get("a").map(String::as_str),
+            Some("half written")
+        );
+    }
+
+    #[test]
+    fn the_open_chats_composer_text_refuses_and_stays_untouched() {
+        let (mut app, _root) = app_with(&["a", "b"]);
+        app.open_chat = Some("a".into());
+        app.composer = "typing now".into();
+        let mut compose = compose_for(&app, &["a", "b"], false);
+        assert!(!submit(&mut app, &mut compose));
+        assert_refused(&app, &compose);
+        assert_eq!(app.composer, "typing now");
+    }
+
+    #[test]
+    fn an_active_edit_refuses() {
+        let (mut app, _root) = app_with(&["a", "b"]);
+        app.editing = Some("message-1".into());
+        let mut compose = compose_for(&app, &["a", "b"], true);
+        assert!(!submit(&mut app, &mut compose));
+        assert_refused(&app, &compose);
+        assert_eq!(app.editing.as_deref(), Some("message-1"));
+    }
+
+    #[test]
+    fn a_locked_member_cannot_be_kept_and_nothing_is_sent() {
+        let (mut app, _root) = app_with(&["a", "b", "l"]);
+        app.chats[2].locked = true;
+        let mut compose = compose_for(&app, &["a", "b", "l"], true);
+        assert!(!submit(&mut app, &mut compose));
+        assert_refused(&app, &compose);
+    }
+
+    #[test]
+    fn more_than_fifty_chats_refuse_even_when_not_kept() {
+        let ids: Vec<String> = (0..51).map(|i| format!("c{i}")).collect();
+        let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let (mut app, _root) = app_with(&refs);
+        let mut compose = compose_for(&app, &refs, false);
+        assert!(!submit(&mut app, &mut compose));
+        assert_refused(&app, &compose);
+    }
+
+    #[test]
+    fn a_clean_send_queues_one_message_per_chat_and_keeps_the_group() {
+        let (mut app, _root) = app_with(&["a", "b"]);
+        let mut compose = compose_for(&app, &["a", "b"], true);
+        assert!(submit(&mut app, &mut compose));
+        let sent: Vec<&str> = app
+            .actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::SendText { chat, text, .. } if text == "hello" => Some(chat.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent, vec!["a", "b"]);
+        assert_eq!(app.settings.ghost_groups.items.len(), 1);
+    }
 }
