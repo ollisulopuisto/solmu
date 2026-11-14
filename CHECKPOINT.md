@@ -12,7 +12,9 @@ existing `line()` helper, RTL-aware), shows in full on hover, and never
 schedules a repaint; a test asserts a wide line in a narrow room asks for no
 further frames. Only caller was the image viewer's title. The unused fade
 helpers stay, they are shared pub API. Not compiled locally (no Rust
-toolchain in this checkout), CI is the check. No merge by the author.
+toolchain in this checkout), CI is the check. No merge by the author. Devin round: the no-repaint test now also
+asserts the ellipsis truncation and the hover tooltip itself.
+
 
 ## Automatic chat categories - November 10, 2026
 

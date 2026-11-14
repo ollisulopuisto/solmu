@@ -1933,6 +1933,68 @@ mod tests {
         assert_ne!(unread_fill(&palette, true), palette.secondary);
     }
 
+    /// A name too wide for its room ends in an ellipsis that keeps the
+    /// start, and hovering shows the full text. Dropping the truncation or
+    /// the hover fails this test.
+    #[test]
+    fn truncated_text_ellipsizes_and_shows_the_full_text_on_hover() {
+        let text = "A picture with a very long name indeed.jpg";
+        let ctx = egui::Context::default();
+        let center = std::cell::Cell::new(egui::Pos2::ZERO);
+        let mut run = |time: f64, events: Vec<egui::Event>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.set_max_width(60.0);
+                    let response = truncated_text(
+                        ui,
+                        text,
+                        egui::FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                    center.set(response.rect.center());
+                },
+            );
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::epaint::Shape::Text(shape) => Some(shape.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // No hover: the room gets the start plus an ellipsis, never the
+        // whole name.
+        let texts = run(0.0, vec![]);
+        let shown = texts
+            .iter()
+            .find(|painted| painted.contains("A picture"))
+            .expect("the title is painted");
+        assert!(shown.ends_with('\u{2026}'), "{shown}");
+        assert!(
+            text.starts_with(shown.trim_end_matches('\u{2026}')),
+            "the start is kept: {shown}"
+        );
+        assert!(
+            !texts.iter().any(|painted| painted == text),
+            "the full text is not painted before hover"
+        );
+        // Hover past the tooltip delay: the full text appears.
+        let _ = run(0.1, vec![egui::Event::PointerMoved(center.get())]);
+        let texts = run(5.0, vec![]);
+        assert!(
+            texts.iter().any(|painted| painted == text),
+            "hover shows the full text: {texts:?}"
+        );
+    }
+
     #[test]
     fn truncated_text_stays_put_and_never_schedules_a_frame() {
         use std::time::Duration;
