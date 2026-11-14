@@ -287,6 +287,16 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // The listening port is the ownership guard: bind before the queue is
+    // read or written, so a second process exits without touching the file.
+    let listener = match TcpListener::bind(&listen) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("solmu-scheduler: cannot bind {listen}: {e}");
+            std::process::exit(1);
+        }
+    };
+    listener.set_nonblocking(true).ok();
     let queue = match Queue::load(&path) {
         Ok(queue) => queue,
         Err(e) => {
@@ -302,17 +312,11 @@ fn main() {
             recovered.len(),
             recovered.join(", ")
         );
-        persist(&scheduler.queue, &path);
     }
+    // Recovery may also have written missing successors of repeating
+    // series; save them even when nothing was mid-send.
+    persist(&scheduler.queue, &path);
 
-    let listener = match TcpListener::bind(&listen) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("solmu-scheduler: cannot bind {listen}: {e}");
-            std::process::exit(1);
-        }
-    };
-    listener.set_nonblocking(true).ok();
     eprintln!(
         "solmu-scheduler: listening on {listen}, queue {}",
         path.display()
