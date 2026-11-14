@@ -511,8 +511,16 @@ fn sections(app: &App) -> Vec<Section> {
         if ui.add_enabled(ready,egui::Button::new("Translate with local API")).clicked() {
             app.local_ai.start(app.settings.beeper.local_ai_endpoint.clone(),app.settings.beeper.local_ai_model.clone(),app.settings.beeper.local_ai_language.clone(),app.settings.beeper.local_ai_allow_lan);
         }
-        if app.local_ai.busy() { ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)); }
-        ui.label(&app.local_ai.status);
+        // A real spinner while the translation runs instead of a blind
+        // 250 ms poll: its frames drive local_ai.poll() only while shown.
+        if app.local_ai.busy() {
+            ui.horizontal(|ui| {
+                crate::theme::spinner(ui, 14.0, app.palette.accent);
+                ui.label(&app.local_ai.status);
+            });
+        } else {
+            ui.label(&app.local_ai.status);
+        }
         if !app.local_ai.output.is_empty() {
             ui.label("Generated translation (review, may be wrong):");
             ui.add(egui::TextEdit::multiline(&mut app.local_ai.output).desired_width(f32::INFINITY).desired_rows(5));
