@@ -8,6 +8,7 @@ pub mod conversation;
 pub mod dialogs;
 pub mod flat_groups;
 pub(crate) mod focus;
+pub mod ghost_groups;
 mod glass;
 pub mod image_editor;
 pub mod image_preview;
@@ -124,6 +125,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     dialogs::show(app, ctx);
     batch_actions::dialogs(app, ctx);
     flat_groups::dialogs(app, ctx);
+    ghost_groups::dialogs(app, ctx);
     image_preview::show(app, ctx);
     image_preview::show_sticker(app, ctx);
     image_editor::show(app, ctx);

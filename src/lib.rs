@@ -24,6 +24,7 @@ pub mod emoji;
 pub mod energy;
 pub mod flat_groups;
 pub mod geo;
+pub mod ghost_groups;
 pub mod group_admin;
 mod hyphenate;
 pub mod i18n;
