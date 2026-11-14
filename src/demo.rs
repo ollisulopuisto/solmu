@@ -21716,6 +21716,7 @@ mod tests {
                 Stop::Search,
                 Stop::Recent,
                 Stop::UnreadMode,
+                Stop::RecentUnreadMode,
                 Stop::NeedsMe,
                 Stop::Bookmarks,
                 Stop::NewChat,
@@ -23983,6 +23984,7 @@ mod rail_tests {
                 [
                     Stop::Recent,
                     Stop::UnreadMode,
+                    Stop::RecentUnreadMode,
                     Stop::NeedsMe,
                     Stop::Bookmarks
                 ],

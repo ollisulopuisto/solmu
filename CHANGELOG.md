@@ -9,6 +9,7 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- A fourth chat-list mode, Unread 7d, sits between Unread and Needs me: unread chats with activity in the last seven days, never a muted one, so an old unread backlog stays out of the way. Cmd+D now steps All, Unread, Unread 7d, Needs me. Unread still lists every unread chat, and a saved mode from before opens as it did.
 - Long image titles in the viewer no longer scroll back and forth: they end in an ellipsis and show in full on hover, and they no longer keep the window repainting while visible.
 - Ghost groups: select two or more chats in the list and choose "Message … separately" to write one message that goes to each chat on its own. Optionally keep the selection as a ghost group, which lives only on this computer, disbands in one click and expires after 7 days without use (each use restarts the clock). No merge fields, no send limits, and no per-chat result tracking yet.
 - The linked-person view's history catch-up no longer repaints five times a second while it waits: each answered page already wakes the window, and the header spinner shows the wait.

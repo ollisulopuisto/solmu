@@ -292,12 +292,12 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             super::batch_actions::archive_bar(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
-                // Three mode tabs share the row with the Bookmarks icon, which
+                // Four mode tabs share the row with the Bookmarks icon, which
                 // keeps its own square so the labels still fit at 300 points.
                 let bookmarks_edge = BOOKMARKS_ICON + theme::ICON_BUTTON_PAD;
                 let width =
-                    (ui.available_width() - 3.0 * ui.spacing().item_spacing.x - bookmarks_edge)
-                        / 3.0;
+                    (ui.available_width() - 4.0 * ui.spacing().item_spacing.x - bookmarks_edge)
+                        / 4.0;
                 for mode in crate::model::ListMode::EVERY {
                     let response = ui.add_sized(
                         [width, 36.0],
@@ -307,9 +307,18 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                     let stop = match mode {
                         crate::model::ListMode::Recent => Stop::Recent,
                         crate::model::ListMode::Unread => Stop::UnreadMode,
+                        crate::model::ListMode::RecentUnread => Stop::RecentUnreadMode,
                         crate::model::ListMode::NeedsMe => Stop::NeedsMe,
                     };
                     let response = response.tab_stop(stop);
+                    let response = if mode == crate::model::ListMode::RecentUnread {
+                        response.on_hover_text(crate::i18n::gettext(
+                            app.locale,
+                            "Unread chats active in the last 7 days, muted ones left out",
+                        ))
+                    } else {
+                        response
+                    };
                     #[cfg(test)]
                     ui.ctx().data_mut(|d| {
                         d.insert_temp(egui::Id::new(("list-mode", mode.key())), response.rect)
@@ -3732,6 +3741,7 @@ mod tests {
             let rects = [
                 crate::model::ListMode::Recent,
                 crate::model::ListMode::Unread,
+                crate::model::ListMode::RecentUnread,
                 crate::model::ListMode::NeedsMe,
             ]
             .map(|f| {

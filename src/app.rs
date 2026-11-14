@@ -3609,6 +3609,11 @@ impl App {
         match mode {
             ListMode::Recent => true,
             ListMode::Unread => chat.looks_unread(),
+            ListMode::RecentUnread => {
+                chat.looks_unread()
+                    && !chat.muted(now)
+                    && now.saturating_sub(chat.last_activity) <= ListMode::RECENT_UNREAD_SECS
+            }
             ListMode::NeedsMe => self.needs_me_at(chat, now),
         }
     }
@@ -31452,6 +31457,40 @@ mod conversation_palette_tests {
         assert_eq!(ids(&app), ["chat-2"]);
         app.chat_filter = ChatFilter::All;
         assert_eq!(ids(&app), ["chat-1", "chat-2", "chat-3"]);
+    }
+
+    #[test]
+    fn unread_7d_mode_keeps_recent_unmuted_unread_chats_only() {
+        use crate::model::ListMode;
+        let app = app();
+        let now = 10_000_000;
+        let week = ListMode::RECENT_UNREAD_SECS;
+        let mut chat = later_chat("chat-1", now - 60);
+        // Read chat: out, however fresh.
+        assert!(!app.mode_matches_at(&chat, ListMode::RecentUnread, now));
+        chat.unread = 1;
+        assert!(app.mode_matches_at(&chat, ListMode::RecentUnread, now));
+        // A chat marked unread by hand counts too.
+        chat.unread = 0;
+        chat.marked_unread = true;
+        assert!(app.mode_matches_at(&chat, ListMode::RecentUnread, now));
+        chat.marked_unread = false;
+        chat.unread = 3;
+        // The window edge is inclusive; one second past it drops the chat.
+        chat.last_activity = now - week;
+        assert!(app.mode_matches_at(&chat, ListMode::RecentUnread, now));
+        chat.last_activity = now - week - 1;
+        assert!(!app.mode_matches_at(&chat, ListMode::RecentUnread, now));
+        // The older chat still shows in plain Unread.
+        assert!(app.mode_matches_at(&chat, ListMode::Unread, now));
+        // Muted chats stay out, for ever or until a time that has not come.
+        chat.last_activity = now - 60;
+        chat.muted_until = Some(0);
+        assert!(!app.mode_matches_at(&chat, ListMode::RecentUnread, now));
+        chat.muted_until = Some(now + 5);
+        assert!(!app.mode_matches_at(&chat, ListMode::RecentUnread, now));
+        chat.muted_until = Some(now - 5);
+        assert!(app.mode_matches_at(&chat, ListMode::RecentUnread, now));
     }
 
     #[test]
