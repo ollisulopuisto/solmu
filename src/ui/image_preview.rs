@@ -482,15 +482,15 @@ fn header(
                 }
                 ui.add_space(8.0);
             }
-            // Last, so it takes what the actions left, scrolling if it needs
-            // more rather than drawn under them.
+            // Last, so it takes what the actions left, shortened with an
+            // ellipsis and shown in full on hover rather than drawn under
+            // them.
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                crate::ui::widgets::scrolling_text(
+                crate::ui::widgets::truncated_text(
                     ui,
                     &title,
                     theme::semibold(14.0),
                     palette.text,
-                    palette.overlay,
                 );
             });
         });

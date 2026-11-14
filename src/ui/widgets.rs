@@ -132,115 +132,31 @@ fn rtl_line(
     }
 }
 
-/// How long a [`scrolling_text`] rests at each end before it moves.
-const SCROLL_REST: f64 = 3.0;
-/// The average speed of a [`scrolling_text`] crossing, in points a second.
-const SCROLL_SPEED: f64 = 40.0;
-/// How wide the faded edge of a [`scrolling_text`] is where the text is cut.
-const SCROLL_FADE: f32 = 24.0;
-
-/// Where a line `overflow` points wider than its room is `elapsed` seconds
-/// after it appeared: how far it has moved left, and how long until it next
-/// needs repainting. It rests at its start, eases across to its end, rests
-/// there, and eases back, over and over.
-fn scroll_offset(elapsed: f64, overflow: f32) -> (f32, Option<std::time::Duration>) {
-    if overflow <= 0.0 {
-        return (0.0, None);
-    }
-    let travel = f64::from(overflow) / SCROLL_SPEED;
-    let cycle = 2.0 * (SCROLL_REST + travel);
-    let phase = elapsed.max(0.0) % cycle;
-    let crossing = |at: f64| {
-        let t = (at / travel).clamp(0.0, 1.0);
-        // Smoothstep: starts and stops gently, as fast as SCROLL_SPEED on average.
-        (t * t * (3.0 - 2.0 * t)) as f32 * overflow
-    };
-    let rest = |left: f64| Some(std::time::Duration::from_secs_f64(left));
-    if phase < SCROLL_REST {
-        (0.0, rest(SCROLL_REST - phase))
-    } else if phase < SCROLL_REST + travel {
-        (
-            crossing(phase - SCROLL_REST),
-            Some(std::time::Duration::ZERO),
-        )
-    } else if phase < 2.0 * SCROLL_REST + travel {
-        (overflow, rest(2.0 * SCROLL_REST + travel - phase))
-    } else {
-        let back = phase - 2.0 * SCROLL_REST - travel;
-        (overflow - crossing(back), Some(std::time::Duration::ZERO))
-    }
-}
-
 /// One line of text with color emoji that never leaves the room it is
-/// given. Text too wide for it scrolls from end to end, resting at each,
-/// and fades into `background` wherever it is cut instead of ending in an
-/// ellipsis. Right-to-left text starts at its right edge, where it begins.
-pub fn scrolling_text(
+/// given. Text too wide for it ends in an ellipsis and shows in full on
+/// hover. It never moves, and it never schedules a repaint: fiber, not
+/// sugar.
+pub fn truncated_text(
     ui: &mut Ui,
     text: &str,
     font: egui::FontId,
     color: Color32,
-    background: Color32,
 ) -> egui::Response {
     let width = ui.available_width().max(1.0);
-    let line = line(ui, text, font, color, f32::INFINITY, 1);
-    let (rect, response) = ui.allocate_exact_size(
-        vec2(line.size().x.min(width), line.size().y),
+    let full = line(ui, text, font.clone(), color, f32::INFINITY, 1);
+    let (rect, mut response) = ui.allocate_exact_size(
+        vec2(full.size().x.min(width), full.size().y),
         Sense::hover(),
     );
     response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), text));
-    let overflow = line.size().x - rect.width();
-    // The clock starts when this text shows here, and again whenever it was
-    // missing from the previous pass (the view closed, or the text changed).
-    let id = response.id.with(text);
-    let now = ui.input(|input| input.time);
-    let pass = ui.ctx().cumulative_pass_nr();
-    let since = ui.ctx().data_mut(|data| {
-        let (since, seen) = data.get_temp_mut_or(id, (now, pass));
-        if *seen + 1 < pass {
-            *since = now;
+    if full.size().x > width {
+        response = response.on_hover_text(text);
+        if ui.is_rect_visible(rect) {
+            line(ui, text, font, color, width, 1).paint(ui, rect.min, color);
         }
-        *seen = pass;
-        *since
-    });
-    let (travelled, repaint) = scroll_offset(now - since, overflow);
-    // How much of the line is hidden past the left edge.
-    let offset = if bidi::base_rtl(text.lines().next().unwrap_or_default()) {
-        overflow.max(0.0) - travelled
-    } else {
-        travelled
-    };
-    if let Some(after) = repaint {
-        // Decorative: stepped while a screen reader is attached.
-        crate::motion::request_frame_after(ui.ctx(), after);
-    }
-    if !ui.is_rect_visible(rect) {
-        return response;
-    }
-    let mut clipped = ui.new_child(UiBuilder::new().max_rect(rect));
-    clipped.set_clip_rect(rect.intersect(ui.clip_rect()));
-    let origin = pos2(rect.left() - offset, rect.top());
-    clipped.painter().galley(origin, line.galley.clone(), color);
-    emoji::paint(&clipped, &line.galley, origin, &line.placements);
-    // Each edge fades in as the text starts to run past it.
-    let fade = SCROLL_FADE.min(rect.width() / 3.0);
-    let strength = |hidden: f32| (hidden / fade).clamp(0.0, 1.0);
-    if offset > 0.0 {
-        fade_left(
-            &clipped,
-            rect,
-            fade,
-            background.gamma_multiply(strength(offset)),
-        );
-    }
-    if overflow - offset > 0.0 {
-        fade_right(
-            &clipped,
-            rect,
-            fade,
-            background.gamma_multiply(strength(overflow - offset)),
-        );
+    } else if ui.is_rect_visible(rect) {
+        full.paint(ui, rect.min, color);
     }
     response
 }
@@ -2005,9 +1921,6 @@ pub fn dotted_chip(
 mod tests {
     use super::*;
 
-    /// A name too wide for its room rests three seconds at its start, eases
-    /// to its end at 40 points a second on average, rests there as long, and
-    /// comes back the same way. One that fits never moves or repaints.
     #[test]
     fn muted_unread_keeps_attention_color_instead_of_network_grey() {
         let palette = Palette::dark();
@@ -2021,62 +1934,34 @@ mod tests {
     }
 
     #[test]
-    fn scrolling_text_steps_its_crossing_while_a_screen_reader_is_attached() {
+    fn truncated_text_stays_put_and_never_schedules_a_frame() {
         use std::time::Duration;
-        // Wide text in a narrow room, drawn in the middle of its first
-        // crossing (after the 3 s rest), when it asks for every frame.
-        let delay = |reader: bool| {
-            let ctx = crate::motion::tests::reading(reader);
-            let draw = |ctx: &egui::Context, time: f64| {
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        time: Some(time),
-                        ..Default::default()
-                    },
-                    |ui| {
-                        ui.set_max_width(60.0);
-                        scrolling_text(
-                            ui,
-                            "A picture with a very long name indeed.jpg",
-                            egui::FontId::proportional(14.0),
-                            Color32::WHITE,
-                            Color32::BLACK,
-                        );
-                    },
-                );
-                output.textures_delta.clear();
-                output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
-            };
-            draw(&ctx, 0.0);
-            draw(&ctx, 3.5)
+        // Wide text in a narrow room: an ellipsis ends it, the full text is
+        // the hover, and no pass asks for another one, however much time
+        // passes.
+        let ctx = egui::Context::default();
+        let mut draw = |time: f64| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.set_max_width(60.0);
+                    truncated_text(
+                        ui,
+                        "A picture with a very long name indeed.jpg",
+                        egui::FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                },
+            );
+            output.textures_delta.clear();
+            output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
         };
-        assert_eq!(delay(false), Duration::ZERO);
-        let stepped = delay(true);
-        assert!(
-            stepped > Duration::from_millis(75) && stepped <= crate::motion::STEP,
-            "{stepped:?}"
-        );
-    }
-
-    #[test]
-    fn scrolling_text_rests_at_each_end_and_crosses_in_between() {
-        use std::time::Duration;
-        assert_eq!(scroll_offset(10.0, 0.0), (0.0, None));
-        // 80 points over: two seconds each way, a ten-second round trip.
-        let at = |seconds| scroll_offset(seconds, 80.0);
-        assert_eq!(at(0.0), (0.0, Some(Duration::from_secs(3))));
-        assert_eq!(at(2.0).0, 0.0);
-        assert_eq!(
-            at(4.0),
-            (40.0, Some(Duration::ZERO)),
-            "halfway at the midpoint"
-        );
-        assert!(at(3.2).0 < 80.0 * 0.1 / 2.0, "starts gently");
-        assert_eq!(at(5.0), (80.0, Some(Duration::from_secs(3))));
-        assert_eq!(at(7.5).0, 80.0);
-        assert_eq!(at(9.0).0, 40.0, "halfway back");
-        assert_eq!(at(10.0).0, 0.0, "a new round trip begins at the start");
-        assert_eq!(at(14.0).0, 40.0);
+        let _ = draw(0.0);
+        assert_eq!(draw(0.1), Duration::MAX);
+        assert_eq!(draw(10.0), Duration::MAX, "nothing moves, nothing waits");
     }
 
     /// Opens a submenu of `items` in a window `window` points wide, and
