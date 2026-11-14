@@ -13548,7 +13548,7 @@ mod tests {
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(360.0, 640.0),
+                        egui::vec2(560.0, 640.0),
                     )),
                     time: Some(time),
                     ..Default::default()
@@ -13593,6 +13593,10 @@ mod tests {
         let (x, width, clip, last) = texts(&narrow(0.0), name);
         let (fit, _, _, _) = texts(&narrow(0.0), "Fit");
         assert!(clip.right() < fit, "the name runs under the buttons");
+        assert!(
+            clip.width() > 40.0,
+            "the window leaves the title a real room: {clip:?}"
+        );
         assert!(
             width <= clip.width() + 0.5,
             "the name no longer overflows its {clip:?} room: {width}"

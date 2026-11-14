@@ -1952,6 +1952,12 @@ mod tests {
     fn truncated_text_ellipsizes_and_shows_the_full_text_on_hover() {
         let text = "A picture with a very long name indeed.jpg";
         let ctx = egui::Context::default();
+        // The test is about the widget's contract, not egui's tooltip
+        // pacing: no delay, no wait for a still pointer.
+        ctx.style_mut(|style| {
+            style.interaction.tooltip_delay = 0.0;
+            style.interaction.show_tooltips_only_when_still = false;
+        });
         crate::motion::tests::settle(&ctx);
         let center = std::cell::Cell::new(egui::Pos2::ZERO);
         let run = |time: f64, events: Vec<egui::Event>| {
@@ -1972,17 +1978,21 @@ mod tests {
             output.textures_delta.clear();
             output.shapes
         };
-        // Painted single-line texts: the laid-out text, its width, and the
-        // last glyph on the row. egui keeps the full string in `job.text`
-        // when it ellipsizes, so the ellipsis shows in the row's glyphs.
+        // Painted texts: the laid-out string, its width, and the last glyph
+        // on the first row. egui keeps the full string in `job.text` when it
+        // ellipsizes, so the ellipsis shows in the row's glyphs.
         let texts = |shapes: &[egui::epaint::ClippedShape]| {
             shapes
                 .iter()
                 .filter_map(|clipped| match &clipped.shape {
-                    egui::epaint::Shape::Text(shape) if shape.galley.rows.len() == 1 => Some((
+                    egui::epaint::Shape::Text(shape) => Some((
                         shape.galley.job.text.clone(),
                         shape.galley.size().x,
-                        shape.galley.rows[0].glyphs.last().map(|glyph| glyph.chr),
+                        shape.galley
+                            .rows
+                            .first()
+                            .and_then(|row| row.glyphs.last())
+                            .map(|glyph| glyph.chr),
                     )),
                     _ => None,
                 })
@@ -2002,15 +2012,24 @@ mod tests {
                 .any(|(job, width, _)| job == text && *width > 60.0),
             "the full-width text is not painted before hover"
         );
-        // Hover past the tooltip delay: the full text appears at full width.
-        let _ = run(0.1, vec![egui::Event::PointerMoved(center.get())]);
-        let painted = texts(&run(5.0, vec![]));
-        assert!(
-            painted
-                .iter()
-                .any(|(job, width, _)| job == text && *width > 60.0),
-            "hover shows the full text: {painted:?}"
-        );
+        // Hover: the tooltip shows the full text at full width. A tooltip
+        // area needs a frame to size itself, so give it a few frames with
+        // the pointer resting on the line.
+        let mut last = Vec::new();
+        let mut tooltip = false;
+        for frame in 0..5 {
+            let events = if frame == 0 {
+                vec![egui::Event::PointerMoved(center.get())]
+            } else {
+                vec![]
+            };
+            last = texts(&run(0.1 * (frame + 1) as f64, events));
+            if last.iter().any(|(job, width, _)| job == text && *width > 60.0) {
+                tooltip = true;
+                break;
+            }
+        }
+        assert!(tooltip, "hover shows the full text: {last:?}");
     }
 
     /// The widget never moves and never asks for another frame, however much
