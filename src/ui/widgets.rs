@@ -1954,7 +1954,7 @@ mod tests {
         let ctx = egui::Context::default();
         // The test is about the widget's contract, not egui's tooltip
         // pacing: no delay, no wait for a still pointer.
-        ctx.style_mut(|style| {
+        ctx.all_styles_mut(|style| {
             style.interaction.tooltip_delay = 0.0;
             style.interaction.show_tooltips_only_when_still = false;
         });
@@ -1988,7 +1988,8 @@ mod tests {
                     egui::epaint::Shape::Text(shape) => Some((
                         shape.galley.job.text.clone(),
                         shape.galley.size().x,
-                        shape.galley
+                        shape
+                            .galley
                             .rows
                             .first()
                             .and_then(|row| row.glyphs.last())
@@ -2024,7 +2025,10 @@ mod tests {
                 vec![]
             };
             last = texts(&run(0.1 * (frame + 1) as f64, events));
-            if last.iter().any(|(job, width, _)| job == text && *width > 60.0) {
+            if last
+                .iter()
+                .any(|(job, width, _)| job == text && *width > 60.0)
+            {
                 tooltip = true;
                 break;
             }
