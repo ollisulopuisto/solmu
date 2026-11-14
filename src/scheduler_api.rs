@@ -281,7 +281,7 @@ pub fn control(
             if let Err(e) = validate(&chat_id, &account_id) {
                 return (400, format!(r#"{{"error":"invalid target: {e}"}}"#), false);
             }
-            let item = crate::scheduler::ScheduledMessage::new(
+            let mut item = crate::scheduler::ScheduledMessage::new(
                 new_id(),
                 account_id,
                 chat_id,
@@ -290,6 +290,33 @@ pub fn control(
                 due_at,
                 now,
             );
+            // A repeating series: one chat, one rule, validated before it
+            // is queued. The first occurrence's id names the series.
+            if let Some(raw) = parsed.get("repeat").filter(|v| !v.is_null()) {
+                let mut repeat: crate::recurrence::Repeat =
+                    match serde_json::from_value(raw.clone()) {
+                        Ok(repeat) => repeat,
+                        Err(e) => {
+                            return (400, format!(r#"{{"error":"invalid repeat: {e}"}}"#), false);
+                        }
+                    };
+                repeat.series = item.id.clone();
+                repeat.sent = 0;
+                repeat.paused = false;
+                repeat.planned = None;
+                if let Err(e) = repeat.validate() {
+                    return (400, format!(r#"{{"error":"invalid repeat: {e}"}}"#), false);
+                }
+                if !repeat.allows_first(item.due_at) {
+                    return (
+                        400,
+                        r#"{"error":"invalid repeat: the first send is after the end date"}"#
+                            .to_string(),
+                        false,
+                    );
+                }
+                item.repeat = Some(repeat);
+            }
             let id = item.id.clone();
             let replaces = parsed.get("replaces").and_then(|v| v.as_str());
             let result = match replaces {
@@ -345,6 +372,7 @@ pub fn control(
                         Reconcile::Found => {
                             queue.get_mut(id).expect("item checked above").state =
                                 crate::scheduler::State::Sent;
+                            queue.spawn_next(id, now);
                             (200, r#"{"reconcile":"found"}"#.to_string(), true)
                         }
                         Reconcile::NotFound => {
@@ -365,7 +393,10 @@ pub fn control(
                     let due_at = parsed.get("due_at").and_then(|v| v.as_i64());
                     queue.edit(id, text, due_at)
                 }
-                "send-now" => queue.edit(id, None, Some(now)),
+                "send-now" => queue.send_now(id, now),
+                "skip" => queue.skip(id, now),
+                "pause" => queue.set_paused(id, true),
+                "resume" => queue.set_paused(id, false),
                 _ => return (404, r#"{"error":"unknown action"}"#.to_string(), false),
             };
             match result {
@@ -791,6 +822,58 @@ mod tests {
                 (200, r#"{"reconcile":"found"}"#, true)
             );
             assert_eq!(q.items[0].state, State::Sent);
+        }
+
+        #[test]
+        fn repeat_is_validated_then_skip_pause_and_resume_work() {
+            let mut q = queue();
+            let create = |q: &mut Queue, repeat: &str| {
+                let body = format!(
+                    r#"{{"account_id":"acc","chat_id":"c","text":"hi","due_at":100,"repeat":{repeat}}}"#
+                );
+                control(
+                    q,
+                    "POST",
+                    "/v1/scheduled",
+                    &body,
+                    0,
+                    &ids(),
+                    &mut |_, _| Ok(()),
+                    &mut no_reconcile(),
+                )
+            };
+            // Interval 0 is refused and nothing is queued.
+            let bad = r#"{"series":"","every":0,"unit":"Day","hour":9,"minute":0,"tz":"UTC"}"#;
+            assert_eq!(create(&mut q, bad).0, 400);
+            assert!(q.items.is_empty());
+            let good = r#"{"series":"ignored","every":1,"unit":"Day","hour":9,"minute":0,"tz":"UTC","sent":7,"paused":true}"#;
+            let (status, _, changed) = create(&mut q, good);
+            assert_eq!((status, changed), (200, true));
+            let repeat = q.items[0].repeat.clone().unwrap();
+            // The daemon names the series and resets what a client could forge.
+            assert_eq!(repeat.series, q.items[0].id);
+            assert_eq!((repeat.sent, repeat.paused), (0, false));
+            let id = q.items[0].id.clone();
+            let act = |q: &mut Queue, action: &str| {
+                control(
+                    q,
+                    "POST",
+                    &format!("/v1/scheduled/{id}/{action}"),
+                    "",
+                    0,
+                    &ids(),
+                    &mut |_, _| Ok(()),
+                    &mut no_reconcile(),
+                )
+            };
+            assert_eq!(act(&mut q, "pause").0, 200);
+            assert!(q.items[0].repeat.as_ref().unwrap().paused);
+            assert_eq!(act(&mut q, "resume").0, 200);
+            assert!(!q.items[0].repeat.as_ref().unwrap().paused);
+            let before = q.items[0].due_at;
+            assert_eq!(act(&mut q, "skip").0, 200);
+            assert!(q.items[0].due_at > before);
+            assert_eq!(q.items.len(), 1);
         }
 
         #[test]

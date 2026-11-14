@@ -32,7 +32,9 @@ separated action rows.
 No browser engine, hosted backend, telemetry, or Solmu-operated account system.
 WhatsApp only: no other networks or protocols (Matrix, Signal, Telegram) and no bridges to them.
 No automation: no bots, MCP server, or interface for other programs to read or
-send messages, and no scheduled, bulk or automatic replies.
+send messages, and no bulk or automatic replies. Send Later, including
+repeating sends, is allowed: it is your own text, to one chat per schedule,
+visible in the queue and stopped by you.
 Several WhatsApp accounts may be linked locally. Current feature limitations
 are not permanent exclusions; see the product boundaries in [AGENTS.md](AGENTS.md#product-boundaries).
 Avoid decorative dashboards and extra nested cards inside message bubbles.

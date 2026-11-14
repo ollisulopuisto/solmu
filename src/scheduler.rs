@@ -69,6 +69,10 @@ pub struct ScheduledMessage {
     pub error: Option<String>,
     /// Pending message id returned by the API on a successful send.
     pub sent_message_id: Option<String>,
+    /// Set on an occurrence of a repeating series. Absent on one-shot
+    /// items and on queues written before repeats existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat: Option<crate::recurrence::Repeat>,
 }
 
 impl ScheduledMessage {
@@ -93,6 +97,7 @@ impl ScheduledMessage {
             attempts: 0,
             error: None,
             sent_message_id: None,
+            repeat: None,
         }
     }
 }
@@ -240,12 +245,159 @@ impl Queue {
             .ok_or_else(|| QueueError::NotFound(id.into()))?;
         match item.state {
             State::Failed | State::Uncertain | State::Missed => {
+                remember_plan(item);
                 item.state = State::Scheduled;
                 item.error = None;
                 item.due_at = now;
                 Ok(())
             }
             state => Err(QueueError::BadState {
+                id: id.into(),
+                state,
+            }),
+        }
+    }
+}
+
+/// Keep the planned date of a repeating occurrence before it is moved.
+fn remember_plan(item: &mut ScheduledMessage) {
+    let due_at = item.due_at;
+    if let Some(repeat) = item.repeat.as_mut()
+        && repeat.planned.is_none()
+    {
+        repeat.planned = Some(due_at);
+    }
+}
+
+impl Queue {
+    /// Send an occurrence now without moving its series: the next
+    /// occurrence still follows the planned date.
+    pub fn send_now(&mut self, id: &str, now: i64) -> Result<(), QueueError> {
+        if let Some(item) = self.get_mut(id)
+            && matches!(item.state, State::Scheduled | State::Missed | State::Failed)
+        {
+            remember_plan(item);
+        }
+        self.edit(id, None, Some(now))
+    }
+
+    /// Startup repair: an occurrence persisted as `Sent` whose successor
+    /// was never written (a crash between the two) gets its successor now.
+    /// Safe to repeat: the successor id is derived from the series and the
+    /// count, so an existing one (even a cancelled one) blocks a duplicate.
+    pub fn repair_series(&mut self, now: i64) -> Vec<String> {
+        let sent: Vec<String> = self
+            .items
+            .iter()
+            .filter(|item| item.state == State::Sent && item.repeat.is_some())
+            .map(|item| item.id.clone())
+            .collect();
+        sent.iter()
+            .filter_map(|id| self.spawn_next(id, now))
+            .collect()
+    }
+
+    /// Pending occurrences of repeating series (not yet sent or cancelled).
+    pub fn active_series(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| {
+                item.repeat.is_some()
+                    && matches!(
+                        item.state,
+                        State::Scheduled
+                            | State::Sending
+                            | State::Failed
+                            | State::Missed
+                            | State::Uncertain
+                    )
+            })
+            .count()
+    }
+
+    /// After an occurrence is `Sent`, queue the next one. Only the daemon's
+    /// send path and a successful reconcile call this, so an occurrence
+    /// that failed, is uncertain or was cancelled never advances its
+    /// series. Returns the new id, or `None` when the series has ended.
+    pub fn spawn_next(&mut self, id: &str, now: i64) -> Option<String> {
+        let item = self.get(id)?;
+        if item.state != State::Sent {
+            return None;
+        }
+        let mut repeat = item.repeat.clone()?;
+        repeat.sent += 1;
+        if repeat.ends_after.is_some_and(|limit| repeat.sent >= limit) {
+            return None;
+        }
+        // Step from the planned date, so sending early (send now) or late
+        // (retry) does not shift the series.
+        let base = repeat.planned.unwrap_or(item.due_at);
+        repeat.planned = None;
+        let due_at = repeat.next_after(base, now)?;
+        let mut next = ScheduledMessage::new(
+            format!("{}~{}", repeat.series, repeat.sent),
+            item.account_id.clone(),
+            item.chat_id.clone(),
+            item.text.clone(),
+            item.reply_to.clone(),
+            due_at,
+            now,
+        );
+        next.repeat = Some(repeat);
+        let next_id = next.id.clone();
+        self.add(next).ok()?;
+        Some(next_id)
+    }
+
+    /// Skip the pending occurrence of a series: move it to the next date
+    /// after now without sending. A series with no next date ends
+    /// (the item is cancelled).
+    pub fn skip(&mut self, id: &str, now: i64) -> Result<(), QueueError> {
+        let item = self
+            .get_mut(id)
+            .ok_or_else(|| QueueError::NotFound(id.into()))?;
+        let bad = |state| QueueError::BadState {
+            id: id.into(),
+            state,
+        };
+        let Some(repeat) = item.repeat.clone() else {
+            return Err(bad(item.state));
+        };
+        match item.state {
+            State::Scheduled | State::Missed | State::Failed => {
+                match repeat.next_after(item.due_at, now) {
+                    Some(due_at) => {
+                        item.due_at = due_at;
+                        // The skipped date is gone: later steps start here, so
+                        // two sends are never closer than the rule allows.
+                        if let Some(repeat) = item.repeat.as_mut() {
+                            repeat.planned = Some(due_at);
+                        }
+                        item.state = State::Scheduled;
+                        item.error = None;
+                    }
+                    None => item.state = State::Cancelled,
+                }
+                Ok(())
+            }
+            state => Err(bad(state)),
+        }
+    }
+
+    /// Pause or resume a series. A paused occurrence is never sent; on
+    /// resume an occurrence already past its grace window becomes Missed
+    /// and waits for a decision, like any other overdue item.
+    pub fn set_paused(&mut self, id: &str, paused: bool) -> Result<(), QueueError> {
+        let item = self
+            .get_mut(id)
+            .ok_or_else(|| QueueError::NotFound(id.into()))?;
+        let state = item.state;
+        match (&mut item.repeat, state) {
+            (Some(repeat), State::Scheduled | State::Missed | State::Failed) => {
+                repeat.paused = paused;
+                Ok(())
+            }
+            _ => Err(QueueError::BadState {
                 id: id.into(),
                 state,
             }),
@@ -333,6 +485,8 @@ impl<S: Send> Scheduler<S> {
                 recovered.push(item.id.clone());
             }
         }
+        // A series whose next occurrence was lost to a crash is repaired.
+        self.queue.repair_series(jiff::Timestamp::now().as_second());
         recovered
     }
 
@@ -348,7 +502,11 @@ impl<S: Send> Scheduler<S> {
             .items
             .iter()
             .enumerate()
-            .filter(|(_, item)| item.state == State::Scheduled && item.due_at <= now)
+            .filter(|(_, item)| {
+                item.state == State::Scheduled
+                    && item.due_at <= now
+                    && !item.repeat.as_ref().is_some_and(|r| r.paused)
+            })
             .map(|(i, _)| i)
             .collect();
         due.sort_by_key(|&i| self.queue.items[i].due_at);
@@ -386,6 +544,12 @@ impl<S: Send> Scheduler<S> {
                     Outcome::Uncertain { id }
                 }
             };
+            if matches!(outcome, Outcome::Sent { .. }) {
+                // The next occurrence is queued in the same write as the
+                // Sent state, so a crash cannot leave a series without one.
+                let sent_id = self.queue.items[i].id.clone();
+                self.queue.spawn_next(&sent_id, now);
+            }
             persist(&self.queue);
             outcomes.push(outcome);
         }
@@ -415,6 +579,10 @@ impl<S: Send> Scheduler<S> {
             let item = self.queue.get_mut(id).expect("item checked above");
             item.state = State::Sent;
             persist(&self.queue);
+            let now = jiff::Timestamp::now().as_second();
+            if self.queue.spawn_next(id, now).is_some() {
+                persist(&self.queue);
+            }
         }
         Ok(verdict)
     }
@@ -749,5 +917,180 @@ mod tests {
         // A missing file is an empty queue.
         let missing = dir.join("nope.json");
         assert_eq!(Queue::load(&missing).unwrap().items.len(), 0);
+    }
+
+    fn series(id: &str, due: i64) -> ScheduledMessage {
+        let mut message = item(id, due);
+        message.repeat = Some(crate::recurrence::Repeat {
+            series: id.into(),
+            every: 1,
+            unit: crate::recurrence::Unit::Day,
+            weekdays: 0,
+            hour: 12,
+            minute: 26,
+            day: 1,
+            tz: "UTC".into(),
+            ends_after: None,
+            until: None,
+            sent: 0,
+            paused: false,
+            planned: None,
+        });
+        message
+    }
+
+    #[test]
+    fn a_sent_occurrence_queues_exactly_the_next_one() {
+        let mut queue = Queue::default();
+        queue.add(series("s", ts(0))).unwrap();
+        let mut sched = Scheduler::new(queue, Mock::default());
+        let outcomes = sched.tick(ts(1), &mut |_| {});
+        assert_eq!(outcomes, vec![Outcome::Sent { id: "s".into() }]);
+        assert_eq!(sched.queue.items.len(), 2);
+        let next = sched.queue.get("s~1").unwrap();
+        assert_eq!(next.state, State::Scheduled);
+        assert!(next.due_at > ts(1));
+        assert_eq!(next.repeat.as_ref().unwrap().sent, 1);
+        // A second tick at the same instant sends nothing and queues nothing.
+        assert!(sched.tick(ts(2), &mut |_| {}).is_empty());
+        assert_eq!(sched.queue.items.len(), 2);
+    }
+
+    #[test]
+    fn a_failed_or_uncertain_occurrence_does_not_advance_the_series() {
+        let mut queue = Queue::default();
+        queue.add(series("f", ts(0))).unwrap();
+        queue.add(series("u", ts(0))).unwrap();
+        let mut mock = Mock::default();
+        mock.results
+            .push_back(Err(SendError::Rejected("no".into())));
+        mock.results
+            .push_back(Err(SendError::Unknown("timeout".into())));
+        let mut sched = Scheduler::new(queue, mock);
+        sched.tick(ts(1), &mut |_| {});
+        assert_eq!(sched.queue.items.len(), 2);
+        assert_eq!(sched.queue.get("f").unwrap().state, State::Failed);
+        assert_eq!(sched.queue.get("u").unwrap().state, State::Uncertain);
+    }
+
+    #[test]
+    fn a_missed_occurrence_waits_and_does_not_catch_up() {
+        let mut queue = Queue::default();
+        queue.add(series("m", ts(0))).unwrap();
+        let mut sched = Scheduler::new(queue, Mock::default());
+        // Three days of downtime.
+        let outcomes = sched.tick(ts(3 * 86_400), &mut |_| {});
+        assert_eq!(outcomes, vec![Outcome::Missed { id: "m".into() }]);
+        assert_eq!(sched.queue.items.len(), 1);
+        assert!(sched.sender.sent.is_empty());
+        // Skip moves it to the next date after now, still one item.
+        sched.queue.skip("m", ts(3 * 86_400)).unwrap();
+        let skipped = sched.queue.get("m").unwrap();
+        assert_eq!(skipped.state, State::Scheduled);
+        assert!(skipped.due_at > ts(3 * 86_400));
+        assert_eq!(sched.queue.items.len(), 1);
+    }
+
+    #[test]
+    fn skipping_restarts_the_series_from_the_new_date() {
+        let mut queue = Queue::default();
+        let mut failed = series("k", ts(0));
+        failed.repeat.as_mut().unwrap().planned = Some(ts(0));
+        queue.add(failed).unwrap();
+        queue.get_mut("k").unwrap().state = State::Failed;
+        queue.skip("k", ts(1)).unwrap();
+        let skipped = queue.get("k").unwrap();
+        // The next send steps from the new date, not the old planned one.
+        assert_eq!(
+            skipped.repeat.as_ref().unwrap().planned,
+            Some(skipped.due_at)
+        );
+    }
+
+    #[test]
+    fn a_paused_series_is_not_sent_until_resumed() {
+        let mut queue = Queue::default();
+        queue.add(series("p", ts(0))).unwrap();
+        queue.set_paused("p", true).unwrap();
+        let mut sched = Scheduler::new(queue, Mock::default());
+        assert!(sched.tick(ts(1), &mut |_| {}).is_empty());
+        assert!(sched.sender.sent.is_empty());
+        sched.queue.set_paused("p", false).unwrap();
+        assert_eq!(sched.tick(ts(2), &mut |_| {}).len(), 1);
+    }
+
+    #[test]
+    fn a_series_stops_after_its_count() {
+        let mut queue = Queue::default();
+        let mut last = series("c", ts(0));
+        last.repeat.as_mut().unwrap().ends_after = Some(1);
+        queue.add(last).unwrap();
+        let mut sched = Scheduler::new(queue, Mock::default());
+        sched.tick(ts(1), &mut |_| {});
+        assert_eq!(sched.queue.items.len(), 1);
+    }
+
+    #[test]
+    fn stopping_a_series_cancels_its_pending_occurrence_for_good() {
+        let mut queue = Queue::default();
+        queue.add(series("x", ts(0))).unwrap();
+        queue.cancel("x").unwrap();
+        let mut sched = Scheduler::new(queue, Mock::default());
+        assert!(sched.tick(ts(1), &mut |_| {}).is_empty());
+        assert_eq!(sched.queue.items.len(), 1);
+        assert_eq!(sched.queue.active_series(), 0);
+    }
+
+    #[test]
+    fn old_queue_files_without_a_repeat_still_load() {
+        let json = r#"{"schema":1,"items":[{"id":"a","account_id":"acc","chat_id":"c","text":"hi","reply_to":null,"due_at":5,"created_at":1,"state":"Scheduled","attempts":0,"error":null,"sent_message_id":null}]}"#;
+        let queue: Queue = serde_json::from_str(json).unwrap();
+        assert!(queue.items[0].repeat.is_none());
+    }
+
+    #[test]
+    fn a_sent_occurrence_without_a_successor_is_repaired_once() {
+        // The state a crash leaves between persisting Sent and queuing the next.
+        let mut queue = Queue::default();
+        let mut sent = series("r", ts(0));
+        sent.state = State::Sent;
+        queue.add(sent).unwrap();
+        let mut sched = Scheduler::new(queue, Mock::default());
+        sched.recover();
+        assert_eq!(sched.queue.items.len(), 2);
+        assert!(sched.queue.get("r~1").is_some());
+        sched.recover();
+        assert_eq!(sched.queue.items.len(), 2);
+    }
+
+    #[test]
+    fn the_successor_is_persisted_with_the_sent_state() {
+        let mut queue = Queue::default();
+        queue.add(series("w", ts(0))).unwrap();
+        let mut sched = Scheduler::new(queue, Mock::default());
+        let mut snapshots: Vec<Vec<State>> = Vec::new();
+        sched.tick(ts(1), &mut |q| {
+            snapshots.push(q.items.iter().map(|item| item.state).collect());
+        });
+        // Claim, then one write holding Sent and the queued successor.
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[1], vec![State::Sent, State::Scheduled]);
+    }
+
+    #[test]
+    fn sending_now_does_not_shift_the_series() {
+        let mut queue = Queue::default();
+        queue.add(series("n", ts(86_400))).unwrap();
+        let planned_next = {
+            let mut probe = Queue::default();
+            probe.add(series("n", ts(86_400))).unwrap();
+            probe.get_mut("n").unwrap().state = State::Sent;
+            probe.spawn_next("n", ts(0));
+            probe.get("n~1").unwrap().due_at
+        };
+        queue.send_now("n", ts(10)).unwrap();
+        let mut sched = Scheduler::new(queue, Mock::default());
+        sched.tick(ts(11), &mut |_| {});
+        assert_eq!(sched.queue.get("n~1").unwrap().due_at, planned_next);
     }
 }

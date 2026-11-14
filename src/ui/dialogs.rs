@@ -2698,6 +2698,7 @@ fn send_later(app: &mut App, ui: &mut egui::Ui) {
         ui.label("Time (HH:MM):");
         ui.text_edit_singleline(&mut app.send_later_time);
     });
+    repeat_controls(app, ui);
     if ui.button("Schedule at this time").clicked() {
         let date = app.send_later_date.trim().parse::<jiff::civil::Date>();
         let time = app.send_later_time.trim().parse::<jiff::civil::Time>();
@@ -2782,20 +2783,192 @@ fn send_later(app: &mut App, ui: &mut egui::Ui) {
     });
 
     if let Some(due_at) = chosen {
-        let chat = app.open_chat.clone().unwrap_or_default();
-        let text = app.composer.trim().to_string();
-        if !text.is_empty() && !chat.is_empty() {
-            let quoting = app.reply_to.as_ref().map(|target| target.id.clone());
-            app.actions.push(crate::model::Action::ScheduleSend {
-                chat,
-                text,
-                due_at,
-                quoting,
-                replaces: None,
-            });
+        match build_repeat(app, due_at) {
+            Err(error) => app.send_later_error = Some(error),
+            Ok(repeat) => {
+                let chat = app.open_chat.clone().unwrap_or_default();
+                let text = app.composer.trim().to_string();
+                if !text.is_empty() && !chat.is_empty() {
+                    let quoting = app.reply_to.as_ref().map(|target| target.id.clone());
+                    app.actions.push(crate::model::Action::ScheduleSend {
+                        chat,
+                        text,
+                        due_at,
+                        quoting,
+                        replaces: None,
+                        repeat,
+                    });
+                }
+                app.actions.push(crate::model::Action::CloseDialog);
+            }
         }
-        app.actions.push(crate::model::Action::CloseDialog);
     }
+}
+
+const REPEAT_UNITS: [&str; 4] = ["Never", "Days", "Weeks", "Months"];
+const WEEKDAY_NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/// The first occurrence typed into the date and time fields, when both
+/// parse and name a real local time.
+fn typed_due(app: &App) -> Option<i64> {
+    let date = app
+        .send_later_date
+        .trim()
+        .parse::<jiff::civil::Date>()
+        .ok()?;
+    let time = app
+        .send_later_time
+        .trim()
+        .parse::<jiff::civil::Time>()
+        .ok()?;
+    let zoned = date
+        .at(time.hour(), time.minute(), 0, 0)
+        .to_zoned(jiff::tz::TimeZone::system())
+        .ok()?;
+    Some(zoned.timestamp().as_second())
+}
+
+/// The repeat rule the dialog describes, anchored on the first occurrence.
+/// `Ok(None)` is a one-time send. The wall time, month day and zone come
+/// from the first occurrence, so "09:00" stays 09:00 across daylight saving.
+fn build_repeat(app: &App, first_due: i64) -> Result<Option<crate::recurrence::Repeat>, String> {
+    use crate::recurrence::{Repeat, Unit};
+    let unit = match app.send_later_repeat {
+        1 => Unit::Day,
+        2 => Unit::Week,
+        3 => Unit::Month,
+        _ => return Ok(None),
+    };
+    let every: u32 = app
+        .send_later_every
+        .trim()
+        .parse()
+        .map_err(|_| "Repeat interval must be a whole number from 1 to 365".to_string())?;
+    let zone = jiff::tz::TimeZone::system();
+    let first = jiff::Timestamp::from_second(first_due)
+        .map_err(|e| e.to_string())?
+        .to_zoned(zone.clone());
+    let value = app.send_later_ends_value.trim();
+    let (mut ends_after, mut until) = (None, None);
+    match app.send_later_ends {
+        1 => {
+            if value.parse::<jiff::civil::Date>().is_err() {
+                return Err("End date must be YYYY-MM-DD".into());
+            }
+            until = Some(value.to_string());
+        }
+        2 => {
+            ends_after = Some(
+                value
+                    .parse::<u32>()
+                    .map_err(|_| "Number of sends must be a whole number".to_string())?,
+            );
+        }
+        _ => {}
+    }
+    let mut weekdays = app.send_later_weekdays;
+    if unit == Unit::Week && weekdays == 0 {
+        weekdays = 1u8 << first.weekday().to_monday_zero_offset();
+    }
+    let repeat = Repeat {
+        series: String::new(),
+        every,
+        unit,
+        weekdays,
+        hour: first.hour() as u8,
+        minute: first.minute() as u8,
+        day: first.day() as u8,
+        tz: zone.iana_name().unwrap_or("").to_string(),
+        ends_after,
+        until,
+        sent: 0,
+        paused: false,
+        planned: None,
+    };
+    repeat.validate()?;
+    Ok(Some(repeat))
+}
+
+/// The Repeat row of the Send Later dialog: how often, which weekdays, when
+/// it ends, and a preview that names the real dates.
+fn repeat_controls(app: &mut App, ui: &mut egui::Ui) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(crate::i18n::gettext(app.locale, "Repeat:"));
+        egui::ComboBox::from_id_salt("send-later-repeat")
+            .selected_text(REPEAT_UNITS[usize::from(app.send_later_repeat.min(3))])
+            .show_ui(ui, |ui| {
+                for (index, name) in REPEAT_UNITS.iter().enumerate() {
+                    ui.selectable_value(&mut app.send_later_repeat, index as u8, *name);
+                }
+            });
+        if app.send_later_repeat != 0 {
+            ui.label("every");
+            ui.add(egui::TextEdit::singleline(&mut app.send_later_every).desired_width(36.0));
+        }
+    });
+    if app.send_later_repeat == 0 {
+        return;
+    }
+    if app.send_later_repeat == 2 {
+        ui.horizontal_wrapped(|ui| {
+            for (bit, name) in WEEKDAY_NAMES.iter().enumerate() {
+                let mut on = app.send_later_weekdays & (1u8 << bit) != 0;
+                if ui.checkbox(&mut on, *name).changed() {
+                    app.send_later_weekdays ^= 1u8 << bit;
+                }
+            }
+        });
+    }
+    ui.horizontal(|ui| {
+        ui.label(crate::i18n::gettext(app.locale, "Ends:"));
+        egui::ComboBox::from_id_salt("send-later-ends")
+            .selected_text(
+                ["Never", "On date", "After sends"][usize::from(app.send_later_ends.min(2))],
+            )
+            .show_ui(ui, |ui| {
+                for (index, name) in ["Never", "On date", "After sends"].iter().enumerate() {
+                    ui.selectable_value(&mut app.send_later_ends, index as u8, *name);
+                }
+            });
+        if app.send_later_ends != 0 {
+            let hint = if app.send_later_ends == 1 {
+                "YYYY-MM-DD"
+            } else {
+                "number"
+            };
+            ui.add(
+                egui::TextEdit::singleline(&mut app.send_later_ends_value)
+                    .hint_text(hint)
+                    .desired_width(100.0),
+            );
+        }
+    });
+    if let Some(first) = typed_due(app)
+        && let Ok(Some(repeat)) = build_repeat(app, first)
+    {
+        let zone = jiff::tz::TimeZone::system();
+        let dates: Vec<String> = repeat
+            .upcoming(first, 3)
+            .into_iter()
+            .filter_map(|at| jiff::Timestamp::from_second(at).ok())
+            .map(|at| {
+                at.to_zoned(zone.clone())
+                    .strftime("%a %d %b %H:%M")
+                    .to_string()
+            })
+            .collect();
+        ui.label(
+            crate::i18n::gettext(app.locale, "Next: {dates}").replace("{dates}", &dates.join(", ")),
+        );
+    }
+    ui.label(
+        egui::RichText::new(crate::i18n::gettext(
+            app.locale,
+            "Sends automatically, to this chat only, until you stop it or it ends.",
+        ))
+        .small(),
+    );
 }
 
 fn preview_text(text: &str) -> String {
@@ -2833,10 +3006,51 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
     };
     let mut items = items.clone();
     items.sort_by_key(|m| m.due_at);
+    ui.horizontal(|ui| {
+        if ui
+            .selectable_label(
+                !app.scheduled_repeating_tab,
+                crate::i18n::gettext(app.locale, "One-time"),
+            )
+            .clicked()
+        {
+            app.scheduled_repeating_tab = false;
+        }
+        if ui
+            .selectable_label(
+                app.scheduled_repeating_tab,
+                crate::i18n::gettext(app.locale, "Repeating"),
+            )
+            .clicked()
+        {
+            app.scheduled_repeating_tab = true;
+        }
+    });
+    ui.add_space(4.0);
+    let repeating_tab = app.scheduled_repeating_tab;
+    // Sent occurrences of a series are history of the series, not queue
+    // rows: the Repeating tab lists each series once, by its pending item.
+    items.retain(|m| {
+        if repeating_tab {
+            m.repeat.is_some()
+                && matches!(
+                    m.state,
+                    State::Scheduled
+                        | State::Sending
+                        | State::Failed
+                        | State::Missed
+                        | State::Uncertain
+                )
+        } else {
+            m.repeat.is_none()
+        }
+    });
     if items.is_empty() {
-        ui.label(
-            "Nothing scheduled. Right-click or long-press the Send button to schedule a message.",
-        );
+        ui.label(if repeating_tab {
+            crate::i18n::gettext(app.locale, "No repeating messages. Choose Repeat in Send Later to start one.")
+        } else {
+            crate::i18n::gettext(app.locale, "Nothing scheduled. Right-click or long-press the Send button to schedule a message.")
+        });
         return;
     }
     egui::ScrollArea::vertical()
@@ -2877,6 +3091,19 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
                     });
                     let preview: String = m.text.chars().take(120).collect();
                     ui.label(preview);
+                    if let Some(repeat) = &m.repeat {
+                        let paused = if repeat.paused { ", paused" } else { "" };
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}, {} sent{}",
+                                repeat.describe(),
+                                repeat.sent,
+                                paused
+                            ))
+                            .small()
+                            .color(palette.secondary),
+                        );
+                    }
                     if m.reply_to.is_some() {
                         ui.label(
                             egui::RichText::new("reply")
@@ -2892,9 +3119,46 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
                         );
                     }
                     ui.horizontal(|ui| {
-                        if matches!(m.state, State::Scheduled)
+                        let is_series = m.repeat.is_some();
+                        let paused = m.repeat.as_ref().is_some_and(|r| r.paused);
+                        if is_series
+                            && matches!(m.state, State::Scheduled | State::Failed | State::Missed)
+                        {
+                            if ui
+                                .small_button(crate::i18n::gettext(app.locale, "Skip next"))
+                                .clicked()
+                            {
+                                app.actions.push(Action::ScheduledItemAction {
+                                    id: m.id.clone(),
+                                    action: "skip".into(),
+                                });
+                                app.actions.push(Action::ShowDialog(Dialog::ScheduledList));
+                            }
+                            let label = if paused {
+                                crate::i18n::gettext(app.locale, "Resume")
+                            } else {
+                                crate::i18n::gettext(app.locale, "Pause")
+                            };
+                            if ui.small_button(label).clicked() {
+                                app.actions.push(Action::ScheduledItemAction {
+                                    id: m.id.clone(),
+                                    action: if paused { "resume" } else { "pause" }.into(),
+                                });
+                                app.actions.push(Action::ShowDialog(Dialog::ScheduledList));
+                            }
+                        }
+                        if (matches!(m.state, State::Scheduled)
+                            || (is_series
+                                && matches!(
+                                    m.state,
+                                    State::Failed | State::Missed | State::Uncertain
+                                )))
                             && ui
-                                .small_button(crate::i18n::gettext(app.locale, "Cancel"))
+                                .small_button(if is_series {
+                                    crate::i18n::gettext(app.locale, "Stop series")
+                                } else {
+                                    crate::i18n::gettext(app.locale, "Cancel")
+                                })
                                 .clicked()
                         {
                             app.actions.push(Action::ScheduledItemAction {
@@ -2918,9 +3182,10 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
                             m.state,
                             State::Scheduled | State::Failed | State::Missed | State::Uncertain
                         ) {
-                            if ui
-                                .small_button(crate::i18n::gettext(app.locale, "Send now"))
-                                .clicked()
+                            if !paused
+                                && ui
+                                    .small_button(crate::i18n::gettext(app.locale, "Send now"))
+                                    .clicked()
                             {
                                 app.actions.push(Action::ScheduledItemAction {
                                     id: m.id.clone(),
@@ -2954,6 +3219,28 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
                                 {
                                     app.send_later_date = zoned.strftime("%Y-%m-%d").to_string();
                                     app.send_later_time = zoned.strftime("%H:%M").to_string();
+                                }
+                                app.send_later_repeat = 0;
+                                app.send_later_every = "1".into();
+                                app.send_later_weekdays = 0;
+                                app.send_later_ends = 0;
+                                app.send_later_ends_value.clear();
+                                if let Some(r) = &m.repeat {
+                                    use crate::recurrence::Unit;
+                                    app.send_later_repeat = match r.unit {
+                                        Unit::Day => 1,
+                                        Unit::Week => 2,
+                                        Unit::Month => 3,
+                                    };
+                                    app.send_later_every = r.every.to_string();
+                                    app.send_later_weekdays = r.weekdays;
+                                    if let Some(until) = &r.until {
+                                        app.send_later_ends = 1;
+                                        app.send_later_ends_value = until.clone();
+                                    } else if let Some(count) = r.ends_after {
+                                        app.send_later_ends = 2;
+                                        app.send_later_ends_value = count.to_string();
+                                    }
                                 }
                                 app.send_later_replaces = Some(m.id.clone());
                                 app.dialog = Some(Dialog::SendLater);

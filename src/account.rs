@@ -110,6 +110,20 @@ pub struct Account {
     pub send_later_date: String,
     pub send_later_time: String,
     pub send_later_error: Option<String>,
+    /// Send Later repeat controls: 0 never, 1 days, 2 weeks, 3 months.
+    pub send_later_repeat: u8,
+    /// The repeat interval as typed ("3").
+    pub send_later_every: String,
+    /// Weeks only: bit 0 Monday to bit 6 Sunday.
+    pub send_later_weekdays: u8,
+    /// 0 never ends, 1 on a date, 2 after a number of sends.
+    pub send_later_ends: u8,
+    /// The end date (YYYY-MM-DD) or send count as typed.
+    pub send_later_ends_value: String,
+    /// Repeating tab (true) or one-time tab of the Send Later queue.
+    pub scheduled_repeating_tab: bool,
+    /// The queue was requested this session (or since the last change).
+    pub scheduled_requested: bool,
     /// Queue item the Send Later dialog is replacing: cancelled by the
     /// daemon only once the replacement is queued.
     pub send_later_replaces: Option<String>,
@@ -261,6 +275,13 @@ impl Account {
             send_later_date: String::new(),
             send_later_time: String::new(),
             send_later_error: None,
+            send_later_repeat: 0,
+            send_later_every: "1".into(),
+            send_later_weekdays: 0,
+            send_later_ends: 0,
+            send_later_ends_value: String::new(),
+            scheduled_repeating_tab: false,
+            scheduled_requested: false,
             send_later_replaces: None,
             send_later_draft_backup: None,
             scheduled_messages: None,
