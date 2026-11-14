@@ -368,6 +368,11 @@ impl Queue {
                 match repeat.next_after(item.due_at, now) {
                     Some(due_at) => {
                         item.due_at = due_at;
+                        // The skipped date is gone: later steps start here, so
+                        // two sends are never closer than the rule allows.
+                        if let Some(repeat) = item.repeat.as_mut() {
+                            repeat.planned = Some(due_at);
+                        }
                         item.state = State::Scheduled;
                         item.error = None;
                     }
@@ -984,6 +989,22 @@ mod tests {
         assert_eq!(skipped.state, State::Scheduled);
         assert!(skipped.due_at > ts(3 * 86_400));
         assert_eq!(sched.queue.items.len(), 1);
+    }
+
+    #[test]
+    fn skipping_restarts_the_series_from_the_new_date() {
+        let mut queue = Queue::default();
+        let mut failed = series("k", ts(0));
+        failed.repeat.as_mut().unwrap().planned = Some(ts(0));
+        queue.add(failed).unwrap();
+        queue.get_mut("k").unwrap().state = State::Failed;
+        queue.skip("k", ts(1)).unwrap();
+        let skipped = queue.get("k").unwrap();
+        // The next send steps from the new date, not the old planned one.
+        assert_eq!(
+            skipped.repeat.as_ref().unwrap().planned,
+            Some(skipped.due_at)
+        );
     }
 
     #[test]
