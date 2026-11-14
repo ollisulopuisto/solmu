@@ -1,5 +1,19 @@
 # Fast-beeper coordination and development checkpoint
 
+## Overflow text: truncation, not scrolling - November 14, 2026
+
+Branch `fix/overflow-text-truncation`, based on main 645b11f, version 0.24.23
+(0.24.22 is open PR fix/repaint-pacing, so expect a version/CHANGELOG conflict
+in whichever merges later). widgets.rs `scrolling_text` panned an overflowing
+line end to end forever - decorative motion that forced repaints the whole
+time a long title was visible, the clearest "sugar" in the design-principles
+review. Replaced by `truncated_text`: the line ends in an ellipsis (the
+existing `line()` helper, RTL-aware), shows in full on hover, and never
+schedules a repaint; a test asserts a wide line in a narrow room asks for no
+further frames. Only caller was the image viewer's title. The unused fade
+helpers stay, they are shared pub API. Not compiled locally (no Rust
+toolchain in this checkout), CI is the check. No merge by the author.
+
 ## Automatic chat categories - November 10, 2026
 
 Branch `feat/chat-auto-categories`, based on main c4e24cc, version 0.24.18. First slice of option 4: Filters > Automatic category (People, Quiet people 7+ days, Long quiet 30+ days, Notifications) from plain rules in `src/categories.rs`, plus Move to... / Sort automatically on a one-to-one chat's menu, stored in `beeper.category_overrides`. Quiet tiers fade in search. Tests in `src/categories.rs`, `src/ui/chats.rs` and `tests/chat_scope.rs`. Not compiled locally (no libpipewire headers here); CI is the first compile. No demo captures yet. Details and gaps: docs/chat-categories.md. No merge by the author.
