@@ -34,7 +34,10 @@ WhatsApp only: no other networks or protocols (Matrix, Signal, Telegram) and no 
 No automation: no bots, MCP server, or interface for other programs to read or
 send messages, and no bulk or automatic replies. Send Later, including
 repeating sends, is allowed: it is your own text, to one chat per schedule,
-visible in the queue and stopped by you.
+visible in the queue and stopped by you. Ghost groups are the one other
+exception: a short-lived, local-only list of up to 50 chats you picked, where
+you write one message and it goes to each chat separately, with no merge
+fields. It disbands in one click and after 7 days without use.
 Several WhatsApp accounts may be linked locally. Current feature limitations
 are not permanent exclusions; see the product boundaries in [AGENTS.md](AGENTS.md#product-boundaries).
 Avoid decorative dashboards and extra nested cards inside message bubbles.

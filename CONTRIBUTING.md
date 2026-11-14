@@ -25,7 +25,9 @@ Product boundaries and upstream responsibilities:
 - Solmu will never automate WhatsApp: no bots, MCP server, or API,
   command-line or scripting interface that reads or sends messages, and no
   bulk or automatic replies. Send Later, including repeating sends, is
-  allowed: your own text, to one chat per schedule, stopped by you.
+  allowed: your own text, to one chat per schedule, stopped by you. So are
+  ghost groups: up to 50 chats you picked, one message you wrote, sent to each
+  chat separately, disbanded in one click.
   WhatsApp's terms forbid automated use and it bans accounts for it.
 
 The guide's [current limitations](https://zapfast.rocks/what-is-zapfast/#what-it-does-not-do-yet)
