@@ -312,9 +312,10 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                     };
                     let response = response.tab_stop(stop);
                     let response = if mode == crate::model::ListMode::RecentUnread {
-                        response.on_hover_text(
+                        response.on_hover_text(crate::i18n::gettext(
+                            app.locale,
                             "Unread chats active in the last 7 days, muted ones left out",
-                        )
+                        ))
                     } else {
                         response
                     };
