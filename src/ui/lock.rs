@@ -81,8 +81,10 @@ fn password(app: &mut App, ui: &mut egui::Ui) {
         )
         .replace("{seconds}", &seconds.to_string());
         theme::paragraph(ui, text, theme::regular(13.0), palette.danger);
-        ui.ctx()
-            .request_repaint_after(wait.min(std::time::Duration::from_millis(250)));
+        // One repaint a second, due exactly when the shown number changes:
+        // 1 fps, not an in-between rate.
+        let change = wait - std::time::Duration::from_secs(seconds.saturating_sub(1));
+        ui.ctx().request_repaint_after(change);
     } else if app.app_lock.wrong {
         theme::paragraph(
             ui,

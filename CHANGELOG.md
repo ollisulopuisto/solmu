@@ -9,6 +9,11 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- The linked-person view's history catch-up no longer repaints five times a second while it waits: each answered page already wakes the window, and the header spinner shows the wait.
+- Settings' local-AI translation shows a real spinner while it runs instead of repainting every 250 ms.
+- The app lock's try-again countdown repaints once a second, exactly when the shown number changes, instead of every 250 ms.
+
+
 - Favorite is the one mark: on a Beeper chat it also sets the bridge pin while one is free, and removing the favorite removes the pin, so a pin can no longer keep a chat in your favorites.
 - The chat list's modes are All, Unread and Needs me, and Cmd+D steps through them. Unread lists every unread chat, muted ones included; the old Focus mode is gone (favorites stay one click away in the rail and on Cmd+1..9), and a saved Focus setting opens as All.
 - A Bookmarks icon after the mode tabs, or Cmd+Shift+B, opens the Saved list; a Starred and Saved switch under its header moves between the two. Cmd+D skips it. Pinned messages are not listed there, since they have no list across chats.
