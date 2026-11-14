@@ -56,6 +56,7 @@ impl SchedulerClient {
     }
 
     /// Schedule a message; returns the assigned id.
+    #[allow(clippy::too_many_arguments)]
     pub fn add(
         &self,
         account_id: &str,
