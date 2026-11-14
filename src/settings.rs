@@ -480,6 +480,8 @@ pub struct Settings {
     #[serde(default)]
     pub silenced: BTreeMap<String, Silence>,
     pub flat_groups: crate::flat_groups::Groups,
+    /// Local-only, short-lived recipient groups for separate sends.
+    pub ghost_groups: crate::ghost_groups::Ghosts,
     pub sidebar_width: f32,
     /// Width of the search pane beside the open chat.
     pub search_pane_width: f32,
@@ -624,6 +626,7 @@ impl Default for Settings {
             zoom: 1.0,
             beeper: BeeperPreferences::default(),
             flat_groups: Default::default(),
+            ghost_groups: Default::default(),
             sidebar_width: 300.0,
             search_pane_width: 380.0,
             info_pane_width: 380.0,

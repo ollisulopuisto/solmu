@@ -9,6 +9,7 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- Ghost groups: select two or more chats in the list and choose "Message … separately" to write one message that goes to each chat on its own. Optionally keep the selection as a ghost group, which lives only on this computer, disbands in one click and expires after 7 days without use (each use restarts the clock). No merge fields, no send limits, and no per-chat result tracking yet.
 - Send Later can repeat: every N days, every N weeks on chosen weekdays, or every N months, ending never, on a date or after a number of sends. The dialog previews the next three dates. The queue has a Repeating tab with Skip next, Pause, Edit and Stop series. A missed occurrence waits for your decision and a series never catches up with a burst. A clock icon beside Send (refresh arrows for a repeating one) shows that the open chat has a schedule and opens the queue. Needs the same solmu-scheduler as Send Later; an older scheduler sends one occurrence and does not queue the next.
 - Favorite is the one mark: on a Beeper chat it also sets the bridge pin while one is free, and removing the favorite removes the pin, so a pin can no longer keep a chat in your favorites.
 - The chat list's modes are All, Unread and Needs me, and Cmd+D steps through them. Unread lists every unread chat, muted ones included; the old Focus mode is gone (favorites stay one click away in the rail and on Cmd+1..9), and a saved Focus setting opens as All.

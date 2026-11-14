@@ -756,6 +756,7 @@ pub struct App {
     pub open_list_menu: Option<(ChatId, String)>,
     /// Name typed in the label manager.
     pub flat_group_ui: crate::ui::flat_groups::State,
+    pub ghost_ui: crate::ui::ghost_groups::State,
     pub label_name: String,
     /// Colour the manager will use for the next label.
     pub label_color: String,
@@ -1664,6 +1665,7 @@ impl App {
             #[cfg(any(test, feature = "demo"))]
             open_list_menu: None,
             flat_group_ui: Default::default(),
+            ghost_ui: Default::default(),
             label_name: String::new(),
             label_color: crate::archive::DEFAULT_COLOR.to_owned(),
             label_editing: None,

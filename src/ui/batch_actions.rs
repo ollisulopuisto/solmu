@@ -42,6 +42,7 @@ pub fn toggle_chat(app: &mut App, chat: &str) {
 }
 
 pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
+    super::ghost_groups::bar(app, ui);
     if app.batch_ui.owner != app.account().id.0 {
         return;
     }
