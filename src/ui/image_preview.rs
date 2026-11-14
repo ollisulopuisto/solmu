@@ -486,12 +486,7 @@ fn header(
             // ellipsis and shown in full on hover rather than drawn under
             // them.
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                crate::ui::widgets::truncated_text(
-                    ui,
-                    &title,
-                    theme::semibold(14.0),
-                    palette.text,
-                );
+                crate::ui::widgets::truncated_text(ui, &title, theme::semibold(14.0), palette.text);
             });
         });
     });

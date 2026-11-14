@@ -144,20 +144,30 @@ pub fn truncated_text(
 ) -> egui::Response {
     let width = ui.available_width().max(1.0);
     let full = line(ui, text, font.clone(), color, f32::INFINITY, 1);
-    let (rect, mut response) = ui.allocate_exact_size(
-        vec2(full.size().x.min(width), full.size().y),
-        Sense::hover(),
-    );
+    let (rect, mut response) =
+        ui.allocate_exact_size(vec2(full.size().x.min(width), full.size().y), Sense::hover());
     response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), text));
-    if full.size().x > width {
-        response = response.on_hover_text(text);
-        if ui.is_rect_visible(rect) {
-            line(ui, text, font, color, width, 1).paint(ui, rect.min, color);
-        }
-    } else if ui.is_rect_visible(rect) {
-        full.paint(ui, rect.min, color);
+    if !ui.is_rect_visible(rect) {
+        return response;
     }
+    // Painted only inside its own rect, so the line can never run under a
+    // neighbour even if a layout hands it more room than it took.
+    let mut clipped = ui.new_child(UiBuilder::new().max_rect(rect));
+    clipped.set_clip_rect(rect.intersect(ui.clip_rect()));
+    let shown = if full.size().x > width {
+        response = response.on_hover_text(text);
+        line(ui, text, font, color, width, 1)
+    } else {
+        full
+    };
+    // Right-to-left text starts at its right edge, where it begins.
+    let x = if bidi::base_rtl(text.lines().next().unwrap_or_default()) {
+        rect.right() - shown.size().x
+    } else {
+        rect.left()
+    };
+    shown.paint(&clipped, pos2(x, rect.top()), color);
     response
 }
 
@@ -1940,6 +1950,7 @@ mod tests {
     fn truncated_text_ellipsizes_and_shows_the_full_text_on_hover() {
         let text = "A picture with a very long name indeed.jpg";
         let ctx = egui::Context::default();
+        crate::motion::tests::settle(&ctx);
         let center = std::cell::Cell::new(egui::Pos2::ZERO);
         let mut run = |time: f64, events: Vec<egui::Event>| {
             let mut output = ctx.run_ui(
@@ -1951,57 +1962,57 @@ mod tests {
                 },
                 |ui| {
                     ui.set_max_width(60.0);
-                    let response = truncated_text(
-                        ui,
-                        text,
-                        egui::FontId::proportional(14.0),
-                        Color32::WHITE,
-                    );
+                    let response =
+                        truncated_text(ui, text, egui::FontId::proportional(14.0), Color32::WHITE);
                     center.set(response.rect.center());
                 },
             );
             output.textures_delta.clear();
-            output
-                .shapes
+            output.shapes
+        };
+        // Painted single-line texts: the laid-out text, its width, and the
+        // last glyph on the row. egui keeps the full string in `job.text`
+        // when it ellipsizes, so the ellipsis shows in the row's glyphs.
+        let texts = |shapes: &[egui::epaint::ClippedShape]| {
+            shapes
                 .iter()
                 .filter_map(|clipped| match &clipped.shape {
-                    egui::epaint::Shape::Text(shape) => Some(shape.galley.text().to_owned()),
+                    egui::epaint::Shape::Text(shape) if shape.galley.rows.len() == 1 => Some((
+                        shape.galley.job.text.clone(),
+                        shape.galley.size().x,
+                        shape.galley.rows[0].glyphs.last().map(|glyph| glyph.chr),
+                    )),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
         };
-        // No hover: the room gets the start plus an ellipsis, never the
-        // whole name.
-        let texts = run(0.0, vec![]);
-        let shown = texts
+        // No hover: the room gets the start plus an ellipsis, nothing wider.
+        let painted = texts(&run(0.0, vec![]));
+        let (job, width, last) = painted
             .iter()
-            .find(|painted| painted.contains("A picture"))
+            .find(|(job, _, _)| job == text)
             .expect("the title is painted");
-        assert!(shown.ends_with('\u{2026}'), "{shown}");
+        assert_eq!(*last, Some('\u{2026}'), "{job}");
+        assert!(*width <= 60.0, "{width} wider than its room");
         assert!(
-            text.starts_with(shown.trim_end_matches('\u{2026}')),
-            "the start is kept: {shown}"
+            !painted.iter().any(|(job, width, _)| job == text && *width > 60.0),
+            "the full-width text is not painted before hover"
         );
-        assert!(
-            !texts.iter().any(|painted| painted == text),
-            "the full text is not painted before hover"
-        );
-        // Hover past the tooltip delay: the full text appears.
+        // Hover past the tooltip delay: the full text appears at full width.
         let _ = run(0.1, vec![egui::Event::PointerMoved(center.get())]);
-        let texts = run(5.0, vec![]);
+        let painted = texts(&run(5.0, vec![]));
         assert!(
-            texts.iter().any(|painted| painted == text),
-            "hover shows the full text: {texts:?}"
+            painted.iter().any(|(job, width, _)| job == text && *width > 60.0),
+            "hover shows the full text: {painted:?}"
         );
     }
 
+    /// The widget never moves and never asks for another frame, however much
+    /// time passes.
     #[test]
     fn truncated_text_stays_put_and_never_schedules_a_frame() {
         use std::time::Duration;
-        // Wide text in a narrow room: an ellipsis ends it, the full text is
-        // the hover, and no pass asks for another one, however much time
-        // passes.
-        let ctx = egui::Context::default();
+        let ctx = crate::motion::tests::reading(false);
         let mut draw = |time: f64| {
             let mut output = ctx.run_ui(
                 egui::RawInput {
@@ -2021,9 +2032,8 @@ mod tests {
             output.textures_delta.clear();
             output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
         };
-        let _ = draw(0.0);
-        assert_eq!(draw(0.1), Duration::MAX);
-        assert_eq!(draw(10.0), Duration::MAX, "nothing moves, nothing waits");
+        assert_eq!(draw(0.0), Duration::MAX);
+        assert_eq!(draw(10.0), Duration::MAX);
     }
 
     /// Opens a submenu of `items` in a window `window` points wide, and

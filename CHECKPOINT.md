@@ -13,7 +13,12 @@ schedules a repaint; a test asserts a wide line in a narrow room asks for no
 further frames. Only caller was the image viewer's title. The unused fade
 helpers stay, they are shared pub API. Not compiled locally (no Rust
 toolchain in this checkout), CI is the check. No merge by the author. Devin round: the no-repaint test now also
-asserts the ellipsis truncation and the hover tooltip itself.
+asserts the ellipsis truncation and the hover tooltip itself. Devin round 2:
+truncated_text now paints through a child clipped to its own rect so the line
+can never run under neighbours, and right-to-left text paints hugging its
+right edge; the widget tests assert the ellipsis via the row's glyphs
+(job.text keeps the full string when ellipsized) and the demo tests assert
+the title stays inside its room beside the Fit button in both directions.
 
 
 ## Automatic chat categories - November 10, 2026
