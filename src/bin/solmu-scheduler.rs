@@ -302,8 +302,10 @@ fn main() {
             recovered.len(),
             recovered.join(", ")
         );
-        persist(&scheduler.queue, &path);
     }
+    // Recovery may also have written missing successors of repeating
+    // series; save them even when nothing was mid-send.
+    persist(&scheduler.queue, &path);
 
     let listener = match TcpListener::bind(&listen) {
         Ok(l) => l,

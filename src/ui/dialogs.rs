@@ -2894,7 +2894,7 @@ fn build_repeat(app: &App, first_due: i64) -> Result<Option<crate::recurrence::R
 fn repeat_controls(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label("Repeat:");
+        ui.label(crate::i18n::gettext(app.locale, "Repeat:"));
         egui::ComboBox::from_id_salt("send-later-repeat")
             .selected_text(REPEAT_UNITS[usize::from(app.send_later_repeat.min(3))])
             .show_ui(ui, |ui| {
@@ -2921,7 +2921,7 @@ fn repeat_controls(app: &mut App, ui: &mut egui::Ui) {
         });
     }
     ui.horizontal(|ui| {
-        ui.label("Ends:");
+        ui.label(crate::i18n::gettext(app.locale, "Ends:"));
         egui::ComboBox::from_id_salt("send-later-ends")
             .selected_text(
                 ["Never", "On date", "After sends"][usize::from(app.send_later_ends.min(2))],
@@ -2958,12 +2958,15 @@ fn repeat_controls(app: &mut App, ui: &mut egui::Ui) {
                     .to_string()
             })
             .collect();
-        ui.label(format!("Next: {}", dates.join(", ")));
+        ui.label(
+            crate::i18n::gettext(app.locale, "Next: {dates}").replace("{dates}", &dates.join(", ")),
+        );
     }
     ui.label(
-        egui::RichText::new(
+        egui::RichText::new(crate::i18n::gettext(
+            app.locale,
             "Sends automatically, to this chat only, until you stop it or it ends.",
-        )
+        ))
         .small(),
     );
 }
@@ -3005,13 +3008,19 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
     items.sort_by_key(|m| m.due_at);
     ui.horizontal(|ui| {
         if ui
-            .selectable_label(!app.scheduled_repeating_tab, "One-time")
+            .selectable_label(
+                !app.scheduled_repeating_tab,
+                crate::i18n::gettext(app.locale, "One-time"),
+            )
             .clicked()
         {
             app.scheduled_repeating_tab = false;
         }
         if ui
-            .selectable_label(app.scheduled_repeating_tab, "Repeating")
+            .selectable_label(
+                app.scheduled_repeating_tab,
+                crate::i18n::gettext(app.locale, "Repeating"),
+            )
             .clicked()
         {
             app.scheduled_repeating_tab = true;
@@ -3038,9 +3047,9 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
     });
     if items.is_empty() {
         ui.label(if repeating_tab {
-            "No repeating messages. Choose Repeat in Send Later to start one."
+            crate::i18n::gettext(app.locale, "No repeating messages. Choose Repeat in Send Later to start one.")
         } else {
-            "Nothing scheduled. Right-click or long-press the Send button to schedule a message."
+            crate::i18n::gettext(app.locale, "Nothing scheduled. Right-click or long-press the Send button to schedule a message.")
         });
         return;
     }
@@ -3115,14 +3124,21 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
                         if is_series
                             && matches!(m.state, State::Scheduled | State::Failed | State::Missed)
                         {
-                            if ui.small_button("Skip next").clicked() {
+                            if ui
+                                .small_button(crate::i18n::gettext(app.locale, "Skip next"))
+                                .clicked()
+                            {
                                 app.actions.push(Action::ScheduledItemAction {
                                     id: m.id.clone(),
                                     action: "skip".into(),
                                 });
                                 app.actions.push(Action::ShowDialog(Dialog::ScheduledList));
                             }
-                            let label = if paused { "Resume" } else { "Pause" };
+                            let label = if paused {
+                                crate::i18n::gettext(app.locale, "Resume")
+                            } else {
+                                crate::i18n::gettext(app.locale, "Pause")
+                            };
                             if ui.small_button(label).clicked() {
                                 app.actions.push(Action::ScheduledItemAction {
                                     id: m.id.clone(),
@@ -3131,10 +3147,15 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
                                 app.actions.push(Action::ShowDialog(Dialog::ScheduledList));
                             }
                         }
-                        if matches!(m.state, State::Scheduled)
+                        if (matches!(m.state, State::Scheduled)
+                            || (is_series
+                                && matches!(
+                                    m.state,
+                                    State::Failed | State::Missed | State::Uncertain
+                                )))
                             && ui
                                 .small_button(if is_series {
-                                    std::borrow::Cow::Borrowed("Stop series")
+                                    crate::i18n::gettext(app.locale, "Stop series")
                                 } else {
                                     crate::i18n::gettext(app.locale, "Cancel")
                                 })

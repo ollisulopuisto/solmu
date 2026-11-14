@@ -163,9 +163,26 @@ impl Repeat {
         None
     }
 
+    /// Whether `due` itself is inside the series: not after the end date.
+    /// `next_after` applies the end date to later dates only.
+    pub fn allows_first(&self, due: i64) -> bool {
+        let Some(until) = &self.until else {
+            return true;
+        };
+        let (Ok(until), Ok(ts)) = (until.parse::<Date>(), Timestamp::from_second(due)) else {
+            return false;
+        };
+        ts.to_zoned(self.zone()).date() <= until
+    }
+
     /// The first `count` occurrences starting at `first_due`, for the
     /// preview in the dialog.
     pub fn upcoming(&self, first_due: i64, count: usize) -> Vec<i64> {
+        // A send-count limit caps the preview: it never lists sends that
+        // will not happen.
+        let count = self.ends_after.map_or(count, |limit| {
+            count.min(limit.saturating_sub(self.sent).max(1) as usize)
+        });
         let mut out = vec![first_due];
         while out.len() < count {
             let last = *out.last().unwrap_or(&first_due);
@@ -374,5 +391,25 @@ mod tests {
         r.weekdays = 0b0000101;
         assert_eq!(r.describe(), "every 2 weeks on Mon Wed 09:00");
         assert_eq!(repeat(Unit::Day, 1).describe(), "every day 09:00");
+    }
+
+    #[test]
+    fn preview_never_lists_more_sends_than_the_count_allows() {
+        let mut rule = repeat(Unit::Day, 1);
+        rule.ends_after = Some(2);
+        let first = at("2030-01-01", 9, 0);
+        assert_eq!(rule.upcoming(first, 3).len(), 2);
+        rule.ends_after = Some(1);
+        assert_eq!(rule.upcoming(first, 3), vec![first]);
+    }
+
+    #[test]
+    fn first_send_after_the_end_date_is_not_allowed() {
+        let mut rule = repeat(Unit::Day, 1);
+        rule.until = Some("2030-01-01".into());
+        assert!(rule.allows_first(at("2030-01-01", 9, 0)));
+        assert!(!rule.allows_first(at("2030-01-02", 9, 0)));
+        rule.until = None;
+        assert!(rule.allows_first(at("2030-01-02", 9, 0)));
     }
 }

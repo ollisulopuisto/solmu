@@ -307,6 +307,14 @@ pub fn control(
                 if let Err(e) = repeat.validate() {
                     return (400, format!(r#"{{"error":"invalid repeat: {e}"}}"#), false);
                 }
+                if !repeat.allows_first(item.due_at) {
+                    return (
+                        400,
+                        r#"{"error":"invalid repeat: the first send is after the end date"}"#
+                            .to_string(),
+                        false,
+                    );
+                }
                 item.repeat = Some(repeat);
             }
             let id = item.id.clone();
