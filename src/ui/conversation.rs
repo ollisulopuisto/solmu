@@ -1760,6 +1760,8 @@ pub(crate) fn composer_with_capabilities(
                 app.pending_view_once,
             );
             let view_once_width = if view_once { COMPOSER_CONTROL + ui.spacing().item_spacing.x } else { 0.0 };
+            let schedule_kind = schedule_indicator(app, chat);
+            let schedule_width = if schedule_kind.is_some() { COMPOSER_CONTROL + ui.spacing().item_spacing.x } else { 0.0 };
             let extras_width = send_extras
                 .as_ref()
                 .map(|extras| extras.width + ui.spacing().item_spacing.x)
@@ -1839,7 +1841,7 @@ pub(crate) fn composer_with_capabilities(
                 }
                 // The send button closes the row, flush with the field's end.
                 let field_width =
-                    (ui.available_width() - button_width - SEND_BUTTON_GAP - view_once_width - extras_width - ui.spacing().item_spacing.x).max(0.0);
+                    (ui.available_width() - button_width - SEND_BUTTON_GAP - view_once_width - schedule_width - extras_width - ui.spacing().item_spacing.x).max(0.0);
                 // The ink is centred on the controls, not the line box: the
                 // span from a capital's top to a descender's bottom sits as far
                 // from the field's top as from its bottom. Inter's box leaves
@@ -2067,6 +2069,13 @@ pub(crate) fn composer_with_capabilities(
                         .clicked()
                 {
                     app.actions.push(Action::SetPendingViewOnce(!app.pending_view_once));
+                }
+                if let Some(recurring) = schedule_kind
+                    && last_line(ui, line, |ui| schedule_button(app, ui, recurring))
+                        .tab_stop(Stop::Schedule)
+                        .clicked()
+                {
+                    app.actions.push(Action::ShowDialog(Dialog::ScheduledList));
                 }
                 let ready = !app.composer.trim().is_empty()
                     || !app.pending.is_empty()
@@ -14520,6 +14529,72 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
         app.actions.push(Action::EditPicture(target));
     }
     ui.add_space(4.0);
+}
+
+/// Whether the open chat has a pending Send Later item: `Some(false)` for
+/// a one-time schedule, `Some(true)` when a repeating series is among them.
+/// Asks for the queue once so the icon is right after a restart.
+fn schedule_indicator(app: &mut App, chat: &Chat) -> Option<bool> {
+    use crate::scheduler::State;
+    if app.scheduled_messages.is_none() {
+        if !app.scheduled_requested && !app.settings.scheduler_url.is_empty() {
+            app.actions.push(Action::RefreshScheduled);
+        }
+        return None;
+    }
+    let pending: Vec<_> = app
+        .scheduled_messages
+        .iter()
+        .flatten()
+        .filter(|item| {
+            item.chat_id == chat.id
+                && matches!(
+                    item.state,
+                    State::Scheduled
+                        | State::Sending
+                        | State::Failed
+                        | State::Missed
+                        | State::Uncertain
+                )
+        })
+        .collect();
+    if pending.is_empty() {
+        None
+    } else {
+        Some(pending.iter().any(|item| item.repeat.is_some()))
+    }
+}
+
+/// The schedule mark beside Send: a clock for a one-time send, the
+/// refresh arrows for a repeating one. It opens the Send Later queue.
+fn schedule_button(app: &App, ui: &mut egui::Ui, recurring: bool) -> egui::Response {
+    let palette = app.conversation_palette();
+    let label = if recurring {
+        "A repeating message is scheduled in this chat"
+    } else {
+        "A message is scheduled in this chat"
+    };
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(COMPOSER_CONTROL), Sense::click());
+    theme::reveal_focus(&response);
+    theme::focus_outline(ui, response.id, rect, COMPOSER_CONTROL / 2.0);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    if ui.is_rect_visible(rect) {
+        let hovered = response.hovered() || response.has_focus();
+        let fill = if hovered {
+            palette.surface_hover
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter()
+            .circle_filled(rect.center(), COMPOSER_CONTROL / 2.0, fill);
+        let icon = if recurring { Icon::Refresh } else { Icon::Clock };
+        theme::paint_icon(ui, icon, rect, 24.0, palette.secondary);
+    }
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(label)
 }
 
 /// A photo's view-once choice stays beside its caption and Send, with the

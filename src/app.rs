@@ -6026,6 +6026,17 @@ impl App {
                 self.reply_to = None;
                 self.send_later_replaces = None;
                 self.send_later_draft_backup = None;
+                // Refresh the queue so the composer's schedule icon is current.
+                self.backend.send(Command::ListScheduled {
+                    scheduler_url: self.settings.scheduler_url.clone(),
+                    scheduler_token: self.scheduler_token(),
+                    quiet: true,
+                });
+                self.send_later_repeat = 0;
+                self.send_later_every = "1".into();
+                self.send_later_weekdays = 0;
+                self.send_later_ends = 0;
+                self.send_later_ends_value.clear();
             }
             Event::ClipboardImage(result) => {
                 self.handle_clipboard_image(result, write_clipboard_image);
@@ -11347,6 +11358,16 @@ impl App {
             Action::SetBeeperReminder { chat, at } => {
                 self.backend.send(Command::SetBeeperReminder { chat, at })
             }
+            Action::RefreshScheduled => {
+                // The composer's schedule icon needs the queue; ask once per
+                // session and again after a schedule is accepted.
+                self.scheduled_requested = true;
+                self.backend.send(Command::ListScheduled {
+                    scheduler_url: self.settings.scheduler_url.clone(),
+                    scheduler_token: self.scheduler_token(),
+                    quiet: true,
+                });
+            }
             Action::ScheduledItemAction { id, action } => {
                 self.backend.send(Command::ScheduledAction {
                     scheduler_url: self.settings.scheduler_url.clone(),
@@ -11361,6 +11382,7 @@ impl App {
                 due_at,
                 quoting,
                 replaces,
+                repeat,
             } => {
                 if self.has_unsent_media_here() {
                     self.toast_error(crate::i18n::gettext(self.locale, "Send Later cannot include attachments. Remove the staged files before scheduling text.").into_owned());
@@ -11377,6 +11399,7 @@ impl App {
                     due_at,
                     quoting,
                     replaces: replaces.or_else(|| self.send_later_replaces.clone()),
+                    repeat,
                 });
             }
             Action::SetArchived(chat, archived) => {
@@ -11573,6 +11596,14 @@ impl App {
                         .unwrap_or_default();
                     self.transcription_language_draft = draft;
                 }
+                if dialog == Dialog::SendLater {
+                    // A fresh Send Later is one send: never inherit a repeat.
+                    self.send_later_repeat = 0;
+                    self.send_later_every = "1".into();
+                    self.send_later_weekdays = 0;
+                    self.send_later_ends = 0;
+                    self.send_later_ends_value.clear();
+                }
                 if dialog == Dialog::NewChat {
                     self.new_chat_search.clear();
                     self.new_group = None;
@@ -11630,6 +11661,7 @@ impl App {
                     self.backend.send(Command::ListScheduled {
                         scheduler_url: self.settings.scheduler_url.clone(),
                         scheduler_token: self.scheduler_token(),
+                        quiet: false,
                     });
                 }
                 if dialog == Dialog::NewContact {
@@ -32082,6 +32114,7 @@ mod linked_attachment_tests {
                 due_at: 9999999999,
                 quoting: None,
                 replaces: None,
+                repeat: None,
             },
             &ctx,
         );

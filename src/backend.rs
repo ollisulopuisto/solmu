@@ -846,6 +846,8 @@ pub enum Command {
     ListScheduled {
         scheduler_url: String,
         scheduler_token: String,
+        /// A background refresh: an unreachable scheduler is not announced.
+        quiet: bool,
     },
     /// Acts on one scheduled item (cancel, retry, send-now).
     ScheduledAction {
@@ -864,6 +866,7 @@ pub enum Command {
         due_at: i64,
         quoting: Option<String>,
         replaces: Option<String>,
+        repeat: Option<crate::recurrence::Repeat>,
     },
     /// Leaves a group or channel. `archive` also hides the chat in Archived.
     LeaveGroup {

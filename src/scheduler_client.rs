@@ -64,6 +64,7 @@ impl SchedulerClient {
         reply_to: Option<&str>,
         due_at: i64,
         replaces: Option<&str>,
+        repeat: Option<&crate::recurrence::Repeat>,
     ) -> Result<String, String> {
         let mut payload = serde_json::json!({
             "account_id": account_id,
@@ -76,6 +77,9 @@ impl SchedulerClient {
         }
         if let Some(replaces) = replaces {
             payload["replaces"] = replaces.into();
+        }
+        if let Some(repeat) = repeat {
+            payload["repeat"] = serde_json::to_value(repeat).map_err(|e| e.to_string())?;
         }
         let body = self.post("/v1/scheduled", payload)?;
         let parsed: serde_json::Value =
@@ -106,6 +110,20 @@ impl SchedulerClient {
             payload["due_at"] = due_at.into();
         }
         self.action(id, "edit", payload)
+    }
+
+    /// Skip the pending occurrence of a repeating series.
+    pub fn skip(&self, id: &str) -> Result<(), String> {
+        self.action(id, "skip", serde_json::json!({}))
+    }
+
+    /// Pause a repeating series; it is never sent while paused.
+    pub fn pause(&self, id: &str) -> Result<(), String> {
+        self.action(id, "pause", serde_json::json!({}))
+    }
+
+    pub fn resume(&self, id: &str) -> Result<(), String> {
+        self.action(id, "resume", serde_json::json!({}))
     }
 
     /// Deliver now instead of at the scheduled time.
@@ -217,6 +235,7 @@ mod tests {
                 "hello",
                 Some("reply-1"),
                 1_762_000_000,
+                None,
                 None,
             )
             .unwrap();
