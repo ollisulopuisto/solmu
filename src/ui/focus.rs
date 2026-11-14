@@ -8,6 +8,7 @@ use egui::{Context, FocusDirection, Id, Response};
 pub enum Stop {
     Composer,
     ViewOnce,
+    Schedule,
     Send,
     Attach,
     Emoji,

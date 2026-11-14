@@ -50,6 +50,7 @@ pub mod privacy;
 pub mod proxy;
 pub mod read_api;
 pub mod read_http;
+pub mod recurrence;
 pub mod run_widths;
 pub mod safety;
 pub mod saved;

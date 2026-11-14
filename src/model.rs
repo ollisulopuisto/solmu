@@ -2776,6 +2776,8 @@ pub enum Action {
         /// Quoted message id.
         quoting: Option<crate::model::ReplyTarget>,
     },
+    /// Reloads the Send Later queue in the background (no dialog).
+    RefreshScheduled,
     /// Acts on one queued Send Later item (cancel, retry, send-now).
     ScheduledItemAction {
         id: String,
@@ -2793,6 +2795,8 @@ pub enum Action {
         /// Queue item this schedule replaces; the daemon cancels it only
         /// once the replacement is queued.
         replaces: Option<String>,
+        /// Repeat rule when this schedules a series; `None` is one send.
+        repeat: Option<crate::recurrence::Repeat>,
     },
     /// Sends a spot as a location message.
     SendLocation {

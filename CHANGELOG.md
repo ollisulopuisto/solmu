@@ -10,8 +10,7 @@ version in Cargo.toml is bumped.
 ## Unreleased
 
 - Long image titles in the viewer no longer scroll back and forth: they end in an ellipsis and show in full on hover, and they no longer keep the window repainting while visible.
-
-
+- Send Later can repeat: every N days, every N weeks on chosen weekdays, or every N months, ending never, on a date or after a number of sends. The dialog previews the next three dates. The queue has a Repeating tab with Skip next, Pause, Edit and Stop series. A missed occurrence waits for your decision and a series never catches up with a burst. A clock icon beside Send (refresh arrows for a repeating one) shows that the open chat has a schedule and opens the queue. Needs the same solmu-scheduler as Send Later; an older scheduler sends one occurrence and does not queue the next.
 - Favorite is the one mark: on a Beeper chat it also sets the bridge pin while one is free, and removing the favorite removes the pin, so a pin can no longer keep a chat in your favorites.
 - The chat list's modes are All, Unread and Needs me, and Cmd+D steps through them. Unread lists every unread chat, muted ones included; the old Focus mode is gone (favorites stay one click away in the rail and on Cmd+1..9), and a saved Focus setting opens as All.
 - A Bookmarks icon after the mode tabs, or Cmd+Shift+B, opens the Saved list; a Starred and Saved switch under its header moves between the two. Cmd+D skips it. Pinned messages are not listed there, since they have no list across chats.

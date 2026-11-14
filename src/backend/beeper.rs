@@ -4407,6 +4407,7 @@ pub fn run(
                 Command::ListScheduled {
                     scheduler_url,
                     scheduler_token,
+                    quiet,
                 } => {
                     match crate::scheduler_client::SchedulerClient::new(
                         &scheduler_url,
@@ -4415,6 +4416,7 @@ pub fn run(
                     .and_then(|client| client.list())
                     {
                         Ok(items) => emit(Event::ScheduledList(items)),
+                        Err(_) if quiet => {}
                         Err(e) => emit(Event::Info(format!("Send Later list unavailable: {e}"))),
                     }
                 }
@@ -4432,6 +4434,9 @@ pub fn run(
                         "cancel" => client.cancel(&id),
                         "retry" => client.retry(&id),
                         "send-now" => client.send_now(&id),
+                        "skip" => client.skip(&id),
+                        "pause" => client.pause(&id),
+                        "resume" => client.resume(&id),
                         other => Err(format!("unknown scheduled action {other}")),
                     });
                     if let Err(e) = result {
@@ -4456,6 +4461,7 @@ pub fn run(
                     due_at,
                     quoting,
                     replaces,
+                    repeat,
                 } => {
                     let result = crate::scheduler_client::SchedulerClient::new(
                         &scheduler_url,
@@ -4469,6 +4475,7 @@ pub fn run(
                             quoting.as_deref(),
                             due_at,
                             replaces.as_deref(),
+                            repeat.as_ref(),
                         )
                     });
                     match result {
