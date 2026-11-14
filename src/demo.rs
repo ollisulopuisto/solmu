@@ -13562,10 +13562,11 @@ mod tests {
             output.textures_delta.clear();
             output.shapes
         };
-        // Where a text was painted: its Text shape and clip rect. An
-        // ellipsized LTR line keeps the full string in `job.text`; the RTL
-        // one is laid out from the shortened "start…" string instead.
-        let find = |shapes: &[egui::epaint::ClippedShape], text: &str| {
+        // Where a text was painted: its x, painted width, clip rect, and
+        // last glyph. An ellipsized LTR line keeps the full string in
+        // `job.text`; the RTL one is laid out from the shortened "start…"
+        // string instead.
+        let texts = |shapes: &[egui::epaint::ClippedShape], text: &str| {
             shapes
                 .iter()
                 .find_map(|clipped| match &clipped.shape {
@@ -13577,20 +13578,16 @@ mod tests {
                                     shape.galley.job.text.trim_end_matches('\u{2026}'),
                                 )) =>
                     {
-                        Some((shape, clipped.clip_rect))
+                        Some((
+                            shape.pos.x,
+                            shape.galley.size().x,
+                            clipped.clip_rect,
+                            shape.galley.rows[0].glyphs.last().map(|glyph| glyph.chr),
+                        ))
                     }
                     _ => None,
                 })
                 .unwrap_or_else(|| panic!("{text} was not painted"))
-        };
-        let texts = |shapes: &[egui::epaint::ClippedShape], text: &str| {
-            let (shape, clip) = find(shapes, text);
-            (
-                shape.pos.x,
-                shape.galley.size().x,
-                clip,
-                shape.galley.rows[0].glyphs.last().map(|glyph| glyph.chr),
-            )
         };
         narrow(0.0);
         let (x, width, clip, last) = texts(&narrow(0.0), name);

@@ -144,8 +144,10 @@ pub fn truncated_text(
 ) -> egui::Response {
     let width = ui.available_width().max(1.0);
     let full = line(ui, text, font.clone(), color, f32::INFINITY, 1);
-    let (rect, mut response) =
-        ui.allocate_exact_size(vec2(full.size().x.min(width), full.size().y), Sense::hover());
+    let (rect, mut response) = ui.allocate_exact_size(
+        vec2(full.size().x.min(width), full.size().y),
+        Sense::hover(),
+    );
     response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), text));
     if !ui.is_rect_visible(rect) {
@@ -1952,7 +1954,7 @@ mod tests {
         let ctx = egui::Context::default();
         crate::motion::tests::settle(&ctx);
         let center = std::cell::Cell::new(egui::Pos2::ZERO);
-        let mut run = |time: f64, events: Vec<egui::Event>| {
+        let run = |time: f64, events: Vec<egui::Event>| {
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     time: Some(time),
@@ -1995,14 +1997,18 @@ mod tests {
         assert_eq!(*last, Some('\u{2026}'), "{job}");
         assert!(*width <= 60.0, "{width} wider than its room");
         assert!(
-            !painted.iter().any(|(job, width, _)| job == text && *width > 60.0),
+            !painted
+                .iter()
+                .any(|(job, width, _)| job == text && *width > 60.0),
             "the full-width text is not painted before hover"
         );
         // Hover past the tooltip delay: the full text appears at full width.
         let _ = run(0.1, vec![egui::Event::PointerMoved(center.get())]);
         let painted = texts(&run(5.0, vec![]));
         assert!(
-            painted.iter().any(|(job, width, _)| job == text && *width > 60.0),
+            painted
+                .iter()
+                .any(|(job, width, _)| job == text && *width > 60.0),
             "hover shows the full text: {painted:?}"
         );
     }
@@ -2013,7 +2019,7 @@ mod tests {
     fn truncated_text_stays_put_and_never_schedules_a_frame() {
         use std::time::Duration;
         let ctx = crate::motion::tests::reading(false);
-        let mut draw = |time: f64| {
+        let draw = |time: f64| {
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     time: Some(time),
