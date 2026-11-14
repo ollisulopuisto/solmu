@@ -223,7 +223,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         key(modifiers, key_code, Action::ToggleSaved);
         let (modifiers, key_code) = SIDEBAR.keys[0];
         key(modifiers, key_code, Action::ToggleSidebar);
-        // Cmd+D steps the chat list through All, Unread and Needs me.
+        // Cmd+D steps the chat list through All, Unread, Unread 7d and Needs me.
         let (modifiers, key_code) = LIST_MODE.keys[0];
         key(
             modifiers,
@@ -1372,7 +1372,7 @@ const LIST_MODE: Shortcut = Shortcut {
     id: "list-mode",
     keys: &[(Modifiers::COMMAND, Key::D)],
     label: Some("Ctrl+D"),
-    description: Some("Switch the chat list between All, Unread and Needs me"),
+    description: Some("Switch the chat list between All, Unread, Unread 7d and Needs me"),
     menu: None,
 };
 const BOOKMARKS: Shortcut = Shortcut {
@@ -1936,7 +1936,7 @@ mod tests {
             ("Ctrl+B", "Collapse or expand the chat list"),
             (
                 "Ctrl+D",
-                "Switch the chat list between All, Unread and Needs me",
+                "Switch the chat list between All, Unread, Unread 7d and Needs me",
             ),
             ("Ctrl+Shift+B", "Open or close Bookmarks"),
             ("Ctrl+Alt+I", "Show or hide the info sidebar"),
@@ -2638,7 +2638,7 @@ mod tests {
         let (_root, mut app, ids) = app_with_chats(1);
         app.open_chat = Some(ids[0].clone());
         let ctx = egui::Context::default();
-        // Info stays on Cmd+Alt+I. Cmd+D steps All > Unread > Needs me.
+        // Info stays on Cmd+Alt+I. Cmd+D steps All > Unread > Unread 7d > Needs me.
         assert!(!press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
         assert!(matches!(
             app.actions.as_slice(),
