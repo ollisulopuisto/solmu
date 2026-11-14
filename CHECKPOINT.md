@@ -1,5 +1,25 @@
 # Fast-beeper coordination and development checkpoint
 
+## Overflow text: truncation, not scrolling - November 14, 2026
+
+Branch `fix/overflow-text-truncation`, based on main 645b11f, version 0.24.23
+(0.24.22 is open PR fix/repaint-pacing, so expect a version/CHANGELOG conflict
+in whichever merges later). widgets.rs `scrolling_text` panned an overflowing
+line end to end forever - decorative motion that forced repaints the whole
+time a long title was visible, the clearest "sugar" in the design-principles
+review. Replaced by `truncated_text`: the line ends in an ellipsis (the
+existing `line()` helper, RTL-aware), shows in full on hover, and never
+schedules a repaint; a test asserts a wide line in a narrow room asks for no
+further frames. Only caller was the image viewer's title. The unused fade
+helpers stay, they are shared pub API. Not compiled locally (no Rust
+toolchain in this checkout), CI is the check. No merge by the author. Devin round: the no-repaint test now also
+asserts the ellipsis truncation and the hover tooltip itself. Devin round 2:
+truncated_text now paints through a child clipped to its own rect so the line
+can never run under neighbours, and right-to-left text paints hugging its
+right edge; the widget tests assert the ellipsis via the row's glyphs
+(job.text keeps the full string when ellipsized) and the demo tests assert
+the title stays inside its room beside the Fit button in both directions.
+
 ## Repaint pacing: no in-between polls - November 14, 2026
 
 Branch `fix/repaint-pacing`, based on main 645b11f, version 0.24.22. Three
