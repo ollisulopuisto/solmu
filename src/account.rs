@@ -121,7 +121,7 @@ pub struct Account {
     pub scheduled_messages: Option<Vec<crate::scheduler::ScheduledMessage>>,
     pub show_archived: bool,
     pub chat_filter: ChatFilter,
-    /// The chat list's mode (Recent, Focus or Needs me); Recent by default.
+    /// The chat list's mode (All, Unread or Needs me); All by default.
     pub list_mode: crate::model::ListMode,
     pub category_filter: Option<ChatFilter>,
     pub favorites_only: bool,

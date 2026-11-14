@@ -2007,7 +2007,7 @@ mod tests {
                     matches!(app.dialog, Some(Dialog::MessageInfo { .. }))
                         && app.message_receipts.is_some(),
                     app.list_mode == crate::model::ListMode::Recent
-                        && tour.labels.contains_key("Recent"),
+                        && tour.labels.contains_key("All"),
                     tour.labels.contains_key("Mark as unread")
                         && tour.labels.contains_key("Follow up")
                         && egui::Popup::is_any_open(&ctx),

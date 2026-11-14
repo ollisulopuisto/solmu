@@ -191,25 +191,40 @@ pub enum ListFilter {
 /// scope (type, network, label) narrows it. Groups arrange every mode's
 /// list as sections; a mode never hides a chat's section membership, but
 /// outside Recent a section with no chats in it drops its heading.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Bookmarks is not a mode: it is the Saved list, opened from its own tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub enum ListMode {
-    /// Everything, latest first: the full list.
+    /// Everything, latest first: the full list. Shown as "All".
     #[default]
     Recent,
-    /// Favourites and pinned chats, plus whatever Needs me holds.
-    Focus,
+    /// Every chat with something unread, muted ones included.
+    Unread,
     /// Unread and manually marked chats only, and never a muted chat.
     NeedsMe,
 }
 
+/// Settings written before Unread replaced Focus still say `Focus`, and a
+/// future name must not make the whole settings file unreadable: both read
+/// as Recent.
+impl<'de> Deserialize<'de> for ListMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Ok(match name.as_str() {
+            "Unread" => Self::Unread,
+            "NeedsMe" => Self::NeedsMe,
+            _ => Self::Recent,
+        })
+    }
+}
+
 impl ListMode {
-    pub const EVERY: [Self; 3] = [Self::Recent, Self::Focus, Self::NeedsMe];
+    pub const EVERY: [Self; 3] = [Self::Recent, Self::Unread, Self::NeedsMe];
 
     pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
         use crate::i18n::gettext;
         match self {
-            Self::Recent => gettext(locale, "Recent"),
-            Self::Focus => gettext(locale, "Focus"),
+            Self::Recent => gettext(locale, "All"),
+            Self::Unread => gettext(locale, "Unread"),
             Self::NeedsMe => gettext(locale, "Needs me"),
         }
     }
@@ -218,16 +233,16 @@ impl ListMode {
     pub fn key(self) -> &'static str {
         match self {
             Self::Recent => "recent",
-            Self::Focus => "focus",
+            Self::Unread => "unread",
             Self::NeedsMe => "needs-me",
         }
     }
 
-    /// The mode Cmd+D moves to: Recent, then Focus, then Needs me, and round.
+    /// The mode Cmd+D moves to: All, then Unread, then Needs me, and round.
     pub fn next(self) -> Self {
         match self {
-            Self::Recent => Self::Focus,
-            Self::Focus => Self::NeedsMe,
+            Self::Recent => Self::Unread,
+            Self::Unread => Self::NeedsMe,
             Self::NeedsMe => Self::Recent,
         }
     }
@@ -235,7 +250,7 @@ impl ListMode {
     pub fn parse(key: &str) -> Option<Self> {
         match key {
             "recent" => Some(Self::Recent),
-            "focus" => Some(Self::Focus),
+            "unread" => Some(Self::Unread),
             "needs-me" => Some(Self::NeedsMe),
             _ => None,
         }
@@ -3192,7 +3207,7 @@ pub enum Action {
     ToggleSidebar,
     ToggleFlatGroups,
     SetChatFilter(ChatFilter),
-    /// Picks the chat list's mode (Recent, Focus or Needs me).
+    /// Picks the chat list's mode (All, Unread or Needs me).
     SetListMode(ListMode),
     /// Widens an in-chat find to every chat: the query moves to the chat
     /// list's search field, which then searches all chats.
@@ -3523,11 +3538,26 @@ mod storage_tests {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn list_mode_next_cycles_recent_focus_needs_me() {
+    fn list_mode_next_cycles_all_unread_needs_me() {
         use super::ListMode;
-        assert_eq!(ListMode::Recent.next(), ListMode::Focus);
-        assert_eq!(ListMode::Focus.next(), ListMode::NeedsMe);
+        assert_eq!(ListMode::Recent.next(), ListMode::Unread);
+        assert_eq!(ListMode::Unread.next(), ListMode::NeedsMe);
         assert_eq!(ListMode::NeedsMe.next(), ListMode::Recent);
+    }
+
+    #[test]
+    fn list_mode_reads_the_retired_focus_as_recent() {
+        use super::ListMode;
+        let read = |text: &str| serde_json::from_str::<ListMode>(text).unwrap();
+        assert_eq!(read("\"Recent\""), ListMode::Recent);
+        assert_eq!(read("\"Unread\""), ListMode::Unread);
+        assert_eq!(read("\"NeedsMe\""), ListMode::NeedsMe);
+        assert_eq!(read("\"Focus\""), ListMode::Recent);
+        assert_eq!(read("\"Whatever\""), ListMode::Recent);
+        assert_eq!(
+            serde_json::to_string(&ListMode::Unread).unwrap(),
+            "\"Unread\""
+        );
     }
 
     /// Checks compatibility with older archived quotes that omitted a source chat.

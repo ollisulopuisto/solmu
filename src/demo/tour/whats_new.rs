@@ -218,7 +218,7 @@ pub(super) fn script() -> Vec<Cue> {
     add(46.8, esc("Esc · Close message info"));
 
     // The primary modes replace the retired Filters menu.
-    add(47.4, Move(Label("Recent")));
+    add(47.4, Move(Label("All")));
     add(48.0, Click(left));
     add(53.0, Move(Label("Katherine Johnson")));
     add(53.4, Click(right));

@@ -21706,8 +21706,9 @@ mod tests {
                 Stop::Profile,
                 Stop::Search,
                 Stop::Recent,
-                Stop::Focus,
+                Stop::UnreadMode,
                 Stop::NeedsMe,
+                Stop::Bookmarks,
                 Stop::NewChat,
             ];
             assert_eq!(
@@ -23970,7 +23971,12 @@ mod rail_tests {
             let (_app, ctx) = open("chat", macos);
             assert_eq!(
                 in_header(&ctx),
-                [Stop::Recent, Stop::Focus, Stop::NeedsMe],
+                [
+                    Stop::Recent,
+                    Stop::UnreadMode,
+                    Stop::NeedsMe,
+                    Stop::Bookmarks
+                ],
                 "{macos}"
             );
             let (_app, ctx) = open("starred", macos);
