@@ -164,6 +164,10 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
         .members
         .iter()
         .map(|member| match chat_for(app, member) {
+            // A locked chat's name stays hidden until its folder is open.
+            Some(chat) if chat.locked && !app.locked_folder_open() => {
+                (gettext(app.locale, "Locked chat").into_owned(), false)
+            }
             Some(chat) => (app.chat_title(chat), sendable(app, member)),
             None => (gettext(app.locale, "Chat unavailable").into_owned(), false),
         })
@@ -265,6 +269,41 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
     }
     if send {
         let now = crate::util::now();
+        let targets: Vec<String> = compose
+            .members
+            .iter()
+            .filter(|member| sendable(app, member))
+            .filter_map(|member| chat_for(app, member).map(|chat| chat.id.clone()))
+            .collect();
+        // Refuse before anything is kept or sent. A send in the main
+        // composer's edit mode would turn the first message into an edit,
+        // and a send clears the target chat's saved draft.
+        let refusal = if app.editing.is_some() {
+            Some(
+                gettext(
+                    app.locale,
+                    "Finish or cancel the message you are editing first.",
+                )
+                .into_owned(),
+            )
+        } else if compose.members.len() > crate::ghost_groups::MAX_MEMBERS {
+            Some(gettext(app.locale, "A ghost group holds up to 50 chats.").into_owned())
+        } else if targets.iter().any(|chat| app.parked_draft(chat)) {
+            Some(
+                gettext(
+                    app.locale,
+                    "A chat here has an unsent draft. Send or clear it first.",
+                )
+                .into_owned(),
+            )
+        } else {
+            None
+        };
+        if let Some(text) = refusal {
+            compose.notice = Some(text);
+            app.ghost_ui.compose = Some(compose);
+            return;
+        }
         // Keep or reuse the group first: a refusal sends nothing.
         match compose.group {
             Some(id) => {
@@ -292,12 +331,6 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
             None => {}
         }
         let text = compose.text.trim().to_owned();
-        let targets: Vec<String> = compose
-            .members
-            .iter()
-            .filter(|member| sendable(app, member))
-            .filter_map(|member| chat_for(app, member).map(|chat| chat.id.clone()))
-            .collect();
         for chat in targets {
             app.actions.push(Action::SendText {
                 chat,

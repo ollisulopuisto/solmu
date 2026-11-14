@@ -4416,7 +4416,7 @@ impl App {
     }
 
     /// Whether a closed chat has unsent text or attachments.
-    fn parked_draft(&self, chat: &str) -> bool {
+    pub(crate) fn parked_draft(&self, chat: &str) -> bool {
         self.drafts
             .get(chat)
             .is_some_and(|text| !text.trim().is_empty())

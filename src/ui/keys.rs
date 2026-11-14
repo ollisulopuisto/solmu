@@ -368,6 +368,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         });
     }
     let escape = (!menu_open || app.reaction_target.is_some())
+        // The ghost-group dialog closes itself on Escape.
+        && app.ghost_ui.compose.is_none()
         && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
     if escape {
         if app.show_update {
