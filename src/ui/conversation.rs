@@ -14589,7 +14589,11 @@ fn schedule_button(app: &App, ui: &mut egui::Ui, recurring: bool) -> egui::Respo
         };
         ui.painter()
             .circle_filled(rect.center(), COMPOSER_CONTROL / 2.0, fill);
-        let icon = if recurring { Icon::Refresh } else { Icon::Clock };
+        let icon = if recurring {
+            Icon::Refresh
+        } else {
+            Icon::Clock
+        };
         theme::paint_icon(ui, icon, rect, 24.0, palette.secondary);
     }
     response

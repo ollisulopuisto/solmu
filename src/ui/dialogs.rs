@@ -2811,8 +2811,16 @@ const WEEKDAY_NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun
 /// The first occurrence typed into the date and time fields, when both
 /// parse and name a real local time.
 fn typed_due(app: &App) -> Option<i64> {
-    let date = app.send_later_date.trim().parse::<jiff::civil::Date>().ok()?;
-    let time = app.send_later_time.trim().parse::<jiff::civil::Time>().ok()?;
+    let date = app
+        .send_later_date
+        .trim()
+        .parse::<jiff::civil::Date>()
+        .ok()?;
+    let time = app
+        .send_later_time
+        .trim()
+        .parse::<jiff::civil::Time>()
+        .ok()?;
     let zoned = date
         .at(time.hour(), time.minute(), 0, 0)
         .to_zoned(jiff::tz::TimeZone::system())
@@ -2915,14 +2923,20 @@ fn repeat_controls(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label("Ends:");
         egui::ComboBox::from_id_salt("send-later-ends")
-            .selected_text(["Never", "On date", "After sends"][usize::from(app.send_later_ends.min(2))])
+            .selected_text(
+                ["Never", "On date", "After sends"][usize::from(app.send_later_ends.min(2))],
+            )
             .show_ui(ui, |ui| {
                 for (index, name) in ["Never", "On date", "After sends"].iter().enumerate() {
                     ui.selectable_value(&mut app.send_later_ends, index as u8, *name);
                 }
             });
         if app.send_later_ends != 0 {
-            let hint = if app.send_later_ends == 1 { "YYYY-MM-DD" } else { "number" };
+            let hint = if app.send_later_ends == 1 {
+                "YYYY-MM-DD"
+            } else {
+                "number"
+            };
             ui.add(
                 egui::TextEdit::singleline(&mut app.send_later_ends_value)
                     .hint_text(hint)
@@ -2938,13 +2952,19 @@ fn repeat_controls(app: &mut App, ui: &mut egui::Ui) {
             .upcoming(first, 3)
             .into_iter()
             .filter_map(|at| jiff::Timestamp::from_second(at).ok())
-            .map(|at| at.to_zoned(zone.clone()).strftime("%a %d %b %H:%M").to_string())
+            .map(|at| {
+                at.to_zoned(zone.clone())
+                    .strftime("%a %d %b %H:%M")
+                    .to_string()
+            })
             .collect();
         ui.label(format!("Next: {}", dates.join(", ")));
     }
     ui.label(
-        egui::RichText::new("Sends automatically, to this chat only, until you stop it or it ends.")
-            .small(),
+        egui::RichText::new(
+            "Sends automatically, to this chat only, until you stop it or it ends.",
+        )
+        .small(),
     );
 }
 

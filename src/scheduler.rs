@@ -957,8 +957,10 @@ mod tests {
         queue.add(series("f", ts(0))).unwrap();
         queue.add(series("u", ts(0))).unwrap();
         let mut mock = Mock::default();
-        mock.results.push_back(Err(SendError::Rejected("no".into())));
-        mock.results.push_back(Err(SendError::Unknown("timeout".into())));
+        mock.results
+            .push_back(Err(SendError::Rejected("no".into())));
+        mock.results
+            .push_back(Err(SendError::Unknown("timeout".into())));
         let mut sched = Scheduler::new(queue, mock);
         sched.tick(ts(1), &mut |_| {});
         assert_eq!(sched.queue.items.len(), 2);
