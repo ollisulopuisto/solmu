@@ -288,11 +288,31 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
             )
         } else if compose.members.len() > crate::ghost_groups::MAX_MEMBERS {
             Some(gettext(app.locale, "A ghost group holds up to 50 chats.").into_owned())
-        } else if targets.iter().any(|chat| app.parked_draft(chat)) {
+        } else if targets.iter().any(|chat| {
+            app.parked_draft(chat)
+                // The open chat's draft lives in the composer and staged files.
+                || (app.open_chat.as_deref() == Some(chat.as_str())
+                    && (!app.composer.trim().is_empty() || !app.pending.is_empty()))
+        }) {
             Some(
                 gettext(
                     app.locale,
                     "A chat here has an unsent draft. Send or clear it first.",
+                )
+                .into_owned(),
+            )
+        } else if compose.keep
+            && compose.group.is_none()
+            && compose
+                .members
+                .iter()
+                .any(|member| chat_for(app, member).is_some_and(|chat| chat.locked))
+        {
+            // Saved groups sit in settings.json; locked chats stay out of it.
+            Some(
+                gettext(
+                    app.locale,
+                    "Locked chats cannot be kept in a ghost group. Untick Keep or remove them.",
                 )
                 .into_owned(),
             )
@@ -343,6 +363,11 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
             app.batch_ui.selected_identities.clear();
         }
         app.actions.push(Action::SettingsChanged);
+        // No per-chat result list yet: say where to look so nobody resends all.
+        app.toast(gettext(
+            app.locale,
+            "Queued for each chat. Check each chat for its result, and do not send the same text to all again.",
+        ));
         return;
     }
     app.ghost_ui.compose = Some(compose);
