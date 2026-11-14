@@ -1,5 +1,21 @@
 # Fast-beeper coordination and development checkpoint
 
+## Repaint pacing: no in-between polls - November 14, 2026
+
+Branch `fix/repaint-pacing`, based on main 645b11f, version 0.24.22. Three
+4-5 fps repaint loops replaced under the 1 fps-or-60 fps principle. The
+linked-person history catch-up polled every 200 ms while waiting; its state
+only advances when a page answer arrives, and backend events already wake
+the window through the Waker, so the poll is gone and the existing header
+spinner keeps showing the wait. Settings' local-AI translation polled every
+250 ms; it now draws the standard theme spinner while busy, whose frames
+drive the same poll only while visible. The app-lock countdown repainted up
+to 250 ms; it now schedules exactly one repaint per displayed second. Not
+compiled locally (no Rust toolchain in this checkout), CI is the check. No
+merge by the author. Devin round: the countdown
+pacing moved to countdown_pacing with a regression test for the second
+boundaries and the final repaint that re-enables Unlock.
+
 ## Automatic chat categories - November 10, 2026
 
 Branch `feat/chat-auto-categories`, based on main c4e24cc, version 0.24.18. First slice of option 4: Filters > Automatic category (People, Quiet people 7+ days, Long quiet 30+ days, Notifications) from plain rules in `src/categories.rs`, plus Move to... / Sort automatically on a one-to-one chat's menu, stored in `beeper.category_overrides`. Quiet tiers fade in search. Tests in `src/categories.rs`, `src/ui/chats.rs` and `tests/chat_scope.rs`. Not compiled locally (no libpipewire headers here); CI is the first compile. No demo captures yet. Details and gaps: docs/chat-categories.md. No merge by the author.
