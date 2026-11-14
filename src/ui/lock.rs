@@ -1,6 +1,8 @@
 //! The lock screen: everything the app lock hides is left undrawn, and the
 //! window shows only this card.
 
+use std::time::Duration;
+
 use egui::{Align, Key, Layout, Modifiers};
 
 use crate::app::App;
@@ -44,6 +46,16 @@ fn keys(app: &mut App, ctx: &egui::Context) {
     });
 }
 
+/// The whole seconds a lockout `wait` shows, and when the next repaint is
+/// due so the shown number changes the moment it should: once a second, at
+/// each second boundary - 1 fps, not an in-between rate. The last repaint
+/// lands when the wait ends, which is when `can_try` enables Unlock again.
+fn countdown_pacing(wait: Duration) -> (u64, Duration) {
+    let seconds = wait.as_secs_f32().ceil().max(1.0) as u64;
+    let change = wait - Duration::from_secs(seconds.saturating_sub(1));
+    (seconds, change)
+}
+
 fn password(app: &mut App, ui: &mut egui::Ui) {
     // One automatic Touch ID prompt per lock; retries stay manual.
     if app.app_lock.touch_id_offered && !app.app_lock.touch_id_asked {
@@ -74,16 +86,13 @@ fn password(app: &mut App, ui: &mut egui::Ui) {
         field.request_focus();
     }
     if let Some(wait) = app.app_lock.wait_left() {
-        let seconds = wait.as_secs_f32().ceil().max(1.0) as u64;
+        let (seconds, change) = countdown_pacing(wait);
         let text = gettext(
             locale,
             "Too many wrong passwords. Try again in {seconds} s.",
         )
         .replace("{seconds}", &seconds.to_string());
         theme::paragraph(ui, text, theme::regular(13.0), palette.danger);
-        // One repaint a second, due exactly when the shown number changes:
-        // 1 fps, not an in-between rate.
-        let change = wait - std::time::Duration::from_secs(seconds.saturating_sub(1));
         ui.ctx().request_repaint_after(change);
     } else if app.app_lock.wrong {
         theme::paragraph(
@@ -171,4 +180,49 @@ fn confirm_unlink(app: &mut App, ui: &mut egui::Ui) {
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::countdown_pacing;
+    use std::time::Duration;
+
+    /// The countdown shows whole seconds and repaints once a second, due
+    /// exactly when the shown number changes, including the boundary where
+    /// the wait ends and Unlock re-enables. No wait gets an in-between rate
+    /// or a stall.
+    #[test]
+    fn countdown_repaints_once_a_second_on_each_boundary() {
+        assert_eq!(
+            countdown_pacing(Duration::from_secs(10)),
+            (10, Duration::from_secs(1))
+        );
+        assert_eq!(
+            countdown_pacing(Duration::from_millis(9_300)),
+            (10, Duration::from_millis(300)),
+            "the next change is the drop to 9 shown seconds"
+        );
+        assert_eq!(
+            countdown_pacing(Duration::from_secs(9)),
+            (9, Duration::from_secs(1))
+        );
+        assert_eq!(
+            countdown_pacing(Duration::from_secs(1)),
+            (1, Duration::from_secs(1)),
+            "the last repaint lands at 0, when can_try enables Unlock"
+        );
+        assert_eq!(
+            countdown_pacing(Duration::from_millis(400)),
+            (1, Duration::from_millis(400)),
+            "a sub-second wait still repaints at its end"
+        );
+        for millis in (1..12_000).step_by(97) {
+            let (shown, delay) = countdown_pacing(Duration::from_millis(millis));
+            assert!(shown >= 1, "{millis} ms");
+            assert!(
+                delay > Duration::ZERO && delay <= Duration::from_secs(1),
+                "{millis} ms waits {delay:?}"
+            );
+        }
+    }
 }
