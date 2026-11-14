@@ -66,6 +66,11 @@ pub struct Repeat {
     /// A paused series stays queued but is never sent.
     #[serde(default)]
     pub paused: bool,
+    /// The date this occurrence was planned for, kept when it is sent or
+    /// retried early or late, so the series keeps its phase. The next
+    /// occurrence steps from here, not from the moment it actually went.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned: Option<i64>,
 }
 
 impl Repeat {
@@ -224,6 +229,7 @@ mod tests {
             until: None,
             sent: 0,
             paused: false,
+            planned: None,
         }
     }
 

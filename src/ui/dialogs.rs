@@ -2875,6 +2875,7 @@ fn build_repeat(app: &App, first_due: i64) -> Result<Option<crate::recurrence::R
         until,
         sent: 0,
         paused: false,
+        planned: None,
     };
     repeat.validate()?;
     Ok(Some(repeat))

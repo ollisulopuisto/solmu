@@ -303,6 +303,7 @@ pub fn control(
                 repeat.series = item.id.clone();
                 repeat.sent = 0;
                 repeat.paused = false;
+                repeat.planned = None;
                 if let Err(e) = repeat.validate() {
                     return (400, format!(r#"{{"error":"invalid repeat: {e}"}}"#), false);
                 }
@@ -384,7 +385,7 @@ pub fn control(
                     let due_at = parsed.get("due_at").and_then(|v| v.as_i64());
                     queue.edit(id, text, due_at)
                 }
-                "send-now" => queue.edit(id, None, Some(now)),
+                "send-now" => queue.send_now(id, now),
                 "skip" => queue.skip(id, now),
                 "pause" => queue.set_paused(id, true),
                 "resume" => queue.set_paused(id, false),
