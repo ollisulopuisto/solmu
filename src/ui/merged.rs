@@ -359,8 +359,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             }
         }
         if waiting || !requests.is_empty() {
-            let ctx = ui.ctx().clone();
-            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            // No polling: each answered page arrives as a backend event,
+            // and events wake the window, so the next pass plans the next
+            // request. The header spinner shows the wait meanwhile.
             state.catch_up = Some(catch_up);
         } else {
             state.older_note = older_note(app, &catch_up);

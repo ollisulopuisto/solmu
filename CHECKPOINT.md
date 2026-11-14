@@ -20,6 +20,21 @@ right edge; the widget tests assert the ellipsis via the row's glyphs
 (job.text keeps the full string when ellipsized) and the demo tests assert
 the title stays inside its room beside the Fit button in both directions.
 
+## Repaint pacing: no in-between polls - November 14, 2026
+
+Branch `fix/repaint-pacing`, based on main 645b11f, version 0.24.22. Three
+4-5 fps repaint loops replaced under the 1 fps-or-60 fps principle. The
+linked-person history catch-up polled every 200 ms while waiting; its state
+only advances when a page answer arrives, and backend events already wake
+the window through the Waker, so the poll is gone and the existing header
+spinner keeps showing the wait. Settings' local-AI translation polled every
+250 ms; it now draws the standard theme spinner while busy, whose frames
+drive the same poll only while visible. The app-lock countdown repainted up
+to 250 ms; it now schedules exactly one repaint per displayed second. Not
+compiled locally (no Rust toolchain in this checkout), CI is the check. No
+merge by the author. Devin round: the countdown
+pacing moved to countdown_pacing with a regression test for the second
+boundaries and the final repaint that re-enables Unlock.
 
 ## Automatic chat categories - November 10, 2026
 
