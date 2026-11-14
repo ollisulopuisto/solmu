@@ -12,7 +12,9 @@ spinner keeps showing the wait. Settings' local-AI translation polled every
 drive the same poll only while visible. The app-lock countdown repainted up
 to 250 ms; it now schedules exactly one repaint per displayed second. Not
 compiled locally (no Rust toolchain in this checkout), CI is the check. No
-merge by the author.
+merge by the author. Devin round: the countdown
+pacing moved to countdown_pacing with a regression test for the second
+boundaries and the final repaint that re-enables Unlock.
 
 ## Automatic chat categories - November 10, 2026
 
