@@ -598,6 +598,19 @@ pub fn menu_item_enabled(
     label: &str,
     enabled: bool,
 ) -> bool {
+    menu_item_hinted(ui, palette, icon, label, enabled, None)
+}
+
+/// A menu entry that shows the key chord for its action, right-aligned and
+/// dim. `hint` is already in the platform's notation (`keys::hint`).
+pub fn menu_item_hinted(
+    ui: &mut Ui,
+    palette: &Palette,
+    icon: Option<Icon>,
+    label: &str,
+    enabled: bool,
+    hint: Option<&str>,
+) -> bool {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(
         vec2(width, 28.0),
@@ -632,13 +645,26 @@ pub fn menu_item_enabled(
             .paint_at(ui, icon_rect);
             x += 26.0;
         }
+        let mut right = rect.right() - 10.0;
+        if let Some(hint) = hint {
+            let galley = ui
+                .painter()
+                .layout_no_wrap(hint.to_owned(), theme::regular(12.5), palette.dim);
+            right -= galley.size().x;
+            ui.painter().galley(
+                pos2(right, rect.center().y - galley.size().y / 2.0),
+                galley,
+                palette.dim,
+            );
+            right -= 12.0;
+        }
         let mut job = egui::text::LayoutJob::simple_singleline(
             label.to_string(),
             theme::regular(13.5),
             color,
         );
         job.wrap = egui::text::TextWrapping {
-            max_width: (rect.right() - 10.0 - x).max(0.0),
+            max_width: (right - x).max(0.0),
             max_rows: 1,
             break_anywhere: true,
             overflow_character: Some('\u{2026}'),
