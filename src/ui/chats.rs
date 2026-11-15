@@ -259,6 +259,9 @@ fn bookmarks_switch(app: &mut App, ui: &mut egui::Ui) {
 /// Size of the Bookmarks icon that ends the mode row.
 const BOOKMARKS_ICON: f32 = 20.0;
 
+/// Glyph size of the icon-only mode tabs.
+const MODE_ICON: f32 = 20.0;
+
 /// Search, title and queues, then the composed scope. Shared by every platform.
 fn header(app: &mut App, ui: &mut egui::Ui) {
     if app.show_starred || app.show_saved || app.show_archived || app.locked_folder_open() {
@@ -292,18 +295,45 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             super::batch_actions::archive_bar(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
-                // Four mode tabs share the row with the Bookmarks icon, which
-                // keeps its own square so the labels still fit at 300 points.
+                // "All" keeps its word; the other three modes are icons, so
+                // nothing is truncated at 300 points. Each icon carries a
+                // tooltip and an accessible label with the mode's name.
+                // "All" is a word, so it gets one and a half shares of the row.
                 let bookmarks_edge = BOOKMARKS_ICON + theme::ICON_BUTTON_PAD;
-                let width =
+                let share =
                     (ui.available_width() - 4.0 * ui.spacing().item_spacing.x - bookmarks_edge)
-                        / 4.0;
+                        / 4.5;
                 for mode in crate::model::ListMode::EVERY {
-                    let response = ui.add_sized(
-                        [width, 36.0],
-                        egui::Button::selectable(app.list_mode == mode, mode.label(app.locale))
-                            .truncate(),
-                    );
+                    let name = mode.label(app.locale);
+                    let icon = match mode {
+                        crate::model::ListMode::Recent => None,
+                        crate::model::ListMode::Unread => Some(Icon::Unread),
+                        crate::model::ListMode::RecentUnread => Some(Icon::UnreadRecent),
+                        crate::model::ListMode::NeedsMe => Some(Icon::CircleAlert),
+                    };
+                    let response = match icon {
+                        None => ui.add_sized(
+                            [share * 1.5, 36.0],
+                            egui::Button::selectable(app.list_mode == mode, name.clone()),
+                        ),
+                        Some(icon) => {
+                            let response = ui.add_sized(
+                                [share, 36.0],
+                                egui::Button::selectable(app.list_mode == mode, ""),
+                            );
+                            let label = name.to_string();
+                            response.widget_info(|| {
+                                egui::WidgetInfo::selected(
+                                    egui::WidgetType::SelectableLabel,
+                                    ui.is_enabled(),
+                                    app.list_mode == mode,
+                                    label.clone(),
+                                )
+                            });
+                            theme::paint_icon(ui, icon, response.rect, MODE_ICON, app.palette.text);
+                            response
+                        }
+                    };
                     let stop = match mode {
                         crate::model::ListMode::Recent => Stop::Recent,
                         crate::model::ListMode::Unread => Stop::UnreadMode,
@@ -316,6 +346,8 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                             app.locale,
                             "Unread chats active in the last 7 days, muted ones left out",
                         ))
+                    } else if icon.is_some() {
+                        response.on_hover_text(name.clone())
                     } else {
                         response
                     };
@@ -3755,6 +3787,10 @@ mod tests {
             }
             for pair in rects.windows(2) {
                 assert_eq!(pair[0].center().y, pair[1].center().y);
+            }
+            // "All" is a word and wider; the three icon tabs are equal.
+            assert!(rects[0].width() > rects[1].width());
+            for pair in rects[1..].windows(2) {
                 assert!((pair[0].width() - pair[1].width()).abs() < 0.01);
             }
             // The Bookmarks icon ends the same row and stays inside the width.
