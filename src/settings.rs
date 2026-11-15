@@ -947,6 +947,10 @@ pub struct AccountSettings {
     pub chat_queue: Option<crate::model::ChatFilter>,
     /// The chat list's mode (All, Unread or Needs me); `None` is All.
     pub list_mode: Option<crate::model::ListMode>,
+    /// Whether each list mode shows one flat list (true) or the group
+    /// sections (false), by [`crate::model::ListMode::key`]. A mode with no
+    /// entry shows the sections, as every mode always has.
+    pub flat_list: std::collections::BTreeMap<String, bool>,
     /// The chip the Calls page last showed, kept only so older settings
     /// files still load; the native Calls page is gone.
     pub call_filter: Option<String>,
@@ -971,6 +975,7 @@ impl Default for AccountSettings {
             favorites_only: false,
             chat_queue: None,
             list_mode: None,
+            flat_list: std::collections::BTreeMap::new(),
             call_filter: None,
         }
     }
@@ -994,6 +999,7 @@ impl AccountSettings {
             favorites_only: false,
             chat_queue: None,
             list_mode: None,
+            flat_list: std::collections::BTreeMap::new(),
             call_filter: None,
         }
     }

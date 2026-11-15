@@ -3604,8 +3604,23 @@ impl App {
                 || self.read_later_contains(chat))
     }
 
+    /// Whether the chat list shows one flat list (with a group tag on each
+    /// row) instead of the group sections, for the current mode.
+    pub fn list_is_flat(&self) -> bool {
+        self.account()
+            .settings
+            .flat_list
+            .get(self.list_mode.key())
+            .copied()
+            .unwrap_or(false)
+    }
+
     pub fn mode_matches_at(&self, chat: &Chat, mode: crate::model::ListMode, now: i64) -> bool {
         use crate::model::ListMode;
+        // A chat opened from an unread-type list stays until the view changes.
+        if mode != ListMode::Recent && self.unread_kept.contains(&chat.id) {
+            return true;
+        }
         match mode {
             ListMode::Recent => true,
             ListMode::Unread => chat.looks_unread(),
@@ -11788,6 +11803,12 @@ impl App {
                 self.show_archived = false;
                 self.remember_list_filter();
             }
+            Action::ToggleListLayout => {
+                let flat = !self.list_is_flat();
+                let key = self.list_mode.key().to_owned();
+                self.account_mut().settings.flat_list.insert(key, flat);
+                self.account_mut().mark_settings_dirty();
+            }
             Action::JoinGroup => {
                 use crate::model::InviteState;
                 let ready = self.invite.as_ref().and_then(|invite| match &invite.state {
@@ -11922,7 +11943,9 @@ impl App {
             // Only the filtered list sends this: search results and
             // notifications open chats without keeping them.
             Action::KeepUnread(id) => {
-                if self.chat_filter == ChatFilter::Unread {
+                if self.chat_filter == ChatFilter::Unread
+                    || self.list_mode != crate::model::ListMode::Recent
+                {
                     self.unread_kept.insert(id);
                 }
             }
@@ -27628,6 +27651,71 @@ mod tests {
         app.apply(Action::KeepUnread("2@s.whatsapp.net".into()), &ctx);
         app.apply(Action::SetChatFilter(ChatFilter::Unread), &ctx);
         assert!(app.visible_chats().is_empty());
+    }
+
+    #[test]
+    fn unread_type_modes_keep_opened_chats_until_the_view_changes() {
+        use crate::model::ListMode;
+        let ctx = egui::Context::default();
+        for mode in [ListMode::Unread, ListMode::RecentUnread, ListMode::NeedsMe] {
+            let mut app = app();
+            let now = crate::util::now();
+            let mut ada = Chat::new("1@s.whatsapp.net".into(), "Ada".into());
+            ada.unread = 1;
+            ada.last_activity = now;
+            let mut cy = Chat::new("3@s.whatsapp.net".into(), "Cy".into());
+            cy.unread = 1;
+            cy.last_activity = now - 1;
+            app.chats = vec![ada, cy];
+            app.apply(Action::SetListMode(mode), &ctx);
+            assert_eq!(
+                app.visible_chats().len(),
+                2,
+                "{mode:?} lists both unread chats"
+            );
+            // Opening from the list keeps the chat, however many are opened.
+            for index in [0, 1] {
+                let id = app.chats[index].id.clone();
+                app.apply(Action::KeepUnread(id.clone()), &ctx);
+                app.open_chat(id);
+                app.chats[index].unread = 0;
+            }
+            assert_eq!(
+                app.visible_chats().len(),
+                2,
+                "{mode:?} keeps both once read"
+            );
+            // Leaving and coming back is a view change: the read chats go.
+            app.apply(Action::SetListMode(mode), &ctx);
+            assert!(app.visible_chats().is_empty(), "{mode:?} forgets them");
+            // A chat opened from a notification or search is not kept.
+            app.chats[0].unread = 1;
+            app.open_chat("1@s.whatsapp.net".into());
+            app.chats[0].unread = 0;
+            assert!(app.visible_chats().is_empty(), "{mode:?} does not keep it");
+        }
+    }
+
+    #[test]
+    fn the_list_layout_is_remembered_per_mode() {
+        use crate::model::ListMode;
+        let ctx = egui::Context::default();
+        let mut app = app();
+        assert!(!app.list_is_flat(), "every mode starts as group sections");
+        app.apply(Action::ToggleListLayout, &ctx);
+        assert!(app.list_is_flat());
+        // Another mode has its own choice.
+        app.apply(Action::SetListMode(ListMode::Unread), &ctx);
+        assert!(!app.list_is_flat());
+        app.apply(Action::ToggleListLayout, &ctx);
+        app.apply(Action::ToggleListLayout, &ctx);
+        assert!(!app.list_is_flat());
+        // Coming back to the first mode finds its choice kept, and the choice
+        // is in the account settings so a restart keeps it too.
+        app.apply(Action::SetListMode(ListMode::Recent), &ctx);
+        assert!(app.list_is_flat());
+        assert_eq!(app.account().settings.flat_list.get("recent"), Some(&true));
+        assert_eq!(app.account().settings.flat_list.get("unread"), Some(&false));
     }
 
     #[test]

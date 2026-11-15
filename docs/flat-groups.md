@@ -38,3 +38,19 @@ favorites, Unreplied, auto-category, network/account, labels and link suggestion
 Shared filter actions remain for palette/keyboard and legacy views. Starting the
 app or picking a primary mode does not restore hidden saved type/favorite scope;
 picking a mode clears all extra scope. These controls are no longer in the list.
+
+## Layout and kept chats
+
+Each mode shows the group sections or one flat list (Cmd+G switches the current
+mode; the choice is kept per mode in the account settings, and no entry means
+sections). A flat list has no headings: each row of a grouped chat ends in
+` · Group name`, and the keyboard steps through the list in its on-screen order.
+Search results and Archived are unchanged.
+
+A chat opened from the list, or stepped to with the keyboard, in Unread, Unread
+7d or Needs me stays listed after it is read, in its place. Changing the view
+(a mode, a filter, Archived) forgets it. Chats opened from a notification or a
+search result are not kept.
+
+Not tested on screen: the sandbox cannot build the app, so the first compile and
+test run is CI. No screenshots.

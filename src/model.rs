@@ -3229,6 +3229,9 @@ pub enum Action {
     SetChatFilter(ChatFilter),
     /// Picks the chat list's mode (All, Unread or Needs me).
     SetListMode(ListMode),
+    /// Cmd+G: the current list mode switches between group sections and one
+    /// flat list. The choice is remembered per mode.
+    ToggleListLayout,
     /// Widens an in-chat find to every chat: the query moves to the chat
     /// list's search field, which then searches all chats.
     FindEverywhere,
