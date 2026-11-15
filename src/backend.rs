@@ -829,9 +829,6 @@ pub enum Command {
     SetArchived(ChatId, bool),
     /// Beeper server reminder; None clears it. ISO8601 UTC timestamp.
     WatchBeeperChats(Vec<ChatId>),
-    /// Chats marked Deal with later (reply or read): polled like the open
-    /// chat so a new message shows within seconds, not at the next refresh.
-    WatchMarkedChats(Vec<ChatId>),
     /// Mirror Beeper pins into favorites: each chat's current pin flag, from
     /// the latest list the bridge sent.
     MirrorPins(Vec<(ChatId, bool)>),

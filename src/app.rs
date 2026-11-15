@@ -453,7 +453,6 @@ pub struct App {
     stale_images: Vec<String>,
     pub composer: String,
     watched_beeper_chats: Vec<ChatId>,
-    marked_beeper_chats: Vec<ChatId>,
     pub beeper_history_errors: HashMap<ChatId, String>,
     pub beeper_live_errors: HashMap<ChatId, String>,
     /// Profile names observed on incoming messages, by sender id, for people
@@ -1525,7 +1524,6 @@ impl App {
             stale_images: Vec::new(),
             composer: String::new(),
             watched_beeper_chats: Vec::new(),
-            marked_beeper_chats: Vec::new(),
             beeper_history_errors: HashMap::new(),
             beeper_live_errors: HashMap::new(),
             sender_names: HashMap::new(),
@@ -3446,7 +3444,6 @@ impl App {
 
     fn toggle_reply_later_member(&mut self, member: crate::merged::Member) {
         toggle_later(&mut self.settings.beeper.reply_later, member);
-        self.sync_marked_watch();
         self.mark_settings_dirty();
     }
 
@@ -3468,25 +3465,8 @@ impl App {
 
     fn toggle_read_later_member(&mut self, member: crate::merged::Member) {
         toggle_later(&mut self.settings.beeper.read_later, member);
-        self.sync_marked_watch();
         self.mark_settings_dirty();
     }
-    /// Tells the backend which chats carry a Deal with later mark, when that
-    /// set changed, so it polls them like the open chat.
-    fn sync_marked_watch(&mut self) {
-        let beeper = &self.settings.beeper;
-        let mut marked: Vec<ChatId> = Vec::new();
-        for member in beeper.reply_later.iter().chain(&beeper.read_later) {
-            if !marked.contains(&member.chat) {
-                marked.push(member.chat.clone());
-            }
-        }
-        if marked != self.marked_beeper_chats {
-            self.marked_beeper_chats = marked.clone();
-            self.backend.send(Command::WatchMarkedChats(marked));
-        }
-    }
-
     pub fn reply_later_contains(&self, chat: &Chat) -> bool {
         self.later_contains(&self.settings.beeper.reply_later, chat)
     }
@@ -4237,9 +4217,10 @@ impl App {
                 .map(|(index, id)| (id, index))
                 .collect();
             chats.sort_by_key(|chat| rank.get(&chat.id).copied().unwrap_or(usize::MAX));
-        } else {
-            *shown = (view, chats.iter().map(|chat| chat.id.clone()).collect());
         }
+        // Newly listed chats take their place in the saved order too, so a
+        // later arrival cannot move them.
+        *shown = (view, chats.iter().map(|chat| chat.id.clone()).collect());
         chats
     }
 
@@ -4916,7 +4897,6 @@ impl App {
                 }
             }
             Event::Chats(mut chats) => {
-                self.sync_marked_watch();
                 for chat in &mut chats {
                     self.apply_silence(chat);
                 }
@@ -11597,7 +11577,6 @@ impl App {
                 if !queued {
                     self.settings.beeper.read_later.push(member);
                 }
-                self.sync_marked_watch();
                 self.mark_settings_dirty();
             }
             Action::ToggleReplyLater(id) => {
@@ -14948,37 +14927,13 @@ mod tests {
         app.list_hovered.store(true, Ordering::Relaxed);
         app.chats[0].last_activity = 500;
         assert_eq!(ids(&app), ["d", "c", "a", "b"]);
+        app.chats.push(later_chat("e", 600));
+        assert_eq!(ids(&app), ["d", "c", "a", "b", "e"]);
+        app.chats.push(later_chat("f", 700));
+        assert_eq!(ids(&app), ["d", "c", "a", "b", "e", "f"], "arrivals keep their place");
         app.chats[3].name = "Dora".into();
         app.search = "dora".into();
         assert_eq!(ids(&app), ["d"], "a view change does not reuse the old order");
-    }
-
-    #[test]
-    fn marked_chats_are_sent_to_the_backend_for_polling_when_the_marks_change() {
-        let root = tempfile::tempdir().unwrap();
-        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
-        let (backend, mut inbox) = Backend::recording();
-        app.backend = backend;
-        let ctx = egui::Context::default();
-        app.chats.push(Chat::new("ada".into(), "Ada".into()));
-        app.chats.push(Chat::new("bo".into(), "Bo".into()));
-        app.apply(Action::ToggleDealLater("ada".into()), &ctx);
-        app.apply(Action::ToggleDealLater("bo".into()), &ctx);
-        app.apply(Action::ToggleDealLater("ada".into()), &ctx);
-        let sent: Vec<Vec<ChatId>> = std::iter::from_fn(|| inbox.try_recv().ok())
-            .filter_map(|command| match command {
-                Command::WatchMarkedChats(chats) => Some(chats),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            sent,
-            vec![
-                vec!["ada".to_string()],
-                vec!["ada".to_string(), "bo".to_string()],
-                vec!["bo".to_string()],
-            ]
-        );
     }
 
     #[test]
