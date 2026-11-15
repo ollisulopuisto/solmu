@@ -984,6 +984,8 @@ fastframe_icons::icons! {
         ListChecks => "list-checks",
         QueueAll => "queue-all",
         QueueUnread => "queue-unread",
+        Unread => "unread",
+        UnreadRecent => "unread-recent",
         QueueReply => "queue-reply",
         QueueRead => "queue-read",
         CircleAlert => lucide "circle-alert",

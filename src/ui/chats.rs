@@ -259,6 +259,23 @@ fn bookmarks_switch(app: &mut App, ui: &mut egui::Ui) {
 /// Size of the Bookmarks icon that ends the mode row.
 const BOOKMARKS_ICON: f32 = 20.0;
 
+/// Width of the "All" tab, the only mode tab that still shows its word.
+const MODE_TEXT_TAB_WIDTH: f32 = 56.0;
+/// Width and glyph size of the icon-only mode tabs.
+const MODE_ICON_TAB_WIDTH: f32 = 48.0;
+const MODE_ICON: f32 = 20.0;
+
+/// The glyph a mode tab shows in place of its name; None keeps the word.
+fn mode_icon(mode: crate::model::ListMode) -> Option<Icon> {
+    use crate::model::ListMode;
+    match mode {
+        ListMode::Recent => None,
+        ListMode::Unread => Some(Icon::Unread),
+        ListMode::RecentUnread => Some(Icon::UnreadRecent),
+        ListMode::NeedsMe => Some(Icon::CircleAlert),
+    }
+}
+
 /// Search, title and queues, then the composed scope. Shared by every platform.
 fn header(app: &mut App, ui: &mut egui::Ui) {
     if app.show_starred || app.show_saved || app.show_archived || app.locked_folder_open() {
@@ -292,18 +309,34 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             super::batch_actions::archive_bar(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
-                // Four mode tabs share the row with the Bookmarks icon, which
-                // keeps its own square so the labels still fit at 300 points.
-                let bookmarks_edge = BOOKMARKS_ICON + theme::ICON_BUTTON_PAD;
-                let width =
-                    (ui.available_width() - 4.0 * ui.spacing().item_spacing.x - bookmarks_edge)
-                        / 4.0;
+                // "All" keeps its word; the other three modes are icons, so
+                // nothing is truncated at 300 points. Each icon carries a
+                // tooltip and an accessible label with the mode's name.
                 for mode in crate::model::ListMode::EVERY {
-                    let response = ui.add_sized(
-                        [width, 36.0],
-                        egui::Button::selectable(app.list_mode == mode, mode.label(app.locale))
-                            .truncate(),
-                    );
+                    let name = mode.label(app.locale);
+                    let response = match mode_icon(mode) {
+                        None => ui.add_sized(
+                            [MODE_TEXT_TAB_WIDTH, 36.0],
+                            egui::Button::selectable(app.list_mode == mode, name.clone()),
+                        ),
+                        Some(icon) => {
+                            let response = ui.add_sized(
+                                [MODE_ICON_TAB_WIDTH, 36.0],
+                                egui::Button::selectable(app.list_mode == mode, ""),
+                            );
+                            let label = name.to_string();
+                            response.widget_info(|| {
+                                egui::WidgetInfo::selected(
+                                    egui::WidgetType::SelectableLabel,
+                                    ui.is_enabled(),
+                                    app.list_mode == mode,
+                                    label.clone(),
+                                )
+                            });
+                            theme::paint_icon(ui, icon, response.rect, MODE_ICON, app.palette.text);
+                            response
+                        }
+                    };
                     let stop = match mode {
                         crate::model::ListMode::Recent => Stop::Recent,
                         crate::model::ListMode::Unread => Stop::UnreadMode,
@@ -316,6 +349,8 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                             app.locale,
                             "Unread chats active in the last 7 days, muted ones left out",
                         ))
+                    } else if mode_icon(mode).is_some() {
+                        response.on_hover_text(name.clone())
                     } else {
                         response
                     };
@@ -3648,6 +3683,25 @@ fn advance_after_ticks(delivery: crate::model::Delivery) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_tabs_show_all_as_a_word_and_the_rest_as_distinct_icons() {
+        use crate::model::ListMode;
+        assert!(mode_icon(ListMode::Recent).is_none());
+        let icons: Vec<_> = [ListMode::Unread, ListMode::RecentUnread, ListMode::NeedsMe]
+            .into_iter()
+            .map(|mode| mode_icon(mode).expect("icon tab"))
+            .collect();
+        for (i, a) in icons.iter().enumerate() {
+            for b in &icons[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+        // Four tabs plus the Bookmarks icon fit the narrowest chat list (300 points).
+        let tabs = MODE_TEXT_TAB_WIDTH + 3.0 * MODE_ICON_TAB_WIDTH;
+        let bookmarks = BOOKMARKS_ICON + theme::ICON_BUTTON_PAD;
+        assert!(tabs + bookmarks + 5.0 * 8.0 <= 300.0);
+    }
 
     #[test]
     fn quiet_tiers_fade_in_steps_stay_readable_and_people_stay_plain() {
