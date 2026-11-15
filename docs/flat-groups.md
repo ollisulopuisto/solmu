@@ -43,7 +43,7 @@ picking a mode clears all extra scope. These controls are no longer in the list.
 
 Each mode shows the group sections or one flat list (Cmd+G switches the current
 mode; the choice is kept per mode in the account settings, and no entry means
-sections). A flat list has no headings: each row of a grouped chat ends in
+sections). A flat list has no headings (no Pinned or Other chats labels either; Archived keeps its own): each row of a grouped chat ends in
 ` · Group name`, and the keyboard steps through the list in its on-screen order.
 Search results and Archived are unchanged.
 
