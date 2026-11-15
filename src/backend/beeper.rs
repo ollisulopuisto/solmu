@@ -30,7 +30,10 @@ mod gallery;
 
 const CHAT_PAGE_LIMIT: u32 = 100;
 /// How often the chat list (ordering, previews, unread counts) is refreshed.
-const CHAT_REFRESH: Duration = Duration::from_secs(60);
+/// Chats that are neither open nor marked show new messages only at this pace.
+const CHAT_REFRESH: Duration = Duration::from_secs(15);
+/// The most marked chats polled every `MSG_POLL`, one request each.
+const MARKED_POLL_CAP: usize = 24;
 /// Receipt refresh for the open chat. The forward-only live poll never
 /// re-returns already loaded messages, so their delivery/read receipt
 /// fields would stall without an occasional full-page refetch.
@@ -3920,6 +3923,7 @@ pub fn run(
     let mut chat_search_cache = (String::new(), CachedSearch::default());
     let mut open_chat: Option<ChatId> = None;
     let mut watched_chats: Vec<ChatId> = Vec::new();
+    let mut marked_chats: Vec<ChatId> = Vec::new();
     // Chats the Server answered 404 for: permanent per id, so polling and
     // history stop instead of retrying forever.
     let mut dead_chats: HashSet<ChatId> = HashSet::new();
@@ -4061,6 +4065,9 @@ pub fn run(
                 Command::ClearMediaCache { token } => pending_storage = Some((token, true)),
                 Command::WatchBeeperChats(chats) => {
                     watched_chats = chats.into_iter().take(8).collect();
+                }
+                Command::WatchMarkedChats(chats) => {
+                    marked_chats = chats.into_iter().take(MARKED_POLL_CAP).collect();
                 }
                 Command::MirrorPins(pins) => {
                     if draft_store.is_none() {
@@ -5178,11 +5185,16 @@ pub fn run(
         }
         if last_msg_poll.elapsed() >= MSG_POLL {
             last_msg_poll = Instant::now();
-            let targets = if watched_chats.is_empty() {
+            let mut targets: Vec<ChatId> = if watched_chats.is_empty() {
                 open_chat.clone().into_iter().collect()
             } else {
                 watched_chats.clone()
             };
+            for chat in &marked_chats {
+                if !targets.contains(chat) {
+                    targets.push(chat.clone());
+                }
+            }
             for chat in targets {
                 if dead_chats.contains(&chat) {
                     continue;
