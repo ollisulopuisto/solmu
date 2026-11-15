@@ -3762,7 +3762,10 @@ impl App {
                         || (self.auto_category_filter.is_some() && chat.is_channel()))
                     && chat.looks_unread())
                 || self.filter_matches(queue, chat)
-                || (queue == ChatFilter::Unread && self.unread_kept.contains(&chat.id)))
+                || (matches!(
+                    queue,
+                    ChatFilter::Unread | ChatFilter::ReplyLater | ChatFilter::ReadLater
+                ) && self.unread_kept.contains(&chat.id)))
             && self
                 .category_filter
                 .is_none_or(|filter| filter.matches(chat))
@@ -6376,18 +6379,21 @@ impl App {
                 account,
                 chat,
             } => {
-                // Established queue behavior: a successful send clears the
-                // chat's reply-later mark. Read-later stays manual.
+                // A successful send clears both Deal with later marks. Like
+                // reading from the Unread list, the row stays listed until
+                // the view changes (`unread_kept`), only its mark goes.
                 let member = crate::merged::Member {
                     origin,
                     account,
                     chat,
                 };
-                if self.settings.beeper.reply_later.contains(&member) {
-                    self.settings
-                        .beeper
-                        .reply_later
-                        .retain(|saved| saved != &member);
+                let beeper = &mut self.settings.beeper;
+                let marked = beeper.reply_later.contains(&member)
+                    || beeper.read_later.contains(&member);
+                if marked {
+                    beeper.reply_later.retain(|saved| saved != &member);
+                    beeper.read_later.retain(|saved| saved != &member);
+                    self.unread_kept.insert(member.chat);
                     self.mark_settings_dirty();
                 }
             }
@@ -31668,13 +31674,13 @@ mod conversation_palette_tests {
     }
 
     #[test]
-    fn deal_later_survives_send_confirmation() {
+    fn send_confirmation_clears_deal_later_but_keeps_the_row_listed_until_the_view_changes() {
+        use crate::model::ListMode;
         let mut app = app();
         app.chats = vec![later_chat("chat-1", 10)];
-        app.apply(
-            Action::ToggleDealLater("chat-1".into()),
-            &egui::Context::default(),
-        );
+        let ctx = egui::Context::default();
+        app.apply(Action::ToggleDealLater("chat-1".into()), &ctx);
+        assert!(app.needs_me_at(&app.chats[0], crate::util::now()));
         let member = crate::merged::Member::of(&app.chats[0]).unwrap();
         app.apply_backend_event(
             Event::BeeperSendConfirmed {
@@ -31684,7 +31690,15 @@ mod conversation_palette_tests {
             },
             true,
         );
-        assert!(app.needs_me_at(&app.chats[0], crate::util::now()));
+        let now = crate::util::now();
+        assert!(!app.read_later_contains(&app.chats[0]), "the mark is gone");
+        assert!(!app.needs_me_at(&app.chats[0], now));
+        assert!(app.mode_matches_at(&app.chats[0], ListMode::NeedsMe, now));
+        app.chat_filter = ChatFilter::ReadLater;
+        assert!(app.chat_scope_matches(&app.chats[0]));
+        app.unread_kept.clear();
+        assert!(!app.chat_scope_matches(&app.chats[0]));
+        assert!(!app.mode_matches_at(&app.chats[0], ListMode::NeedsMe, now));
     }
 
     #[test]
