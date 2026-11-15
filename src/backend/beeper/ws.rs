@@ -245,7 +245,10 @@ fn read_frame(reader: &mut impl Read) -> io::Result<(u8, bool, Vec<u8>)> {
         len => len as u64,
     };
     if len > MAX_MESSAGE as u64 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "frame too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "frame too large",
+        ));
     }
     let mut mask = [0u8; 4];
     if masked {
@@ -290,7 +293,10 @@ mod tests {
         let mut frame = vec![0x81, 2];
         frame.extend_from_slice(b"hi");
         let (opcode, fin, payload) = read_frame(&mut frame.as_slice()).unwrap();
-        assert_eq!((opcode, fin, payload.as_slice()), (OP_TEXT, true, &b"hi"[..]));
+        assert_eq!(
+            (opcode, fin, payload.as_slice()),
+            (OP_TEXT, true, &b"hi"[..])
+        );
     }
 
     #[test]
@@ -302,7 +308,9 @@ mod tests {
 
     #[test]
     fn only_chat_and_message_events_count_as_wakes() {
-        assert!(is_domain_event(br#"{"type":"message.upserted","chatID":"a"}"#));
+        assert!(is_domain_event(
+            br#"{"type":"message.upserted","chatID":"a"}"#
+        ));
         assert!(is_domain_event(br#"{"type":"chat.deleted","chatID":"a"}"#));
         assert!(!is_domain_event(br#"{"type":"ready","version":1}"#));
         assert!(!is_domain_event(br#"{"type":"error","code":"X"}"#));
@@ -332,7 +340,11 @@ mod tests {
                 .write_all(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
                 .unwrap();
             let (_, _, subscribe) = read_frame(&mut reader).unwrap();
-            assert!(String::from_utf8(subscribe).unwrap().contains("subscriptions.set"));
+            assert!(
+                String::from_utf8(subscribe)
+                    .unwrap()
+                    .contains("subscriptions.set")
+            );
             let event = br#"{"type":"message.upserted","chatID":"a"}"#;
             let mut frame = vec![0x81, event.len() as u8];
             frame.extend_from_slice(event);
@@ -345,7 +357,13 @@ mod tests {
         let (wake, woken) = mpsc::channel();
         let stop = AtomicBool::new(false);
         // localhost may resolve to ::1 first: the IPv4 address must still be tried.
-        let connected = run_once(&format!("localhost:{port}"), "localhost", "tok", &wake, &stop);
+        let connected = run_once(
+            &format!("localhost:{port}"),
+            "localhost",
+            "tok",
+            &wake,
+            &stop,
+        );
         server.join().unwrap();
         assert!(connected);
         assert!(woken.try_recv().is_ok());
