@@ -1890,9 +1890,9 @@ enum ChatListRow {
     Chat(usize),
 }
 
-fn sectioned_rows(favorites: &[bool]) -> Vec<ChatListRow> {
+fn sectioned_rows(favorites: &[bool], headings: bool) -> Vec<ChatListRow> {
     let split = favorites.iter().take_while(|favorite| **favorite).count();
-    let grouped = split > 0 && split < favorites.len();
+    let grouped = headings && split > 0 && split < favorites.len();
     let mut rows = Vec::with_capacity(favorites.len() + if grouped { 2 } else { 0 });
     for index in 0..favorites.len() {
         if grouped && (index == 0 || index == split) {
@@ -2033,8 +2033,9 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
         widgets::empty_state(ui, &palette, Icon::MessageCircle, title, body);
         return;
     }
-    // Labels appear only when both groups remain in this filtered view.
-    let list_rows = sectioned_rows(&favorites);
+    // Labels appear only when both groups remain in this filtered view, and
+    // never in a flat list: that layout is heading-free (Archived keeps them).
+    let list_rows = sectioned_rows(&favorites, app.show_archived);
     // Virtual headers have short, noninteractive rows of their own.
     ui.spacing_mut().item_spacing.y = 0.0;
     let row_height = chat_row_height(app.settings.beeper.compact_list);
@@ -3850,18 +3851,26 @@ mod tests {
     #[test]
     fn favorites_sections_exist_only_with_both_visible_groups() {
         use ChatListRow::{Chat, Header};
-        assert_eq!(sectioned_rows(&[]), vec![]);
-        assert_eq!(sectioned_rows(&[false, false]), vec![Chat(0), Chat(1)]);
-        assert_eq!(sectioned_rows(&[true, true]), vec![Chat(0), Chat(1)]);
+        assert_eq!(sectioned_rows(&[], true), vec![]);
         assert_eq!(
-            sectioned_rows(&[true, true, false]),
+            sectioned_rows(&[false, false], true),
+            vec![Chat(0), Chat(1)]
+        );
+        assert_eq!(sectioned_rows(&[true, true], true), vec![Chat(0), Chat(1)]);
+        assert_eq!(
+            sectioned_rows(&[true, true, false], true),
             vec![Header(true), Chat(0), Chat(1), Header(false), Chat(2)]
+        );
+        // A flat list has no headings, whatever its pinned and other chats.
+        assert_eq!(
+            sectioned_rows(&[true, true, false], false),
+            vec![Chat(0), Chat(1), Chat(2)]
         );
     }
 
     #[test]
     fn favorites_headers_are_included_in_virtual_scroll_geometry() {
-        let rows = sectioned_rows(&[true, false, false]);
+        let rows = sectioned_rows(&[true, false, false], true);
         let offsets = section_offsets(&rows, 80.0);
         assert_eq!(offsets, vec![0.0, 26.0, 106.0, 138.0, 218.0, 298.0]);
         assert_eq!(reveal_bounds(0.0, 200.0, offsets[4], offsets[5]), 98.0);
