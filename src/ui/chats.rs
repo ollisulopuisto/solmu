@@ -1982,7 +1982,12 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
         results(app, ui);
         return;
     }
-    if !app.show_archived {
+    // An empty unread-type list keeps the group view: it has nothing to say
+    // that the flat list's "No chats yet" would not get wrong.
+    if !app.show_archived
+        && (!app.list_is_flat()
+            || (app.list_mode != crate::model::ListMode::Recent && app.visible_chats().is_empty()))
+    {
         super::flat_groups::list(app, ui, to_top);
         return;
     }
@@ -2645,6 +2650,13 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
     // backend supplied one (WhatsApp rows are unchanged).
     let title = match &chat.network {
         Some(network) if app.settings.beeper.show_network_labels => format!("{title} · {network}"),
+        _ => title,
+    };
+    // A flat list has no group headings, so the group goes on the row.
+    let title = match super::flat_groups::home_name(app, chat) {
+        Some(group) if app.list_is_flat() && app.search.trim().is_empty() && !app.show_archived => {
+            format!("{title} · {group}")
+        }
         _ => title,
     };
     // While searching, the result reached with the arrows is the selection;

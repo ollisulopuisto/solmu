@@ -9,6 +9,8 @@ version in Cargo.toml is bumped.
 
 ## Unreleased
 
+- The chat list has two independent choices: the mode (All, Unread, Unread 7d, Needs me; Cmd+D) and the layout (group sections or one flat list with the group name on each row; Cmd+G). The layout is remembered for each mode, and every mode starts as group sections, as before.
+- Opening a chat in Unread, Unread 7d or Needs me no longer drops it from the list: it stays in place, read, until you change the view (switch mode, pick a filter or archive). This worked only for the old Unread chip before.
 - The chat-list mode tabs no longer truncate: All keeps its word, and Unread, Unread 7d and Needs me are icons (a filled dot, a calendar with a dot, an alert circle) with the full name as tooltip and screen-reader label.
 - A fourth chat-list mode, Unread 7d, sits between Unread and Needs me: unread chats with activity in the last seven days, never a muted one, so an old unread backlog stays out of the way. Cmd+D now steps All, Unread, Unread 7d, Needs me. Unread still lists every unread chat, and a saved mode from before opens as it did.
 - Long image titles in the viewer no longer scroll back and forth: they end in an ellipsis and show in full on hover, and they no longer keep the window repainting while visible.

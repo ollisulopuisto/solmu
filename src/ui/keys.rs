@@ -230,6 +230,9 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             key_code,
             Action::SetListMode(app.list_mode.next()),
         );
+        // Cmd+G switches the list between group sections and one flat list.
+        let (modifiers, key_code) = LIST_LAYOUT.keys[0];
+        key(modifiers, key_code, Action::ToggleListLayout);
         let (modifiers, key_code) = SETTINGS.keys[0];
         key(modifiers, key_code, Action::ToggleSettings);
         let (modifiers, key_code) = QUIT.keys[0];
@@ -1375,6 +1378,13 @@ const LIST_MODE: Shortcut = Shortcut {
     description: Some("Switch the chat list between All, Unread, Unread 7d and Needs me"),
     menu: None,
 };
+const LIST_LAYOUT: Shortcut = Shortcut {
+    id: "list-layout",
+    keys: &[(Modifiers::COMMAND, Key::G)],
+    label: Some("Ctrl+G"),
+    description: Some("Show the chat list as group sections or as one flat list"),
+    menu: None,
+};
 const BOOKMARKS: Shortcut = Shortcut {
     id: "bookmarks",
     // Cmd+B already collapses the chat list, so Bookmarks takes Shift.
@@ -1609,6 +1619,7 @@ pub static REGISTRY: &[Row] = &[
     Row::Help("Ctrl+C", "Copy the selected messages"),
     Row::Binding(&SIDEBAR),
     Row::Binding(&LIST_MODE),
+    Row::Binding(&LIST_LAYOUT),
     Row::Binding(&BOOKMARKS),
     Row::Binding(&INFO_SIDEBAR),
     Row::Help(
@@ -1937,6 +1948,10 @@ mod tests {
             (
                 "Ctrl+D",
                 "Switch the chat list between All, Unread, Unread 7d and Needs me",
+            ),
+            (
+                "Ctrl+G",
+                "Show the chat list as group sections or as one flat list",
             ),
             ("Ctrl+Shift+B", "Open or close Bookmarks"),
             ("Ctrl+Alt+I", "Show or hide the info sidebar"),

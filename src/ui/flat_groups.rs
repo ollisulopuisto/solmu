@@ -121,6 +121,28 @@ fn draw_row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     }
 }
 
+/// The name of the group a chat lives in, for the tag a flat list shows: the
+/// first group holding any of its linked identities, as the sections choose.
+pub fn home_name(app: &App, chat: &Chat) -> Option<String> {
+    let linked = app
+        .settings
+        .beeper
+        .people
+        .iter()
+        .any(|person| person.members.iter().any(|m| m.matches(chat)));
+    let keys = if linked {
+        identities(app, chat)
+    } else {
+        vec![member(app, chat)]
+    };
+    app.settings
+        .flat_groups
+        .items
+        .iter()
+        .find(|group| belongs(group, &keys))
+        .map(|group| group.name.clone())
+}
+
 pub fn assign(app: &mut App, chat: &Chat) {
     let target = member(app, chat);
     let targets = identities(app, chat);
@@ -213,7 +235,8 @@ pub fn assign_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
 /// Headers are static and never change the navigation order.
 pub fn navigation_chats(app: &App) -> Vec<&Chat> {
     let chats = app.visible_chats();
-    if app.show_archived
+    if app.list_is_flat()
+        || app.show_archived
         || app.show_starred
         || app.locked_folder_open()
         || app.secret_code_matched()
@@ -1086,6 +1109,66 @@ mod tests {
         assign(&mut app, &b);
         assert_eq!(app.flat_group_ui.assigning.as_ref().unwrap().1, vec![group]);
     }
+    #[test]
+    fn a_flat_list_steps_in_activity_order_and_tags_rows_with_their_group() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        app.chats = vec![
+            Chat::new("ungrouped".into(), "Ungrouped".into()),
+            Chat::new("work".into(), "Work chat".into()),
+        ];
+        app.chats[0].last_activity = 200;
+        app.chats[1].last_activity = 100;
+        let group = app.settings.flat_groups.create("Work").unwrap();
+        let work = member(&app, &app.chats[1]);
+        app.settings.flat_groups.add(group, work);
+        let order = |app: &App| {
+            navigation_chats(app)
+                .iter()
+                .map(|c| c.id.as_str().to_owned())
+                .collect::<Vec<_>>()
+        };
+        // Grouped: the group's chat comes first, though it is older.
+        assert_eq!(order(&app), ["work", "ungrouped"]);
+        app.apply(Action::ToggleListLayout, &egui::Context::default());
+        assert_eq!(order(&app), ["ungrouped", "work"]);
+        // Only the grouped chat carries a tag.
+        assert_eq!(home_name(&app, &app.chats[1]).as_deref(), Some("Work"));
+        assert_eq!(home_name(&app, &app.chats[0]), None);
+    }
+
+    #[test]
+    fn a_linked_chat_is_tagged_with_the_group_of_any_of_its_aliases() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        let mut a = Chat::new("a".into(), "Person".into());
+        a.backend_origin = Some("server".into());
+        a.backend_account = Some("signal".into());
+        let mut b = a.clone();
+        b.id = "b".into();
+        b.backend_account = Some("whatsapp".into());
+        app.settings.beeper.people.push(crate::merged::Person {
+            name: "Person".into(),
+            members: vec![
+                crate::merged::Member::of(&a).unwrap(),
+                crate::merged::Member::of(&b).unwrap(),
+            ],
+            primary: None,
+        });
+        app.chats = vec![a.clone(), b.clone()];
+        // Only the alias is saved in the group; the row shows the first one.
+        let group = app.settings.flat_groups.create("Work").unwrap();
+        let alias = member(&app, &b);
+        app.settings.flat_groups.add(group, alias);
+        assert_eq!(home_name(&app, &a).as_deref(), Some("Work"));
+    }
+
     #[test]
     fn grouped_keyboard_order_and_reveal_expand_collapsed_rows() {
         let root = tempfile::tempdir().unwrap();
