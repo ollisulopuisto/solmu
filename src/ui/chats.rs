@@ -2147,6 +2147,10 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
     }
     app.scroll_route
         .place(crate::app::ScrollPane::Chats, output.inner_rect);
+    app.list_hovered.store(
+        ui.rect_contains_pointer(output.inner_rect),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     #[cfg(test)]
     ui.ctx().data_mut(|data| {
         data.insert_temp(list_offset_id(), output.state.offset.y);

@@ -769,6 +769,11 @@ pub struct App {
     pub auto_category_filter: Option<crate::categories::AutoCategory>,
     /// Chats opened from the Unread list, kept there until the filter changes.
     unread_kept: HashSet<ChatId>,
+    /// Whether the pointer is over the chat list. While it is, a refresh or
+    /// push event updates rows in place but does not reorder them.
+    pub(crate) list_hovered: std::sync::atomic::AtomicBool,
+    /// The last order `visible_chats` showed, with the view it belongs to.
+    list_order: std::sync::Mutex<(String, Vec<ChatId>)>,
     pub toasts: Vec<Toast>,
     /// Link suggestions for the current chats, people and dismissals, kept
     /// until one of them changes.
@@ -1674,6 +1679,8 @@ impl App {
             label_filter: None,
             auto_category_filter: None,
             unread_kept: HashSet::new(),
+            list_hovered: std::sync::atomic::AtomicBool::new(false),
+            list_order: std::sync::Mutex::new((String::new(), Vec::new())),
             toasts: Vec::new(),
             link_suggestions_cache: None,
             actions: Vec::new(),
@@ -4211,6 +4218,28 @@ impl App {
                 .position(|p| p.members.iter().any(|m| m.matches(chat)))
                 .is_none_or(|index| people_seen.insert(index))
         });
+        // Under the pointer, or while arrowing through search results, rows
+        // keep the order they were last shown in; chats that arrived since
+        // go last. Leaving the list or changing the view lets the order
+        // follow the data again.
+        let view = format!("{:?}", (self.chat_filter, self.list_mode, &self.search));
+        let held = self.list_hovered.load(std::sync::atomic::Ordering::Relaxed)
+            || self.search_selected.is_some();
+        let mut shown = self
+            .list_order
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if held && shown.0 == view {
+            let rank: HashMap<&ChatId, usize> = shown
+                .1
+                .iter()
+                .enumerate()
+                .map(|(index, id)| (id, index))
+                .collect();
+            chats.sort_by_key(|chat| rank.get(&chat.id).copied().unwrap_or(usize::MAX));
+        } else {
+            *shown = (view, chats.iter().map(|chat| chat.id.clone()).collect());
+        }
         chats
     }
 
@@ -14888,6 +14917,40 @@ mod tests {
         assert_eq!(app.visible_chats()[0].id, "signal");
         app.beeper_network_filter = None;
         assert_eq!(app.visible_chats().len(), 4);
+    }
+
+    #[test]
+    fn a_refresh_does_not_reorder_rows_under_the_pointer_until_it_leaves() {
+        use std::sync::atomic::Ordering;
+        let mut app = app();
+        app.chats = vec![
+            later_chat("a", 30),
+            later_chat("b", 20),
+            later_chat("c", 10),
+        ];
+        let ids = |app: &App| -> Vec<String> {
+            app.visible_chats()
+                .iter()
+                .map(|chat| chat.id.clone())
+                .collect()
+        };
+        assert_eq!(ids(&app), ["a", "b", "c"]);
+        app.list_hovered.store(true, Ordering::Relaxed);
+        app.chats = vec![
+            later_chat("a", 30),
+            later_chat("b", 20),
+            later_chat("c", 90),
+            later_chat("d", 95),
+        ];
+        assert_eq!(ids(&app), ["a", "b", "c", "d"], "same order, new chat last");
+        app.list_hovered.store(false, Ordering::Relaxed);
+        assert_eq!(ids(&app), ["d", "c", "a", "b"]);
+        app.list_hovered.store(true, Ordering::Relaxed);
+        app.chats[0].last_activity = 500;
+        assert_eq!(ids(&app), ["d", "c", "a", "b"]);
+        app.chats[3].name = "Dora".into();
+        app.search = "dora".into();
+        assert_eq!(ids(&app), ["d"], "a view change does not reuse the old order");
     }
 
     #[test]
