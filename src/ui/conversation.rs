@@ -536,9 +536,9 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                 ui.add_space(room.left);
                 let picture = app.avatar(&chat.id);
                 let (subtitle, color) = subtitle(app, chat);
-                // More and Search, and Back in a narrow window, each on its
-                // own glass with room around it on a vibrant window.
-                let buttons = if narrow { 3.0 } else { 2.0 }
+                // Info, More and Search, and Back in a narrow window, each on
+                // its own glass with room around it on a vibrant window.
+                let buttons = if narrow { 4.0 } else { 3.0 }
                     + if chat.is_channel() { 3.0 } else { 4.0 }
                     + if app.beeper_live_errors.contains_key(&chat.id) {
                         1.0
