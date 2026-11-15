@@ -14899,44 +14899,6 @@ mod tests {
     }
 
     #[test]
-    fn a_refresh_does_not_reorder_rows_under_the_pointer_until_it_leaves() {
-        use std::sync::atomic::Ordering;
-        let mut app = app();
-        app.chats = vec![
-            later_chat("a", 30),
-            later_chat("b", 20),
-            later_chat("c", 10),
-        ];
-        let ids = |app: &App| -> Vec<String> {
-            app.visible_chats()
-                .iter()
-                .map(|chat| chat.id.clone())
-                .collect()
-        };
-        assert_eq!(ids(&app), ["a", "b", "c"]);
-        app.list_hovered.store(true, Ordering::Relaxed);
-        app.chats = vec![
-            later_chat("a", 30),
-            later_chat("b", 20),
-            later_chat("c", 90),
-            later_chat("d", 95),
-        ];
-        assert_eq!(ids(&app), ["a", "b", "c", "d"], "same order, new chat last");
-        app.list_hovered.store(false, Ordering::Relaxed);
-        assert_eq!(ids(&app), ["d", "c", "a", "b"]);
-        app.list_hovered.store(true, Ordering::Relaxed);
-        app.chats[0].last_activity = 500;
-        assert_eq!(ids(&app), ["d", "c", "a", "b"]);
-        app.chats.push(later_chat("e", 600));
-        assert_eq!(ids(&app), ["d", "c", "a", "b", "e"]);
-        app.chats.push(later_chat("f", 700));
-        assert_eq!(ids(&app), ["d", "c", "a", "b", "e", "f"], "arrivals keep their place");
-        app.chats[3].name = "Dora".into();
-        app.search = "dora".into();
-        assert_eq!(ids(&app), ["d"], "a view change does not reuse the old order");
-    }
-
-    #[test]
     fn beeper_translate_action_only_stages_explicit_text_for_review() {
         let root = tempfile::tempdir().unwrap();
         let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
@@ -31753,6 +31715,52 @@ mod conversation_palette_tests {
             true,
         );
         assert!(app.needs_me_at(&app.chats[0], crate::util::now()));
+    }
+
+    #[test]
+    fn a_refresh_does_not_reorder_rows_under_the_pointer_until_it_leaves() {
+        use std::sync::atomic::Ordering;
+        let mut app = app();
+        app.chats = vec![
+            later_chat("a", 30),
+            later_chat("b", 20),
+            later_chat("c", 10),
+        ];
+        let ids = |app: &App| -> Vec<String> {
+            app.visible_chats()
+                .iter()
+                .map(|chat| chat.id.clone())
+                .collect()
+        };
+        assert_eq!(ids(&app), ["a", "b", "c"]);
+        app.list_hovered.store(true, Ordering::Relaxed);
+        app.chats = vec![
+            later_chat("a", 30),
+            later_chat("b", 20),
+            later_chat("c", 90),
+            later_chat("d", 95),
+        ];
+        assert_eq!(ids(&app), ["a", "b", "c", "d"], "same order, new chat last");
+        app.list_hovered.store(false, Ordering::Relaxed);
+        assert_eq!(ids(&app), ["d", "c", "a", "b"]);
+        app.list_hovered.store(true, Ordering::Relaxed);
+        app.chats[0].last_activity = 500;
+        assert_eq!(ids(&app), ["d", "c", "a", "b"]);
+        app.chats.push(later_chat("e", 600));
+        assert_eq!(ids(&app), ["d", "c", "a", "b", "e"]);
+        app.chats.push(later_chat("f", 700));
+        assert_eq!(
+            ids(&app),
+            ["d", "c", "a", "b", "e", "f"],
+            "arrivals keep their place"
+        );
+        app.chats[3].name = "Dora".into();
+        app.search = "dora".into();
+        assert_eq!(
+            ids(&app),
+            ["d"],
+            "a view change does not reuse the old order"
+        );
     }
 
     #[test]
