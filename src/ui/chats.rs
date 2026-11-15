@@ -259,22 +259,8 @@ fn bookmarks_switch(app: &mut App, ui: &mut egui::Ui) {
 /// Size of the Bookmarks icon that ends the mode row.
 const BOOKMARKS_ICON: f32 = 20.0;
 
-/// Width of the "All" tab, the only mode tab that still shows its word.
-const MODE_TEXT_TAB_WIDTH: f32 = 56.0;
-/// Width and glyph size of the icon-only mode tabs.
-const MODE_ICON_TAB_WIDTH: f32 = 48.0;
+/// Glyph size of the icon-only mode tabs.
 const MODE_ICON: f32 = 20.0;
-
-/// The glyph a mode tab shows in place of its name; None keeps the word.
-fn mode_icon(mode: crate::model::ListMode) -> Option<Icon> {
-    use crate::model::ListMode;
-    match mode {
-        ListMode::Recent => None,
-        ListMode::Unread => Some(Icon::Unread),
-        ListMode::RecentUnread => Some(Icon::UnreadRecent),
-        ListMode::NeedsMe => Some(Icon::CircleAlert),
-    }
-}
 
 /// Search, title and queues, then the composed scope. Shared by every platform.
 fn header(app: &mut App, ui: &mut egui::Ui) {
@@ -312,16 +298,27 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                 // "All" keeps its word; the other three modes are icons, so
                 // nothing is truncated at 300 points. Each icon carries a
                 // tooltip and an accessible label with the mode's name.
+                // "All" is a word, so it gets one and a half shares of the row.
+                let bookmarks_edge = BOOKMARKS_ICON + theme::ICON_BUTTON_PAD;
+                let share =
+                    (ui.available_width() - 4.0 * ui.spacing().item_spacing.x - bookmarks_edge)
+                        / 4.5;
                 for mode in crate::model::ListMode::EVERY {
                     let name = mode.label(app.locale);
-                    let response = match mode_icon(mode) {
+                    let icon = match mode {
+                        crate::model::ListMode::Recent => None,
+                        crate::model::ListMode::Unread => Some(Icon::Unread),
+                        crate::model::ListMode::RecentUnread => Some(Icon::UnreadRecent),
+                        crate::model::ListMode::NeedsMe => Some(Icon::CircleAlert),
+                    };
+                    let response = match icon {
                         None => ui.add_sized(
-                            [MODE_TEXT_TAB_WIDTH, 36.0],
+                            [share * 1.5, 36.0],
                             egui::Button::selectable(app.list_mode == mode, name.clone()),
                         ),
                         Some(icon) => {
                             let response = ui.add_sized(
-                                [MODE_ICON_TAB_WIDTH, 36.0],
+                                [share, 36.0],
                                 egui::Button::selectable(app.list_mode == mode, ""),
                             );
                             let label = name.to_string();
@@ -349,7 +346,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                             app.locale,
                             "Unread chats active in the last 7 days, muted ones left out",
                         ))
-                    } else if mode_icon(mode).is_some() {
+                    } else if icon.is_some() {
                         response.on_hover_text(name.clone())
                     } else {
                         response
@@ -3685,25 +3682,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mode_tabs_show_all_as_a_word_and_the_rest_as_distinct_icons() {
-        use crate::model::ListMode;
-        assert!(mode_icon(ListMode::Recent).is_none());
-        let icons: Vec<_> = [ListMode::Unread, ListMode::RecentUnread, ListMode::NeedsMe]
-            .into_iter()
-            .map(|mode| mode_icon(mode).expect("icon tab"))
-            .collect();
-        for (i, a) in icons.iter().enumerate() {
-            for b in &icons[i + 1..] {
-                assert_ne!(a, b);
-            }
-        }
-        // Four tabs plus the Bookmarks icon fit the narrowest chat list (300 points).
-        let tabs = MODE_TEXT_TAB_WIDTH + 3.0 * MODE_ICON_TAB_WIDTH;
-        let bookmarks = BOOKMARKS_ICON + theme::ICON_BUTTON_PAD;
-        assert!(tabs + bookmarks + 5.0 * 8.0 <= 300.0);
-    }
-
-    #[test]
     fn quiet_tiers_fade_in_steps_stay_readable_and_people_stay_plain() {
         use crate::categories::AutoCategory;
         for palette in [Palette::dark(), Palette::light()] {
@@ -3809,6 +3787,10 @@ mod tests {
             }
             for pair in rects.windows(2) {
                 assert_eq!(pair[0].center().y, pair[1].center().y);
+            }
+            // "All" is a word and wider; the three icon tabs are equal.
+            assert!(rects[0].width() > rects[1].width());
+            for pair in rects[1..].windows(2) {
                 assert!((pair[0].width() - pair[1].width()).abs() < 0.01);
             }
             // The Bookmarks icon ends the same row and stays inside the width.
