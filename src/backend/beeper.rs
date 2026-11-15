@@ -27,6 +27,7 @@ use crate::model::{Chat, ChatId, ChatKind, Content, Delivery, LastMessage, Messa
 use crate::paths::AccountDirs;
 
 mod gallery;
+mod ws;
 
 const CHAT_PAGE_LIMIT: u32 = 100;
 /// How often the chat list (ordering, previews, unread counts) is refreshed.
@@ -37,6 +38,9 @@ const CHAT_REFRESH: Duration = Duration::from_secs(60);
 const RECEIPT_REFRESH: Duration = Duration::from_secs(30);
 /// How often the open conversation is polled for new messages.
 const MSG_POLL: Duration = Duration::from_secs(3);
+/// The push feed may wake a chat-list refresh at most this often, so a burst
+/// of events costs one refresh.
+const WS_REFRESH_MIN: Duration = Duration::from_secs(2);
 /// Command-handling latency budget; the loop sleeps this long between drains.
 const LOOP_TICK: Duration = Duration::from_millis(200);
 
@@ -3925,6 +3929,12 @@ pub fn run(
     let mut dead_chats: HashSet<ChatId> = HashSet::new();
     let mut last_chat_refresh = Instant::now() - CHAT_REFRESH;
     let mut last_msg_poll = Instant::now();
+    // Push feed: an event makes the next tick poll at once. Skipped in tests,
+    // whose fake servers do not speak WebSocket.
+    let (feed_wake, feed_events) = std::sync::mpsc::channel();
+    let _feed = (!cfg!(test))
+        .then(|| ws::spawn(&cfg.base_url, &cfg.token, feed_wake))
+        .flatten();
     let mut last_receipt_refresh = Instant::now();
     let mut pending_sends: Vec<(ChatId, String, Instant)> = Vec::new();
     let mut tracked_media: HashMap<(String, String), (String, crate::merged::Member)> =
@@ -5175,6 +5185,13 @@ pub fn run(
         }
         while let Ok((chat, pending_id)) = accepted_rx.try_recv() {
             pending_sends.push((chat, pending_id, Instant::now()));
+        }
+        if feed_events.try_recv().is_ok() {
+            while feed_events.try_recv().is_ok() {}
+            last_msg_poll = Instant::now() - MSG_POLL;
+            if last_chat_refresh.elapsed() >= WS_REFRESH_MIN {
+                last_chat_refresh = Instant::now() - CHAT_REFRESH;
+            }
         }
         if last_msg_poll.elapsed() >= MSG_POLL {
             last_msg_poll = Instant::now();
