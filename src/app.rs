@@ -6396,8 +6396,8 @@ impl App {
                     chat,
                 };
                 let beeper = &self.settings.beeper;
-                let marked = beeper.reply_later.contains(&member)
-                    || beeper.read_later.contains(&member);
+                let marked =
+                    beeper.reply_later.contains(&member) || beeper.read_later.contains(&member);
                 if marked {
                     // Only a row already listed stays; a send must not pull
                     // a chat into a view it was never part of.
@@ -31838,7 +31838,7 @@ mod conversation_palette_tests {
     }
 
     #[test]
-    fn sending_clears_reply_later_but_keeps_read_later() {
+    fn sending_clears_both_later_marks() {
         let mut app = app();
         app.chats = vec![later_chat("chat-1", 10)];
         let ctx = egui::Context::default();
@@ -31853,10 +31853,9 @@ mod conversation_palette_tests {
             },
             true,
         );
-        // Established queue behavior: a successful send clears reply later;
-        // read later is an explicit manual mark with no auto-clear.
+        // A successful send clears both Deal with later marks.
         assert!(!app.reply_later_contains(&app.chats[0]));
-        assert!(app.read_later_contains(&app.chats[0]));
+        assert!(!app.read_later_contains(&app.chats[0]));
     }
 
     #[test]
