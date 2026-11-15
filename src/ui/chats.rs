@@ -3338,7 +3338,14 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
     } else {
         crate::i18n::gettext(locale, "Deal with later")
     };
-    if widgets::menu_item(ui, palette, Some(Icon::Clock), &label) {
+    if widgets::menu_item_hinted(
+        ui,
+        palette,
+        Some(Icon::Clock),
+        &label,
+        true,
+        super::keys::hint("read-later").as_deref(),
+    ) {
         app.actions.push(Action::ToggleDealLater(chat.id.clone()));
     }
     // Move a one-to-one chat out of its automatic category for good. The
@@ -3386,7 +3393,14 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
     } else {
         crate::i18n::gettext(locale, "Archive")
     };
-    if widgets::menu_item(ui, palette, Some(Icon::Archive), archive_label.as_ref()) {
+    if widgets::menu_item_hinted(
+        ui,
+        palette,
+        Some(Icon::Archive),
+        archive_label.as_ref(),
+        true,
+        super::keys::hint("archive").as_deref(),
+    ) {
         app.actions
             .push(Action::SetArchived(chat.id.clone(), !chat.archived));
     }

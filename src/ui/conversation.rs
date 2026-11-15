@@ -727,6 +727,23 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                             .set(more_glass, glass_button(&palette, more.rect));
                     }
                     let info_label = crate::i18n::gettext(app.locale, "Info");
+                    if palette.vibrant() {
+                        ui.add_space(BUTTON_GAP);
+                    }
+                    let info_glass = ui.painter().add(egui::Shape::Noop);
+                    let info_tip = match super::keys::hint("info-sidebar") {
+                        Some(chord) => format!("{} ({chord})", info_label),
+                        None => info_label.to_string(),
+                    };
+                    let info_button =
+                        header_icon(ui, &palette, Icon::Info, app.info_visible(), &info_tip);
+                    if palette.vibrant() {
+                        ui.painter()
+                            .set(info_glass, glass_button(&palette, info_button.rect));
+                    }
+                    if info_button.clicked() {
+                        app.actions.push(Action::ToggleInfoSidebar);
+                    }
                     let favorite_label = if chat.favorite {
                         crate::i18n::gettext(app.locale, "Remove from favorites")
                     } else {
@@ -740,17 +757,28 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                     let clear_label = crate::i18n::gettext(app.locale, "Clear chat");
                     let copy_number_label = crate::i18n::gettext(app.locale, "Copy number");
                     let close_label = crate::i18n::gettext(app.locale, "Close chat");
+                    let info_hint = super::keys::hint("info-sidebar");
+                    let archive_hint = super::keys::hint("archive");
+                    let close_hint = cfg!(target_os = "macos")
+                        .then(|| super::keys::label("Ctrl+W"));
+                    let hinted = |label: &str, hint: &Option<String>| match hint {
+                        Some(hint) => format!("{label}    {hint}"),
+                        None => label.to_owned(),
+                    };
+                    let info_row = hinted(info_label.as_ref(), &info_hint);
+                    let archive_row = hinted(archive_label.as_ref(), &archive_hint);
+                    let close_row = hinted(close_label.as_ref(), &close_hint);
                     let width = widgets::menu_width(
                         ui,
                         &[
-                            info_label.as_ref(),
+                            info_row.as_str(),
                             select_messages_label.as_ref(),
                             favorite_label.as_ref(),
-                            archive_label.as_ref(),
+                            archive_row.as_str(),
                             clear_label.as_ref(),
                             leave_label.as_ref(),
                             copy_number_label.as_ref(),
-                            close_label.as_ref(),
+                            close_row.as_str(),
                         ],
                         true,
                     );
@@ -763,11 +791,13 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                         .width(width)
                         .frame(widgets::menu_frame(&palette))
                         .show(|ui| {
-                            if widgets::menu_item(
+                            if widgets::menu_item_hinted(
                                 ui,
                                 &palette,
                                 Some(Icon::Info),
                                 info_label.as_ref(),
+                                true,
+                                info_hint.as_deref(),
                             ) {
                                 app.actions.push(Action::OpenInfo(chat.id.clone()));
                             }
@@ -788,11 +818,13 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                                 app.actions
                                     .push(Action::SetFavorite(chat.id.clone(), !chat.favorite));
                             }
-                            if widgets::menu_item(
+                            if widgets::menu_item_hinted(
                                 ui,
                                 &palette,
                                 Some(Icon::Archive),
                                 archive_label.as_ref(),
+                                true,
+                                archive_hint.as_deref(),
                             ) {
                                 app.actions
                                     .push(Action::SetArchived(chat.id.clone(), !chat.archived));
@@ -835,8 +867,14 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                             {
                                 app.actions.push(Action::CopyText(format!("+{phone}")));
                             }
-                            if widgets::menu_item(ui, &palette, Some(Icon::X), close_label.as_ref())
-                            {
+                            if widgets::menu_item_hinted(
+                                ui,
+                                &palette,
+                                Some(Icon::X),
+                                close_label.as_ref(),
+                                true,
+                                close_hint.as_deref(),
+                            ) {
                                 app.actions.push(Action::CloseChat);
                             }
                         });

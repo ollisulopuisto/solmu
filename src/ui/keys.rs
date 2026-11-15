@@ -1655,6 +1655,12 @@ pub static REGISTRY: &[Row] = &[
     Row::Binding(&EDIT_SELECT_ALL),
 ];
 
+/// The chord of binding `id` in the platform's notation, for menu hints.
+/// None when the binding has no label of its own.
+pub fn hint(id: &str) -> Option<String> {
+    shortcut(id).label.map(label)
+}
+
 /// Looks a registry entry up by its stable id.
 pub fn shortcut(id: &str) -> &'static Shortcut {
     REGISTRY
@@ -1981,6 +1987,13 @@ mod tests {
             ("Ctrl+Q", "Quit"),
         ];
         assert_eq!(help_rows().collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn menu_hints_come_from_the_registry_and_skip_unlabelled_bindings() {
+        assert_eq!(hint("archive"), Some(label("Ctrl+E")));
+        assert_eq!(hint("info-sidebar"), Some(label("Ctrl+Alt+I")));
+        assert_eq!(hint("close-chat"), None);
     }
 
     #[test]
