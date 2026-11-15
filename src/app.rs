@@ -1894,6 +1894,8 @@ impl App {
         }
         // Labels belong to their account: show the one this account showed.
         self.label_filter = self.remembered_label();
+        // Chat ids repeat across accounts: a kept chat belongs to the one left.
+        self.unread_kept.clear();
         self.page = Page::Chats;
         self.save_roster();
         self.wallpaper_image.reload();
@@ -15999,6 +16001,16 @@ mod tests {
         app.actions.push(Action::Open(Page::Settings));
         app.apply_actions(&ctx);
         (app, events)
+    }
+
+    #[test]
+    fn kept_chats_do_not_follow_an_account_switch() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _events) = two_accounts_on_settings(directory.path(), "same-chat");
+        let second = app.accounts[1].id.clone();
+        app.unread_kept.insert("same-chat".into());
+        app.switch_account(&second);
+        assert!(app.unread_kept.is_empty());
     }
 
     #[test]
