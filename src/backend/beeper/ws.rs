@@ -78,14 +78,13 @@ fn run_once(
     wake: &mpsc::Sender<()>,
     stop: &AtomicBool,
 ) -> bool {
-    let Some(socket) = address
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut found| found.next())
-    else {
-        return false;
-    };
-    let Ok(stream) = TcpStream::connect_timeout(&socket, CONNECT_TIMEOUT) else {
+    // A name like localhost can resolve to ::1 first while the server
+    // listens on IPv4 only, so every resolved address gets a try.
+    let Some(stream) = address.to_socket_addrs().ok().and_then(|found| {
+        found
+            .into_iter()
+            .find_map(|socket| TcpStream::connect_timeout(&socket, CONNECT_TIMEOUT).ok())
+    }) else {
         return false;
     };
     let _ = stream.set_nodelay(true);
@@ -96,7 +95,8 @@ fn run_once(
     };
     let mut reader = BufReader::new(stream);
     let mut key_bytes = [0u8; 16];
-    let _ = ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut key_bytes);
+    key_bytes[..8].copy_from_slice(&random_u64().to_le_bytes());
+    key_bytes[8..].copy_from_slice(&random_u64().to_le_bytes());
     let key = {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD.encode(key_bytes)
@@ -130,6 +130,28 @@ fn run_once(
     }
     let mut message: Vec<u8> = Vec::new();
     while !stop.load(Ordering::Relaxed) {
+        // Wait for the first byte of a frame without consuming it, so a quiet
+        // link can be probed with a ping. Once a frame has started, any
+        // error (a stall included) reconnects instead of resuming mid-frame.
+        match reader.fill_buf() {
+            Ok(buffered) if buffered.is_empty() => return true,
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                if writer
+                    .write_all(&encode_frame(OP_PING, b"", mask()))
+                    .is_err()
+                {
+                    return true;
+                }
+                continue;
+            }
+            Err(_) => return true,
+        }
         match read_frame(&mut reader) {
             Ok((opcode, fin, payload)) => match opcode {
                 OP_PING => {
@@ -158,30 +180,24 @@ fn run_once(
                 }
                 _ => {}
             },
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) =>
-            {
-                // Quiet for PING_EVERY: probe the link so a dead one is noticed.
-                if writer
-                    .write_all(&encode_frame(OP_PING, b"", mask()))
-                    .is_err()
-                {
-                    return true;
-                }
-            }
             Err(_) => return true,
         }
     }
     true
 }
 
+/// A random value from std's per-instance hasher seed. The handshake key and
+/// frame masks only have to vary between frames, not resist an attacker, on a
+/// loopback link that already carries the bearer token in the clear.
+fn random_u64() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish()
+}
+
 fn mask() -> [u8; 4] {
-    let mut bytes = [0u8; 4];
-    let _ = ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes);
-    bytes
+    (random_u64() as u32).to_le_bytes()
 }
 
 /// A client frame: FIN set, masked as RFC 6455 requires of clients.
@@ -291,6 +307,48 @@ mod tests {
         assert!(!is_domain_event(br#"{"type":"ready","version":1}"#));
         assert!(!is_domain_event(br#"{"type":"error","code":"X"}"#));
         assert!(!is_domain_event(b"not json"));
+    }
+
+    #[test]
+    fn the_feed_subscribes_and_wakes_on_an_event_that_arrives_in_pieces() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                request.push_str(&line);
+            }
+            assert!(request.starts_with("GET /v1/ws HTTP/1.1"));
+            assert!(request.contains("Authorization: Bearer tok"));
+            stream
+                .write_all(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
+                .unwrap();
+            let (_, _, subscribe) = read_frame(&mut reader).unwrap();
+            assert!(String::from_utf8(subscribe).unwrap().contains("subscriptions.set"));
+            let event = br#"{"type":"message.upserted","chatID":"a"}"#;
+            let mut frame = vec![0x81, event.len() as u8];
+            frame.extend_from_slice(event);
+            stream.write_all(&frame[..1]).unwrap();
+            stream.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            stream.write_all(&frame[1..]).unwrap();
+            stream.write_all(&[0x88, 0]).unwrap();
+        });
+        let (wake, woken) = mpsc::channel();
+        let stop = AtomicBool::new(false);
+        // localhost may resolve to ::1 first: the IPv4 address must still be tried.
+        let connected = run_once(&format!("localhost:{port}"), "localhost", "tok", &wake, &stop);
+        server.join().unwrap();
+        assert!(connected);
+        assert!(woken.try_recv().is_ok());
     }
 
     #[test]

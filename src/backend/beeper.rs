@@ -3935,6 +3935,7 @@ pub fn run(
     let _feed = (!cfg!(test))
         .then(|| ws::spawn(&cfg.base_url, &cfg.token, feed_wake))
         .flatten();
+    let mut feed_refresh_pending = false;
     let mut last_receipt_refresh = Instant::now();
     let mut pending_sends: Vec<(ChatId, String, Instant)> = Vec::new();
     let mut tracked_media: HashMap<(String, String), (String, crate::merged::Member)> =
@@ -5189,9 +5190,12 @@ pub fn run(
         if feed_events.try_recv().is_ok() {
             while feed_events.try_recv().is_ok() {}
             last_msg_poll = Instant::now() - MSG_POLL;
-            if last_chat_refresh.elapsed() >= WS_REFRESH_MIN {
-                last_chat_refresh = Instant::now() - CHAT_REFRESH;
-            }
+            feed_refresh_pending = true;
+        }
+        // Events inside the throttle wait for it instead of being dropped.
+        if feed_refresh_pending && last_chat_refresh.elapsed() >= WS_REFRESH_MIN {
+            feed_refresh_pending = false;
+            last_chat_refresh = Instant::now() - CHAT_REFRESH;
         }
         if last_msg_poll.elapsed() >= MSG_POLL {
             last_msg_poll = Instant::now();
