@@ -31,7 +31,8 @@ mod ws;
 
 const CHAT_PAGE_LIMIT: u32 = 100;
 /// How often the chat list (ordering, previews, unread counts) is refreshed.
-const CHAT_REFRESH: Duration = Duration::from_secs(60);
+/// Chats that are not open or watched show new messages only at this pace.
+const CHAT_REFRESH: Duration = Duration::from_secs(15);
 /// Receipt refresh for the open chat. The forward-only live poll never
 /// re-returns already loaded messages, so their delivery/read receipt
 /// fields would stall without an occasional full-page refetch.

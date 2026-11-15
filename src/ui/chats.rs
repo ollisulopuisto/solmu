@@ -1956,7 +1956,18 @@ fn section_header(app: &App, ui: &mut egui::Ui, pinned: bool, height: f32) {
     );
 }
 
+/// The chat list in whichever layout is active. Hover is judged here, over the
+/// whole pane, so every layout holds row order the same way.
 fn list(app: &mut App, ui: &mut egui::Ui) {
+    let pane = ui.available_rect_before_wrap();
+    list_for_layout(app, ui);
+    app.list_hovered.store(
+        ui.rect_contains_pointer(pane),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+fn list_for_layout(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     // Taken here so a send seen while the list is hidden cannot move it later.
     let to_top = std::mem::take(&mut app.scroll_chats_to_top);
