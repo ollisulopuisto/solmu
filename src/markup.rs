@@ -1286,12 +1286,12 @@ fn link_at(text: &str, at: usize) -> Option<(usize, String)> {
     if let Some((user, host)) = token.split_once('@')
         && !user.is_empty()
         && !user.contains('/')
-        && is_domain(host)
+        && is_domain(host, false)
     {
         return Some((end, format!("mailto:{token}")));
     }
     let (host, _) = token.split_once('/').unwrap_or((token, ""));
-    if is_domain(host) {
+    if is_domain(host, true) {
         return Some((end, format!("https://{token}")));
     }
     None
@@ -1309,8 +1309,9 @@ fn bare_after_word_character(text: &str, at: usize, token: &str) -> bool {
     !explicit && text[..at].ends_with('_')
 }
 
-/// Whether a token is a hostname without a scheme.
-fn is_domain(host: &str) -> bool {
+/// Whether a token is a hostname without a scheme. `bare` is a web address
+/// typed with no scheme, `www.` or `@`: only those reject a mixed-case ending.
+fn is_domain(host: &str, bare: bool) -> bool {
     let host = host.split_once(':').map_or(host, |(name, _)| name);
     let labels: Vec<&str> = host.split('.').collect();
     if labels.len() < 2 || labels.iter().any(|label| label.is_empty()) {
@@ -1323,30 +1324,36 @@ fn is_domain(host: &str) -> bool {
     }) {
         return false;
     }
-    let tld = labels[labels.len() - 1].to_ascii_lowercase();
-    if !tld.chars().all(|c| c.is_ascii_alphabetic()) {
+    let tld = labels[labels.len() - 1];
+    // A capital after the dot ("ok.Today") is the next sentence, not an address;
+    // all-capitals ("EXAMPLE.COM") still is one.
+    let mixed_case =
+        tld.chars().any(|c| c.is_ascii_lowercase()) && tld.chars().any(|c| c.is_ascii_uppercase());
+    if !tld.chars().all(|c| c.is_ascii_alphabetic()) || (bare && mixed_case) {
         return false;
     }
+    let tld = tld.to_ascii_lowercase();
     match tld.len() {
         0..=1 => false,
-        2 => !matches!(
-            tld.as_str(),
-            "js" | "rs"
-                | "py"
-                | "ts"
-                | "md"
-                | "sh"
-                | "go"
-                | "rb"
-                | "cs"
-                | "cc"
-                | "hs"
-                | "ml"
-                | "so"
-        ),
+        2 => COUNTRY_TLDS.split(' ').any(|code| code == tld),
         _ => KNOWN_TLDS.contains(&tld.as_str()),
     }
 }
+
+/// Country codes a bare name may end in. Left out on purpose, because they are
+/// also file extensions: rs, py, sh, md, cc, so, ml. Written with an explicit
+/// scheme or `www.` they still link.
+const COUNTRY_TLDS: &str = "ac ad ae af ag ai al am ao aq ar as at au aw ax az ba bb bd be bf bg \
+    bh bi bj bm bn bo br bs bt bw by bz ca cd cf cg ch ci ck cl cm cn co \
+    cr cu cv cw cx cy cz de dj dk dm do dz ec ee eg er es et eu fi fj fk \
+    fm fo fr ga gd ge gf gg gh gi gl gm gn gp gq gr gs gt gu gw gy hk hm \
+    hn hr ht hu id ie il im in io iq ir is it je jm jo jp ke kg kh ki km \
+    kn kp kr kw ky kz la lb lc li lk lr ls lt lu lv ly ma mc me mg mh mk \
+    mm mn mo mp mq mr ms mt mu mv mw mx my mz na nc ne nf ng ni nl no np \
+    nr nu nz om pa pe pf pg ph pk pl pm pn pr ps pt pw qa re ro ru rw sa \
+    sb sc sd se sg si sk sl sm sn sr ss st su sv sx sy sz tc td tf tg th \
+    tj tk tl tm tn to tr tt tv tw tz ua ug uk us uy uz va vc ve vg vi vn \
+    vu wf ws ye yt za zm zw";
 
 const KNOWN_TLDS: &[&str] = &[
     "com",
@@ -1947,6 +1954,29 @@ mod tests {
         );
         assert_eq!(links("_www.example.com"), vec!["https://www.example.com"]);
         assert_eq!(links("go to example.com"), vec!["https://example.com"]);
+    }
+
+    #[test]
+    fn bare_names_link_only_with_a_real_lowercase_or_capital_ending() {
+        let links = |text: &str| -> Vec<String> {
+            parse(text, &[])
+                .into_iter()
+                .filter_map(|span| span.link)
+                .collect()
+        };
+        // File names and run-on sentences are not addresses.
+        assert!(links("see tests.kt and build.ex and mod.el").is_empty());
+        assert!(links("ok.Today no.Help joo.Love").is_empty());
+        assert!(links("main.rs lib.py run.sh notes.md").is_empty());
+        // Real ones still link, including country codes and all capitals.
+        assert_eq!(links("vedur.is"), vec!["https://vedur.is"]);
+        assert_eq!(links("yle.fi/uutiset"), vec!["https://yle.fi/uutiset"]);
+        assert_eq!(links("EXAMPLE.COM"), vec!["https://EXAMPLE.COM"]);
+        // Explicit schemes and www. keep working for any ending.
+        assert_eq!(links("https://tokio.rs/x"), vec!["https://tokio.rs/x"]);
+        assert_eq!(links("www.example.rs"), vec!["https://www.example.rs"]);
+        // An email host may be mixed case.
+        assert_eq!(links("hello@Example.Com"), vec!["mailto:hello@Example.Com"]);
     }
 
     #[test]
