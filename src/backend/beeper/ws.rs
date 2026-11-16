@@ -134,7 +134,7 @@ fn run_once(
         // link can be probed with a ping. Once a frame has started, any
         // error (a stall included) reconnects instead of resuming mid-frame.
         match reader.fill_buf() {
-            Ok(buffered) if buffered.is_empty() => return true,
+            Ok([]) => return true,
             Ok(_) => {}
             Err(error)
                 if matches!(
