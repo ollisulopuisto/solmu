@@ -759,8 +759,8 @@ fn header(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> Rect {
                     let close_label = crate::i18n::gettext(app.locale, "Close chat");
                     let info_hint = super::keys::hint("info-sidebar");
                     let archive_hint = super::keys::hint("archive");
-                    let close_hint = cfg!(target_os = "macos")
-                        .then(|| super::keys::label("Control+W"));
+                    let close_hint =
+                        cfg!(target_os = "macos").then(|| super::keys::label("Control+W"));
                     let hinted = |label: &str, hint: &Option<String>| match hint {
                         Some(hint) => format!("{label}    {hint}"),
                         None => label.to_owned(),

@@ -30377,11 +30377,23 @@ mod person_tests {
         assert_eq!(app.avatar("ada-tg"), Some(tg_big), "same on every row");
         let tg_tie = picture("full-tg-64.png");
         size(&mut app, "ada-tg", &tg_tie, 64);
-        assert_eq!(app.avatar("ada-wa"), Some(wa_small.clone()), "tie: member order");
+        assert_eq!(
+            app.avatar("ada-wa"),
+            Some(wa_small.clone()),
+            "tie: member order"
+        );
         app.settings.beeper.people[0].primary = Some(Member::of(&app.chats[1]).unwrap());
-        assert_eq!(app.avatar("ada-wa"), Some(tg_tie.clone()), "tie: primary first");
+        assert_eq!(
+            app.avatar("ada-wa"),
+            Some(tg_tie.clone()),
+            "tie: primary first"
+        );
         std::fs::remove_file(&tg_tie).unwrap();
-        assert_eq!(app.avatar("ada-wa"), Some(wa_small), "evicted file is skipped");
+        assert_eq!(
+            app.avatar("ada-wa"),
+            Some(wa_small),
+            "evicted file is skipped"
+        );
     }
 
     #[test]
@@ -30404,7 +30416,11 @@ mod person_tests {
         };
         send(false, 10);
         app.background_frame(&ctx);
-        assert_eq!(app.avatar_pixels.get(&path), None, "thumbnails are not measured");
+        assert_eq!(
+            app.avatar_pixels.get(&path),
+            None,
+            "thumbnails are not measured"
+        );
         send(true, 65_536);
         app.background_frame(&ctx);
         assert_eq!(app.avatar_pixels.get(&path), Some(&65_536));
