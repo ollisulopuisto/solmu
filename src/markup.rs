@@ -1286,12 +1286,12 @@ fn link_at(text: &str, at: usize) -> Option<(usize, String)> {
     if let Some((user, host)) = token.split_once('@')
         && !user.is_empty()
         && !user.contains('/')
-        && is_domain(host)
+        && is_domain(host, false)
     {
         return Some((end, format!("mailto:{token}")));
     }
     let (host, _) = token.split_once('/').unwrap_or((token, ""));
-    if is_domain(host) {
+    if is_domain(host, true) {
         return Some((end, format!("https://{token}")));
     }
     None
@@ -1309,8 +1309,9 @@ fn bare_after_word_character(text: &str, at: usize, token: &str) -> bool {
     !explicit && text[..at].ends_with('_')
 }
 
-/// Whether a token is a hostname without a scheme.
-fn is_domain(host: &str) -> bool {
+/// Whether a token is a hostname without a scheme. `bare` is a web address
+/// typed with no scheme, `www.` or `@`: only those reject a mixed-case ending.
+fn is_domain(host: &str, bare: bool) -> bool {
     let host = host.split_once(':').map_or(host, |(name, _)| name);
     let labels: Vec<&str> = host.split('.').collect();
     if labels.len() < 2 || labels.iter().any(|label| label.is_empty()) {
@@ -1326,10 +1327,9 @@ fn is_domain(host: &str) -> bool {
     let tld = labels[labels.len() - 1];
     // A capital after the dot ("ok.Today") is the next sentence, not an address;
     // all-capitals ("EXAMPLE.COM") still is one.
-    if !tld.chars().all(|c| c.is_ascii_alphabetic())
-        || (tld.chars().any(|c| c.is_ascii_lowercase())
-            && tld.chars().any(|c| c.is_ascii_uppercase()))
-    {
+    let mixed_case = tld.chars().any(|c| c.is_ascii_lowercase())
+        && tld.chars().any(|c| c.is_ascii_uppercase());
+    if !tld.chars().all(|c| c.is_ascii_alphabetic()) || (bare && mixed_case) {
         return false;
     }
     let tld = tld.to_ascii_lowercase();
@@ -1975,6 +1975,8 @@ mod tests {
         // Explicit schemes and www. keep working for any ending.
         assert_eq!(links("https://tokio.rs/x"), vec!["https://tokio.rs/x"]);
         assert_eq!(links("www.example.rs"), vec!["https://www.example.rs"]);
+        // An email host may be mixed case.
+        assert_eq!(links("hello@Example.Com"), vec!["mailto:hello@Example.Com"]);
     }
 
     #[test]
