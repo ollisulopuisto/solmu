@@ -7,6 +7,11 @@ acknowledged, and the latest sections when opened from Help. The
 shown automatically; move its bullets under the release version when the
 version in Cargo.toml is bumped.
 
+Versions are CalVer, `YY.M.N`: the two-digit year, the month without a leading
+zero, and the number of the release in that month, starting at 1 (`26.11.1`).
+Cargo, the Mac bundle and the Windows installer need three numeric parts, so
+this is the whole scheme. Older releases (`v0.24.21` and before) keep their numbers.
+
 ## Unreleased
 
 - The chat list has two independent choices: the mode (All, Unread, Unread 7d, Needs me; Cmd+D) and the layout (group sections or one flat list with the group name on each row; Cmd+G). The layout is remembered for each mode, and every mode starts as group sections, as before.

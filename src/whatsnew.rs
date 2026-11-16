@@ -82,6 +82,14 @@ mod tests {
     }
 
     #[test]
+    fn current_version_is_calver_year_month_number() {
+        let [year, month, number] = current();
+        assert!(year >= 26, "the year is two digits, from 2026: {year}");
+        assert!((1..=12).contains(&month), "the month is 1-12: {month}");
+        assert!(number >= 1, "the number counts releases in the month from 1");
+    }
+
+    #[test]
     fn parses_versions_with_prefixes_and_suffixes() {
         assert_eq!(version("0.20.2"), Some([0, 20, 2]));
         assert_eq!(version("v1.2.3"), Some([1, 2, 3]));
