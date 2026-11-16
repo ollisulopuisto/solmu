@@ -4431,9 +4431,13 @@ impl App {
 
     pub fn avatar(&mut self, id: &str) -> Option<PathBuf> {
         if let Some(ids) = self.linked_avatar_ids(id) {
-            return ids
-                .into_iter()
-                .find_map(|id| self.account_mut().avatar(&id));
+            let thumbnail = ids.iter().find_map(|id| self.account_mut().avatar(id));
+            // A picture the Contact info panel already fetched at full size
+            // stands in when no member has a thumbnail.
+            return thumbnail.or_else(|| {
+                ids.iter()
+                    .find_map(|id| self.avatars_full.get(id).cloned().flatten())
+            });
         }
         self.account_mut().avatar(id)
     }
@@ -30319,11 +30323,25 @@ mod person_tests {
         );
         app.avatars.insert("ada-wa".into(), None);
         app.avatars.insert("ada-tg".into(), None);
+        app.avatars_full.clear();
         assert_eq!(
             app.avatar("ada-wa"),
             None,
             "initials only when none has a picture"
         );
+    }
+
+    #[test]
+    fn linked_row_uses_a_full_size_picture_when_no_thumbnail_exists() {
+        let mut app = linked_unread_app();
+        let root = app.account().dirs.media_cache_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        let tg = root.join("synthetic-tg-full.png");
+        std::fs::write(&tg, b"synthetic fixture").unwrap();
+        app.avatars.insert("ada-wa".into(), None);
+        app.avatars.insert("ada-tg".into(), None);
+        app.avatars_full.insert("ada-tg".into(), Some(tg.clone()));
+        assert_eq!(app.avatar("ada-wa"), Some(tg));
     }
 
     #[test]
