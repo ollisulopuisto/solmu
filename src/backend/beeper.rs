@@ -10995,7 +10995,21 @@ mod tests {
                 composing: true,
             })
             .unwrap();
-        std::thread::sleep(Duration::from_millis(800));
+        // Wait for the three commands, not a fixed time: a loaded CI runner
+        // took longer than 800 ms. The short grace after catches a stray POST.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(m, _, _)| m == "POST")
+            .count()
+            < 3
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(200));
         let posts: Vec<(String, String)> = requests
             .lock()
             .unwrap()
