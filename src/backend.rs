@@ -1332,6 +1332,9 @@ pub enum Event {
         id: String,
         full: bool,
         path: Option<PathBuf>,
+        /// Width times height from the file header, read by the worker so
+        /// the UI never touches the file; 0 when unknown.
+        pixels: u64,
     },
     MessageDeleted {
         chat: ChatId,

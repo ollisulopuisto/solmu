@@ -3530,8 +3530,17 @@ pub fn run(
         .spawn(move || {
             while let Ok((id, full)) = avatar_rx.recv() {
                 let path = avatar_api.download_avatar(&id, &avatar_dirs).ok();
+                let pixels = path
+                    .as_deref()
+                    .and_then(|path| image::image_dimensions(path).ok())
+                    .map_or(0, |(width, height)| u64::from(width) * u64::from(height));
                 if avatar_events
-                    .send(Event::Avatar { id, full, path })
+                    .send(Event::Avatar {
+                        id,
+                        full,
+                        path,
+                        pixels,
+                    })
                     .is_err()
                 {
                     break;
@@ -5128,6 +5137,7 @@ pub fn run(
                             id,
                             full,
                             path: None,
+                            pixels: 0,
                         });
                     }
                 }

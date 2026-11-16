@@ -780,6 +780,7 @@ pub struct App {
     /// Link suggestions for the current chats, people and dismissals, kept
     /// until one of them changes.
     link_suggestions_cache: Option<(u64, Vec<crate::suggest::Suggestion>)>,
+    avatar_pixels: HashMap<PathBuf, u64>,
     pub actions: Vec<Action>,
     /// Invalidates editor history when a composer closes and reopens before
     /// another frame, including a new session reusing the same account id.
@@ -1685,6 +1686,7 @@ impl App {
             later_kept: HashSet::new(),
             toasts: Vec::new(),
             link_suggestions_cache: None,
+            avatar_pixels: HashMap::new(),
             actions: Vec::new(),
             composer_undo_epoch: 0,
             prefilled: None,
@@ -4430,24 +4432,34 @@ impl App {
     }
 
     pub fn avatar(&mut self, id: &str) -> Option<PathBuf> {
-        if let Some(ids) = self.linked_avatar_ids(id) {
-            return ids
-                .into_iter()
-                .find_map(|id| self.account_mut().avatar(&id));
+        if self.linked_avatar_ids(id).is_some() {
+            return self.avatar_full(id);
         }
         self.account_mut().avatar(id)
     }
 
-    /// Full-size and thumbnail use the same primary-first order. A primary
-    /// thumbnail beats another network's full-size picture while it loads.
+    /// A linked person shows the largest full-size picture any member has
+    /// (pixels, measured by the avatar worker; unmeasured counts as 0); a tie goes to the primary, then the
+    /// saved member order. A thumbnail, in that same order, is only the
+    /// fallback while no member has a full-size one. Every member's full size
+    /// is requested once, so a larger picture arriving later takes over.
     pub fn avatar_full(&mut self, id: &str) -> Option<PathBuf> {
-        if let Some(ids) = self.linked_avatar_ids(id) {
-            return ids.into_iter().find_map(|id| {
-                self.source_avatar_full(&id)
-                    .or_else(|| self.account_mut().avatar(&id))
-            });
+        let Some(ids) = self.linked_avatar_ids(id) else {
+            return self.source_avatar_full(id);
+        };
+        let mut largest: Option<(u64, PathBuf)> = None;
+        for id in &ids {
+            // A cleaned-up cache file is skipped, like a missing thumbnail.
+            if let Some(path) = self.source_avatar_full(id).filter(|path| path.is_file()) {
+                let pixels = self.avatar_pixels.get(&path).copied().unwrap_or(0);
+                if largest.as_ref().is_none_or(|(best, _)| pixels > *best) {
+                    largest = Some((pixels, path));
+                }
+            }
         }
-        self.source_avatar_full(id)
+        largest
+            .map(|(_, path)| path)
+            .or_else(|| ids.iter().find_map(|id| self.account_mut().avatar(id)))
     }
 
     /// Returns or requests one source's full-size profile picture.
@@ -5578,7 +5590,12 @@ impl App {
             } => {
                 self.presence.insert(id, Presence { online, last_seen });
             }
-            Event::Avatar { id, full, path } => {
+            Event::Avatar {
+                id,
+                full,
+                path,
+                pixels,
+            } => {
                 if self.chats.iter().any(|chat| chat.backend_account.is_some()) {
                     let cache = if full {
                         &mut self.avatars_full
@@ -5596,6 +5613,9 @@ impl App {
                 // replaces, which egui would otherwise keep showing.
                 self.stale_images
                     .extend(path.iter().map(|path| crate::util::image_uri(path)));
+                if let (true, Some(path)) = (full, &path) {
+                    self.avatar_pixels.insert(path.clone(), pixels);
+                }
                 let previous = if full {
                     self.avatar_full_requests.remove(&id);
                     self.avatars_full.insert(id, path)
@@ -26557,6 +26577,7 @@ mod tests {
                     id: group.into(),
                     full: false,
                     path: Some(path.clone()),
+                    pixels: 0,
                 })
                 .unwrap();
         };
@@ -30303,8 +30324,8 @@ mod person_tests {
         app.avatars_full.insert("ada-wa".into(), Some(wa.clone()));
         assert_eq!(
             app.avatar_full("ada-wa"),
-            Some(tg),
-            "primary thumbnail beats fallback full size"
+            Some(wa.clone()),
+            "a full-size picture beats any thumbnail"
         );
         app.settings.beeper.people[0].primary = Some(Member::of(&app.chats[0]).unwrap());
         assert_eq!(
@@ -30319,11 +30340,74 @@ mod person_tests {
         );
         app.avatars.insert("ada-wa".into(), None);
         app.avatars.insert("ada-tg".into(), None);
+        app.avatars_full.clear();
         assert_eq!(
             app.avatar("ada-wa"),
             None,
             "initials only when none has a picture"
         );
+    }
+
+    #[test]
+    fn linked_row_takes_the_largest_full_size_picture_then_primary_then_thumbnail() {
+        let mut app = linked_unread_app();
+        let root = app.account().dirs.media_cache_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        let picture = |name: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, b"synthetic fixture").unwrap();
+            path
+        };
+        let size = |app: &mut App, id: &str, path: &PathBuf, side: u64| {
+            app.avatars_full.insert(id.into(), Some(path.clone()));
+            app.avatar_pixels.insert(path.clone(), side * side);
+        };
+        let wa_small = picture("full-wa-64.png");
+        let tg_big = picture("full-tg-256.png");
+        let thumb = picture("thumb-wa-16.png");
+        app.adopt_avatar("ada-wa", thumb.clone());
+        app.avatars.insert("ada-tg".into(), None);
+        let shown = app.avatar("ada-wa");
+        assert_eq!(shown, Some(thumb), "thumbnail only as fallback");
+        size(&mut app, "ada-wa", &wa_small, 64);
+        let shown = app.avatar("ada-wa");
+        assert_eq!(shown, Some(wa_small.clone()), "full beats thumbnail");
+        size(&mut app, "ada-tg", &tg_big, 256);
+        assert_eq!(app.avatar("ada-wa"), Some(tg_big.clone()), "largest wins");
+        assert_eq!(app.avatar("ada-tg"), Some(tg_big), "same on every row");
+        let tg_tie = picture("full-tg-64.png");
+        size(&mut app, "ada-tg", &tg_tie, 64);
+        assert_eq!(app.avatar("ada-wa"), Some(wa_small.clone()), "tie: member order");
+        app.settings.beeper.people[0].primary = Some(Member::of(&app.chats[1]).unwrap());
+        assert_eq!(app.avatar("ada-wa"), Some(tg_tie.clone()), "tie: primary first");
+        std::fs::remove_file(&tg_tie).unwrap();
+        assert_eq!(app.avatar("ada-wa"), Some(wa_small), "evicted file is skipped");
+    }
+
+    #[test]
+    fn a_full_size_avatar_event_records_the_worker_measured_pixels() {
+        let mut app = linked_unread_app();
+        let (backend, _commands, events) = Backend::recording_with_events();
+        app.backend = backend;
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let path = std::path::PathBuf::from("/cache/avatars/ada-full.jpg");
+        let send = |full: bool, pixels: u64| {
+            events
+                .send(Event::Avatar {
+                    id: "ada-tg".into(),
+                    full,
+                    path: Some(path.clone()),
+                    pixels,
+                })
+                .unwrap();
+        };
+        send(false, 10);
+        app.background_frame(&ctx);
+        assert_eq!(app.avatar_pixels.get(&path), None, "thumbnails are not measured");
+        send(true, 65_536);
+        app.background_frame(&ctx);
+        assert_eq!(app.avatar_pixels.get(&path), Some(&65_536));
     }
 
     #[test]
