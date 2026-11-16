@@ -780,6 +780,7 @@ pub struct App {
     /// Link suggestions for the current chats, people and dismissals, kept
     /// until one of them changes.
     link_suggestions_cache: Option<(u64, Vec<crate::suggest::Suggestion>)>,
+    avatar_pixels: HashMap<PathBuf, u64>,
     pub actions: Vec<Action>,
     /// Invalidates editor history when a composer closes and reopens before
     /// another frame, including a new session reusing the same account id.
@@ -1685,6 +1686,7 @@ impl App {
             later_kept: HashSet::new(),
             toasts: Vec::new(),
             link_suggestions_cache: None,
+            avatar_pixels: HashMap::new(),
             actions: Vec::new(),
             composer_undo_epoch: 0,
             prefilled: None,
@@ -4430,28 +4432,36 @@ impl App {
     }
 
     pub fn avatar(&mut self, id: &str) -> Option<PathBuf> {
-        if let Some(ids) = self.linked_avatar_ids(id) {
-            let thumbnail = ids.iter().find_map(|id| self.account_mut().avatar(id));
-            // A picture the Contact info panel already fetched at full size
-            // stands in when no member has a thumbnail.
-            return thumbnail.or_else(|| {
-                ids.iter()
-                    .find_map(|id| self.avatars_full.get(id).cloned().flatten())
-            });
+        if self.linked_avatar_ids(id).is_some() {
+            return self.avatar_full(id);
         }
         self.account_mut().avatar(id)
     }
 
-    /// Full-size and thumbnail use the same primary-first order. A primary
-    /// thumbnail beats another network's full-size picture while it loads.
+    /// A linked person shows the largest full-size picture any member has
+    /// (pixels, from the file header); a tie goes to the primary, then the
+    /// saved member order. A thumbnail, in that same order, is only the
+    /// fallback while no member has a full-size one. Every member's full size
+    /// is requested once, so a larger picture arriving later takes over.
     pub fn avatar_full(&mut self, id: &str) -> Option<PathBuf> {
-        if let Some(ids) = self.linked_avatar_ids(id) {
-            return ids.into_iter().find_map(|id| {
-                self.source_avatar_full(&id)
-                    .or_else(|| self.account_mut().avatar(&id))
-            });
+        let Some(ids) = self.linked_avatar_ids(id) else {
+            return self.source_avatar_full(id);
+        };
+        let mut largest: Option<(u64, PathBuf)> = None;
+        for id in &ids {
+            if let Some(path) = self.source_avatar_full(id) {
+                let pixels = *self.avatar_pixels.entry(path.clone()).or_insert_with(|| {
+                    image::image_dimensions(&path)
+                        .map_or(0, |(width, height)| u64::from(width) * u64::from(height))
+                });
+                if largest.as_ref().is_none_or(|(best, _)| pixels > *best) {
+                    largest = Some((pixels, path));
+                }
+            }
         }
-        self.source_avatar_full(id)
+        largest
+            .map(|(_, path)| path)
+            .or_else(|| ids.iter().find_map(|id| self.account_mut().avatar(id)))
     }
 
     /// Returns or requests one source's full-size profile picture.
@@ -5600,6 +5610,9 @@ impl App {
                 // replaces, which egui would otherwise keep showing.
                 self.stale_images
                     .extend(path.iter().map(|path| crate::util::image_uri(path)));
+                if let Some(path) = &path {
+                    self.avatar_pixels.remove(path);
+                }
                 let previous = if full {
                     self.avatar_full_requests.remove(&id);
                     self.avatars_full.insert(id, path)
@@ -30307,8 +30320,8 @@ mod person_tests {
         app.avatars_full.insert("ada-wa".into(), Some(wa.clone()));
         assert_eq!(
             app.avatar_full("ada-wa"),
-            Some(tg),
-            "primary thumbnail beats fallback full size"
+            Some(wa.clone()),
+            "a full-size picture beats any thumbnail"
         );
         app.settings.beeper.people[0].primary = Some(Member::of(&app.chats[0]).unwrap());
         assert_eq!(
@@ -30332,16 +30345,33 @@ mod person_tests {
     }
 
     #[test]
-    fn linked_row_uses_a_full_size_picture_when_no_thumbnail_exists() {
+    fn linked_row_takes_the_largest_full_size_picture_then_primary_then_thumbnail() {
         let mut app = linked_unread_app();
         let root = app.account().dirs.media_cache_dir();
         std::fs::create_dir_all(&root).unwrap();
-        let tg = root.join("synthetic-tg-full.png");
-        std::fs::write(&tg, b"synthetic fixture").unwrap();
-        app.avatars.insert("ada-wa".into(), None);
+        let picture = |name: &str, side: u32| {
+            let path = root.join(name);
+            image::RgbaImage::new(side, side).save(&path).unwrap();
+            path
+        };
+        let wa_small = picture("full-wa-64.png", 64);
+        let tg_big = picture("full-tg-256.png", 256);
+        let thumb = picture("thumb-wa-16.png", 16);
+        app.adopt_avatar("ada-wa", thumb.clone());
         app.avatars.insert("ada-tg".into(), None);
-        app.avatars_full.insert("ada-tg".into(), Some(tg.clone()));
-        assert_eq!(app.avatar("ada-wa"), Some(tg));
+        let shown = app.avatar("ada-wa");
+        assert_eq!(shown, Some(thumb), "thumbnail only as fallback");
+        app.avatars_full.insert("ada-wa".into(), Some(wa_small.clone()));
+        let shown = app.avatar("ada-wa");
+        assert_eq!(shown, Some(wa_small.clone()), "full beats thumbnail");
+        app.avatars_full.insert("ada-tg".into(), Some(tg_big.clone()));
+        assert_eq!(app.avatar("ada-wa"), Some(tg_big.clone()), "largest wins");
+        assert_eq!(app.avatar("ada-tg"), Some(tg_big), "same on every row");
+        let tg_tie = picture("full-tg-64.png", 64);
+        app.avatars_full.insert("ada-tg".into(), Some(tg_tie.clone()));
+        assert_eq!(app.avatar("ada-wa"), Some(wa_small), "tie: member order");
+        app.settings.beeper.people[0].primary = Some(Member::of(&app.chats[1]).unwrap());
+        assert_eq!(app.avatar("ada-wa"), Some(tg_tie), "tie: primary first");
     }
 
     #[test]
