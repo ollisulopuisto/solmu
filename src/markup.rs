@@ -1327,8 +1327,8 @@ fn is_domain(host: &str, bare: bool) -> bool {
     let tld = labels[labels.len() - 1];
     // A capital after the dot ("ok.Today") is the next sentence, not an address;
     // all-capitals ("EXAMPLE.COM") still is one.
-    let mixed_case = tld.chars().any(|c| c.is_ascii_lowercase())
-        && tld.chars().any(|c| c.is_ascii_uppercase());
+    let mixed_case =
+        tld.chars().any(|c| c.is_ascii_lowercase()) && tld.chars().any(|c| c.is_ascii_uppercase());
     if !tld.chars().all(|c| c.is_ascii_alphabetic()) || (bare && mixed_case) {
         return false;
     }
