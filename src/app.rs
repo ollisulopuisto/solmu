@@ -4449,7 +4449,8 @@ impl App {
         };
         let mut largest: Option<(u64, PathBuf)> = None;
         for id in &ids {
-            if let Some(path) = self.source_avatar_full(id) {
+            // A cleaned-up cache file is skipped, like a missing thumbnail.
+            if let Some(path) = self.source_avatar_full(id).filter(|path| path.is_file()) {
                 let pixels = *self.avatar_pixels.entry(path.clone()).or_insert_with(|| {
                     image::image_dimensions(&path)
                         .map_or(0, |(width, height)| u64::from(width) * u64::from(height))
@@ -30361,17 +30362,22 @@ mod person_tests {
         app.avatars.insert("ada-tg".into(), None);
         let shown = app.avatar("ada-wa");
         assert_eq!(shown, Some(thumb), "thumbnail only as fallback");
-        app.avatars_full.insert("ada-wa".into(), Some(wa_small.clone()));
+        app.avatars_full
+            .insert("ada-wa".into(), Some(wa_small.clone()));
         let shown = app.avatar("ada-wa");
         assert_eq!(shown, Some(wa_small.clone()), "full beats thumbnail");
-        app.avatars_full.insert("ada-tg".into(), Some(tg_big.clone()));
+        app.avatars_full
+            .insert("ada-tg".into(), Some(tg_big.clone()));
         assert_eq!(app.avatar("ada-wa"), Some(tg_big.clone()), "largest wins");
         assert_eq!(app.avatar("ada-tg"), Some(tg_big), "same on every row");
         let tg_tie = picture("full-tg-64.png", 64);
-        app.avatars_full.insert("ada-tg".into(), Some(tg_tie.clone()));
-        assert_eq!(app.avatar("ada-wa"), Some(wa_small), "tie: member order");
+        app.avatars_full
+            .insert("ada-tg".into(), Some(tg_tie.clone()));
+        assert_eq!(app.avatar("ada-wa"), Some(wa_small.clone()), "tie: member order");
         app.settings.beeper.people[0].primary = Some(Member::of(&app.chats[1]).unwrap());
-        assert_eq!(app.avatar("ada-wa"), Some(tg_tie), "tie: primary first");
+        assert_eq!(app.avatar("ada-wa"), Some(tg_tie.clone()), "tie: primary first");
+        std::fs::remove_file(&tg_tie).unwrap();
+        assert_eq!(app.avatar("ada-wa"), Some(wa_small), "evicted file is skipped");
     }
 
     #[test]
