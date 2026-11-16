@@ -86,7 +86,10 @@ mod tests {
         let [year, month, number] = current();
         assert!(year >= 26, "the year is two digits, from 2026: {year}");
         assert!((1..=12).contains(&month), "the month is 1-12: {month}");
-        assert!(number >= 1, "the number counts releases in the month from 1");
+        assert!(
+            number >= 1,
+            "the number counts releases in the month from 1"
+        );
     }
 
     #[test]
