@@ -647,9 +647,9 @@ pub fn menu_item_hinted(
         }
         let mut right = rect.right() - 10.0;
         if let Some(hint) = hint {
-            let galley = ui
-                .painter()
-                .layout_no_wrap(hint.to_owned(), theme::regular(12.5), palette.dim);
+            let galley =
+                ui.painter()
+                    .layout_no_wrap(hint.to_owned(), theme::regular(12.5), palette.dim);
             right -= galley.size().x;
             ui.painter().galley(
                 pos2(right, rect.center().y - galley.size().y / 2.0),
