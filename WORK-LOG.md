@@ -156,8 +156,8 @@ and dismiss actions. Migrated the contract to assert that shipped bounded path
 and that the removed menu stays removed. Standalone rustc execution passes.
 
 
-## 2026-11-17: Cmd+B linked header and About build identity
+## 2026-11-17: Cmd+B linked header
 
 The linked-person renderer did not apply the traffic-light clearance used by ordinary chat headers. With only the 52-point icon rail left after Cmd+B, the green button overlapped the linked name. Added real-input coverage for repeated hide/show at three zoom levels in both themes. Capture and test results are recorded in the PR; never use private chat data as review media.
 
-About now reads the package-owned Resources/build-version.txt, written by bundle.sh before signing. The numeric Info.plist version and update ordering remain unchanged. Non-bundled development binaries fall back to Cargo version.
+About build identity is tracked in a separate PR.

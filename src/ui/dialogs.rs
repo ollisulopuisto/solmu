@@ -1199,7 +1199,7 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             theme::text(ui, "Solmu", theme::bold(17.0), palette.text);
             let version_label = crate::i18n::gettext(app.locale, "Version {version}")
-                .replace("{version}", crate::version::display());
+                .replace("{version}", env!("CARGO_PKG_VERSION"));
             theme::text(ui, version_label, theme::regular(13.0), palette.secondary);
         });
     });
