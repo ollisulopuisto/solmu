@@ -173,10 +173,8 @@ jobs:
               --demo-size "$size" --demo-page "$page" --demo-shot-delay 6000 "$@"
             test -s "$out/$name.png"
           }
-          shot before-info-1180x780 1180x780 chat,info-media
-          shot before-info-dark-1180x780 1180x780 chat,info-media,theme=Catppuccin.json
-          shot before-sidebar-1180x780 1180x780 chat,flat-groups
-          shot before-sidebar-dark-1180x780 1180x780 chat,flat-groups,theme=Catppuccin.json
+          shot before-whisper-settings-light-1180x780 1180x780 'settings-search=Voice notes,light'
+          shot before-whisper-settings-dark-1180x780 1180x780 'settings-search=Voice notes,theme=Catppuccin.json'
       - uses: actions/upload-artifact@v7
         with:
           name: layout-shots
