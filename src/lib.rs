@@ -74,6 +74,7 @@ pub mod transcript;
 pub mod ui;
 pub mod updates;
 pub mod util;
+pub mod version;
 pub mod video;
 pub mod voice;
 pub mod wallpaper;

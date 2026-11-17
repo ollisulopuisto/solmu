@@ -33,7 +33,7 @@ class WorkflowTests(unittest.TestCase):
         block = run_block(text, '        run: |\n')
         targets = ['aarch64-apple-darwin', 'x86_64-apple-darwin',
                    'x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc']
-        for target in targets + ['all', 'invalid']:
+        for target in targets + ['all', 'shots-only', 'whisper-helper', 'whisper-smoke', 'invalid']:
             with tempfile.NamedTemporaryFile() as out:
                 env = dict(os.environ, TARGET=target, GITHUB_OUTPUT=out.name)
                 result = subprocess.run(['bash', '-eu', '-c', block], env=env, capture_output=True)
@@ -42,7 +42,7 @@ class WorkflowTests(unittest.TestCase):
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     rows = json.loads(Path(out.name).read_text().split('=', 1)[1])['include']
-                    self.assertEqual([r['target'] for r in rows], targets if target == 'all' else [target])
+                    self.assertEqual([r['target'] for r in rows], targets if target == 'all' else [] if target in ['shots-only', 'whisper-helper', 'whisper-smoke'] else [target])
         self.assertIn('fromJSON(needs.select.outputs.matrix)', text)
         self.assertIn('FAST_BEEPER_UPLOAD_ARTIFACTS', text)
 
@@ -112,6 +112,46 @@ class WorkflowTests(unittest.TestCase):
         verifier = (ROOT / 'packaging/macos/verify.sh').read_text()
         self.assertIn('verify_architectures "$app/Contents/MacOS/solmu"', verifier)
         self.assertIn('verify_architectures "$app/Contents/MacOS/solmu-client"', verifier)
+
+    def test_optional_helper_routing_signing_and_artifact_guards(self):
+        trial = workflow('trial-binaries.yml')
+        caller = trial.split('  whisper-helper:', 1)[1].split('  build:', 1)[0]
+        helper = workflow('whisper-helper.yml')
+        for text in [caller, helper]:
+            self.assertIn("github.event.repository.private == false", text)
+            self.assertIn("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)", text)
+        self.assertIn("inputs.target != 'whisper-helper'", trial.split('  build:', 1)[1])
+        self.assertIn("inputs.target == 'whisper-helper'", caller)
+        self.assertIn("if: vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true'", helper)
+        self.assertIn('retention-days: 1', helper)
+        self.assertLess(helper.index('Build standalone optional helper'), helper.index('Set up signing credentials'))
+
+    def test_optional_helper_has_a_baseline_intel_cpu(self):
+        script = ROOT / 'packaging/macos/build-whisper-helper.sh'
+        for arch in ['x86_64', 'arm64']:
+            with tempfile.TemporaryDirectory() as directory:
+                work = Path(directory)
+                bin_dir = work / 'bin'
+                bin_dir.mkdir()
+                source = work / 'source'
+                source.mkdir()
+                (source / 'LICENSE').write_text('fixture')
+                output = work / 'output'
+                for name, body in {
+                    'cmake': 'echo "$*" >> "$LOG"\nif [ "$1" = --build ]; then mkdir -p "$2/bin"; touch "$2/bin/whisper-cli"; fi\n',
+                    'otool': 'echo fixture\necho " /usr/lib/libSystem.B.dylib (compatibility version 1)"\n',
+                    'lipo': 'exit 0\n',
+                }.items():
+                    stub = bin_dir / name
+                    stub.write_text('#!/bin/bash\nset -eu\n' + body)
+                    stub.chmod(0o755)
+                env = dict(os.environ, PATH=str(bin_dir)+':'+os.environ['PATH'], LOG=str(work/'calls'))
+                result = subprocess.run(['bash', str(script), str(source), str(output), arch], env=env, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = (work/'calls').read_text()
+                self.assertIn('-DGGML_NATIVE=OFF', calls)
+                for instruction in ['AVX', 'AVX2', 'FMA', 'F16C', 'BMI2', 'SSE42']:
+                    self.assertEqual('-DGGML_'+instruction+'=OFF' in calls, arch == 'x86_64', instruction)
 
     def test_ci_selection_modes(self):
         text = workflow('ci.yml')
