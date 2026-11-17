@@ -22604,7 +22604,7 @@ mod tests {
                         .iter()
                         .filter(|(text, rect)| text == &name && rect.top() < 60.0)
                         .map(|(_, rect)| rect)
-                        .last()
+                        .next_back()
                         .expect("linked header title");
                     assert!(
                         title.left() >= crate::theme::traffic_light_inset(&ctx),
