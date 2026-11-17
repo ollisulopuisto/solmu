@@ -1434,7 +1434,13 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
     let loading = app.transcript_reader().is_some_and(|worker| {
         worker.saved_loading(&app.account().id.0, &listing.chat, &app.info_voice_query)
     });
-    if listing.voice.is_empty() && saved.is_empty() && !loading && app.info_voice_query.is_empty() {
+    if listing.voice.is_empty()
+        && saved.is_empty()
+        && !loading
+        && app.info_voice_query.is_empty()
+        && !app.info_media_failed
+        && !app.info_media_pending
+    {
         widgets::empty_state(
             ui,
             &app.palette,

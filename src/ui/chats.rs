@@ -2255,6 +2255,8 @@ fn results(app: &mut App, ui: &mut egui::Ui) {
     let chats: Vec<Chat> = app.beeper_display_chats();
     let hits: Vec<Message> = app.scoped_search_hits();
     if !app.search.trim().is_empty()
+        && !app.locked_folder_open()
+        && !app.secret_code_matched()
         && let Some(worker) = app.transcript_reader()
     {
         let (loading, truncated) = worker.saved_account_state(&app.account().id.0, &app.search);
