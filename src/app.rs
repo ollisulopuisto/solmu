@@ -11855,6 +11855,11 @@ impl App {
             Action::ToggleFlatGroups => {}
             Action::MenuCommand(id) => {
                 let actions = crate::ui::keys::menu_actions(self, &id);
+                if id == "chat-quote-reply" && crate::ui::keys::linked_view(self) {
+                    let message =
+                        crate::i18n::gettext(self.locale, "In a linked chat, reply with Cmd+R");
+                    self.toast(message.into_owned());
+                }
                 self.actions.extend(actions);
             }
             Action::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,

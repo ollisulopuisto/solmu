@@ -1063,6 +1063,13 @@ fn message_shortcuts_allowed(app: &App, ctx: &egui::Context) -> bool {
         && !egui::Popup::is_any_open(ctx)
 }
 
+/// Whether the open chat is a linked person's view. Its Cmd+R reply is
+/// routed by the view's own state, which a menu command cannot reach.
+pub fn linked_view(app: &App) -> bool {
+    app.current_chat()
+        .is_some_and(|chat| linked_person(app, chat).is_some())
+}
+
 fn linked_person<'a>(app: &'a App, chat: &Chat) -> Option<&'a crate::merged::Person> {
     super::merged::person_for_view(app, chat)
 }
@@ -1776,7 +1783,17 @@ pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
         "chat-favorite" => chat.map(|chat| Action::SetFavorite(chat.id.clone(), !chat.favorite)),
         "chat-reply-later" => reply_later_action(app),
         "chat-read-later" => read_later_action(app),
-        "chat-quote-reply" => latest_incoming_action(app),
+        "chat-quote-reply" => {
+            // As Cmd+R: leave selection mode first, or the toolbar hides the composer.
+            let mut actions = Vec::new();
+            if let Some(reply) = latest_incoming_action(app) {
+                if app.selection.is_some() {
+                    actions.push(Action::CancelSelection);
+                }
+                actions.push(reply);
+            }
+            return actions;
+        }
         "chat-forward" => forward_action(app),
         "chat-newest" => chat.map(|_| Action::ScrollToBottom),
         "chat-clear" => chat
@@ -2243,6 +2260,35 @@ mod tests {
                 assert!(MENU_COMMANDS.contains(command), "{command} is not built");
             }
         }
+    }
+
+    #[test]
+    fn menu_quote_reply_leaves_selection_mode_as_command_r_does() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![
+                    shortcut_message(&chat, "older", true, 10),
+                    shortcut_message(&chat, "latest-incoming", true, 20),
+                ],
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            menu_actions(&app, "chat-quote-reply"),
+            [Action::Reply("latest-incoming".into())]
+        );
+        app.selection = Some((chat, vec!["older".into()]));
+        assert_eq!(
+            menu_actions(&app, "chat-quote-reply"),
+            [
+                Action::CancelSelection,
+                Action::Reply("latest-incoming".into())
+            ]
+        );
     }
 
     #[test]
