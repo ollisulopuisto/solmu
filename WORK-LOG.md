@@ -204,3 +204,11 @@ provider selected yet: official b5454 has Apple dynamic-library XCFramework,
 not a macOS CLI. Archive inspected and published SHA256 matched. Linux/Windows
 archives exist. Main has reported choices; do not silently choose a third-party
 Mac CLI or add a helper distribution. No xattr bypass or weakened validation.
+
+Separate optional helper prep: manual-only workflow fetches pinned official
+source, builds standalone helper app, signs/notarizes/staples, checks quarantine
+without stripping it, and emits exact archive metadata. No Solmu build invokes
+it and no release asset is published automatically. Workflow and build script
+are only prepared, not run. Publishing helper plus pinning output URL/size/hash
+and implementing verified runtime installation still pending. Existing app
+engine controls remain disabled until that runtime exists.
