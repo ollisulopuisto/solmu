@@ -20,10 +20,18 @@ readers already at the bottom and compensates changes above scrolled-back views.
 Validation: five pure Rust width/timing tests pass locally, including append,
 stagger, overshoot, retarget, history/cap changes and pruning. Native geometry,
 footer, card-containment and both-theme tests updated for the approved design.
-Native app compilation, full test suite, and visual capture await CI. Local
-native compilation is blocked by missing PipeWire development headers.
+Full native library/test-target compilation and strict clippy passed locally.
+Two additional extracted-function regressions failed before the follow-up fix
+and passed afterward: poster bytes do not invalidate geometry, and received
+albums use their natural 320-point width capped by the pane. The full native
+suite and final-head pixel capture are CI gates, not local execution claims.
 
 Review follow-up: linked width signatures cover preview/card/poster and quote
 inputs, and the linked planner reserves the same network-chip lane as rendering.
 A same-text no-preview/preview regression and narrow-lane cap assertion cover
 those paths. Pin notices keep both separated bodies and their receipt slots.
+
+
+Width signatures hash text and layout shape without formatting payloads or
+traversing thumbnail/waveform bytes. Received albums retain their natural card
+width; sent albums use card-based band planning rather than a viewport fallback.

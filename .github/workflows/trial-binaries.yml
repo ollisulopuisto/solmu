@@ -177,6 +177,8 @@ jobs:
           # width, in light and dark themes.
           shot chat-card-widths-1180x780 1180x780 chat,card-widths
           shot chat-card-widths-dark-1180x780 1180x780 chat,card-widths,theme=Catppuccin.json
+          shot chat-card-widths-messages-1180x780 1180x780 chat,card-widths,messages
+          shot chat-linked-messages-1180x780 1180x780 chat,linked,messages
           # The combined sidebar beside the list, and where it must fall
           # back to the compact rail.
           shot chat-1180x780 1180x780 chat

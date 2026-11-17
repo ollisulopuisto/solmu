@@ -18507,6 +18507,45 @@ mod tests {
     }
 
     #[test]
+    fn received_album_stays_card_sized_in_a_wide_timeline() {
+        for theme in [ThemeChoice::Dark, ThemeChoice::Light, ThemeChoice::Messages] {
+            let mut app = app();
+            app.settings.theme = theme;
+            app.settings.reduce_motion = true;
+            let chat = SAMPLES[0].id;
+            let mut first = app.conversations[chat]
+                .message("ada-photo")
+                .unwrap()
+                .clone();
+            first.id = "album-a".into();
+            first.from_me = false;
+            if let Content::Image { media, caption, .. } = &mut first.content {
+                media.album = Some("album".into());
+                *caption = None;
+            }
+            let mut second = first.clone();
+            second.id = "album-b".into();
+            app.conversations.get_mut(chat).unwrap().messages = vec![first, second];
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            for _ in 0..5 {
+                streak_test_frame(&mut app, &ctx, 1180., 1000., vec![]);
+            }
+            let rect = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(
+                        crate::ui::conversation::bubble_id(chat, "album-a").with("rect"),
+                    )
+                })
+                .unwrap();
+            assert!(
+                rect.width() <= 342.,
+                "received album retains its 320-point content maximum: {rect:?}"
+            );
+        }
+    }
+
+    #[test]
     fn received_hugs_text_and_sent_run_uses_thirds_with_one_footer() {
         use crate::ui::conversation::{bubble_id, footer_id};
         for theme in [ThemeChoice::Dark, ThemeChoice::Light, ThemeChoice::Messages] {

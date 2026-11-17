@@ -5632,24 +5632,28 @@ fn bubble_frame(
         let cap = ((max_width - inset).min(ui.available_width())).max(0.0);
         // Metadata is outside the frame, so text/media need no footer slot.
         let reserve = 0.0;
-        let settled = view
-            .neighbour_width
-            .map(|width| {
-                if own && !bubbleless(&palette, message) {
-                    width.max((120.0 - inset).max(0.0)).min(cap)
-                } else {
-                    width.min(cap)
-                }
-            })
-            .or_else(|| album.map(|_| CARD_WIDTH.min(cap)))
+        let settled = album
+            .filter(|_| !own)
+            .map(|_| CARD_WIDTH.min(cap))
             .or_else(|| {
-                settled_width(ui, view, message, cap).map(|width| {
-                    if own {
-                        width.max((120.0 - inset).max(0.0)).min(cap)
-                    } else {
-                        width
-                    }
-                })
+                view.neighbour_width
+                    .map(|width| {
+                        if own && !bubbleless(&palette, message) {
+                            width.max((120.0 - inset).max(0.0)).min(cap)
+                        } else {
+                            width.min(cap)
+                        }
+                    })
+                    .or_else(|| album.map(|_| CARD_WIDTH.min(cap)))
+                    .or_else(|| {
+                        settled_width(ui, view, message, cap).map(|width| {
+                            if own {
+                                width.max((120.0 - inset).max(0.0)).min(cap)
+                            } else {
+                                width
+                            }
+                        })
+                    })
             });
         if !bubbleless(&palette, message)
             && (own || matches!(message.content, Content::Text { .. }))
@@ -6039,6 +6043,9 @@ fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) ->
 }
 
 fn natural_content_width(message: &Message, cap: f32, text: Option<f32>) -> Option<f32> {
+    if matches!(&message.content,Content::Image {media,..} if media.album.is_some()) {
+        return Some(CARD_WIDTH.min(cap));
+    }
     if matches!(
         message.content,
         Content::Location { .. } | Content::LiveLocation { .. }
@@ -6087,6 +6094,33 @@ pub(crate) fn width_key(message: &Message) -> String {
     format!("{}\0{}", message.chat, message.id)
 }
 
+/// Only inputs used by natural_content_width belong here. In particular a
+/// poster's bytes, a waveform and an interactive thumbnail never change width.
+fn width_signature(message: &Message) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    std::mem::discriminant(&message.content).hash(&mut hash);
+    body_for_measurement(&message.content)
+        .map(|(text, _)| text)
+        .hash(&mut hash);
+    message.quoted.is_some().hash(&mut hash);
+    message.thumbnail.is_some().hash(&mut hash);
+    match &message.content {
+        Content::Text { preview, .. } => preview.is_some().hash(&mut hash),
+        Content::Interactive { card, .. } => {
+            card.is_some().hash(&mut hash);
+            if let Some(card) = card {
+                card.image.is_some().hash(&mut hash);
+                card.carousel.len().hash(&mut hash);
+            }
+        }
+        Content::Video { note, .. } => note.hash(&mut hash),
+        Content::Image { media, .. } => media.album.is_some().hash(&mut hash),
+        _ => {}
+    }
+    hash.finish()
+}
+
 /// Measure once per text revision, then plan sent-run widths across the full
 /// timeline before viewport culling. Incoming rows retain their natural width.
 fn planned_widths(
@@ -6098,27 +6132,15 @@ fn planned_widths(
     animate: bool,
     natural: impl Fn(&Message) -> f32,
 ) -> HashMap<String, f32> {
-    use std::hash::{Hash, Hasher};
     book.retain_fingerprint(
         cap.to_bits() ^ crate::theme::font_generation().wrapping_mul(0x9E37_79B9),
     );
     let mut entries = Vec::with_capacity(messages.len());
     for message in messages {
         let key = width_key(message);
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
-        // Content includes preview presence, interactive image/carousel shape,
-        // media dimensions and captions. The poster and quote affect sizing too.
-        format!("{:?}", message.content).hash(&mut hash);
-        format!("{:?}", message.thumbnail).hash(&mut hash);
-        format!("{:?}", message.quoted).hash(&mut hash);
-        message.forwarded.hash(&mut hash);
-        for mention in &message.mentions {
-            mention.id.hash(&mut hash);
-            mention.user.hash(&mut hash);
-        }
-        book.check_signature(&key, hash.finish());
+        book.check_signature(&key, width_signature(message));
         if !message.mentions.is_empty() {
-            book.invalidate(&message.id);
+            book.invalidate(&key);
         }
         let width = book.get(&key).unwrap_or_else(|| {
             let width = natural(message).clamp(0.0, cap);
@@ -12040,6 +12062,48 @@ fn chat_of(chat: &ChatId) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn width_signature_ignores_media_bytes_and_tracks_layout_shape() {
+        let mut row = message(Content::Text {
+            text: "same text".into(),
+            preview: None,
+        });
+        let plain = width_signature(&row);
+        row.thumbnail = Some(vec![1; 1024 * 1024]);
+        let poster = width_signature(&row);
+        row.thumbnail = Some(vec![255; 2 * 1024 * 1024]);
+        assert_eq!(
+            width_signature(&row),
+            poster,
+            "poster bytes do not affect width"
+        );
+        assert_ne!(plain, poster, "poster presence is a layout input");
+        if let Content::Text { preview, .. } = &mut row.content {
+            *preview = Some(crate::model::LinkPreview {
+                url: "https://example.com".into(),
+                title: None,
+                description: None,
+            });
+        }
+        assert_ne!(
+            width_signature(&row),
+            poster,
+            "preview presence invalidates"
+        );
+    }
+
+    #[test]
+    fn received_album_uses_its_natural_card_width_not_the_viewport() {
+        let mut source = media(None, None);
+        source.album = Some("album".into());
+        let row = message(Content::Image {
+            caption: None,
+            media: source,
+            motion: None,
+        });
+        assert_eq!(natural_content_width(&row, 520., None), Some(320.));
+        assert_eq!(natural_content_width(&row, 200., None), Some(200.));
+    }
 
     #[test]
     fn unknown_delivery_footer_keeps_no_clockless_status_slot() {
