@@ -544,6 +544,33 @@ mod real_runtime_smoke {
             executable_sha256: Box::leak(executable_hash.to_owned().into_boxed_str()),
         };
         let state = tempfile::tempdir().unwrap();
+        // Set only by the explicit public-download validation dispatch after
+        // the reviewed runtime URL and hashes have been pinned.
+        if std::env::var_os("SOLMU_VALIDATE_PUBLIC_DOWNLOAD").is_some() {
+            let download = crate::local_whisper::Download::start(state.path().to_owned(), || {});
+            let started = Instant::now();
+            loop {
+                match download.state() {
+                    crate::local_whisper::DownloadState::Ready(model) => {
+                        crate::local_whisper::verify_model(&model).unwrap();
+                        let spec =
+                            crate::whisper_runtime::artifact().expect("pinned public runtime");
+                        crate::whisper_runtime::verify(
+                            &crate::whisper_runtime::executable(state.path()),
+                            spec,
+                        )
+                        .expect("public downloader installed verified runtime");
+                        break;
+                    }
+                    crate::local_whisper::DownloadState::Downloading { .. }
+                        if started.elapsed() < Duration::from_secs(20 * 60) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    status => panic!("public downloader did not become ready: {status:?}"),
+                }
+            }
+        }
         let cancel = std::sync::atomic::AtomicBool::new(false);
         let binary = crate::whisper_runtime::install_archive(&archive, state.path(), spec, &cancel)
             .expect("verified install");

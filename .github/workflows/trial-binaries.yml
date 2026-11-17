@@ -18,6 +18,10 @@ on:
           - shots-only
           - whisper-helper
           - whisper-smoke
+      validate_public_download:
+        description: 'Explicitly exercise the pinned public runtime/model downloader'
+        type: boolean
+        default: false
       helper_run:
         description: 'Explicit successful helper artifact run for whisper-smoke'
         type: string
@@ -97,6 +101,9 @@ jobs:
           codesign --verify --strict --deep -R '=anchor apple generic and identifier "fi.sulopuisto.solmu.whisper" and certificate leaf[subject.OU] = "LWSR8T5392"' "$app"
           spctl --assess --type execute --verbose=2 "$app"
           xcrun stapler validate "$app"
+      - name: Opt into public downloader validation
+        if: inputs.validate_public_download
+        run: echo 'SOLMU_VALIDATE_PUBLIC_DOWNLOAD=1' >> "$GITHUB_ENV"
       - name: Production installer, repair, decoder and real Opus transcription
         run: mbx test --locked --lib local_whisper_real_recording -- --ignored
 

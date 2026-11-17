@@ -48,7 +48,9 @@ assessment. Intel validation and runtime asset publication are still pending.
 A pinned hash does not establish Gatekeeper approval. No code strips quarantine,
 weakens library validation or self-signs downloaded executables. The first helper trial passed
 these checks; production app installation, repair and real Opus inference are
-covered by an explicit manual smoke route whose passing result is still pending.
+covered by an explicit manual smoke route. The arm64 run 44142397679 passed
+production installation, damage/repair, real speech Opus encoding/decoding and
+Whisper inference. Public-URL download and enabled-app validation remain pending.
 
 Sources checked 2026-11-17:
 - https://github.com/ggml-org/whisper.cpp/releases/tag/b5454
