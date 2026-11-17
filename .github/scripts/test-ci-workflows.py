@@ -113,6 +113,33 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('verify_architectures "$app/Contents/MacOS/solmu"', verifier)
         self.assertIn('verify_architectures "$app/Contents/MacOS/solmu-client"', verifier)
 
+    def test_optional_helper_has_a_baseline_intel_cpu(self):
+        script = ROOT / 'packaging/macos/build-whisper-helper.sh'
+        for arch in ['x86_64', 'arm64']:
+            with tempfile.TemporaryDirectory() as directory:
+                work = Path(directory)
+                bin_dir = work / 'bin'
+                bin_dir.mkdir()
+                source = work / 'source'
+                source.mkdir()
+                (source / 'LICENSE').write_text('fixture')
+                output = work / 'output'
+                for name, body in {
+                    'cmake': 'echo "$*" >> "$LOG"\nif [ "$1" = --build ]; then mkdir -p "$2/bin"; touch "$2/bin/whisper-cli"; fi\n',
+                    'otool': 'echo fixture\necho " /usr/lib/libSystem.B.dylib (compatibility version 1)"\n',
+                    'lipo': 'exit 0\n',
+                }.items():
+                    stub = bin_dir / name
+                    stub.write_text('#!/bin/bash\nset -eu\n' + body)
+                    stub.chmod(0o755)
+                env = dict(os.environ, PATH=str(bin_dir)+':'+os.environ['PATH'], LOG=str(work/'calls'))
+                result = subprocess.run(['bash', str(script), str(source), str(output), arch], env=env, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = (work/'calls').read_text()
+                self.assertIn('-DGGML_NATIVE=OFF', calls)
+                for instruction in ['AVX', 'AVX2', 'FMA', 'F16C', 'BMI2', 'SSE42']:
+                    self.assertEqual('-DGGML_'+instruction+'=OFF' in calls, arch == 'x86_64', instruction)
+
     def test_ci_selection_modes(self):
         text = workflow('ci.yml')
         block = run_block(text.split('id: scope', 1)[1], '        run: |\n')
