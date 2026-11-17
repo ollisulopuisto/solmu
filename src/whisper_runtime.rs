@@ -39,7 +39,12 @@ fn bounded_command(command: &mut std::process::Command) -> Result<(), String> {
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(_)) => return Err("Runtime verification or installation failed".into()),
+            Ok(Some(status)) => {
+                return Err(format!(
+                    "Runtime command {:?} failed: {status}",
+                    command.get_program()
+                ));
+            }
             Ok(None) if started.elapsed() < Duration::from_secs(60) => {
                 std::thread::sleep(Duration::from_millis(25));
             }
