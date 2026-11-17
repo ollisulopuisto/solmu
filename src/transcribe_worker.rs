@@ -110,7 +110,7 @@ type SearchCache = Arc<Mutex<Option<(u64, String, Vec<Hit>)>>>;
 const SCOPED_CACHE_SLOTS: usize = 4;
 struct ScopedSnapshot {
     version: u64,
-    key: (String, String, String),
+    key: (String, String, String, bool),
     hits: Option<Arc<[Hit]>>,
     truncated: bool,
 }
@@ -121,7 +121,7 @@ struct ScanPermit {
     active: Arc<AtomicUsize>,
     cache: ScopedSearchCache,
     version: u64,
-    key: (String, String, String),
+    key: (String, String, String, bool),
     wake: Arc<dyn Fn() + Send + Sync>,
 }
 impl Drop for ScanPermit {
@@ -402,6 +402,17 @@ impl Worker {
     /// Saved text only: never queues the engine or downloads audio. A
     /// versioned scoped memo keeps repeated paint passes off disk.
     pub fn saved_in_chat(&self, account: &str, chat: &str, query: &str) -> Arc<[Hit]> {
+        self.saved_scope(account, chat, query, false)
+    }
+
+    pub fn saved_for_account(&self, account: &str, query: &str) -> Arc<[Hit]> {
+        if query.trim().is_empty() {
+            return Arc::default();
+        }
+        self.saved_scope(account, "", query, true)
+    }
+
+    fn saved_scope(&self, account: &str, chat: &str, query: &str, all_chats: bool) -> Arc<[Hit]> {
         let Some(store) = &self.store else {
             return self
                 .shared
@@ -410,7 +421,7 @@ impl Worker {
                 .unwrap_or_else(|p| p.into_inner())
                 .iter()
                 .filter_map(|((a, c, m), status)| {
-                    if a != account || c != chat {
+                    if a != account || (!all_chats && c != chat) {
                         return None;
                     }
                     let Status::Ready(text) = status else {
@@ -433,6 +444,7 @@ impl Worker {
             account.to_owned(),
             chat.to_owned(),
             crate::util::search_key(query.trim()),
+            all_chats,
         );
         let mut memo = self
             .scoped_search_cache
@@ -476,7 +488,7 @@ impl Worker {
             let _permit = permit;
             let snapshot = {
                 let _io = shared.store_io.lock().unwrap_or_else(|p| p.into_inner());
-                store.snapshot_while(&key.2, &key.0, &key.1, || {
+                let current = || {
                     shared.alive.load(Ordering::Relaxed)
                         && store.version() == version
                         && cache
@@ -484,7 +496,12 @@ impl Worker {
                             .unwrap_or_else(|p| p.into_inner())
                             .iter()
                             .any(|entry| entry.version == version && entry.key == key)
-                })
+                };
+                if key.3 {
+                    store.account_snapshot_while(&key.2, &key.0, current)
+                } else {
+                    store.snapshot_while(&key.2, &key.0, &key.1, current)
+                }
             };
             let mut memo = cache.lock().unwrap_or_else(|p| p.into_inner());
             // A stale completion wakes once so the next frame can request the
@@ -511,6 +528,7 @@ impl Worker {
             account.to_owned(),
             chat.to_owned(),
             crate::util::search_key(query.trim()),
+            false,
         );
         self.scoped_search_cache
             .lock()
@@ -528,12 +546,33 @@ impl Worker {
             account.to_owned(),
             chat.to_owned(),
             crate::util::search_key(query.trim()),
+            false,
         );
         self.scoped_search_cache
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .iter()
             .any(|entry| entry.version == store.version() && entry.key == key && entry.truncated)
+    }
+
+    pub fn saved_account_state(&self, account: &str, query: &str) -> (bool, bool) {
+        let Some(store) = &self.store else {
+            return (false, false);
+        };
+        let key = (
+            account.to_owned(),
+            String::new(),
+            crate::util::search_key(query.trim()),
+            true,
+        );
+        self.scoped_search_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|entry| entry.version == store.version() && entry.key == key)
+            .map_or((true, false), |entry| {
+                (entry.hits.is_none(), entry.truncated)
+            })
     }
 
     /// Read/delete access to saved text without an engine or worker thread.
@@ -718,7 +757,7 @@ mod tests {
     #[test]
     fn panicking_scan_releases_admission_and_pending_entry() {
         let active = Arc::new(AtomicUsize::new(1));
-        let key = ("acc".into(), "chat".into(), "query".into());
+        let key = ("acc".into(), "chat".into(), "query".into(), false);
         let cache = Arc::new(Mutex::new(VecDeque::from([ScopedSnapshot {
             version: 0,
             key: key.clone(),
@@ -771,6 +810,38 @@ mod tests {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn account_search_never_waits_for_disk_and_filters_before_caps() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), u64::MAX).unwrap();
+        store.put("mine", "chat", "mine", "station").unwrap();
+        for i in 0..60 {
+            store
+                .put("other", "chat", &format!("m{i}"), "station")
+                .unwrap();
+        }
+        let worker = Worker::archive(store);
+        let io = worker.shared.store_io.lock().unwrap();
+        assert!(worker.saved_for_account("mine", "station").is_empty());
+        assert!(worker.saved_account_state("mine", "station").0);
+        drop(io);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let hits = loop {
+            let hits = worker.saved_for_account("mine", "station");
+            if !hits.is_empty() {
+                break hits;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_id, "mine");
+        assert!(Arc::ptr_eq(
+            &hits,
+            &worker.saved_for_account("mine", "station")
+        ));
     }
 
     #[test]

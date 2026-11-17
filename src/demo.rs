@@ -10993,6 +10993,16 @@ mod tests {
             "saved matches remain expandable outside the bounded media listing"
         );
         assert!(app.transcriber.as_ref().unwrap().recorded().is_empty());
+        app.info_media = None;
+        app.info_media_pending = false;
+        app.info_media_failed = true;
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        assert!(
+            crate::ui::focus::control(&ctx, crate::ui::focus::Stop::InfoVoice(0, 2)).is_some(),
+            "saved transcript controls survive failed metadata without cached rows"
+        );
         app.info_voice_query = "no such words".into();
         for _ in 0..3 {
             render(&mut app, &ctx);

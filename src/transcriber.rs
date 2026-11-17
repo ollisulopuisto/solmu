@@ -463,6 +463,50 @@ impl Store {
         self.snapshot_while(query, account, chat, || true)
     }
 
+    /// Account-wide search uses the same bounded snapshots, filtering before caps.
+    pub fn account_snapshot_while(
+        &self,
+        query: &str,
+        account: &str,
+        current: impl Fn() -> bool,
+    ) -> Snapshot {
+        let mut out = Snapshot::default();
+        if query.trim().is_empty() {
+            return out;
+        }
+        let mut retained = std::collections::BTreeMap::new();
+        let mut bytes = 0;
+        for chat in subdirs(&self.root.join(encode(account))) {
+            if !current() {
+                return Snapshot::default();
+            }
+            let Some(chat) = decode(&chat) else {
+                continue;
+            };
+            let snapshot = self.snapshot_while(query, account, &chat, &current);
+            out.truncated |= snapshot.truncated;
+            for hit in snapshot.hits {
+                bytes += hit.text.len();
+                retained.insert(
+                    (
+                        std::cmp::Reverse(hit.modified),
+                        hit.chat_id.clone(),
+                        hit.message_id.clone(),
+                    ),
+                    hit,
+                );
+                while retained.len() > SNAPSHOT_HITS || bytes > SNAPSHOT_TEXT_BYTES {
+                    if let Some((_, hit)) = retained.pop_last() {
+                        bytes -= hit.text.len();
+                        out.truncated = true;
+                    }
+                }
+            }
+        }
+        out.hits = retained.into_values().collect();
+        out
+    }
+
     pub fn snapshot_while(
         &self,
         query: &str,

@@ -3874,9 +3874,10 @@ impl App {
             .map(|hit| (hit.chat.clone(), hit.id.clone()))
             .collect();
         if let Some(worker) = self.transcript_reader() {
-            for hit in
-                self.transcript_hit_messages(worker.search(self.search.trim()), self.search.trim())
-            {
+            for hit in self.transcript_hit_messages(
+                worker.saved_for_account(&self.account().id.0, self.search.trim()),
+                self.search.trim(),
+            ) {
                 if self
                     .chat(&hit.chat)
                     .is_some_and(|chat| !chat.locked && !self.chat_scope_matches(chat))
@@ -3916,9 +3917,10 @@ impl App {
             && !self.locked_folder_open()
             && !self.secret_code_matched()
         {
-            for hit in
-                self.transcript_hit_messages(worker.search(self.search.trim()), self.search.trim())
-            {
+            for hit in self.transcript_hit_messages(
+                worker.saved_for_account(&self.account().id.0, self.search.trim()),
+                self.search.trim(),
+            ) {
                 if self.chat(&hit.chat).is_some_and(|chat| chat.locked) {
                     continue;
                 }
@@ -26367,7 +26369,15 @@ mod tests {
         // No backend hit for the loaded message: its transcript still
         // surfaces it, keeping the real timestamp with the matched
         // transcript line as the preview.
-        let hits = app.scoped_search_hits();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let hits = loop {
+            let hits = app.scoped_search_hits();
+            if hits.len() == 2 {
+                break hits;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
         assert_eq!(hits.len(), 2, "{hits:?}");
         let loaded: Vec<_> = hits.iter().filter(|hit| hit.id == "m1").collect();
         assert_eq!(loaded.len(), 1);

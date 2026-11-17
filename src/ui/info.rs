@@ -1163,6 +1163,18 @@ fn media_view(app: &mut App, ui: &mut egui::Ui, chat: &str, tab: MediaTab, overl
         }
         None => {}
     }
+    // Saved text does not depend on a successful media-metadata response.
+    if shown.is_none() && tab == MediaTab::Voice {
+        voice_list(
+            app,
+            ui,
+            &ChatMedia {
+                chat: chat.to_owned(),
+                ..Default::default()
+            },
+            overlay,
+        );
+    }
     app.info_uris = uris;
     app.info_media = listing;
 }
