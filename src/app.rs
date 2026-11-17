@@ -7274,9 +7274,13 @@ impl App {
             .open_chat
             .as_deref()
             .and_then(|chat| {
-                self.transcript_reader().map(|worker| {
-                    worker.saved_in_chat(&self.account().id.0, chat, &self.chat_search)
-                })
+                (!self.chat_search.trim().is_empty())
+                    .then(|| {
+                        self.transcript_reader().map(|worker| {
+                            worker.saved_in_chat(&self.account().id.0, chat, &self.chat_search)
+                        })
+                    })
+                    .flatten()
             })
             .unwrap_or_default();
         let key = ChatSearchKey {

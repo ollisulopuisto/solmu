@@ -12,7 +12,7 @@
 //! respawn) invalidates the late result for good.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
@@ -99,6 +99,7 @@ pub struct Worker {
     /// Search memo: (store version, query, hits).
     search_cache: SearchCache,
     scoped_search_cache: ScopedSearchCache,
+    active_scans: Arc<AtomicUsize>,
     wake_search: Arc<dyn Fn() + Send + Sync>,
     /// What a stub was told, for tests; always empty on a live worker.
     recorded: Arc<Mutex<Vec<String>>>,
@@ -253,6 +254,7 @@ impl Worker {
             store: Some(store),
             search_cache: Arc::new(Mutex::new(None)),
             scoped_search_cache: Arc::new(Mutex::new(VecDeque::new())),
+            active_scans: Arc::new(AtomicUsize::new(0)),
             wake_search,
             recorded: Arc::new(Mutex::new(Vec::new())),
         }
@@ -419,6 +421,9 @@ impl Worker {
         if let Some(entry) = memo.iter().find(|entry| entry.key == key) {
             return entry.hits.clone().unwrap_or_default();
         }
+        if self.active_scans.load(Ordering::Relaxed) >= SCOPED_CACHE_SLOTS {
+            return Arc::default();
+        }
         if memo.len() >= SCOPED_CACHE_SLOTS {
             if let Some(index) = memo.iter().position(|entry| entry.hits.is_some()) {
                 memo.remove(index);
@@ -433,6 +438,8 @@ impl Worker {
             truncated: false,
         });
         drop(memo);
+        self.active_scans.fetch_add(1, Ordering::Relaxed);
+        let active_scans = Arc::clone(&self.active_scans);
         let store = store.clone();
         let cache = Arc::clone(&self.scoped_search_cache);
         let shared = Arc::clone(&self.shared);
@@ -440,7 +447,15 @@ impl Worker {
         std::thread::spawn(move || {
             let snapshot = {
                 let _io = shared.store_io.lock().unwrap_or_else(|p| p.into_inner());
-                store.snapshot(&key.2, &key.0, &key.1)
+                store.snapshot_while(&key.2, &key.0, &key.1, || {
+                    shared.alive.load(Ordering::Relaxed)
+                        && store.version() == version
+                        && cache
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .iter()
+                            .any(|entry| entry.version == version && entry.key == key)
+                })
             };
             let mut memo = cache.lock().unwrap_or_else(|p| p.into_inner());
             // A stale completion wakes once so the next frame can request the
@@ -455,6 +470,7 @@ impl Worker {
                 entry.truncated = snapshot.truncated;
             }
             drop(memo);
+            active_scans.fetch_sub(1, Ordering::Relaxed);
             wake();
         });
         Arc::default()
@@ -512,6 +528,7 @@ impl Worker {
             store: Some(store),
             search_cache: Arc::new(Mutex::new(None)),
             scoped_search_cache: Arc::new(Mutex::new(VecDeque::new())),
+            active_scans: Arc::new(AtomicUsize::new(0)),
             wake_search: Arc::new(wake),
             recorded: Arc::new(Mutex::new(Vec::new())),
         }
@@ -559,6 +576,7 @@ impl Worker {
             store: None,
             search_cache: Arc::new(Mutex::new(None)),
             scoped_search_cache: Arc::new(Mutex::new(VecDeque::new())),
+            active_scans: Arc::new(AtomicUsize::new(0)),
             wake_search: Arc::new(|| {}),
             recorded,
         }
@@ -648,6 +666,31 @@ mod tests {
     }
 
     #[test]
+    fn scan_threads_stay_bounded_across_queries_and_store_versions() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), 1 << 20).unwrap();
+        let worker = Worker::archive(store.clone());
+        let io = worker.shared.store_io.lock().unwrap();
+        for i in 0..20 {
+            store
+                .put("acc", "chat", "one", &format!("station {i}"))
+                .unwrap();
+            worker.saved_in_chat("acc", "chat", &i.to_string());
+            assert!(worker.active_scans.load(Ordering::Relaxed) <= SCOPED_CACHE_SLOTS);
+        }
+        assert_eq!(
+            worker.active_scans.load(Ordering::Relaxed),
+            SCOPED_CACHE_SLOTS
+        );
+        drop(io);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while worker.active_scans.load(Ordering::Relaxed) != 0 {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
     fn alternating_scoped_panels_settle_without_rescanning() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::new(root.path().to_owned(), 1 << 20).unwrap();
@@ -706,7 +749,6 @@ mod tests {
     }
 
     use std::path::PathBuf;
-    use std::sync::atomic::AtomicUsize;
     use std::time::{Duration, Instant};
 
     struct EchoEngine;

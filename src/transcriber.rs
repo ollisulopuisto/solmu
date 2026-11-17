@@ -460,7 +460,19 @@ impl Store {
     /// source files before applying the result cap; retain only bounded text.
     /// Oversized external files are skipped and the partial-state notice stays on.
     pub fn snapshot(&self, query: &str, account: &str, chat: &str) -> Snapshot {
+        self.snapshot_while(query, account, chat, || true)
+    }
+
+    pub fn snapshot_while(
+        &self,
+        query: &str,
+        account: &str,
+        chat: &str,
+        current: impl Fn() -> bool,
+    ) -> Snapshot {
         use std::io::Read;
+        let mut retained = std::collections::BTreeMap::new();
+        let mut retained_bytes = 0;
         let mut out = Snapshot::default();
         let needle = crate::util::search_key(query.trim());
         let dir = self.root.join(encode(account)).join(encode(chat));
@@ -468,6 +480,9 @@ impl Store {
             return out;
         };
         for entry in entries.flatten() {
+            if !current() {
+                return Snapshot::default();
+            }
             let name = entry.file_name();
             let Some(stem) = name.to_str().and_then(|name| name.strip_suffix(".txt")) else {
                 continue;
@@ -516,33 +531,26 @@ impl Store {
                 }
                 text.truncate(end);
             }
-            out.hits.push(Hit {
+            let hit = Hit {
                 account_id: account.into(),
                 chat_id: chat.into(),
                 message_id,
                 text,
                 modified,
-            });
-            out.hits.sort_by(|a, b| {
-                b.modified
-                    .cmp(&a.modified)
-                    .then_with(|| a.message_id.cmp(&b.message_id))
-            });
-            let mut bytes = 0;
-            out.hits.retain(|hit| {
-                bytes += hit.text.len();
-                if bytes > SNAPSHOT_TEXT_BYTES {
+            };
+            retained_bytes += hit.text.len();
+            retained.insert(
+                (std::cmp::Reverse(hit.modified), hit.message_id.clone()),
+                hit,
+            );
+            while retained.len() > SNAPSHOT_HITS || retained_bytes > SNAPSHOT_TEXT_BYTES {
+                if let Some((_, removed)) = retained.pop_last() {
+                    retained_bytes -= removed.text.len();
                     out.truncated = true;
-                    false
-                } else {
-                    true
                 }
-            });
-            if out.hits.len() > SNAPSHOT_HITS {
-                out.hits.truncate(SNAPSHOT_HITS);
-                out.truncated = true;
             }
         }
+        out.hits = retained.into_values().collect();
         out
     }
 }
@@ -594,6 +602,15 @@ mod tests {
         );
         assert!(snapshot.hits.iter().map(|h| h.text.len()).sum::<usize>() <= SNAPSHOT_TEXT_BYTES);
         assert!(store.snapshot("needle", "other", "chat").hits.is_empty());
+    }
+
+    #[test]
+    fn obsolete_snapshot_stops_before_reading_files() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), 1 << 20).unwrap();
+        store.put("acc", "chat", "one", "station").unwrap();
+        let snapshot = store.snapshot_while("station", "acc", "chat", || false);
+        assert!(snapshot.hits.is_empty());
     }
 
     #[test]
