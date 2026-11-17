@@ -16,10 +16,12 @@ jobs:
       WHISPER_REVISION: d1be6fde11ac6e0407606b4e42fe72d34add8037
       APPLE_TEAM_ID: LWSR8T5392
       SIGNING_IDENTITY: 'Developer ID Application: Olli Sulopuisto (LWSR8T5392)'
-      KEYCHAIN_PATH: ${{ runner.temp }}/whisper-signing.keychain-db
-      CERTIFICATE_PATH: ${{ runner.temp }}/whisper-signing.p12
       NOTARY_PROFILE: solmu-whisper
     steps:
+      - name: Runtime paths
+        run: |
+          echo "KEYCHAIN_PATH=$RUNNER_TEMP/whisper-signing.keychain-db" >> "$GITHUB_ENV"
+          echo "CERTIFICATE_PATH=$RUNNER_TEMP/whisper-signing.p12" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
       - name: Fetch pinned official runtime source
         run: |
