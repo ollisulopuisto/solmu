@@ -44,9 +44,11 @@ CI quirks (`.github/workflows/ci.yml`; details in `CI-GUIDE.md`):
 Known flaky tests:
 
 - `demo::tests::linked_messages_style_uses_one_clock_per_run` (`src/demo.rs`) -
-  an elapsed-time assertion, seen failing on the Ubuntu leg 2026-11-17 with
-  macOS green and the diff unrelated. If it fails on your unrelated PR, check
-  whether main passes it and say so in the PR instead of patching around it.
+  asserts the message-bubble clock layout (footer widths: only the last bubble
+  of a same-sender run keeps its clock); seen failing on the Ubuntu leg
+  2026-11-17 (`footer(0)` was 31.5, expected 0.0) with macOS green and the diff
+  unrelated. If it fails on your unrelated PR, check whether main passes it and
+  say so in the PR instead of patching around it.
 
 Merge gate: a PR merges only when Devin review shows no open findings on the
 current head and the required CI checks are green (owner's standing rule). If
