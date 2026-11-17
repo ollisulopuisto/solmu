@@ -2,10 +2,12 @@ name: Optional Whisper helper
 # Separate runtime pipeline. Solmu builds never invoke this workflow or link Whisper.
 on:
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
   helper:
+    if: github.event.repository.private == false
     runs-on: macos-15
     strategy:
       matrix:
