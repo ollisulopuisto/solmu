@@ -105,7 +105,7 @@ pub struct Worker {
 
 /// Search memo: (store version, query, hits).
 type SearchCache = Arc<Mutex<Option<(u64, String, Vec<Hit>)>>>;
-type ScopedSearchCache = Arc<Mutex<Option<(u64, String, String, String, Vec<Hit>)>>>;
+type ScopedSearchCache = Arc<Mutex<Option<(u64, String, String, Vec<Hit>)>>>;
 
 /// The loop: drain commands until Shutdown or the channel closes. `wake`
 /// repaints the view after each status change.
@@ -395,28 +395,25 @@ impl Worker {
                 .collect();
         };
         let version = store.version();
-        let query = query.trim();
+        let needle = crate::util::search_key(query.trim());
         let mut memo = self
             .scoped_search_cache
             .lock()
             .unwrap_or_else(|p| p.into_inner());
-        if let Some((v, a, c, q, hits)) = &*memo
-            && *v == version
-            && a == account
-            && c == chat
-            && q == query
-        {
-            return hits.clone();
+        let cached = memo
+            .as_ref()
+            .is_some_and(|(v, a, c, _)| *v == version && a == account && c == chat);
+        if !cached {
+            let hits = store.search_scoped("", usize::MAX, Some((account, chat)));
+            *memo = Some((version, account.into(), chat.into(), hits));
         }
-        let hits = store.search_scoped(query, usize::MAX, Some((account, chat)));
-        *memo = Some((
-            version,
-            account.into(),
-            chat.into(),
-            query.into(),
-            hits.clone(),
-        ));
-        hits
+        memo.as_ref()
+            .unwrap()
+            .3
+            .iter()
+            .filter(|hit| needle.is_empty() || crate::util::search_key(&hit.text).contains(&needle))
+            .cloned()
+            .collect()
     }
 
     /// Read/delete access to saved text without an engine or worker thread.
