@@ -38,7 +38,7 @@ const COPY_LINK_STOP: u8 = 13;
 const RESET_LINK_STOP: u8 = 14;
 const TAB_STOP: u8 = 20;
 const LEAVE_STOP: u8 = 30;
-const RETRY_STOP: u8 = 31;
+pub(crate) const RETRY_STOP: u8 = 31;
 
 /// The media view's title, and the overview row that opens it.
 fn media_title(app: &App) -> String {
@@ -1123,6 +1123,14 @@ fn media_view(app: &mut App, ui: &mut egui::Ui, chat: &str, tab: MediaTab, overl
     );
     match shown {
         Some(media) => {
+            // Retain usable cached rows, but never disguise a failed refresh
+            // as a successful current listing.
+            if app.info_media_failed {
+                ui.horizontal(|ui| {
+                    ui.add_space(MARGIN);
+                    failure_line(app, ui);
+                });
+            }
             let cut = match tab {
                 MediaTab::Media => media.photos_truncated,
                 MediaTab::Videos => media.videos_truncated,

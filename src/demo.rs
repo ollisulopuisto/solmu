@@ -10913,6 +10913,24 @@ mod tests {
     }
 
     #[test]
+    fn shared_voice_failed_refresh_keeps_rows_and_exposes_retry() {
+        use crate::ui::focus::{self, Stop};
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("info-voice"));
+        let count = app.info_media.as_ref().unwrap().voice.len();
+        app.info_media_pending = false;
+        app.info_media_failed = true;
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        assert_eq!(app.info_media.as_ref().unwrap().voice.len(), count);
+        assert!(focus::control(&ctx, Stop::InfoVoice(0, 0)).is_some());
+        assert!(focus::control(&ctx, Stop::InfoControl(crate::ui::info::RETRY_STOP)).is_some());
+    }
+
+    #[test]
     fn shared_voice_refresh_and_audio_actions_are_keyboard_reachable() {
         use crate::ui::focus::{self, Stop};
         let mut app = app();

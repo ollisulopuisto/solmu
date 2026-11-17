@@ -5,3 +5,9 @@ The chat info panel separates Photos, Videos, Voice, Docs and Links. Voice inclu
 Beeper metadata is read on a separate bounded worker, not on the typing/send worker. One Refresh or opening checks at most ten history pages and 20,000 rows, with a newest-items note if history continues. This is not a promise that every old attachment was found. Each kind has its own display cap. No attachment body is downloaded by listing metadata. Refresh is explicit, not polling. Failed or busy requests show Retry rather than leave a spinner forever. No database schema or saved-setting change.
 
 Validation: model categorization/caps, backend pagination/bounds/scope/errors, audio download state without a loaded transcript, existing info-pane request correlation and demo scenes. Local library clippy passes; native suites and synthetic pixel review are required before merge. Live private messages are not sent, transcribed or downloaded during tests.
+
+Native synthetic before/after, Voice, Videos, dark and narrow-panel captures:
+https://files.instinct.com/6nkicc93b5c9-solmu-shared-voice-and-video
+
+If a refresh fails, existing cached items remain usable and a visible error
+with Try again is shown above them. A failed refresh never implies an empty chat.
