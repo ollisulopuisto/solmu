@@ -1759,6 +1759,7 @@ pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
         || app.sticker_view.is_some()
         || app.recording.is_some()
         || app.picker.is_some()
+        || app.dialog.is_some()
     {
         return Vec::new();
     }
@@ -2259,6 +2260,17 @@ mod tests {
             if let Some(command) = command {
                 assert!(MENU_COMMANDS.contains(command), "{command} is not built");
             }
+        }
+    }
+
+    #[test]
+    fn menu_commands_do_nothing_while_a_dialog_is_open() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        assert!(!menu_actions(&app, "chat-favorite").is_empty());
+        app.dialog = Some(Dialog::Palette);
+        for id in ["chat-favorite", "chat-clear", "chat-leave", "go-jump"] {
+            assert!(menu_actions(&app, id).is_empty(), "{id}");
         }
     }
 
