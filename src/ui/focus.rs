@@ -45,7 +45,7 @@ pub enum Stop {
     Search,
     Recent,
     UnreadMode,
-    RecentUnreadMode,
+    NewLocalGroup,
     NeedsMe,
     /// The first chip, All, on the chat list.
     All,

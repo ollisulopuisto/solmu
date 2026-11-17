@@ -194,19 +194,16 @@ pub enum ListFilter {
 /// Bookmarks is not a mode: it is the Saved list, opened from its own tab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub enum ListMode {
-    /// Everything, latest first: the full list. Shown as "All".
+    /// Everything, latest first: the full list. Shown as "Recent".
     #[default]
     Recent,
     /// Every chat with something unread, muted ones included.
     Unread,
-    /// Unread chats with activity in the last seven days, never a muted one:
-    /// the stale backlog stays out of the way. Shown as "Unread 7d".
-    RecentUnread,
     /// Unread and manually marked chats only, and never a muted chat.
     NeedsMe,
 }
 
-/// Settings written before Unread replaced Focus still say `Focus`, and a
+/// Retired Focus and RecentUnread settings open the full Recent list. A
 /// future name must not make the whole settings file unreadable: both read
 /// as Recent.
 impl<'de> Deserialize<'de> for ListMode {
@@ -214,7 +211,6 @@ impl<'de> Deserialize<'de> for ListMode {
         let name = String::deserialize(deserializer)?;
         Ok(match name.as_str() {
             "Unread" => Self::Unread,
-            "RecentUnread" => Self::RecentUnread,
             "NeedsMe" => Self::NeedsMe,
             _ => Self::Recent,
         })
@@ -222,22 +218,13 @@ impl<'de> Deserialize<'de> for ListMode {
 }
 
 impl ListMode {
-    /// How far back "Unread 7d" looks, in seconds, on a chat's last activity.
-    pub const RECENT_UNREAD_SECS: i64 = 7 * 24 * 60 * 60;
-
-    pub const EVERY: [Self; 4] = [
-        Self::Recent,
-        Self::Unread,
-        Self::RecentUnread,
-        Self::NeedsMe,
-    ];
+    pub const EVERY: [Self; 3] = [Self::Recent, Self::Unread, Self::NeedsMe];
 
     pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
         use crate::i18n::gettext;
         match self {
-            Self::Recent => gettext(locale, "All"),
+            Self::Recent => gettext(locale, "Recent"),
             Self::Unread => gettext(locale, "Unread"),
-            Self::RecentUnread => gettext(locale, "Unread 7d"),
             Self::NeedsMe => gettext(locale, "Needs me"),
         }
     }
@@ -247,17 +234,15 @@ impl ListMode {
         match self {
             Self::Recent => "recent",
             Self::Unread => "unread",
-            Self::RecentUnread => "recent-unread",
             Self::NeedsMe => "needs-me",
         }
     }
 
-    /// The mode Cmd+D moves to: All, Unread, Unread 7d, then Needs me, and round.
+    /// The mode Cmd+D moves to: Recent, Unread, then Needs me, and round.
     pub fn next(self) -> Self {
         match self {
             Self::Recent => Self::Unread,
-            Self::Unread => Self::RecentUnread,
-            Self::RecentUnread => Self::NeedsMe,
+            Self::Unread => Self::NeedsMe,
             Self::NeedsMe => Self::Recent,
         }
     }
@@ -266,7 +251,7 @@ impl ListMode {
         match key {
             "recent" => Some(Self::Recent),
             "unread" => Some(Self::Unread),
-            "recent-unread" => Some(Self::RecentUnread),
+            "recent-unread" => Some(Self::Recent),
             "needs-me" => Some(Self::NeedsMe),
             _ => None,
         }
@@ -3572,8 +3557,7 @@ mod tests {
     fn list_mode_next_cycles_all_unread_needs_me() {
         use super::ListMode;
         assert_eq!(ListMode::Recent.next(), ListMode::Unread);
-        assert_eq!(ListMode::Unread.next(), ListMode::RecentUnread);
-        assert_eq!(ListMode::RecentUnread.next(), ListMode::NeedsMe);
+        assert_eq!(ListMode::Unread.next(), ListMode::NeedsMe);
         assert_eq!(ListMode::NeedsMe.next(), ListMode::Recent);
     }
 
@@ -3583,13 +3567,9 @@ mod tests {
         let read = |text: &str| serde_json::from_str::<ListMode>(text).unwrap();
         assert_eq!(read("\"Recent\""), ListMode::Recent);
         assert_eq!(read("\"Unread\""), ListMode::Unread);
-        assert_eq!(read("\"RecentUnread\""), ListMode::RecentUnread);
+        assert_eq!(read("\"RecentUnread\""), ListMode::Recent);
         assert_eq!(read("\"NeedsMe\""), ListMode::NeedsMe);
-        assert_eq!(
-            ListMode::parse("recent-unread"),
-            Some(ListMode::RecentUnread)
-        );
-        assert_eq!(ListMode::RecentUnread.key(), "recent-unread");
+        assert_eq!(ListMode::parse("recent-unread"), Some(ListMode::Recent));
         assert_eq!(read("\"Focus\""), ListMode::Recent);
         assert_eq!(read("\"Whatever\""), ListMode::Recent);
         assert_eq!(

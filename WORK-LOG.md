@@ -161,3 +161,19 @@ and that the removed menu stays removed. Standalone rustc execution passes.
 The linked-person renderer did not apply the traffic-light clearance used by ordinary chat headers. With only the 52-point icon rail left after Cmd+B, the green button overlapped the linked name. Added real-input coverage for repeated hide/show at three zoom levels in both themes. Capture and test results are recorded in the PR; never use private chat data as review media.
 
 About build identity is tracked in a separate PR.
+
+
+## 2026-11-17 - Readable sidebar, approved sketch A
+
+Recent replaces All, with no unread/age/mute restriction. Removed the seven-day
+unread mode and migrate its saved value and legacy native command to Recent.
+Three named buttons and their descriptions replace icon-only tabs. Local group
+creation moves to a + beside Groups, with an on-demand, cancellable name popup;
+all changes are local and preserve original chats. New native synthetic capture
+scenes cover both themes. Existing Unread/Needs me logic and grouping stay intact.
+
+Validation: cargo fmt, cargo check --lib --tests --features demo and library
+clippy -D warnings passed locally. Full native tests and pixels await CI.
+Regression coverage exercises named labels, popup creation/cancel in both
+layouts, old saved-mode migration, mode cycling and no date/unread/mute cutoff.
+No sidebar release build yet; combine with About #357 after review and CI.

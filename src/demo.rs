@@ -3669,6 +3669,9 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "light" => {
                 app.settings.theme = ThemeChoice::Light;
             }
+            "dark" => {
+                app.settings.theme = ThemeChoice::Dark;
+            }
             "messages" => {
                 app.settings.theme = ThemeChoice::Messages;
             }
@@ -21923,8 +21926,8 @@ mod tests {
                 Stop::Search,
                 Stop::Recent,
                 Stop::UnreadMode,
-                Stop::RecentUnreadMode,
                 Stop::NeedsMe,
+                Stop::NewLocalGroup,
                 Stop::NewChat,
             ];
             if ready {
@@ -24238,6 +24241,71 @@ mod rail_tests {
         }
     }
 
+    #[test]
+    fn readable_sidebar_and_local_group_popup_work_in_both_layouts() {
+        for flat in [false, true] {
+            let (mut app, ctx) = open("chat", false);
+            app.account_mut()
+                .settings
+                .flat_list
+                .insert("recent".into(), flat);
+            let painted = frame_at(&mut app, &ctx, egui::vec2(1180.0, 780.0), Vec::new());
+            for label in ["Recent", "Unread", "Needs me", "Groups"] {
+                assert!(
+                    painted.iter().any(|text| text == label),
+                    "missing {label}: {painted:?}"
+                );
+            }
+            assert!(
+                !painted
+                    .iter()
+                    .any(|text| text == "Unread 7d" || text == "Create" || text == "New group")
+            );
+            let plus = stop_rect(&ctx, Stop::NewLocalGroup).unwrap();
+            let mode = stop_rect(&ctx, Stop::NeedsMe).unwrap();
+            assert!(plus.top() > mode.bottom());
+            let before = app.settings.flat_groups.items.len();
+            click(&mut app, &ctx, 1180.0, plus.center());
+            assert_eq!(
+                ctx.memory(|m| m.focused()),
+                Some(egui::Id::new("new-local-group-name"))
+            );
+            frame(
+                &mut app,
+                &ctx,
+                1180.0,
+                vec![egui::Event::Text("Synthetic local group".into())],
+            );
+            assert_eq!(app.flat_group_ui.name, "Synthetic local group");
+            let create = ctx
+                .data(|d| d.get_temp::<egui::Rect>(egui::Id::new("create-local-group-rect")))
+                .unwrap();
+            click(&mut app, &ctx, 1180.0, create.center());
+            assert_eq!(app.settings.flat_groups.items.len(), before + 1);
+            assert_eq!(
+                app.settings.flat_groups.items.last().unwrap().name,
+                "Synthetic local group"
+            );
+            assert!(app.flat_group_ui.name.is_empty());
+            // Dismissed drafts cannot silently create a second local section.
+            let plus = stop_rect(&ctx, Stop::NewLocalGroup).unwrap();
+            click(&mut app, &ctx, 1180.0, plus.center());
+            frame(
+                &mut app,
+                &ctx,
+                1180.0,
+                vec![egui::Event::Text("Discarded".into())],
+            );
+            frame(&mut app, &ctx, 1180.0, vec![escape()]);
+            frame(&mut app, &ctx, 1180.0, Vec::new());
+            assert_eq!(app.settings.flat_groups.items.len(), before + 1);
+            assert!(
+                ctx.read_response(egui::Id::new("new-local-group-name"))
+                    .is_none()
+            );
+        }
+    }
+
     /// The list header keeps only New chat and Hide the chat list beside its
     /// title; the starred messages' header has only Back and its title, and
     /// the Calls tab's only New call.
@@ -24258,12 +24326,7 @@ mod rail_tests {
             let (_app, ctx) = open("chat", macos);
             assert_eq!(
                 in_header(&ctx),
-                [
-                    Stop::Recent,
-                    Stop::UnreadMode,
-                    Stop::RecentUnreadMode,
-                    Stop::NeedsMe
-                ],
+                [Stop::Recent, Stop::UnreadMode, Stop::NeedsMe],
                 "{macos}"
             );
             let (_app, ctx) = open("starred", macos);

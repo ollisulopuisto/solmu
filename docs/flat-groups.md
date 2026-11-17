@@ -55,3 +55,16 @@ search result are not kept.
 
 Not tested on screen: the sandbox cannot build the app, so the first compile and
 test run is CI. No screenshots.
+
+
+The chat-list modes are **Recent**, **Unread**, and **Needs me**. Recent contains
+all chats in the current scope, newest activity first within each group (or
+globally in flat layout), with no age limit. Unread includes muted chats; Needs
+me includes unread or manually marked-for-later chats but excludes muted ones.
+Old Unread 7d settings migrate to Recent. Cmd+D cycles these three modes.
+
+The **+** beside the Groups heading opens **New local group**. Enter a name and
+press Create or Enter; Cancel, Escape, or clicking outside dismisses it without
+creating a group. The field is not part of the scrolling list and works in both
+grouped and flat layouts. This creates a local sidebar section, never a new
+backend group conversation.
