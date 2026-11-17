@@ -27,6 +27,7 @@ use crate::model::{Chat, ChatId, ChatKind, Content, Delivery, LastMessage, Messa
 use crate::paths::AccountDirs;
 
 mod gallery;
+mod shared;
 mod ws;
 
 const CHAT_PAGE_LIMIT: u32 = 100;
@@ -3486,6 +3487,7 @@ pub fn run(
     }
 
     let gallery_tx = gallery::worker(api.clone(), events.clone(), waker.clone());
+    let shared_tx = shared::worker(api.clone(), events.clone(), waker.clone());
 
     // Bounded single download worker: a slow image must not block typing,
     // read state, history or send confirmations on the control worker.
@@ -4811,6 +4813,16 @@ pub fn run(
                 }
                 Command::Composing { chat, composing } => {
                     let _ = api.typing(&chat, composing);
+                }
+                Command::ListChatShared { chat, request } => {
+                    if let Err(error) = shared_tx.try_send((chat, request)) {
+                        let (std::sync::mpsc::TrySendError::Full((_, request))
+                        | std::sync::mpsc::TrySendError::Disconnected((_, request))) = error;
+                        emit(Event::ChatShared {
+                            request,
+                            result: Err("Shared-items history is busy; try again".into()),
+                        });
+                    }
                 }
                 Command::SearchChatMessages {
                     chat,
@@ -7381,6 +7393,27 @@ mod tests {
         // Ordinary links keep their destination beside the label.
         let raw = "<p>see <a href=\"https://example.com/page\">this</a></p>";
         assert_eq!(plain_rich_text(raw), "see this (https://example.com/page)");
+    }
+
+    /// The shrug and table flip from Olli's Text Replacements keep every
+    /// backslash, underscore, slash and bracket through the HTML mapper,
+    /// plain or entity-encoded, so the echo of a sent message reads back as
+    /// the text that was typed.
+    #[test]
+    fn the_expanded_shrug_survives_the_html_mapper() {
+        let shrug = "\u{af}\\_(\u{30c4})_/\u{af}";
+        assert_eq!(plain_rich_text(&format!("<p>{shrug}</p>")), shrug);
+        assert_eq!(plain_rich_text(shrug), shrug);
+        assert_eq!(
+            plain_rich_text("<p>&#175;\\_(&#12484;)_&#47;&#175;</p>"),
+            shrug
+        );
+        assert_eq!(
+            plain_rich_text(&format!("<p>well {shrug} ok</p>")),
+            format!("well {shrug} ok")
+        );
+        let flip = "(\u{256f}\u{b0}\u{25a1}\u{b0}\u{ff09}\u{256f}\u{fe35} \u{253b}\u{2501}\u{253b}";
+        assert_eq!(plain_rich_text(&format!("<p>{flip}</p>")), flip);
     }
 
     #[test]

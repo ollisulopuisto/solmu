@@ -198,3 +198,7 @@ Second native gate: tour and hover fixed; group popup focus/input/create pass.
 Escape remained consumed by TextEdit before Popup saw it. Capture Escape
 before drawing the field, clear the draft and close explicitly; regression
 also checks popup state rather than only a previous-frame widget response.
+
+## 2026-11-17 - Voice and video shared-item sections
+
+Separate Photos/Videos/Voice tabs, bounded metadata-only Beeper listing worker (the old command was ignored), explicit refresh, and audio download/play/jump rows. Per-kind caps cannot let photos crowd out video or audio. Download results update panel rows even outside the loaded transcript. No schema/settings migration. Local library clippy passes; native tests, before/after synthetic screenshots and actual Devin gate remain pending. No private screenshot reused, no release built.

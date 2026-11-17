@@ -16,6 +16,7 @@ on:
           - x86_64-pc-windows-msvc
           - all
           - shots-only
+          - whisper-helper
 
 permissions:
   contents: read
@@ -47,11 +48,16 @@ jobs:
               dict(os='windows-2025', target='x86_64-pc-windows-msvc', executable='solmu.exe'),
           ]
           selected = [r for r in rows if os.environ['TARGET'] in ('all', r['target'])]
-          if not selected and os.environ['TARGET'] != 'shots-only':
+          if not selected and os.environ['TARGET'] not in ('shots-only', 'whisper-helper'):
               raise SystemExit('Unknown target; refusing build')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write('matrix=' + json.dumps(dict(include=selected)) + '\n')
           PY
+
+  whisper-helper:
+    if: github.event.repository.private == false && inputs.target == 'whisper-helper' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    uses: ./.github/workflows/whisper-helper.yml
+    secrets: inherit
 
   build:
     needs: select
@@ -60,7 +66,7 @@ jobs:
     # Skip by condition on shots-only runs: an empty matrix skips the job
     # too, but GitHub then concludes the whole run as failed despite
     # every real job passing.
-    if: github.event.repository.private == false && inputs.target != 'shots-only'
+    if: github.event.repository.private == false && inputs.target != 'shots-only' && inputs.target != 'whisper-helper'
 
     timeout-minutes: 90
     strategy:
@@ -185,6 +191,11 @@ jobs:
           shot send-later-menu-dark-1180x780 1180x780 chat,send-later-menu,theme=Catppuccin.json
           shot send-later-calendar-1180x780 1180x780 chat,send-later-calendar
           shot send-later-recurring-1180x780 1180x780 chat,send-later-recurring
+          shot info-photos-1180x780 1180x780 chat,info-media
+          shot info-videos-1180x780 1180x780 chat,info-videos
+          shot info-voice-1180x780 1180x780 chat,info-voice
+          shot info-voice-dark-1180x780 1180x780 chat,info-voice,theme=Catppuccin.json
+          shot info-voice-900x780 900x780 chat,info-voice
           shot chat-1180x780 1180x780 chat
           shot chat-menu-1180x780 1180x780 chat,chat-menu
           shot chat-menu-beeper-1180x780 1180x780 chat,chat-menu-beeper
