@@ -4987,7 +4987,7 @@ mod tests {
     }
 
     #[test]
-    fn linked_messages_style_keeps_clocks_without_cadence_overlap() {
+    fn linked_messages_style_uses_one_clock_per_run() {
         let mut app = app();
         apply_flags(&mut app, Some("linked-minute-gutter,messages"));
         let ctx = egui::Context::default();
@@ -5008,12 +5008,17 @@ mod tests {
             })
             .map_or(0.0, |rect| rect.width())
         };
-        assert!(footer(0) > 0.0, "separate 18:40 bubble keeps its clock");
+        assert_eq!(
+            footer(0),
+            0.0,
+            "only the last of a same-sender run keeps its clock"
+        );
+        assert_eq!(footer(1), 0.0);
         assert!(footer(2) > 0.0, "last 18:41 bubble keeps its clock");
     }
 
     #[test]
-    fn streak_seam_menu_targets_the_older_bubble_and_selection_unstacks() {
+    fn separated_bubbles_keep_their_own_menu_and_selection_targets() {
         let mut app = app();
         group_stacks_sample(&mut app);
         let ctx = egui::Context::default();
@@ -5031,7 +5036,11 @@ mod tests {
         let older = rect(2);
         let newer = rect(3);
         let point = egui::pos2(older.left() + 20.0, older.bottom() - 2.0);
-        assert!(newer.contains(point), "point lies in the physical overlap");
+        assert!(
+            !newer.contains(point),
+            "four-point row gap leaves no overlap"
+        );
+        assert!((newer.top() - older.bottom() - 4.).abs() < 1.);
         for pressed in [true, false] {
             streak_test_frame(
                 &mut app,
@@ -5177,8 +5186,8 @@ mod tests {
                     };
                     if let (Some(first), Some(next)) = (live(first), live(next)) {
                         assert!(
-                            (first.bottom() - next.top() - 6.0).abs() < 1.0,
-                            "scrolling must not reuse a stale seam"
+                            (next.top() - first.bottom() - 4.0).abs() < 1.0,
+                            "scrolling retains the live four-point row gap"
                         );
                     }
                 }
@@ -6132,12 +6141,12 @@ mod tests {
         let rows = &mut app.conversations.get_mut(ME).unwrap().messages;
         let start = rows[0].timestamp;
         for (index, row) in rows.iter_mut().enumerate() {
-            row.timestamp = start + index as i64 * 6 * 60;
+            row.timestamp = start + index as i64 * (24 * 60 * 60 + 6 * 60);
         }
         let ctx = egui::Context::default();
         app.attach(&ctx);
         render(&mut app, &ctx);
-        let shapes = frame_sized(&mut app, &ctx, 780.0, Vec::new());
+        let shapes = frame_sized(&mut app, &ctx, 1400.0, Vec::new());
         let mut texts = Vec::new();
         let mut images = Vec::new();
         for shape in &shapes {
@@ -12891,10 +12900,7 @@ mod tests {
         assert!(nodes.iter().any(|(label, _, _)| label == "Download all"));
         let shapes = frame_sized(&mut app, &ctx, 780.0, Vec::new());
         assert!(
-            shapes
-                .iter()
-                .any(|shape| matches!(&shape.shape, egui::Shape::Text(text)
-            if text.galley.text().contains("A reference for the album")))
+            shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("A reference for the album")))
         );
     }
 
@@ -19670,7 +19676,7 @@ mod tests {
 
     /// Voice controls keep their width and order in right-aligned bubbles.
     #[test]
-    fn an_own_voice_message_keeps_its_bubble_narrow() {
+    fn an_own_voice_message_keeps_its_controls_inside_the_sent_band() {
         let mut app = app();
         let ctx = egui::Context::default();
         app.attach(&ctx);
@@ -19682,7 +19688,7 @@ mod tests {
             .data(|data| data.get_temp::<egui::Rect>(id))
             .expect("the bubble was drawn");
         assert!(
-            (240.0..=345.0).contains(&rect.width()),
+            (320.0..=560.0).contains(&rect.width()),
             "{} wide",
             rect.width()
         );
@@ -23218,7 +23224,7 @@ mod bubble_detail_tests {
     /// photo leaves the tail to the balloon after it. All of it fits a 1280
     /// by 1000 window.
     #[test]
-    fn messages_balloons_tail_only_the_last_of_each_run() {
+    fn messages_balloons_tail_every_body() {
         // These runs belong to one day. Near midnight a real clock puts a
         // day boundary between them, correctly giving another bubble a tail.
         let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
@@ -23283,9 +23289,9 @@ mod bubble_detail_tests {
                 "{page}: bubbles-out-2's free emoji must not grow a balloon"
             );
             for (id, own, tailed) in [
-                ("bubbles-in-1", false, false),
+                ("bubbles-in-1", false, true),
                 ("bubbles-in-2", false, true),
-                ("bubbles-out-1", true, false),
+                ("bubbles-out-1", true, true),
                 ("bubbles-out-3", true, true),
                 ("bubbles-in-4", false, true),
                 ("bubbles-out-4", true, true),
@@ -23484,9 +23490,17 @@ mod bubble_detail_tests {
                 "{id}: no strip under the picture ({picture:?} in {frame:?})"
             );
             assert!(
-                (frame.left() + 10.0 - picture.left()).abs() < 0.5
-                    && (frame.right() - 10.0 - picture.right()).abs() < 0.5,
-                "{id}: the bubble wraps the picture ({picture:?} in {frame:?})"
+                frame.contains_rect(picture),
+                "{id}: band contains the picture ({picture:?} in {frame:?})"
+            );
+            let edge_gap = if id == "photos-out" {
+                frame.right() - 10. - picture.right()
+            } else {
+                picture.left() - frame.left() - 10.
+            };
+            assert!(
+                edge_gap.abs() < 0.5,
+                "{id}: picture keeps its sender-side edge"
             );
         }
         let bubble = crate::ui::conversation::bubble_id(chat, "photos-caption");
@@ -23509,6 +23523,12 @@ mod bubble_detail_tests {
         let ctx = egui::Context::default();
         app.attach(&ctx);
         apply_flags(&mut app, Some("voice"));
+        // Isolate the two opposite-sender voice fixtures, each last in its run.
+        app.conversations
+            .get_mut(SAMPLES[0].id)
+            .unwrap()
+            .messages
+            .retain(|row| matches!(row.id.as_str(), "ada-voice" | "you-voice"));
         frames(&mut app, &ctx, egui::vec2(1180.0, 1400.0));
         let chat = SAMPLES[0].id;
         for id in ["ada-voice", "you-voice"] {

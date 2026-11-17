@@ -35,3 +35,8 @@ those paths. Pin notices keep both separated bodies and their receipt slots.
 Width signatures hash text and layout shape without formatting payloads or
 traversing thumbnail/waveform bytes. Received albums retain their natural card
 width; sent albums use card-based band planning rather than a viewport fallback.
+
+CI follow-up: photo widths start from their actual frame ratio, call rows from
+their title/detail fonts, and wide carousels use the renderer's distinct cap.
+Old seam-overlap, last-tail-only and per-minute-clock assertions now test the
+approved separated rows, every-body tails and one footer per sender/day run.

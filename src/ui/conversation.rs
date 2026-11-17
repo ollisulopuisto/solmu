@@ -3365,7 +3365,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                         text_cap,
                         inset,
                         !app.settings.reduce_motion && view.animate,
-                        |message| settled_width(ui, &view, message, text_cap).unwrap_or(text_cap),
+                        |message| {
+                            settled_width(ui, &view, message, planning_cap(ui, message, text_cap))
+                                .unwrap_or(text_cap)
+                        },
                     );
                     let mut previous: Option<&Message> = None;
                     let mut day_separator_top = f32::NEG_INFINITY;
@@ -6039,6 +6042,37 @@ const CAROUSEL_GAP: f32 = 8.0;
 
 /// Returns the shared card width, bounded by [`CARD_WIDTH`] and `cap`.
 fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
+    if let Content::Call {
+        video,
+        status,
+        duration,
+        group,
+    } = &message.content
+    {
+        let entry = super::call_log::Entry {
+            from_me: message.from_me,
+            video: *video,
+            status: *status,
+            duration: *duration,
+            group: *group,
+        };
+        let title = ui
+            .painter()
+            .layout_no_wrap(
+                entry.title(view.locale),
+                theme::medium(14.0),
+                view.palette.text,
+            )
+            .size()
+            .x;
+        let detail = entry.detail(view.locale).map_or(0., |label| {
+            ui.painter()
+                .layout_no_wrap(label, theme::regular(12.5), view.palette.secondary)
+                .size()
+                .x
+        });
+        return Some((CALL_BADGE + CALL_BADGE_GAP + title.max(detail)).min(cap));
+    }
     natural_content_width(message, cap, natural_text_width(ui, view, message, cap))
 }
 
@@ -6070,6 +6104,12 @@ fn natural_content_width(message: &Message, cap: f32, text: Option<f32>) -> Opti
         && card.image.is_some()
     {
         return Some(CARD_WIDTH.min(cap));
+    }
+    if let Content::Image { media, .. } | Content::Video { media, .. } = &message.content
+        && !matches!(message.content, Content::Video {note:false,..} if message.thumbnail.is_none())
+    {
+        let width = frame_size(media, None, cap.min(PICTURE_WIDTH), PICTURE_HEIGHT).x;
+        return Some(width.max(text.unwrap_or(0.)).min(cap));
     }
     let card = message.quoted.is_some()
         || match &message.content {
@@ -6103,6 +6143,22 @@ fn width_signature(message: &Message) -> u64 {
     body_for_measurement(&message.content)
         .map(|(text, _)| text)
         .hash(&mut hash);
+    if let Some(media) = message.content.media() {
+        media.width.hash(&mut hash);
+        media.height.hash(&mut hash);
+    }
+    if let Content::Call {
+        video,
+        status,
+        duration,
+        group,
+    } = &message.content
+    {
+        video.hash(&mut hash);
+        std::mem::discriminant(status).hash(&mut hash);
+        duration.hash(&mut hash);
+        group.hash(&mut hash);
+    }
     message.quoted.is_some().hash(&mut hash);
     message.thumbnail.is_some().hash(&mut hash);
     match &message.content {
@@ -6119,6 +6175,18 @@ fn width_signature(message: &Message) -> u64 {
         _ => {}
     }
     hash.finish()
+}
+
+fn is_carousel(message: &Message) -> bool {
+    matches!(&message.content, Content::Interactive {card:Some(card),..} if !card.carousel.is_empty())
+}
+
+fn planning_cap(ui: &egui::Ui, message: &Message, normal: f32) -> f32 {
+    if is_carousel(message) {
+        ((ui.available_width() * 0.95).min(920.0) - 20.0).max(0.0)
+    } else {
+        normal
+    }
 }
 
 /// Measure once per text revision, then plan sent-run widths across the full
@@ -6143,7 +6211,7 @@ fn planned_widths(
             book.invalidate(&key);
         }
         let width = book.get(&key).unwrap_or_else(|| {
-            let width = natural(message).clamp(0.0, cap);
+            let width = natural(message).clamp(0.0, planning_cap(ui, message, cap));
             book.remember(&key, width);
             width
         });
@@ -6171,9 +6239,13 @@ fn planned_widths(
                 .iter()
                 .map(|(_, w, _)| w + inset)
                 .fold(0.0, f32::max);
-            for (_, width, _) in &mut entries[start..end] {
-                *width =
-                    (crate::run_widths::band(*width + inset, widest, cap + inset) - inset).max(0.0);
+            for (offset, (_, width, _)) in entries[start..end].iter_mut().enumerate() {
+                *width = (crate::run_widths::band(
+                    *width + inset,
+                    widest,
+                    planning_cap(ui, messages[start + offset], cap) + inset,
+                ) - inset)
+                    .max(0.0);
             }
         }
         start = end;
@@ -6188,8 +6260,12 @@ fn planned_widths(
     }
     entries
         .into_iter()
-        .map(|(id, _, _)| {
-            let width = book.width(&id, now).unwrap_or_default().clamp(0.0, cap);
+        .zip(messages)
+        .map(|((id, _, _), message)| {
+            let width = book
+                .width(&id, now)
+                .unwrap_or_default()
+                .clamp(0.0, planning_cap(ui, message, cap));
             (id, width)
         })
         .collect()
@@ -6220,6 +6296,7 @@ pub(crate) fn linked_run_widths(
         inset,
         !app.settings.reduce_motion && app.window_focused,
         |message| {
+            let cap = planning_cap(ui, message, cap);
             let text = body_for_measurement(&message.content).map(|(text, grow)| {
                 let mentions: Vec<_> = message
                     .mentions
@@ -12089,6 +12166,26 @@ mod tests {
             width_signature(&row),
             poster,
             "preview presence invalidates"
+        );
+    }
+
+    #[test]
+    fn plain_photo_planning_uses_its_frame_not_the_viewport() {
+        let row = message(Content::Image {
+            caption: None,
+            media: media(Some(640), Some(480)),
+            motion: None,
+        });
+        assert_eq!(natural_content_width(&row, 540., None), Some(320.));
+        let narrow = message(Content::Image {
+            caption: None,
+            media: media(Some(200), Some(600)),
+            motion: None,
+        });
+        let width = natural_content_width(&narrow, 540., None).unwrap();
+        assert!(
+            width < 160.,
+            "portrait ratio determines the natural width: {width}"
         );
     }
 
