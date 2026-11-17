@@ -17,6 +17,11 @@ on:
           - all
           - shots-only
           - whisper-helper
+          - whisper-smoke
+      helper_run:
+        description: 'Explicit successful helper artifact run for whisper-smoke'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -48,11 +53,43 @@ jobs:
               dict(os='windows-2025', target='x86_64-pc-windows-msvc', executable='solmu.exe'),
           ]
           selected = [r for r in rows if os.environ['TARGET'] in ('all', r['target'])]
-          if not selected and os.environ['TARGET'] not in ('shots-only', 'whisper-helper'):
+          if not selected and os.environ['TARGET'] not in ('shots-only', 'whisper-helper', 'whisper-smoke'):
               raise SystemExit('Unknown target; refusing build')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write('matrix=' + json.dumps(dict(include=selected)) + '\n')
           PY
+
+  whisper-smoke:
+    if: github.event.repository.private == false && inputs.target == 'whisper-smoke'
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          cache-generation: test-v1
+      - name: Fetch explicitly selected signed helper and pinned test data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HELPER_RUN: ${{ inputs.helper_run }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case "$HELPER_RUN" in ''|*[!0-9]*) echo 'A numeric helper run is required'; exit 1;; esac
+          mkdir -p "$RUNNER_TEMP/whisper-smoke/helper"
+          gh run download "$HELPER_RUN" --repo "$REPOSITORY" --name optional-whisper-arm64 --dir "$RUNNER_TEMP/whisper-smoke/helper"
+          curl --fail --location --retry 2 'https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin' -o "$RUNNER_TEMP/whisper-smoke/model.bin"
+          curl --fail --location --retry 2 'https://raw.githubusercontent.com/ggml-org/whisper.cpp/d1be6fde11ac6e0407606b4e42fe72d34add8037/samples/jfk.wav' -o "$RUNNER_TEMP/whisper-smoke/recording.wav"
+          echo '59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e  '"$RUNNER_TEMP/whisper-smoke/recording.wav" | shasum -a 256 -c -
+          echo "SOLMU_HELPER_FIXTURE=$RUNNER_TEMP/whisper-smoke/helper" >> "$GITHUB_ENV"
+          echo "SOLMU_MODEL_FIXTURE=$RUNNER_TEMP/whisper-smoke/model.bin" >> "$GITHUB_ENV"
+          echo "SOLMU_RECORDING_FIXTURE=$RUNNER_TEMP/whisper-smoke/recording.wav" >> "$GITHUB_ENV"
+      - name: Production installer, repair, decoder and real Opus transcription
+        run: mbx test --locked --lib local_whisper_real_recording -- --ignored
 
   whisper-helper:
     if: github.event.repository.private == false && inputs.target == 'whisper-helper' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
@@ -66,7 +103,7 @@ jobs:
     # Skip by condition on shots-only runs: an empty matrix skips the job
     # too, but GitHub then concludes the whole run as failed despite
     # every real job passing.
-    if: github.event.repository.private == false && inputs.target != 'shots-only' && inputs.target != 'whisper-helper'
+    if: github.event.repository.private == false && inputs.target != 'shots-only' && inputs.target != 'whisper-helper' && inputs.target != 'whisper-smoke'
 
     timeout-minutes: 90
     strategy:

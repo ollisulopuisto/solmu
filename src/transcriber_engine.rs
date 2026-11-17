@@ -502,3 +502,75 @@ mod tests {
         assert!(err.contains("invalid"), "got: {err}");
     }
 }
+
+/// Explicit manual runtime validation. The normal suite never downloads a
+/// model or runs a downloaded helper. Inputs come from a selected CI artifact.
+#[cfg(all(test, target_os = "macos"))]
+mod real_runtime_smoke {
+    use super::*;
+    #[test]
+    #[ignore = "explicit manual helper/model smoke test only"]
+    fn local_whisper_real_recording_installs_repairs_and_transcribes_opus() {
+        let directory =
+            PathBuf::from(std::env::var("SOLMU_HELPER_FIXTURE").expect("helper fixture"));
+        let metadata: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(directory.join("solmu-whisper-v1.9.5-arm64.json")).unwrap(),
+        )
+        .unwrap();
+        let archive = directory.join(metadata["filename"].as_str().unwrap());
+        assert_eq!(
+            metadata["upstream_revision"],
+            "d1be6fde11ac6e0407606b4e42fe72d34add8037"
+        );
+        let executable_hash = metadata["executable_sha256"].as_str().unwrap_or_else(|| {
+            // The first signed arm64 trial predates the metadata field. Both
+            // hashes were independently recorded before this validation test.
+            assert_eq!(
+                metadata["sha256"],
+                "a36cf9a93cff6bc5f08c65f0de0dd42f66b996880b6098abaf1fdc66b84a367c"
+            );
+            "a2b9571b58e06eb808891e729b4561d5b212a942d37670c329c0aa2dbf33db42"
+        });
+        let spec = crate::whisper_runtime::Artifact {
+            url: "https://invalid.invalid/not-used-in-offline-install-smoke",
+            bytes: metadata["size"].as_u64().unwrap(),
+            sha256: Box::leak(
+                metadata["sha256"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+                    .into_boxed_str(),
+            ),
+            executable_sha256: Box::leak(executable_hash.to_owned().into_boxed_str()),
+        };
+        let state = tempfile::tempdir().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let binary = crate::whisper_runtime::install_archive(&archive, state.path(), spec, &cancel)
+            .expect("verified install");
+        crate::whisper_runtime::verify(&binary, spec).expect("post-install Gatekeeper/hash");
+        std::fs::write(&binary, b"bad install").unwrap();
+        assert!(crate::whisper_runtime::verify(&binary, spec).is_err());
+        let binary = crate::whisper_runtime::install_archive(&archive, state.path(), spec, &cancel)
+            .expect("repair damaged runtime");
+        let model = PathBuf::from(std::env::var("SOLMU_MODEL_FIXTURE").expect("model fixture"));
+        crate::local_whisper::verify_model(&model).expect("pinned model");
+        let recording =
+            PathBuf::from(std::env::var("SOLMU_RECORDING_FIXTURE").expect("recording fixture"));
+        let samples =
+            crate::audio::decode_for_transcription(&recording).expect("decode real speech");
+        let opus = crate::voice::encode(&samples).expect("encode voice-note Opus");
+        let note = state.path().join("recording.ogg");
+        std::fs::write(&note, opus).unwrap();
+        let samples = crate::audio::decode_for_transcription(&note).expect("decode voice note");
+        let pcm = crate::transcriber::wyoming_pcm_from_mono(&samples, crate::voice::RATE);
+        let wav = pcm_wav(&pcm).unwrap();
+        crate::whisper_runtime::verify(&binary, spec).unwrap();
+        let mut engine = WhisperCpp::new(binary, model);
+        let transcript = engine.transcribe(wav.path(), "en").expect("real inference");
+        assert!(
+            transcript.to_lowercase().contains("ask not"),
+            "expected speech recognized"
+        );
+        // Never print transcripts or fixture contents to CI logs.
+    }
+}
