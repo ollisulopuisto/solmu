@@ -182,6 +182,39 @@ The linked-person renderer did not apply the traffic-light clearance used by ord
 
 About build identity is tracked in a separate PR.
 
+
+## 2026-11-17 - Readable sidebar, approved sketch A
+
+Recent replaces All, with no unread/age/mute restriction. Removed the seven-day
+unread mode and migrate its saved value and legacy native command to Recent.
+Three named buttons and their descriptions replace icon-only tabs. Local group
+creation moves to a + beside Groups, with an on-demand, cancellable name popup;
+all changes are local and preserve original chats. New native synthetic capture
+scenes cover both themes. Existing Unread/Needs me logic and grouping stay intact.
+
+Validation: cargo fmt, cargo check --lib --tests --features demo and library
+clippy -D warnings passed locally. Full native tests and pixels await CI.
+Regression coverage exercises named labels, popup creation/cancel in both
+layouts, old saved-mode migration, mode cycling and no date/unread/mute cutoff.
+No sidebar release build yet; combine with About #357 after review and CI.
+
+Sidebar review follow-up: localized the + tooltip/accessibility label and moved
+its focus stop after Needs me to match visual and tested order. Both library
+and test-target clippy passed locally before this small correction. Screenshot
+evidence still awaits native CI; the review gate remains open.
+
+Native #358 gate found popup focus requested during an invisible sizing pass,
+a tour cue still seeking the retired All mode label, and a tooltip fixture
+whose target moved below the viewport with the fuller header. Focus now waits
+for the visible popup pass; tour targets the semantic Recent stop; tooltip
+fixture explicitly uses compact rows, matching its existing row-stride math.
+Rerun native gate before treating these corrections as validated.
+
+Second native gate: tour and hover fixed; group popup focus/input/create pass.
+Escape remained consumed by TextEdit before Popup saw it. Capture Escape
+before drawing the field, clear the draft and close explicitly; regression
+also checks popup state rather than only a previous-frame widget response.
+
 ## 2026-11-17 - Voice and video shared-item sections
 
 Separate Photos/Videos/Voice tabs, bounded metadata-only Beeper listing worker (the old command was ignored), explicit refresh, and audio download/play/jump rows. Per-kind caps cannot let photos crowd out video or audio. Download results update panel rows even outside the loaded transcript. No schema/settings migration. Local library clippy passes; native tests, before/after synthetic screenshots and actual Devin gate remain pending. No private screenshot reused, no release built.

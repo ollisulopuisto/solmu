@@ -3644,11 +3644,6 @@ impl App {
         match mode {
             ListMode::Recent => true,
             ListMode::Unread => chat.looks_unread(),
-            ListMode::RecentUnread => {
-                chat.looks_unread()
-                    && !chat.muted(now)
-                    && now.saturating_sub(chat.last_activity) <= ListMode::RECENT_UNREAD_SECS
-            }
             ListMode::NeedsMe => self.needs_me_at(chat, now),
         }
     }
@@ -28000,7 +27995,7 @@ mod tests {
     fn unread_type_modes_keep_opened_chats_until_the_view_changes() {
         use crate::model::ListMode;
         let ctx = egui::Context::default();
-        for mode in [ListMode::Unread, ListMode::RecentUnread, ListMode::NeedsMe] {
+        for mode in [ListMode::Unread, ListMode::NeedsMe] {
             let mut app = app();
             let now = crate::util::now();
             let mut ada = Chat::new("1@s.whatsapp.net".into(), "Ada".into());
@@ -31970,37 +31965,20 @@ mod conversation_palette_tests {
     }
 
     #[test]
-    fn unread_7d_mode_keeps_recent_unmuted_unread_chats_only() {
+    fn recent_has_no_unread_mute_or_age_cutoff() {
         use crate::model::ListMode;
         let app = app();
         let now = 10_000_000;
-        let week = ListMode::RECENT_UNREAD_SECS;
-        let mut chat = later_chat("chat-1", now - 60);
-        // Read chat: out, however fresh.
-        assert!(!app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        chat.unread = 1;
-        assert!(app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        // A chat marked unread by hand counts too.
-        chat.unread = 0;
-        chat.marked_unread = true;
-        assert!(app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        chat.marked_unread = false;
-        chat.unread = 3;
-        // The window edge is inclusive; one second past it drops the chat.
-        chat.last_activity = now - week;
-        assert!(app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        chat.last_activity = now - week - 1;
-        assert!(!app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        // The older chat still shows in plain Unread.
-        assert!(app.mode_matches_at(&chat, ListMode::Unread, now));
-        // Muted chats stay out, for ever or until a time that has not come.
-        chat.last_activity = now - 60;
-        chat.muted_until = Some(0);
-        assert!(!app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        chat.muted_until = Some(now + 5);
-        assert!(!app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        chat.muted_until = Some(now - 5);
-        assert!(app.mode_matches_at(&chat, ListMode::RecentUnread, now));
+        for age in [0, 60, 7 * 86400, 365 * 86400] {
+            for unread in [0, 3] {
+                for muted in [None, Some(0), Some(now + 60)] {
+                    let mut chat = later_chat("chat-1", now - age);
+                    chat.unread = unread;
+                    chat.muted_until = muted;
+                    assert!(app.mode_matches_at(&chat, ListMode::Recent, now));
+                }
+            }
+        }
     }
 
     #[test]
