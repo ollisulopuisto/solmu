@@ -5067,6 +5067,33 @@ mod tests {
             "newer bubble must not steal seam clicks"
         );
         egui::Popup::close_all(&ctx);
+        let point = egui::pos2(newer.left() + 20., newer.top() + 2.);
+        for pressed in [true, false] {
+            streak_test_frame(
+                &mut app,
+                &ctx,
+                1180.,
+                2000.,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        assert!(
+            egui::Popup::is_id_open(&ctx, id(3).with("popup")),
+            "newer body's top padding opens its own menu"
+        );
+        assert!(
+            !egui::Popup::is_id_open(&ctx, id(2).with("popup")),
+            "older body cannot steal newer padding clicks"
+        );
+        egui::Popup::close_all(&ctx);
         app.selection = Some((SAMPLES[0].id.into(), vec!["group-stack-2".into()]));
         for _ in 0..3 {
             streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);

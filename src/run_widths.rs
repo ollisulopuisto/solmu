@@ -71,8 +71,13 @@ impl WidthBook {
         self.natural.insert(id.into(), width);
     }
     pub fn invalidate(&mut self, id: &str) {
-        self.natural
-            .retain(|key, _| key != id && !key.ends_with(&format!("\0{id}")));
+        if id.contains('\0') {
+            self.natural.remove(id);
+        } else {
+            let suffix = format!("\0{id}");
+            self.natural
+                .retain(|key, _| key != id && !key.ends_with(&suffix));
+        }
     }
     pub fn check_signature(&mut self, id: &str, signature: u64) {
         if self.signatures.insert(id.into(), signature) != Some(signature) {
@@ -90,11 +95,32 @@ impl WidthBook {
                 .position(|(id, _, _)| id == last)
                 .is_some_and(|i| i + 1 < entries.len())
         });
-        let ids: HashSet<&str> = entries.iter().map(|(id, _, _)| id.as_str()).collect();
-        self.natural.retain(|id, _| ids.contains(id.as_str()));
-        self.signatures.retain(|id, _| ids.contains(id.as_str()));
-        self.motion
-            .retain(|id, transition| ids.contains(id.as_str()) && now < transition.start + RESIZE);
+        let same_order = self.order.len() == entries.len()
+            && self
+                .order
+                .iter()
+                .zip(entries)
+                .all(|(old, (id, _, _))| old == id);
+        let same_targets = same_order
+            && entries
+                .iter()
+                .all(|(id, width, _)| self.targets.get(id) == Some(width));
+        if same_targets {
+            self.motion
+                .retain(|_, transition| animate && now < transition.start + RESIZE);
+            return;
+        }
+        if !same_order {
+            let ids: HashSet<&str> = entries.iter().map(|(id, _, _)| id.as_str()).collect();
+            self.natural.retain(|id, _| ids.contains(id.as_str()));
+            self.signatures.retain(|id, _| ids.contains(id.as_str()));
+            self.motion.retain(|id, transition| {
+                ids.contains(id.as_str()) && now < transition.start + RESIZE
+            });
+        } else {
+            self.motion
+                .retain(|_, transition| now < transition.start + RESIZE);
+        }
         if !animate {
             self.motion.clear();
         }
@@ -127,7 +153,9 @@ impl WidthBook {
             .iter()
             .map(|(id, width, _)| (id.clone(), *width))
             .collect();
-        self.order = entries.iter().map(|(id, _, _)| id.clone()).collect();
+        if !same_order {
+            self.order = entries.iter().map(|(id, _, _)| id.clone()).collect();
+        }
     }
     pub fn width(&self, id: &str, now: f64) -> Option<f32> {
         self.motion
@@ -151,6 +179,24 @@ mod tests {
             .map(|(id, w)| (id.to_string(), *w, true))
             .collect()
     }
+    #[test]
+    fn unchanged_plans_reuse_collections_and_keep_motion_running() {
+        let mut book = WidthBook::default();
+        let initial = rows(&[("a", 120.)]);
+        book.plan(&initial, 0., true);
+        let changed = rows(&[("a", 220.), ("b", 220.)]);
+        book.plan(&changed, 1., true);
+        let order = book.order.as_ptr();
+        let targets = book.targets.capacity();
+        book.plan(&changed, 1. + PAUSE + RESIZE * 0.5, true);
+        assert_eq!(book.order.as_ptr(), order);
+        assert_eq!(book.targets.capacity(), targets);
+        assert!(book.width("a", 1. + PAUSE + RESIZE * 0.5).unwrap() > 220.);
+        book.plan(&changed, 2., false);
+        assert_eq!(book.width("a", 2.), Some(220.));
+        assert!(!book.animating(2.));
+    }
+
     #[test]
     fn sent_bands_round_up_and_respect_narrow_caps() {
         assert_eq!(

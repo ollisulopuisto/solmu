@@ -40,3 +40,13 @@ CI follow-up: photo widths start from their actual frame ratio, call rows from
 their title/detail fonts, and wide carousels use the renderer's distinct cap.
 Old seam-overlap, last-tail-only and per-minute-clock assertions now test the
 approved separated rows, every-body tails and one footer per sender/day run.
+
+Adversarial review follow-up: resolved mention names participate in the width
+signature, so unchanged mention rows reuse their measurement. Stable plans reuse
+their order and target maps instead of rebuilding those collections. Explicit
+invalidation builds its suffix once, not per cached row. Linked rendering no
+longer computes or passes the obsolete cadence/neighbor arguments. Padding-click
+coverage now tests both separated neighboring bubbles. Full-timeline signatures
+still have linear cost, and pane/font changes deliberately remeasure; large
+history resize performance has not been benchmarked. History inserts snap, and
+bounce overshoot is bounded by the pane cap.

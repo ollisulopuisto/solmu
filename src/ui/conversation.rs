@@ -3362,9 +3362,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                         ui,
                         &conversation.messages.iter().collect::<Vec<_>>(),
                         &mut conversation.width_book,
-                        text_cap,
-                        inset,
+                        (text_cap, inset),
                         !app.settings.reduce_motion && view.animate,
+                        view.mention_names,
                         |message| {
                             settled_width(ui, &view, message, planning_cap(ui, message, text_cap))
                                 .unwrap_or(text_cap)
@@ -5439,6 +5439,7 @@ pub(crate) fn sender_streak_hues(messages: &[Message]) -> Vec<f32> {
 
 /// A causal cadence limit for each row, computed before viewport filtering.
 /// The candidate gap never teaches its own limit. Long pauses start a new burst.
+#[cfg(test)]
 pub(crate) fn cadence_limits(messages: &[&Message]) -> Vec<i64> {
     use std::collections::{HashMap, VecDeque};
     type History = (i64, VecDeque<(i64, i64)>, i64);
@@ -6184,6 +6185,17 @@ fn width_signature(message: &Message) -> u64 {
     hash.finish()
 }
 
+fn resolved_width_signature(message: &Message, name: impl Fn(&str) -> String) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    width_signature(message).hash(&mut hash);
+    for mention in &message.mentions {
+        mention.user.hash(&mut hash);
+        name(&mention.id).hash(&mut hash);
+    }
+    hash.finish()
+}
+
 fn is_carousel(message: &Message) -> bool {
     matches!(&message.content, Content::Interactive {card:Some(card),..} if !card.carousel.is_empty())
 }
@@ -6202,21 +6214,19 @@ fn planned_widths(
     ui: &egui::Ui,
     messages: &[&Message],
     book: &mut crate::run_widths::WidthBook,
-    cap: f32,
-    inset: f32,
+    geometry: (f32, f32),
     animate: bool,
+    mention_name: impl Fn(&str) -> String,
     natural: impl Fn(&Message) -> f32,
 ) -> HashMap<String, f32> {
+    let (cap, inset) = geometry;
     book.retain_fingerprint(
         cap.to_bits() ^ crate::theme::font_generation().wrapping_mul(0x9E37_79B9),
     );
     let mut entries = Vec::with_capacity(messages.len());
     for message in messages {
         let key = width_key(message);
-        book.check_signature(&key, width_signature(message));
-        if !message.mentions.is_empty() {
-            book.invalidate(&key);
-        }
+        book.check_signature(&key, resolved_width_signature(message, &mention_name));
         let width = book.get(&key).unwrap_or_else(|| {
             let width = natural(message).clamp(0.0, planning_cap(ui, message, cap));
             book.remember(&key, width);
@@ -6299,9 +6309,9 @@ pub(crate) fn linked_run_widths(
         ui,
         messages,
         book,
-        cap,
-        inset,
+        (cap, inset),
         !app.settings.reduce_motion && app.window_focused,
+        |id| app.mention_name(id),
         |message| {
             let cap = planning_cap(ui, message, cap);
             let text = body_for_measurement(&message.content).map(|(text, grow)| {
@@ -7405,10 +7415,7 @@ pub(crate) fn linked_bubble(
     chat: &Chat,
     message: &Message,
     show_timestamp: bool,
-    _previous: Option<&Message>,
-    _next: Option<&Message>,
     footer_right: f32,
-    _cadence: (Option<i64>, Option<i64>),
     run_width: Option<f32>,
     actions: &mut Vec<Action>,
 ) -> Option<egui::Rect> {
@@ -12145,6 +12152,34 @@ fn chat_of(chat: &ChatId) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mention_width_is_cached_until_its_resolved_name_changes() {
+        let mut row = message(Content::text("hello @user"));
+        row.mentions = vec![crate::model::MentionRef {
+            id: "contact".into(),
+            user: "@user".into(),
+        }];
+        let key = width_key(&row);
+        let mut book = crate::run_widths::WidthBook::default();
+        book.check_signature(&key, resolved_width_signature(&row, |_| "Ada".into()));
+        book.remember(&key, 123.);
+        book.check_signature(&key, resolved_width_signature(&row, |_| "Ada".into()));
+        assert_eq!(
+            book.get(&key),
+            Some(123.),
+            "unchanged mentions reuse measurement"
+        );
+        book.check_signature(
+            &key,
+            resolved_width_signature(&row, |_| "Ada Lovelace".into()),
+        );
+        assert_eq!(
+            book.get(&key),
+            None,
+            "resolved name change invalidates width"
+        );
+    }
+
     #[test]
     fn width_signature_ignores_media_bytes_and_tracks_layout_shape() {
         let mut row = message(Content::Text {
