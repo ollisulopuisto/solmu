@@ -291,9 +291,16 @@ fn previous_time(app: &App, chat: &str, now: &Zoned) -> Option<Zoned> {
 /// skip an ambiguous newer expression and offer an unrelated older one.
 fn expression(text: &str, sent: i64, now: &Zoned) -> Option<Option<Zoned>> {
     let lower = text.to_lowercase();
-    let words: Vec<_> = lower.split_whitespace().collect();
+    let words: Vec<_> = lower
+        .split_whitespace()
+        .map(|word| {
+            word.trim_matches(|c: char| ",!?;()[]\"'".contains(c))
+                .trim_end_matches('.')
+        })
+        .collect();
     let mut times = Vec::new();
     let mut unknown_number = false;
+    let mut saw_clock = false;
     for (i, word) in words.iter().enumerate() {
         let token = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != ':' && c != '.');
         let meridiem = if token.ends_with("am") {
@@ -311,6 +318,8 @@ fn expression(text: &str, sent: i64, now: &Zoned) -> Option<Option<Zoned>> {
         };
         let token = token.trim_end_matches("am").trim_end_matches("pm");
         let prefixed = i > 0 && ["at", "klo", "kello"].contains(&words[i - 1]);
+        saw_clock |= token.chars().any(|c| c.is_ascii_digit())
+            && (token.contains(':') || prefixed || meridiem.is_some());
         let split = token
             .split_once(':')
             .or_else(|| prefixed.then(|| token.split_once('.')).flatten());
@@ -345,7 +354,7 @@ fn expression(text: &str, sent: i64, now: &Zoned) -> Option<Option<Zoned>> {
         }
     }
     if times.is_empty() {
-        return None;
+        return saw_clock.then_some(None);
     }
     if words.iter().any(|w| {
         [
@@ -373,6 +382,20 @@ fn expression(text: &str, sent: i64, now: &Zoned) -> Option<Option<Zoned>> {
             "friday",
             "saturday",
             "sunday",
+            "mon",
+            "tue",
+            "wed",
+            "thu",
+            "fri",
+            "sat",
+            "sun",
+            "ma",
+            "ti",
+            "ke",
+            "to",
+            "pe",
+            "la",
+            "su",
             "maanantaina",
             "tiistaina",
             "keskiviikkona",
@@ -522,6 +545,8 @@ mod tests {
             "today at 08:00",
             "tomorrow at 14:00 or 15:00",
             "Friday at 14:00",
+            "Friday, at 14:00",
+            "tomorrow at 14:30:45",
             "at 29:00",
             "18.11 at 14:30",
             "tomorrow at 14:30 UTC",
@@ -531,6 +556,7 @@ mod tests {
         }
         assert!(expression("no time here", sent, &now).is_none());
         assert!(expression("I have 3 cats", sent, &now).is_none());
+        assert_eq!(expression("tomorrow at 14:30:45", sent, &now), Some(None));
         assert!(
             expression("tomorrow at 14:30", sent - 3 * 86400, &now)
                 .unwrap()
