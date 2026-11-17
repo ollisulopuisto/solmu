@@ -8,10 +8,15 @@ permissions:
 jobs:
   helper:
     if: github.event.repository.private == false
-    runs-on: macos-15
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        arch: [arm64, x86_64]
+        include:
+          - arch: arm64
+            os: macos-15
+          - arch: x86_64
+            os: macos-15-intel
     env:
       WHISPER_REVISION: d1be6fde11ac6e0407606b4e42fe72d34add8037
       APPLE_TEAM_ID: LWSR8T5392
@@ -64,9 +69,7 @@ jobs:
           # Gatekeeper is tested with quarantine present, not stripped or bypassed.
           xattr -w com.apple.quarantine '0083;00000000;Solmu;' "$app"
           spctl --assess --type execute --verbose=2 "$app"
-          if [ '${{ matrix.arch }}' = arm64 ]; then
-            "$app/Contents/MacOS/whisper-cli" --help
-          fi
+          "$app/Contents/MacOS/whisper-cli" --help
           mkdir -p dist
           ditto -c -k --keepParent "$app" 'dist/solmu-whisper-v1.9.5-${{ matrix.arch }}.zip'
       - name: Record exact download metadata
