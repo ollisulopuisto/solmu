@@ -3,6 +3,12 @@
 pub mod stock;
 pub mod tour;
 
+static SHOT_SEND_LATER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn send_later_menu() -> bool {
+    SHOT_SEND_LATER.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Set by the `rail-bottom` shot page: the navigation rail is captured
 /// scrolled to its end, as after a wheel scroll, proving the lower
 /// sections stay reachable.
@@ -2579,6 +2585,36 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "chat-menu" => app.open_chat_menu = Some(app.chats[0].id.clone()),
             // Reply later / Read later: flagged rows carry the clock and
             // list marks, and the chip row shows both filters.
+            "send-later-menu" | "send-later-calendar" | "send-later-recurring" => {
+                app.composer = "Laitan luonnoksen tulemaan.".into();
+                app.send_later_chat = app.open_chat.clone();
+                let now = jiff::Zoned::now();
+                app.send_later_date = now.date().tomorrow().unwrap().to_string();
+                app.send_later_time = "08:00".into();
+                app.send_later_repeat = if part == "send-later-recurring" { 2 } else { 0 };
+                if part == "send-later-menu" {
+                    SHOT_SEND_LATER.store(true, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(chat) = app.open_chat.clone() {
+                        let row = message(
+                            &chat,
+                            "send-later-time",
+                            false,
+                            0,
+                            Content::text("Huomenna klo 14.30 sopisi hyvin."),
+                        );
+                        app.conversations
+                            .get_mut(&chat)
+                            .unwrap()
+                            .messages
+                            .push(Message {
+                                timestamp: now.timestamp().as_second(),
+                                ..row
+                            });
+                    }
+                } else {
+                    app.dialog = Some(Dialog::SendLater);
+                }
+            }
             "later" => {
                 let reply = app.later_key(&app.chats[0]);
                 app.settings.beeper.reply_later.push(reply);

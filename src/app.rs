@@ -11668,6 +11668,30 @@ impl App {
                     self.toast(crate::i18n::gettext(self.locale, "Marked to read later"));
                 }
             }
+            Action::OpenSendLater { chat, recurring } => {
+                if self
+                    .chat(&chat)
+                    .is_none_or(|chat| !chat.can_send() || chat.locked)
+                {
+                    return;
+                }
+                self.apply(Action::ShowDialog(Dialog::SendLater), ctx);
+                if self.dialog == Some(Dialog::SendLater) {
+                    self.send_later_chat = Some(chat);
+                    let now = jiff::Zoned::now();
+                    let due = now + jiff::SignedDuration::from_hours(1);
+                    self.send_later_date = due.strftime("%Y-%m-%d").to_string();
+                    self.send_later_time = due.strftime("%H:%M").to_string();
+                    self.send_later_repeat = if recurring { 1 } else { 0 };
+                    self.send_later_error = None;
+                    ctx.data_mut(|data| {
+                        data.remove::<jiff::civil::Date>(egui::Id::new((
+                            "send-later-month",
+                            self.account().id.clone(),
+                        )))
+                    });
+                }
+            }
             Action::ShowDialog(dialog) => {
                 if self.composed_forward_running() {
                     self.toast_error("The forward batch is still running. Wait for its results.");
@@ -11695,6 +11719,7 @@ impl App {
                     self.transcription_language_draft = draft;
                 }
                 if dialog == Dialog::SendLater {
+                    self.send_later_chat = self.open_chat.clone();
                     // A fresh Send Later is one send: never inherit a repeat.
                     self.send_later_repeat = 0;
                     self.send_later_every = "1".into();

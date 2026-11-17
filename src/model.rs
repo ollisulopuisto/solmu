@@ -3223,6 +3223,11 @@ pub enum Action {
     /// person-level, persisted in settings, never sent anywhere.
     ToggleReadLater(ChatId),
     ShowDialog(Dialog),
+    /// Open the date selector for the exact composer destination.
+    OpenSendLater {
+        chat: ChatId,
+        recurring: bool,
+    },
     CloseDialog,
     ToggleSidebar,
     ToggleFlatGroups,

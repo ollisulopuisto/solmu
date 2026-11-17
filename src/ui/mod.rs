@@ -26,6 +26,7 @@ pub mod pane;
 pub mod picker;
 pub mod polls;
 pub mod rail;
+pub(crate) mod send_later;
 pub mod settings;
 pub mod switcher;
 pub mod update;

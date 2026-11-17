@@ -107,6 +107,7 @@ pub struct Account {
     pub transcription_language_draft: String,
     /// Send Later dialog draft: custom date (YYYY-MM-DD) and time (HH:MM),
     /// plus a validation error to show. Prefilled when the dialog opens.
+    pub send_later_chat: Option<ChatId>,
     pub send_later_date: String,
     pub send_later_time: String,
     pub send_later_error: Option<String>,
@@ -272,6 +273,7 @@ impl Account {
             new_group_sequence: 0,
             new_group_request: None,
             transcription_language_draft: String::new(),
+            send_later_chat: None,
             send_later_date: String::new(),
             send_later_time: String::new(),
             send_later_error: None,

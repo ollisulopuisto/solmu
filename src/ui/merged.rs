@@ -1379,7 +1379,7 @@ fn destination_label(app: &App, destination: Option<&Member>) -> String {
 /// The width the composer's extras reserve: the clock, its gap, and the
 /// selector's icon button, plus slack.
 fn measure_extras(ui: &egui::Ui) -> f32 {
-    34.0 + ui.spacing().item_spacing.x + SELECTOR_SIZE + 10.0
+    SELECTOR_SIZE + 10.0
 }
 
 /// The destination selector is the network's icon alone; the network and
@@ -1404,24 +1404,6 @@ fn destination_extras(
         .and_then(|member| app.chat(&member.chat))
         .map(|chat| format!("{}{}", network_label(chat), account_name(app, chat)))
         .unwrap_or_else(|| chosen.to_owned());
-    let schedulable =
-        app.editing.is_none() && !app.composer.trim().is_empty() && !app.has_unsent_media_here();
-    let clock = ui
-        .add_enabled_ui(schedulable, |ui| {
-            crate::theme::icon_button(
-                ui,
-                crate::theme::Icon::Clock,
-                22.0,
-                palette.secondary,
-                palette.text,
-                "Send later",
-            )
-        })
-        .inner;
-    if clock.clicked() {
-        app.actions
-            .push(Action::ShowDialog(crate::model::Dialog::SendLater));
-    }
     let network = state
         .destination
         .as_ref()
