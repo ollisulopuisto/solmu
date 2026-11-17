@@ -1426,11 +1426,56 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
         );
         return;
     }
+    let transcripts: std::collections::HashMap<_, _> = app
+        .transcriber
+        .as_ref()
+        .map(|worker| worker.saved_in_chat(&app.account().id.0, &listing.chat, ""))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|hit| (hit.message_id, hit.text))
+        .collect();
+    ui.add(
+        egui::TextEdit::singleline(&mut app.info_voice_query)
+            .hint_text(crate::i18n::gettext(
+                app.locale,
+                "Search saved voice transcripts",
+            ))
+            .desired_width(f32::INFINITY),
+    )
+    .tab_stop(Stop::InfoControl(26));
+    ui.label(crate::i18n::gettext(
+        app.locale,
+        "Only saved transcripts are searched. Searching never starts transcription.",
+    ));
+    let query = crate::util::search_key(app.info_voice_query.trim());
+    let matching = listing
+        .voice
+        .iter()
+        .filter(|message| {
+            query.is_empty()
+                || transcripts
+                    .get(&message.id)
+                    .is_some_and(|text| crate::util::search_key(text).contains(&query))
+        })
+        .count();
+    if matching == 0 && !query.is_empty() {
+        ui.label(crate::i18n::gettext(
+            app.locale,
+            "No saved transcripts match.",
+        ));
+    }
     egui::ScrollArea::vertical()
         .id_salt(("info-voice", &listing.chat))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for (index, message) in listing.voice.iter().enumerate() {
+                let transcript = transcripts.get(&message.id);
+                if !query.is_empty()
+                    && !transcript
+                        .is_some_and(|text| crate::util::search_key(text).contains(&query))
+                {
+                    continue;
+                }
                 let Content::Audio {
                     media,
                     seconds,
@@ -1511,6 +1556,32 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
                                 theme::spinner(ui, 14.0, app.palette.secondary);
                             }
                         });
+                        if let Some(text) = transcript {
+                            let expanded = app.info_voice_expanded.contains(&message.id);
+                            let label = if expanded {
+                                "Hide transcript"
+                            } else {
+                                "Expand transcript"
+                            };
+                            if ui
+                                .button(crate::i18n::gettext(app.locale, label))
+                                .tab_stop(Stop::InfoVoice(index as u16, 2))
+                                .clicked()
+                                && !app.info_voice_expanded.remove(&message.id)
+                            {
+                                app.info_voice_expanded.insert(message.id.clone());
+                            }
+                            if expanded {
+                                ui.add(egui::Label::new(text.as_str()).wrap().selectable(true));
+                            } else if !query.is_empty() {
+                                let preview = Content::text(text.clone())
+                                    .text_matching(&app.info_voice_query)
+                                    .unwrap_or_default();
+                                ui.add(egui::Label::new(preview).wrap());
+                            }
+                        } else {
+                            ui.label(crate::i18n::gettext(app.locale, "No saved transcript"));
+                        }
                     });
                 ui.separator();
             }

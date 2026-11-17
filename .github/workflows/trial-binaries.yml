@@ -190,6 +190,9 @@ jobs:
           shot info-voice-1180x780 1180x780 chat,info-voice
           shot info-voice-dark-1180x780 1180x780 chat,info-voice,theme=Catppuccin.json
           shot info-voice-900x780 900x780 chat,info-voice
+          shot voice-transcripts-1180x780 1180x780 chat,voice-transcripts
+          shot voice-transcripts-search-1180x780 1180x780 chat,voice-transcripts-search
+          shot chat-transcript-search-1180x780 1180x780 chat,chat-transcript-search
           shot chat-1180x780 1180x780 chat
           shot chat-menu-1180x780 1180x780 chat,chat-menu
           shot chat-menu-beeper-1180x780 1180x780 chat,chat-menu-beeper

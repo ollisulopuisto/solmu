@@ -512,6 +512,8 @@ pub struct App {
     pub info: Option<InfoPanel>,
     /// The listing of the panel's chat, once the worker has answered.
     pub info_media: Option<ChatMedia>,
+    pub info_voice_query: String,
+    pub info_voice_expanded: HashSet<String>,
     /// Whether a listing is on its way from the worker.
     pub info_media_pending: bool,
     /// Whether the chat changed while a listing was on its way, so it is
@@ -1550,6 +1552,8 @@ impl App {
             chat_search_open: false,
             info: None,
             info_media: None,
+            info_voice_query: String::new(),
+            info_voice_expanded: HashSet::new(),
             info_media_pending: false,
             info_media_stale: false,
             info_textures: HashSet::new(),
@@ -3849,7 +3853,9 @@ impl App {
             .map(|hit| (hit.chat.clone(), hit.id.clone()))
             .collect();
         if let Some(worker) = &self.transcriber {
-            for hit in self.transcript_hit_messages(worker.search(self.search.trim())) {
+            for hit in
+                self.transcript_hit_messages(worker.search(self.search.trim()), self.search.trim())
+            {
                 if self
                     .chat(&hit.chat)
                     .is_some_and(|chat| !chat.locked && !self.chat_scope_matches(chat))
@@ -3889,7 +3895,9 @@ impl App {
             && !self.locked_folder_open()
             && !self.secret_code_matched()
         {
-            for hit in self.transcript_hit_messages(worker.search(self.search.trim())) {
+            for hit in
+                self.transcript_hit_messages(worker.search(self.search.trim()), self.search.trim())
+            {
                 if self.chat(&hit.chat).is_some_and(|chat| chat.locked) {
                     continue;
                 }
@@ -3915,8 +3923,11 @@ impl App {
     /// it is loaded, a synthetic one otherwise; the preview shows the
     /// transcript line that matched, not the voice-note label. Both kinds
     /// navigate to the source by chat + message id.
-    fn transcript_hit_messages(&self, hits: Vec<crate::transcriber::Hit>) -> Vec<Message> {
-        let query = self.search.trim().to_owned();
+    fn transcript_hit_messages(
+        &self,
+        hits: Vec<crate::transcriber::Hit>,
+        query: &str,
+    ) -> Vec<Message> {
         let account = self.account().id.0.clone();
         hits.into_iter()
             // The store is shared; only the active account's transcripts
@@ -3951,7 +3962,7 @@ impl App {
                         thumbnail: None,
                     });
                 let preview = Content::text(hit.text.clone())
-                    .text_matching(&query)
+                    .text_matching(query)
                     .unwrap_or_else(|| hit.text.lines().next().unwrap_or("").trim().to_owned());
                 message.content = Content::text(preview);
                 message
@@ -7083,6 +7094,8 @@ impl App {
     /// answer on its way is for a chat the panel no longer shows.
     fn reset_info_media(&mut self) {
         self.info_media = None;
+        self.info_voice_query.clear();
+        self.info_voice_expanded.clear();
         self.info_released.append(&mut self.info_uris);
         self.info_media_request += 1;
         self.info_media_pending = false;
@@ -7208,6 +7221,64 @@ impl App {
         self.chat_search_day = None;
         self.chat_search_calendar = false;
         self.focus_chat_search = false;
+    }
+
+    /// Local saved transcripts join in-chat search even if backend search
+    /// fails. Unknown message dates never match a day filter; file mtimes
+    /// are not message dates. Querying never starts transcription.
+    pub fn chat_search_results(&self) -> Vec<Message> {
+        let mut hits = self.chat_search_hits.clone();
+        let Some(chat) = self.open_chat.as_deref() else {
+            return hits;
+        };
+        if self.chat_search.trim().is_empty() {
+            return hits;
+        }
+        if self.chat(chat).is_some_and(|chat| chat.locked) && !self.locked_folder_open() {
+            return Vec::new();
+        }
+        let Some(worker) = &self.transcriber else {
+            return hits;
+        };
+        let (from, until) = self.chat_search_range();
+        for hit in worker.saved_in_chat(&self.account().id.0, chat, &self.chat_search) {
+            let known = self
+                .conversations
+                .get(chat)
+                .and_then(|c| c.message(&hit.message_id))
+                .or_else(|| {
+                    hits.iter()
+                        .find(|m| m.id == hit.message_id && m.chat == chat)
+                });
+            let stamp = known.map_or(0, |m| m.timestamp);
+            if from.is_some_and(|from| stamp == 0 || stamp < from)
+                || until.is_some_and(|until| stamp >= until)
+            {
+                continue;
+            }
+            let mut messages = self.transcript_hit_messages(vec![hit], self.chat_search.trim());
+            let Some(mut message) = messages.pop() else {
+                continue;
+            };
+            message.timestamp = stamp;
+            let preview = Content::text(message.summary())
+                .text_matching(&self.chat_search)
+                .unwrap_or_else(|| message.summary());
+            message.content = Content::text(format!(
+                "{}: {preview}",
+                crate::i18n::gettext(self.locale, "Voice transcript")
+            ));
+            if let Some(existing) = hits
+                .iter_mut()
+                .find(|m| m.chat == chat && m.id == message.id)
+            {
+                existing.content = message.content;
+            } else {
+                hits.push(message);
+            }
+        }
+        hits.sort_by_key(|message| std::cmp::Reverse(message.timestamp));
+        hits
     }
 
     /// The Unix-second range the day filter stands for, if a day is picked.
@@ -26219,6 +26290,65 @@ mod tests {
         app.search = "   ".into();
         assert!(app.scoped_search_hits().is_empty());
         std::fs::remove_dir_all(&store_dir).ok();
+    }
+
+    #[test]
+    fn in_chat_saved_transcripts_are_scoped_deduplicated_and_keep_real_dates() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _events) =
+            App::headless(AppDirs::under(directory.path()), Settings::default());
+        let chat = "voice-chat";
+        app.chats.push(Chat::new(chat.into(), "Voice".into()));
+        app.open_chat = Some(chat.into());
+        app.chat_search = "station".into();
+        app.search = "unrelated global query".into();
+        let store =
+            crate::transcriber::Store::new(directory.path().join("saved"), 1 << 20).unwrap();
+        let account = app.account().id.0.clone();
+        store
+            .put(&account, chat, "known", "First line.\nMeet at the station.")
+            .unwrap();
+        store
+            .put(&account, chat, "unloaded", "Another station note")
+            .unwrap();
+        store
+            .put("another-account", chat, "private", "station secret")
+            .unwrap();
+        store
+            .put(&account, "another-chat", "private", "station secret")
+            .unwrap();
+        app.transcriber = Some(crate::transcribe_worker::Worker::stub_with_store(store));
+        app.chat_search_hits.push(message(chat, "known", 100));
+        let hits = app.chat_search_results();
+        assert_eq!(hits.len(), 2);
+        let known = hits.iter().find(|hit| hit.id == "known").unwrap();
+        assert_eq!(known.timestamp, 100);
+        assert!(known.summary().contains("station"));
+        assert!(known.summary().contains("Voice transcript"));
+        assert_eq!(hits.iter().filter(|hit| hit.id == "known").count(), 1);
+        assert_eq!(
+            hits.iter()
+                .find(|hit| hit.id == "unloaded")
+                .unwrap()
+                .timestamp,
+            0
+        );
+        assert!(
+            app.transcriber.as_ref().unwrap().recorded().is_empty(),
+            "search queues no inference"
+        );
+        app.chat_search_day = Some(jiff::civil::Date::new(2026, 11, 17).unwrap());
+        app.chat_search_hits.clear();
+        assert!(
+            app.chat_search_results().is_empty(),
+            "unknown dates must not use file mtime"
+        );
+        app.chat_search_day = None;
+        app.chats[0].locked = true;
+        assert!(
+            app.chat_search_results().is_empty(),
+            "a hidden locked chat stays private"
+        );
     }
 
     #[test]

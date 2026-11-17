@@ -337,17 +337,34 @@ impl Store {
     /// never leaves the machine; matching uses the same normalization as
     /// chat search, and hits carry the real account/chat/message ids.
     pub fn search(&self, query: &str, limit: usize) -> Vec<Hit> {
+        self.search_scoped(query, limit, None)
+    }
+
+    /// Filter account/chat before the cap, so another chat cannot hide hits.
+    /// An empty scoped query returns saved transcripts for the Voice panel.
+    pub fn search_scoped(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: Option<(&str, &str)>,
+    ) -> Vec<Hit> {
         let needle = crate::util::search_key(query.trim());
         let mut hits = Vec::new();
-        if !needle.is_empty() {
+        if !needle.is_empty() || scope.is_some() {
             for account in subdirs(&self.root) {
                 let Some(account_id) = decode(&account) else {
                     continue;
                 };
+                if scope.is_some_and(|(wanted, _)| wanted != account_id) {
+                    continue;
+                }
                 for chat in subdirs(&self.root.join(&account)) {
                     let Some(chat_id) = decode(&chat) else {
                         continue;
                     };
+                    if scope.is_some_and(|(_, wanted)| wanted != chat_id) {
+                        continue;
+                    }
                     let dir = self.root.join(&account).join(&chat);
                     let Ok(entries) = std::fs::read_dir(&dir) else {
                         continue;

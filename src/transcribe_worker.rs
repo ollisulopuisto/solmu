@@ -98,12 +98,14 @@ pub struct Worker {
     store: Option<Store>,
     /// Search memo: (store version, query, hits).
     search_cache: SearchCache,
+    scoped_search_cache: ScopedSearchCache,
     /// What a stub was told, for tests; always empty on a live worker.
     recorded: Arc<Mutex<Vec<String>>>,
 }
 
 /// Search memo: (store version, query, hits).
 type SearchCache = Arc<Mutex<Option<(u64, String, Vec<Hit>)>>>;
+type ScopedSearchCache = Arc<Mutex<Option<(u64, String, String, String, Vec<Hit>)>>>;
 
 /// The loop: drain commands until Shutdown or the channel closes. `wake`
 /// repaints the view after each status change.
@@ -240,6 +242,7 @@ impl Worker {
             shared,
             store: Some(store),
             search_cache: Arc::new(Mutex::new(None)),
+            scoped_search_cache: Arc::new(Mutex::new(None)),
             recorded: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -362,6 +365,60 @@ impl Worker {
         hits
     }
 
+    /// Saved text only: never queues the engine or downloads audio. A
+    /// versioned scoped memo keeps repeated paint passes off disk.
+    pub fn saved_in_chat(&self, account: &str, chat: &str, query: &str) -> Vec<Hit> {
+        let Some(store) = &self.store else {
+            return self
+                .shared
+                .status
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .filter_map(|((a, c, m), status)| {
+                    if a != account || c != chat {
+                        return None;
+                    }
+                    let Status::Ready(text) = status else {
+                        return None;
+                    };
+                    crate::util::search_key(text)
+                        .contains(&crate::util::search_key(query))
+                        .then(|| Hit {
+                            account_id: a.clone(),
+                            chat_id: c.clone(),
+                            message_id: m.clone(),
+                            text: text.clone(),
+                            modified: 0,
+                        })
+                })
+                .collect();
+        };
+        let version = store.version();
+        let query = query.trim();
+        let mut memo = self
+            .scoped_search_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some((v, a, c, q, hits)) = &*memo
+            && *v == version
+            && a == account
+            && c == chat
+            && q == query
+        {
+            return hits.clone();
+        }
+        let hits = store.search_scoped(query, usize::MAX, Some((account, chat)));
+        *memo = Some((
+            version,
+            account.into(),
+            chat.into(),
+            query.into(),
+            hits.clone(),
+        ));
+        hits
+    }
+
     /// A worker with no engine behind it, for demos and tests: the given
     /// statuses are what the view sees; queued work is only recorded.
     pub fn stub(pairs: impl IntoIterator<Item = (Key, Status)>) -> Self {
@@ -403,6 +460,7 @@ impl Worker {
             }),
             store: None,
             search_cache: Arc::new(Mutex::new(None)),
+            scoped_search_cache: Arc::new(Mutex::new(None)),
             recorded,
         }
     }
@@ -452,6 +510,33 @@ impl Drop for Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_chat_snapshot_filters_before_limit_and_invalidates_on_delete() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), 1 << 20).unwrap();
+        for i in 0..60 {
+            store
+                .put("other", "same-chat", &format!("m{i}"), "station")
+                .unwrap();
+        }
+        store
+            .put("mine", "same-chat", "mine", "at the station")
+            .unwrap();
+        let worker = Worker::stub_with_store(store);
+        let hits = worker.saved_in_chat("mine", "same-chat", "station");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_id, "mine");
+        assert_eq!(worker.saved_in_chat("mine", "same-chat", "").len(), 1);
+        worker.remove_chat("mine".into(), "same-chat".into());
+        assert!(worker.saved_in_chat("mine", "same-chat", "").is_empty());
+        assert!(
+            worker
+                .recorded()
+                .iter()
+                .all(|line| !line.starts_with("transcribe"))
+        );
+    }
+
     use std::path::PathBuf;
     use std::sync::atomic::AtomicUsize;
     use std::time::{Duration, Instant};

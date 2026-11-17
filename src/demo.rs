@@ -2387,6 +2387,31 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
     };
     for part in page.split(',').map(str::trim) {
         match part {
+            "voice-transcripts" | "voice-transcripts-search" | "chat-transcript-search" => {
+                apply_flags(app, Some("info-voice"));
+                let account = app.account().id.0.clone();
+                let chat = app.open_chat.clone().unwrap();
+                let rows = app.info_media.as_ref().unwrap().voice.clone();
+                let pairs = rows.iter().enumerate().map(|(index, message)| {
+                    ((account.clone(), chat.clone(), message.id.clone()),
+                     crate::transcribe_worker::Status::Ready(if index == 0 {
+                        "The train arrives at six. I will meet you outside the station, near the main entrance.".into()
+                     } else { "The tickets are booked. See you tomorrow.".into() }))
+                }).collect::<Vec<_>>();
+                app.transcriber = Some(crate::transcribe_worker::Worker::stub(pairs));
+                if let Some(first) = rows.first() {
+                    app.info_voice_expanded.insert(first.id.clone());
+                }
+                if part == "voice-transcripts-search" {
+                    app.info_voice_query = "station".into();
+                }
+                if part == "chat-transcript-search" {
+                    app.info = None;
+                    app.chat_search_open = true;
+                    app.chat_search = "station".into();
+                    app.chat_search_pending = false;
+                }
+            }
             "delete-review" | "delete-review-unsupported" => {
                 let chat = app.open_chat.clone().unwrap();
                 let known = app.chats.iter_mut().find(|c| c.id == chat).unwrap();
@@ -10910,6 +10935,28 @@ mod tests {
         apply_flags(&mut app, Some("group-info"));
         let listing = app.info_media.as_ref().expect("the group is listed");
         assert!(!listing.media.is_empty(), "the group's photo");
+    }
+
+    #[test]
+    fn voice_panel_search_and_transcript_expansion_never_queue_inference() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("voice-transcripts-search"));
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        assert!(crate::ui::focus::control(&ctx, crate::ui::focus::Stop::InfoVoice(0, 2)).is_some());
+        assert!(
+            crate::ui::focus::control(&ctx, crate::ui::focus::Stop::InfoVoice(1, 0)).is_none(),
+            "nonmatching row hidden"
+        );
+        assert!(app.transcriber.as_ref().unwrap().recorded().is_empty());
+        app.info_voice_query = "no such words".into();
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        assert!(crate::ui::focus::control(&ctx, crate::ui::focus::Stop::InfoVoice(0, 0)).is_none());
     }
 
     #[test]

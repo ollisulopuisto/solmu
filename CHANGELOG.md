@@ -206,3 +206,5 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 - The chat list's edge can be dragged to resize it.
 - Attachment uploads to WhatsApp no longer send the request shape that was rejected; a failed send keeps the staged files.
 - The sidebar restores correctly in narrow windows and with the list hidden, and settings rows no longer cut their titles short.
+
+- Voice shared items can expand and search saved transcripts; in-chat search includes saved transcript matches without starting transcription.
