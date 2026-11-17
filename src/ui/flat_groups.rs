@@ -9,6 +9,8 @@ use std::collections::{HashMap, HashSet};
 #[derive(Default)]
 pub struct State {
     pub name: String,
+    /// Popup sizing passes cannot keep text focus; wait for its visible pass.
+    focus_name: bool,
     pub assigning: Option<(Member, Vec<u64>)>,
     /// Headings folded shut this session: a group's id, or `None` for Other.
     pub collapsed: HashSet<Option<u64>>,
@@ -495,6 +497,7 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
                 .data_mut(|d| d.insert_temp(egui::Id::new("new-local-group-rect"), response.rect));
             if response.clicked() {
                 app.flat_group_ui.name.clear();
+                app.flat_group_ui.focus_name = true;
             }
             egui::Popup::menu(&response)
                 .width(220.0)
@@ -508,8 +511,9 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
                             .char_limit(80)
                             .desired_width(200.0),
                     );
-                    if response.clicked() {
+                    if app.flat_group_ui.focus_name && ui.is_visible() {
                         name.request_focus();
+                        app.flat_group_ui.focus_name = false;
                     }
                     let enter = name.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     let mut create = false;

@@ -182,3 +182,10 @@ Sidebar review follow-up: localized the + tooltip/accessibility label and moved
 its focus stop after Needs me to match visual and tested order. Both library
 and test-target clippy passed locally before this small correction. Screenshot
 evidence still awaits native CI; the review gate remains open.
+
+Native #358 gate found popup focus requested during an invisible sizing pass,
+a tour cue still seeking the retired All mode label, and a tooltip fixture
+whose target moved below the viewport with the fuller header. Focus now waits
+for the visible popup pass; tour targets the semantic Recent stop; tooltip
+fixture explicitly uses compact rows, matching its existing row-stride math.
+Rerun native gate before treating these corrections as validated.

@@ -10689,6 +10689,9 @@ mod tests {
     #[test]
     fn hovering_a_cut_short_preview_shows_the_whole_last_message() {
         let mut app = app();
+        // The fuller header leaves less vertical space. This tooltip test
+        // needs all three fixture rows visible and uses the compact row stride.
+        app.settings.beeper.compact_list = true;
         let ctx = egui::Context::default();
         app.attach(&ctx);
         let group = SAMPLES[4].id;
