@@ -9800,7 +9800,7 @@ impl App {
                 if self.scheduling_draft.as_ref().is_some_and(|draft| {
                     draft.chat == chat
                         && draft.text.trim() == text.trim()
-                        && draft.quoting == quoting
+                        && draft.quoting == quoting.as_ref().map(|reply| reply.id.clone())
                 }) {
                     return;
                 }
