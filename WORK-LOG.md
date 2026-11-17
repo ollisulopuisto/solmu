@@ -1,5 +1,21 @@
 # Work log
 
+## 2026-11-17: Wyoming transcript read as empty (data_length framing)
+
+Branch fix/wyoming-data-length. Read README/WORK-LOG; no root agent/board file
+present. Root cause of "wyoming returned an empty transcript" against a working
+Parakeet-MLX Wyoming server: the reference rhasspy/wyoming library writes event
+data out-of-line (header line carries `data_length`, raw JSON data bytes follow
+the header with no newline of their own); the reader only handled inline `data`
+and binary `payload_length`, so `data.text` was always empty. Fix consumes and
+merges `data_length` bytes for every event before matching, mirroring
+async_read_event. Tests: exact-framing repro (fails on main with the observed
+error string), framed non-transcript events skipped, framed empty text still an
+error; existing inline-data tests kept. Verified in a standalone crate against
+the real module sources (this Linux box cannot link the full egui/pipewire lib);
+full suite runs in CI. No DMG, no release.
+
+
 ## 2026-11-11: scoped archive/delete batches
 
 Separate feature branch from main. Read README/CONTRIBUTING; no root agent/board/
