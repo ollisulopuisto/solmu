@@ -541,8 +541,8 @@ fn sections(app: &App) -> Vec<Section> {
         ui.text_edit_singleline(&mut app.settings.transcription_language);
         if before != (app.settings.transcription_wyoming.clone(), app.settings.transcription_language.clone()) { app.actions.push(Action::SettingsChanged); }
         ui.label("Transcripts are stored on this computer, per account and chat, and follow a chat you delete or clear. Transcript text joins message search on this computer only.");
-        if ui.add_enabled(app.transcriber.is_some(), egui::Button::new("Delete all transcripts on this computer")).clicked()
-            && let Some(worker) = &app.transcriber
+        if ui.add_enabled(app.transcript_reader().is_some(), egui::Button::new("Delete all transcripts on this computer")).clicked()
+            && let Some(worker) = app.transcript_reader()
         {
             worker.clear();
             // The per-message language overrides belong to the transcripts.

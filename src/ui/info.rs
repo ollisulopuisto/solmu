@@ -1413,7 +1413,14 @@ fn docs_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: boo
 
 /// Audio/voice clips keep an explicit play/download target and a separate jump.
 fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bool) {
-    if listing.voice.is_empty() {
+    let saved = app
+        .transcript_reader()
+        .map(|worker| worker.saved_in_chat(&app.account().id.0, &listing.chat, ""))
+        .unwrap_or_default();
+    let loading = app
+        .transcript_reader()
+        .is_some_and(|worker| worker.saved_loading(&app.account().id.0, &listing.chat));
+    if listing.voice.is_empty() && saved.is_empty() && !loading {
         widgets::empty_state(
             ui,
             &app.palette,
@@ -1426,11 +1433,51 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
         );
         return;
     }
+    let transcripts: std::collections::HashMap<_, _> = saved
+        .iter()
+        .map(|hit| (hit.message_id.clone(), hit.text.clone()))
+        .collect();
+    ui.add(
+        egui::TextEdit::singleline(&mut app.info_voice_query)
+            .hint_text(crate::i18n::gettext(
+                app.locale,
+                "Search saved voice transcripts",
+            ))
+            .desired_width(f32::INFINITY),
+    )
+    .tab_stop(Stop::InfoControl(26));
+    ui.label(crate::i18n::gettext(
+        app.locale,
+        "Only saved transcripts are searched. Searching never starts transcription.",
+    ));
+    let query = crate::util::search_key(app.info_voice_query.trim());
+    let matching = saved
+        .iter()
+        .filter(|hit| crate::util::search_key(&hit.text).contains(&query))
+        .count();
+    if loading {
+        ui.label(crate::i18n::gettext(
+            app.locale,
+            "Loading saved transcripts…",
+        ));
+    } else if matching == 0 && !query.is_empty() {
+        ui.label(crate::i18n::gettext(
+            app.locale,
+            "No saved transcripts match.",
+        ));
+    }
     egui::ScrollArea::vertical()
         .id_salt(("info-voice", &listing.chat))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for (index, message) in listing.voice.iter().enumerate() {
+                let transcript = transcripts.get(&message.id);
+                if !query.is_empty()
+                    && !transcript
+                        .is_some_and(|text| crate::util::search_key(text).contains(&query))
+                {
+                    continue;
+                }
                 let Content::Audio {
                     media,
                     seconds,
@@ -1511,10 +1558,76 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
                                 theme::spinner(ui, 14.0, app.palette.secondary);
                             }
                         });
+                        if let Some(text) = transcript {
+                            saved_transcript(app, ui, &message.id, text, index);
+                        } else {
+                            ui.label(crate::i18n::gettext(app.locale, "No saved transcript"));
+                        }
                     });
                 ui.separator();
             }
+            let outside: Vec<_> = saved
+                .iter()
+                .filter(|hit| {
+                    crate::util::search_key(&hit.text).contains(&query)
+                        && !listing
+                            .voice
+                            .iter()
+                            .any(|message| message.id == hit.message_id)
+                })
+                .collect();
+            for (offset, hit) in outside
+                .iter()
+                .take(crate::model::MEDIA_LIST_LIMIT)
+                .enumerate()
+            {
+                let index = listing.voice.len() + offset;
+                ui.label(crate::i18n::gettext(app.locale, "Saved voice transcript"));
+                if ui
+                    .small_button(crate::i18n::gettext(app.locale, "Go to chat"))
+                    .tab_stop(Stop::InfoVoice(index as u16, 1))
+                    .clicked()
+                {
+                    app.actions.push(Action::OpenMessage {
+                        chat: listing.chat.clone(),
+                        message: hit.message_id.clone(),
+                    });
+                    if overlay {
+                        app.actions.push(Action::CloseInfo);
+                    }
+                }
+                saved_transcript(app, ui, &hit.message_id, &hit.text, index);
+                ui.separator();
+            }
+            if outside.len() > crate::model::MEDIA_LIST_LIMIT {
+                ui.label(crate::i18n::gettext(
+                    app.locale,
+                    "Only the newest saved matches are listed. Refine your search.",
+                ));
+            }
         });
+}
+
+fn saved_transcript(app: &mut App, ui: &mut egui::Ui, id: &str, text: &str, index: usize) {
+    let expanded = app.info_voice_expanded.contains(id);
+    let label = if expanded {
+        "Hide transcript"
+    } else {
+        "Expand transcript"
+    };
+    let toggle = ui
+        .button(crate::i18n::gettext(app.locale, label))
+        .tab_stop(Stop::InfoVoice(index as u16, 2));
+    theme::reveal_focus(&toggle);
+    if toggle.clicked() && !app.info_voice_expanded.remove(id) {
+        app.info_voice_expanded.insert(id.to_owned());
+    }
+    if expanded {
+        ui.add(egui::Label::new(text).wrap().selectable(true));
+    } else if !app.info_voice_query.trim().is_empty() {
+        let preview = crate::transcriber::preview(text, &app.info_voice_query);
+        ui.add(egui::Label::new(preview).wrap());
+    }
 }
 
 /// The web links written in the chat, newest first: the preview's title or
