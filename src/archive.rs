@@ -5963,12 +5963,15 @@ mod media_path_tests {
             let text = matches!(row.content, Content::Text { .. });
             assert_eq!(row.thumbnail.is_none(), text, "{}", row.id);
         }
-        assert_eq!(ids(rows), ["preview", "clip", "link", "doc", "photo"]);
+        assert_eq!(
+            ids(rows),
+            ["preview", "clip", "link", "doc", "voice", "photo"]
+        );
         // The limit applies to each kind, so a chat full of photos still
         // lists its documents and links.
         assert_eq!(
             ids(archive.media_docs_links(chat, 1).expect("rows")),
-            ["preview", "clip", "doc", "photo"]
+            ["preview", "clip", "doc", "voice", "photo"]
         );
     }
 

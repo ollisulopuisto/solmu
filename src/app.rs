@@ -4797,6 +4797,16 @@ impl App {
                             message.content.forget_files_in(&dir);
                         }
                     }
+                    if let Some(listing) = &mut self.info_media {
+                        for message in listing
+                            .media
+                            .iter_mut()
+                            .chain(&mut listing.docs)
+                            .chain(&mut listing.voice)
+                        {
+                            message.content.forget_files_in(&dir);
+                        }
+                    }
                     if live {
                         let done = crate::i18n::gettext(self.locale, "Media cache cleared");
                         self.toast(done.into_owned());
@@ -23523,7 +23533,16 @@ mod tests {
             .entry(chat.into())
             .or_default()
             .messages
-            .push(photo);
+            .push(photo.clone());
+        let mut voice = photo.clone();
+        voice.id = "voice".into();
+        voice.content = Content::Audio {
+            media: photo.content.media().unwrap().clone(),
+            seconds: Some(2),
+            voice_note: true,
+            waveform: vec![],
+        };
+        app.set_info_media(ChatMedia::collect(chat.into(), vec![photo, voice], 10));
         let id = app.account().id.clone();
         app.apply(Action::ClearMediaCache(id), &ctx);
         assert!(app.storage_clearing);
@@ -23552,6 +23571,25 @@ mod tests {
         assert!(!app.storage_clearing);
         let shown = &app.conversations[chat].messages[0];
         assert_eq!(shown.content.media().unwrap().path, None);
+        let listing = app.info_media.as_ref().unwrap();
+        assert!(
+            listing.media.iter().chain(&listing.voice).all(|m| m
+                .content
+                .media()
+                .unwrap()
+                .path
+                .is_none())
+        );
+        let mut refreshed = listing.clone();
+        app.set_info_media(std::mem::take(&mut refreshed));
+        assert!(
+            app.info_media.as_ref().unwrap().voice[0]
+                .content
+                .media()
+                .unwrap()
+                .path
+                .is_none()
+        );
     }
 
     /// Home moves to the oldest loaded message first; Home again there asks
