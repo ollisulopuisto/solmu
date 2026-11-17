@@ -10912,6 +10912,68 @@ mod tests {
         assert!(!listing.media.is_empty(), "the group's photo");
     }
 
+    #[test]
+    fn shared_voice_refresh_and_audio_actions_are_keyboard_reachable() {
+        use crate::ui::focus::{self, Stop};
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("info-voice"));
+        assert!(!app.info_media.as_ref().unwrap().voice.is_empty());
+        app.backend.record_demo_commands();
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        let id = focus::control(&ctx, Stop::InfoControl(24)).expect("Links tab");
+        ctx.memory_mut(|memory| memory.request_focus(id));
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Tab, egui::Modifiers::NONE)],
+        );
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            focus::control(&ctx, Stop::InfoControl(25)),
+            "Tab reaches Refresh"
+        );
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Tab, egui::Modifiers::NONE)],
+        );
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            focus::control(&ctx, Stop::InfoVoice(0, 0)),
+            "Tab reaches Download/Play"
+        );
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+        );
+        render(&mut app, &ctx);
+        assert!(
+            app.backend
+                .take_demo_commands()
+                .iter()
+                .any(|command| matches!(
+                    command,
+                    crate::backend::Command::Download { manual: true, .. }
+                )),
+            "Enter downloads the selected audio"
+        );
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Tab, egui::Modifiers::NONE)],
+        );
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            focus::control(&ctx, Stop::InfoVoice(0, 1)),
+            "Tab reaches Go to chat"
+        );
+    }
+
     /// The group dialog offers the pencil and the photo menu only when we may
     /// change the group's info, and not while a change is on its way.
     #[test]

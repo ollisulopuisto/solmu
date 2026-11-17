@@ -922,6 +922,11 @@ impl ChatMedia {
         media
     }
 
+    /// Count of the items currently listed, including audio.
+    pub fn listed_count(&self) -> usize {
+        self.media.len() + self.voice.len() + self.docs.len() + self.links.len()
+    }
+
     /// Whether any list was cut.
     pub fn truncated(&self) -> bool {
         self.history_incomplete
@@ -4649,6 +4654,7 @@ mod tests {
             2
         );
         assert_eq!(listing.voice.len(), 2);
+        assert_eq!(listing.listed_count(), 6);
         assert!(listing.photos_truncated && listing.videos_truncated && listing.voice_truncated);
     }
 

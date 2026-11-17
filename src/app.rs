@@ -7130,7 +7130,40 @@ impl App {
     /// the panel draws them under fixed names and frees them together when
     /// it closes. The pictures the last listing had and this one has not
     /// are freed on the panel's next frame.
-    pub(crate) fn set_info_media(&mut self, media: ChatMedia) {
+    pub(crate) fn set_info_media(&mut self, mut media: ChatMedia) {
+        // A metadata refresh must not discard completed local files or a live
+        // download. Both panel-only and loaded-transcript clips can own them.
+        for row in media
+            .media
+            .iter_mut()
+            .chain(media.docs.iter_mut())
+            .chain(media.voice.iter_mut())
+        {
+            let previous = self
+                .info_media
+                .as_ref()
+                .filter(|old| old.chat == media.chat)
+                .and_then(|old| {
+                    old.media
+                        .iter()
+                        .chain(&old.docs)
+                        .chain(&old.voice)
+                        .find(|m| m.id == row.id)
+                })
+                .or_else(|| {
+                    self.conversations
+                        .get(&media.chat)
+                        .and_then(|c| c.messages.iter().find(|m| m.id == row.id))
+                });
+            if let Some(old) = previous.and_then(|m| m.content.media())
+                && let Some(new) = row.content.media_at_mut(None)
+                && old.mime == new.mime
+                && old.size == new.size
+            {
+                new.path.clone_from(&old.path);
+                new.state.clone_from(&old.state);
+            }
+        }
         let uris: Vec<String> = media
             .media
             .iter()
@@ -27321,6 +27354,20 @@ mod tests {
             Some(std::path::Path::new("voice.ogg"))
         );
         assert_eq!(media.state, MediaState::Idle);
+        let mut refreshed = app.info_media.clone().unwrap();
+        let fresh_media = refreshed.voice[0].content.media_at_mut(None).unwrap();
+        fresh_media.path = None;
+        fresh_media.state = MediaState::Idle;
+        app.set_info_media(refreshed);
+        assert_eq!(
+            app.info_media.as_ref().unwrap().voice[0]
+                .content
+                .media()
+                .unwrap()
+                .path
+                .as_deref(),
+            Some(std::path::Path::new("voice.ogg"))
+        );
         app.handle_media(chat, "voice", None, Err("offline".into()));
         assert!(matches!(
             app.info_media.as_ref().unwrap().voice[0]

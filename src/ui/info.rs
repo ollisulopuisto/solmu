@@ -938,12 +938,7 @@ fn media_row(app: &mut App, ui: &mut egui::Ui, chat: &str, overlay: bool) {
     let listing = app.info_media.take();
     let uris = std::mem::take(&mut app.info_uris);
     let shown = listing.as_ref().filter(|media| media.chat == chat);
-    let count = shown.map(|media| {
-        (
-            media.media.len() + media.docs.len() + media.links.len(),
-            media.truncated(),
-        )
-    });
+    let count = shown.map(|media| (media.listed_count(), media.truncated()));
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
     let response = response.tab_stop(Stop::InfoControl(MEDIA_ROW_STOP));
     if app.info_focus == Some(InfoFocus::MediaRow) {
@@ -1114,6 +1109,7 @@ fn media_view(app: &mut App, ui: &mut egui::Ui, chat: &str, tab: MediaTab, overl
                         !app.info_media_pending,
                         egui::Button::new(crate::i18n::gettext(app.locale, "Refresh")),
                     )
+                    .tab_stop(Stop::InfoControl(TAB_STOP + 5))
                     .clicked()
                 {
                     app.actions.push(Action::RetryInfoMedia);
@@ -1189,14 +1185,11 @@ fn media_grid(
             ui,
             &palette,
             Icon::Image,
-            &crate::i18n::gettext(
-                app.locale,
-                if tab == MediaTab::Videos {
-                    "No videos"
-                } else {
-                    "No photos"
-                },
-            ),
+            &if tab == MediaTab::Videos {
+                crate::i18n::gettext(app.locale, "No videos")
+            } else {
+                crate::i18n::gettext(app.locale, "No photos")
+            },
             &crate::i18n::gettext(
                 app.locale,
                 "Photos and videos shared in this chat will show here.",
@@ -1428,8 +1421,8 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
     egui::ScrollArea::vertical()
         .id_salt(("info-voice", &listing.chat))
         .auto_shrink([false, false])
-        .show_rows(ui, 86.0, listing.voice.len(), |ui, range| {
-            for message in &listing.voice[range] {
+        .show(ui, |ui| {
+            for (index, message) in listing.voice.iter().enumerate() {
                 let Content::Audio {
                     media,
                     seconds,
@@ -1452,13 +1445,14 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
                             } else {
                                 crate::i18n::gettext(app.locale, "Play")
                             };
-                            if ui
+                            let play = ui
                                 .add_enabled(
                                     media.state != crate::model::MediaState::Downloading,
                                     egui::Button::new(label).min_size(vec2(70.0, 40.0)),
                                 )
-                                .clicked()
-                            {
+                                .tab_stop(Stop::InfoVoice(index as u16, 0));
+                            theme::reveal_focus(&play);
+                            if play.clicked() {
                                 if let Some(path) = &media.path {
                                     // A member's info pane may be open over a different chat.
                                     // Set the originating chat explicitly before playback.
@@ -1491,10 +1485,11 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
                         });
                         ui.horizontal(|ui| {
                             ui.add_space(78.0);
-                            if ui
+                            let jump = ui
                                 .small_button(crate::i18n::gettext(app.locale, "Go to chat"))
-                                .clicked()
-                            {
+                                .tab_stop(Stop::InfoVoice(index as u16, 1));
+                            theme::reveal_focus(&jump);
+                            if jump.clicked() {
                                 go_to(app, message, overlay);
                             }
                             if let crate::model::MediaState::Failed(_) = &media.state {
