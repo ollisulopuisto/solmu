@@ -85,9 +85,11 @@ jobs:
           archive.with_suffix('.json').write_text(json.dumps(metadata, indent=2)+'\n')
           PY
       - uses: actions/upload-artifact@v7
+        if: vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true'
         with:
           name: optional-whisper-${{ matrix.arch }}
           path: dist/*
+          retention-days: 1
       - name: Remove signing keychain
         if: always()
         run: |
