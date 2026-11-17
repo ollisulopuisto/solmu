@@ -154,3 +154,8 @@ contract still required the retired Filters-menu suggestion list verbatim.
 Chat-level Same person? cards remain in merged.rs, capped at three with accept
 and dismiss actions. Migrated the contract to assert that shipped bounded path
 and that the removed menu stays removed. Standalone rustc execution passes.
+
+
+## 2026-11-17 About build identity
+
+About reads the package-owned Resources/build-version.txt, written by bundle.sh before signing. Initialization runs before the event loop; About rendering reads memory only. The numeric Info.plist version and update ordering remain unchanged. Non-bundled binaries fall back to Cargo version. Package regression was red before the metadata writer, green after; all 8 package tests and standalone version-selection Rust test pass. Native CI and full packaged UI capture are still required.

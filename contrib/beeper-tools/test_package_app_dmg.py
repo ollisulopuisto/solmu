@@ -94,6 +94,17 @@ class FinderAppTests(unittest.TestCase):
         verify = (ROOT / 'packaging/macos/verify.sh').read_text()
         self.assertIn('info.get("LSUIElement") is not True', verify)
 
+    def test_bundle_keeps_full_build_version_for_about(self):
+        import subprocess
+        # Execute the real setup before platform-specific binary/icon tools.
+        setup = (ROOT / 'packaging/macos/bundle.sh').read_text().split('cp "$binary"', 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory) / 'Solmu.app'
+            subprocess.run(['bash', '-c', setup, 'bundle.sh', '/unused', str(app),
+                            '26.11.1-manual.53'], check=True)
+            self.assertEqual((app / 'Contents/Resources/build-version.txt').read_text().strip(),
+                             '26.11.1-manual.53')
+
     def test_original_icon_and_non_terminal_bundle_identity(self):
         info = plistlib.loads((ROOT / 'packaging/macos/Info.plist').read_bytes())
         self.assertEqual(info['CFBundlePackageType'], 'APPL')
