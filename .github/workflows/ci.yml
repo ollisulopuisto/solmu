@@ -189,6 +189,20 @@ jobs:
               --demo-shot "$RUNNER_TEMP/solmu-$page.png" --demo-shot-delay 8000
             test -s "$RUNNER_TEMP/solmu-$page.png"
           done
+          # A synthetic app-bundle path exercises the real metadata lookup.
+          # No account, launcher, signing identity or private data is used.
+          bundle="$RUNNER_TEMP/about-review/Solmu.app/Contents"
+          mkdir -p "$bundle/MacOS" "$bundle/Resources"
+          cp target/debug/solmu "$bundle/MacOS/solmu-client"
+          for state in before after; do
+            if [ "$state" = after ]; then
+              printf '%s\n' '26.11.1-manual.53' > "$bundle/Resources/build-version.txt"
+            fi
+            for page in about settings,settings-search=about; do
+              "$bundle/MacOS/solmu-client" --demo --demo-page "$page" \
+                --demo-shot "$RUNNER_TEMP/solmu-about-$state-$page.png" --demo-shot-delay 8000
+            done
+          done
       - name: macOS preview
         if: runner.os == 'macOS' && vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true'
         uses: actions/upload-artifact@v7
@@ -236,6 +250,20 @@ jobs:
             target/debug/solmu --demo --demo-page "$page" \
               --demo-shot "$RUNNER_TEMP/solmu-$page.png" --demo-shot-delay 8000
             test -s "$RUNNER_TEMP/solmu-$page.png"
+          done
+          # A synthetic app-bundle path exercises the real metadata lookup.
+          # No account, launcher, signing identity or private data is used.
+          bundle="$RUNNER_TEMP/about-review/Solmu.app/Contents"
+          mkdir -p "$bundle/MacOS" "$bundle/Resources"
+          cp target/debug/solmu "$bundle/MacOS/solmu-client"
+          for state in before after; do
+            if [ "$state" = after ]; then
+              printf '%s\n' '26.11.1-manual.53' > "$bundle/Resources/build-version.txt"
+            fi
+            for page in about settings,settings-search=about; do
+              "$bundle/MacOS/solmu-client" --demo --demo-page "$page" \
+                --demo-shot "$RUNNER_TEMP/solmu-about-$state-$page.png" --demo-shot-delay 8000
+            done
           done
       - name: macOS preview
         if: vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true'
