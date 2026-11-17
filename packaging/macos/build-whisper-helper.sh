@@ -7,9 +7,9 @@ arch="$3"
 case "$arch" in arm64|x86_64) ;; *) echo 'Unsupported architecture' >&2; exit 1;; esac
 # GGML_NATIVE=OFF alone still enables AVX2/FMA/BMI2 in pinned GGML.
 # Use a portable Intel baseline, including older macOS 12 Intel hardware.
-cpu_flags=()
+cpu_flags=(-DGGML_NATIVE=OFF)
 if [ "$arch" = x86_64 ]; then
-  cpu_flags=(-DGGML_SSE42=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF
+  cpu_flags+=(-DGGML_SSE42=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF
     -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_BMI2=OFF)
 fi
 cmake -S "$source_dir" -B "$out/build" \
