@@ -159,3 +159,9 @@ and that the removed menu stays removed. Standalone rustc execution passes.
 ## 2026-11-17 About build identity
 
 About reads the package-owned Resources/build-version.txt, written by bundle.sh before signing. Initialization runs before the event loop; About rendering reads memory only. The numeric Info.plist version and update ordering remain unchanged. Non-bundled binaries fall back to Cargo version. Package regression was red before the metadata writer, green after; all 8 package tests and standalone version-selection Rust test pass. Native CI and full packaged UI capture are still required.
+
+## 2026-11-17: Cmd+B linked header
+
+The linked-person renderer did not apply the traffic-light clearance used by ordinary chat headers. With only the 52-point icon rail left after Cmd+B, the green button overlapped the linked name. Added real-input coverage for repeated hide/show at three zoom levels in both themes. Capture and test results are recorded in the PR; never use private chat data as review media.
+
+About build identity is tracked in a separate PR.
