@@ -1611,13 +1611,11 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
 fn saved_transcript(app: &mut App, ui: &mut egui::Ui, id: &str, text: &str, index: usize) {
     let expanded = app.info_voice_expanded.contains(id);
     let label = if expanded {
-        "Hide transcript"
+        crate::i18n::gettext(app.locale, "Hide transcript")
     } else {
-        "Expand transcript"
+        crate::i18n::gettext(app.locale, "Expand transcript")
     };
-    let toggle = ui
-        .button(crate::i18n::gettext(app.locale, label))
-        .tab_stop(Stop::InfoVoice(index as u16, 2));
+    let toggle = ui.button(label).tab_stop(Stop::InfoVoice(index as u16, 2));
     theme::reveal_focus(&toggle);
     if toggle.clicked() && !app.info_voice_expanded.remove(id) {
         app.info_voice_expanded.insert(id.to_owned());

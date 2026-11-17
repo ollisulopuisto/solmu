@@ -693,6 +693,29 @@ mod tests {
     }
 
     #[test]
+    fn truncation_is_reported_even_when_no_saved_match_can_be_displayed() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), u64::MAX).unwrap();
+        store.put("acc", "chat", "huge", "station").unwrap();
+        let dir = root.path().join("acc/chat");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.join("huge.txt"))
+            .unwrap()
+            .set_len((32 << 20) + 1)
+            .unwrap();
+        let worker = Worker::archive(store);
+        worker.saved_in_chat("acc", "chat", "station");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while worker.saved_loading("acc", "chat", "station") {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(worker.saved_in_chat("acc", "chat", "station").is_empty());
+        assert!(worker.saved_truncated("acc", "chat", "station"));
+    }
+
+    #[test]
     fn panicking_scan_releases_admission_and_pending_entry() {
         let active = Arc::new(AtomicUsize::new(1));
         let key = ("acc".into(), "chat".into(), "query".into());

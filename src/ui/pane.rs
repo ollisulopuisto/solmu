@@ -359,6 +359,17 @@ fn search(app: &mut App, ui: &mut egui::Ui, overlay: bool) {
     }) {
         ui.add(egui::Label::new(egui::RichText::new("This API search covers the selected member chat only. Use the linked timeline search for all loaded sources.").color(palette.secondary)).wrap());
     }
+    // Local caps are independent of backend pagination. Show this before
+    // empty/error returns too, since oversized files can leave no visible hit.
+    if !app.chat_search.trim().is_empty()
+        && app.open_chat.as_deref().is_some_and(|chat| {
+            app.transcript_reader().is_some_and(|worker| {
+                worker.saved_truncated(&app.account().id.0, chat, &app.chat_search)
+            })
+        })
+    {
+        ui.label(crate::i18n::gettext(app.locale, "Saved transcript results are partial: up to 500 matches and 2 MB of text, with long transcripts clipped. Refine your search or open the message."));
+    }
     if let Some(error) = &app.beeper_chat_search_error {
         ui.add(egui::Label::new(egui::RichText::new(error).color(palette.warning)).wrap());
         if hits.is_empty() {
