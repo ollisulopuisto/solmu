@@ -152,10 +152,33 @@ fn decode_residual_escapes(value: &str) -> String {
     if !escaped {
         return value.to_owned();
     }
-    let quoted = format!("\"{}\"", value.replace('"', "\\\""));
-    Parser::new(&quoted)
-        .quoted()
-        .unwrap_or_else(|| value.to_owned())
+    // Decode the whole value as the inside of a quoted plist string, with
+    // quotation marks as plain content and escaped ones decoded by `escape`.
+    let mut parser = Parser::new(value);
+    let mut out = String::new();
+    while let Some(&byte) = parser.rest.first() {
+        if byte == b'\\' {
+            parser.rest = &parser.rest[1..];
+            match parser.escape() {
+                Some(decoded) => out.push(decoded),
+                None => return value.to_owned(),
+            }
+        } else {
+            let width = match byte {
+                0xC0..=0xDF => 2,
+                0xE0..=0xEF => 3,
+                0xF0..=0xFF => 4,
+                _ => 1,
+            };
+            let (chunk, rest) = parser.rest.split_at(width.min(parser.rest.len()));
+            parser.rest = rest;
+            match std::str::from_utf8(chunk) {
+                Ok(text) => out.push_str(text),
+                Err(_) => return value.to_owned(),
+            }
+        }
+    }
+    out
 }
 
 /// Old-style plist value: arrays, dictionaries and atoms (quoted or bare).
@@ -431,6 +454,20 @@ mod tests {
         assert_eq!(table[0].with, "(╯°□°）╯︵ ┻━┻");
         assert_eq!(table[1].with, "Hää");
         assert_eq!(table[2].with, "\u{1F600}");
+    }
+
+    #[test]
+    fn double_escaped_quotes_survive_the_second_decode() {
+        // Stored text `\U00e4 \"hello\" tail` is printed by `defaults` with
+        // each backslash and quote escaped again; nothing after the first
+        // quote may be lost.
+        let input = "({ replace = q; with = \"\\\\U00e4 \\\\\\\"hello\\\\\\\" tail\"; })";
+        let table = parse_replacements(input);
+        assert_eq!(table[0].with, "ä \"hello\" tail");
+        // A bare quote inside already-decoded text is plain content.
+        assert_eq!(decode_residual_escapes("\\U00e4 \"x\" y"), "ä \"x\" y");
+        // An escape that cannot be decoded leaves the value as parsed.
+        assert_eq!(decode_residual_escapes("\\U00e4 \\q"), "\\U00e4 \\q");
     }
 
     #[test]
