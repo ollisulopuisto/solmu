@@ -21735,7 +21735,7 @@ mod tests {
             }
             // The same on macOS: the rail carries Settings there too, beside
             // the app menu.
-            let expected = vec![
+            let mut expected = vec![
                 Stop::Composer,
                 Stop::Send,
                 Stop::Attach,
@@ -21757,6 +21757,9 @@ mod tests {
                 Stop::Bookmarks,
                 Stop::NewChat,
             ];
+            if ready {
+                expected.insert(1, Stop::SendLater);
+            }
             assert_eq!(
                 crate::ui::focus::stops(&ctx)
                     .iter()

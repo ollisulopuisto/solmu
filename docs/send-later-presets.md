@@ -26,3 +26,7 @@ date or a daylight-saving gap/overlap disables the preset instead of rolling it
 forward or skipping to an older unrelated message. Choose the calendar when the
 preset is unavailable. Parsed choices are frozen while the menu is open, so an
 incoming message cannot change the action under the pointer.
+
+CI follow-up: the main keyboard-cycle regression now includes Send Later between
+Composer and Send only when a text draft enables it. The test still traverses
+every stop in both directions and checks transcript position and focus borders.
