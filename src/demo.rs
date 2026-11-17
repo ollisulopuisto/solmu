@@ -23219,9 +23219,9 @@ mod bubble_detail_tests {
     }
 
     /// The `bubbles` page in both Messages palettes: every message of the
-    /// sample is drawn, and only each run's last balloon curls a tail out of
-    /// its side, as far as Apple's reaches at Solmu's text size; a lone
-    /// photo leaves the tail to the balloon after it. All of it fits a 1280
+    /// sample is drawn, with the same top-corner tail on every body as the
+    /// other skins. Free emoji and bare pictures keep their own geometry.
+    /// All of it fits a 1280
     /// by 1000 window.
     #[test]
     fn messages_balloons_tail_every_body() {
@@ -23234,7 +23234,7 @@ mod bubble_detail_tests {
             twelve_hour: false,
         });
         const SIZE: egui::Vec2 = egui::vec2(1280.0, 1000.0);
-        let reach = crate::ui::widgets::balloon::TIP[0] * crate::ui::widgets::MESSAGES_SCALE;
+        let reach = crate::ui::widgets::TAIL_WIDTH;
         for page in ["bubbles,messages", "bubbles,messages-light"] {
             let mut app = app();
             let ctx = egui::Context::default();

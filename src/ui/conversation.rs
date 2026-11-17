@@ -6042,6 +6042,17 @@ const CAROUSEL_GAP: f32 = 8.0;
 
 /// Returns the shared card width, bounded by [`CARD_WIDTH`] and `cap`.
 fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
+    natural_call_width(ui, message, cap, view.locale, &view.palette)
+        .or_else(|| natural_content_width(message, cap, natural_text_width(ui, view, message, cap)))
+}
+
+fn natural_call_width(
+    ui: &egui::Ui,
+    message: &Message,
+    cap: f32,
+    locale: crate::i18n::Locale,
+    palette: &Palette,
+) -> Option<f32> {
     if let Content::Call {
         video,
         status,
@@ -6058,22 +6069,18 @@ fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) ->
         };
         let title = ui
             .painter()
-            .layout_no_wrap(
-                entry.title(view.locale),
-                theme::medium(14.0),
-                view.palette.text,
-            )
+            .layout_no_wrap(entry.title(locale), theme::medium(14.0), palette.text)
             .size()
             .x;
-        let detail = entry.detail(view.locale).map_or(0., |label| {
+        let detail = entry.detail(locale).map_or(0., |label| {
             ui.painter()
-                .layout_no_wrap(label, theme::regular(12.5), view.palette.secondary)
+                .layout_no_wrap(label, theme::regular(12.5), palette.secondary)
                 .size()
                 .x
         });
         return Some((CALL_BADGE + CALL_BADGE_GAP + title.max(detail)).min(cap));
     }
-    natural_content_width(message, cap, natural_text_width(ui, view, message, cap))
+    None
 }
 
 fn natural_content_width(message: &Message, cap: f32, text: Option<f32>) -> Option<f32> {
@@ -6313,14 +6320,13 @@ pub(crate) fn linked_run_widths(
                     link: palette.link,
                     mention: palette.accent,
                 };
-                markup::layout(ui, text, &mentions, &style, cap, grow)
-                    .galley
-                    .rows
-                    .iter()
-                    .map(|row| row.row.size.x)
-                    .fold(0.0, f32::max)
+                let measured = markup::measure(ui, text, &mentions, &style, cap, grow);
+                let plan = crate::wrap::balance(&measured.items, cap, measured.hyphen);
+                if plan.lines == 0 { 0. } else { plan.width }
             });
-            natural_content_width(message, cap, text).unwrap_or(cap)
+            natural_call_width(ui, message, cap, app.locale, &palette)
+                .or_else(|| natural_content_width(message, cap, text))
+                .unwrap_or(cap)
         },
     )
 }
