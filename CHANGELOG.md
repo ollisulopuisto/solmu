@@ -16,6 +16,8 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- Both About views show the full packaged build version, including the manual build suffix, instead of only the base Cargo version.
+
 - Linked-person chat headers keep clear of the Mac traffic lights after Cmd+B hides the chat list, including at different zoom levels.
 
 - The Mac menu bar has a Go menu (Chats, Bookmarks, Starred messages, Archived, Locked, Jump to chat, Command palette, Next and Previous number) and a Chat menu (Archive, Favorite, Reply later, Read later, Quote reply, Forward, Jump to newest, Clear, Leave). The View menu lists the four chat-list modes, Next list mode and the group-sections or flat-list switch. Menu items show the same keys as the keyboard; entries without a key stay blank.
