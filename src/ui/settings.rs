@@ -2139,7 +2139,7 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             theme::text(
                 ui,
-                format!("{} {}", "Solmu", env!("CARGO_PKG_VERSION")),
+                format!("{} {}", "Solmu", crate::version::display()),
                 theme::semibold(16.0),
                 palette.text,
             );

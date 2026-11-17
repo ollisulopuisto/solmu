@@ -431,6 +431,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         .inner_margin(8.0)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
+                // Linked chats have their own header. When the list is
+                // collapsed, the traffic lights extend beyond the icon rail.
+                let lights = if crate::theme::macos_chrome(ui.ctx()) {
+                    (crate::theme::traffic_light_inset(ui.ctx()) - ui.cursor().left()).max(0.0)
+                } else {
+                    0.0
+                };
+                ui.add_space(lights);
                 let has_error = valid
                     .iter()
                     .any(|member| app.beeper_live_errors.contains_key(&member.chat));

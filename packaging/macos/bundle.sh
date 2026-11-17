@@ -20,6 +20,9 @@ here="$(cd "$(dirname "$0")" && pwd)"
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+# Preserve the complete package label for both About surfaces. Info.plist
+# keeps its numeric version because macOS requires it there.
+printf '%s\n' "$version" > "$app/Contents/Resources/build-version.txt"
 
 cp "$binary" "$app/Contents/MacOS/solmu"
 chmod 755 "$app/Contents/MacOS/solmu"
