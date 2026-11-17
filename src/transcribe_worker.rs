@@ -116,6 +116,27 @@ struct ScopedSnapshot {
 }
 type ScopedSearchCache = Arc<Mutex<VecDeque<ScopedSnapshot>>>;
 
+/// Releases admission and unsettles a failed request even if scanning panics.
+struct ScanPermit {
+    active: Arc<AtomicUsize>,
+    cache: ScopedSearchCache,
+    version: u64,
+    key: (String, String, String),
+    wake: Arc<dyn Fn() + Send + Sync>,
+}
+impl Drop for ScanPermit {
+    fn drop(&mut self) {
+        self.cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|entry| {
+                !(entry.version == self.version && entry.key == self.key && entry.hits.is_none())
+            });
+        self.active.fetch_sub(1, Ordering::Relaxed);
+        (self.wake)();
+    }
+}
+
 /// The loop: drain commands until Shutdown or the channel closes. `wake`
 /// repaints the view after each status change.
 fn run(
@@ -444,7 +465,15 @@ impl Worker {
         let cache = Arc::clone(&self.scoped_search_cache);
         let shared = Arc::clone(&self.shared);
         let wake = Arc::clone(&self.wake_search);
+        let permit = ScanPermit {
+            active: active_scans,
+            cache: cache.clone(),
+            version,
+            key: key.clone(),
+            wake,
+        };
         std::thread::spawn(move || {
+            let _permit = permit;
             let snapshot = {
                 let _io = shared.store_io.lock().unwrap_or_else(|p| p.into_inner());
                 store.snapshot_while(&key.2, &key.0, &key.1, || {
@@ -470,8 +499,6 @@ impl Worker {
                 entry.truncated = snapshot.truncated;
             }
             drop(memo);
-            active_scans.fetch_sub(1, Ordering::Relaxed);
-            wake();
         });
         Arc::default()
     }
@@ -663,6 +690,39 @@ mod tests {
                 .iter()
                 .all(|line| !line.starts_with("transcribe"))
         );
+    }
+
+    #[test]
+    fn panicking_scan_releases_admission_and_pending_entry() {
+        let active = Arc::new(AtomicUsize::new(1));
+        let key = ("acc".into(), "chat".into(), "query".into());
+        let cache = Arc::new(Mutex::new(VecDeque::from([ScopedSnapshot {
+            version: 0,
+            key: key.clone(),
+            hits: None,
+            truncated: false,
+        }])));
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = wakes.clone();
+        let permit = ScanPermit {
+            active: active.clone(),
+            cache: cache.clone(),
+            version: 0,
+            key,
+            wake: Arc::new(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }),
+        };
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let _permit = permit;
+                panic!("synthetic scan panic");
+            }))
+            .is_err()
+        );
+        assert_eq!(active.load(Ordering::Relaxed), 0);
+        assert!(cache.lock().unwrap().is_empty());
+        assert_eq!(wakes.load(Ordering::Relaxed), 1);
     }
 
     #[test]
