@@ -11049,6 +11049,16 @@ mod tests {
         );
         assert_eq!(
             ctx.memory(|memory| memory.focused()),
+            focus::control(&ctx, Stop::InfoControl(26)),
+            "Tab reaches saved-transcript search"
+        );
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Tab, egui::Modifiers::NONE)],
+        );
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
             focus::control(&ctx, Stop::InfoVoice(0, 0)),
             "Tab reaches Download/Play"
         );
