@@ -5653,10 +5653,9 @@ fn bubble_frame(
             });
         if !bubbleless(&palette, message)
             && (own || matches!(message.content, Content::Text { .. }))
+            && let Some(width) = settled
         {
-            if let Some(width) = settled {
-                ui.set_min_width(width);
-            }
+            ui.set_min_width(width);
         }
         let pending = view.pending_media.and_then(|records| {
             records
@@ -6292,14 +6291,9 @@ fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f3
         link: palette.link,
         mention: palette.accent,
     };
-    let laid = markup::layout(ui, text, &mentions_of(view, message), &style, cap, grow);
-    let widest = laid
-        .galley
-        .rows
-        .iter()
-        .map(|row| row.row.size.x)
-        .fold(0.0, f32::max);
-    Some(widest)
+    let measured = markup::measure(ui, text, &mentions_of(view, message), &style, cap, grow);
+    let plan = crate::wrap::balance(&measured.items, cap, measured.hyphen);
+    Some(if plan.lines == 0 { 0.0 } else { plan.width })
 }
 
 /// Width of a quote's accent bar.
