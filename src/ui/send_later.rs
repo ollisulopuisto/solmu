@@ -127,7 +127,10 @@ pub fn button(app: &mut App, ui: &mut egui::Ui, chat: &Chat, open: bool) {
     let response = ui
         .add_enabled_ui(enabled, |ui| {
             if expanded {
-                ui.add_sized([104.0, 30.0], egui::Button::new("Send later"))
+                ui.add_sized(
+                    [104.0, 30.0],
+                    egui::Button::new(crate::i18n::gettext(app.locale, "Send later")),
+                )
             } else {
                 theme::icon_button(
                     ui,
@@ -135,7 +138,7 @@ pub fn button(app: &mut App, ui: &mut egui::Ui, chat: &Chat, open: bool) {
                     22.0,
                     palette.secondary,
                     palette.text,
-                    "Send later (Cmd/Ctrl+Shift+Enter)",
+                    crate::i18n::gettext(app.locale, "Send later (Cmd/Ctrl+Shift+Enter)").as_ref(),
                 )
             }
         })
@@ -171,27 +174,40 @@ pub fn button(app: &mut App, ui: &mut egui::Ui, chat: &Chat, open: bool) {
         .frame(widgets::menu_frame(&palette))
         .show(|ui| {
             still_open = true;
-            ui.small("↑↓ select · 1–4 choose · Enter confirm · Esc close");
-            ui.small("Parsed time: most recent matching text in this destination chat.");
+            ui.small(crate::i18n::gettext(
+                app.locale,
+                "↑↓ select · 1–4 choose · Enter confirm · Esc close",
+            ));
+            ui.small(crate::i18n::gettext(
+                app.locale,
+                "Parsed time: most recent matching text in this destination chat.",
+            ));
             // Upward menu: the fastest preset is nearest the anchor.
             for index in (0..4).rev() {
                 let label = match index {
-                    0 => format!(
-                        "1   Send at 8am · {}",
-                        morning
+                    0 => crate::i18n::gettext(app.locale, "1   Send at 8am · {when}").replace(
+                        "{when}",
+                        &morning
                             .as_ref()
                             .map(|z| z.strftime("%a %d %b %H:%M").to_string())
-                            .unwrap_or_else(|| "unavailable".into())
+                            .unwrap_or_else(|| {
+                                crate::i18n::gettext(app.locale, "unavailable").into_owned()
+                            }),
                     ),
-                    1 => format!(
-                        "2   Send at {}",
-                        parsed
+                    1 => crate::i18n::gettext(app.locale, "2   Send at {when}").replace(
+                        "{when}",
+                        &parsed
                             .as_ref()
                             .map(|z| z.strftime("%a %d %b %H:%M").to_string())
-                            .unwrap_or_else(|| "[no clear future time]".into())
+                            .unwrap_or_else(|| {
+                                crate::i18n::gettext(app.locale, "[no clear future time]")
+                                    .into_owned()
+                            }),
                     ),
-                    2 => "3   Send at arbitrary time…".into(),
-                    _ => "4   Send recurring…".into(),
+                    2 => {
+                        crate::i18n::gettext(app.locale, "3   Send at arbitrary time…").into_owned()
+                    }
+                    _ => crate::i18n::gettext(app.locale, "4   Send recurring…").into_owned(),
                 };
                 let available = enabled
                     && match index {
@@ -221,7 +237,13 @@ pub fn button(app: &mut App, ui: &mut egui::Ui, chat: &Chat, open: bool) {
             0 | 1 => {
                 if let Some(due) = if index == 0 { morning } else { parsed } {
                     if due.timestamp().as_second() <= crate::util::now() + 30 {
-                        app.toast_error("That preset is now in the past. Reopen Send later.");
+                        app.toast_error(
+                            crate::i18n::gettext(
+                                app.locale,
+                                "That preset is now in the past. Reopen Send later.",
+                            )
+                            .into_owned(),
+                        );
                         return;
                     }
                     {
@@ -301,6 +323,7 @@ fn expression(text: &str, sent: i64, now: &Zoned) -> Option<Option<Zoned>> {
     let mut times = Vec::new();
     let mut unknown_number = false;
     let mut saw_clock = false;
+    let mut invalid_clock = false;
     for (i, word) in words.iter().enumerate() {
         let token = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != ':' && c != '.');
         let meridiem = if token.ends_with("am") {
@@ -318,13 +341,18 @@ fn expression(text: &str, sent: i64, now: &Zoned) -> Option<Option<Zoned>> {
         };
         let token = token.trim_end_matches("am").trim_end_matches("pm");
         let prefixed = i > 0 && ["at", "klo", "kello"].contains(&words[i - 1]);
-        saw_clock |= token.chars().any(|c| c.is_ascii_digit())
+        if token.is_empty() {
+            continue;
+        }
+        let clock_shaped = token.chars().any(|c| c.is_ascii_digit())
             && (token.contains(':') || prefixed || meridiem.is_some());
+        saw_clock |= clock_shaped;
         let split = token
             .split_once(':')
             .or_else(|| prefixed.then(|| token.split_once('.')).flatten());
         let (hour, minute) = if let Some((h, m)) = split {
             if h.len() > 2 || m.len() != 2 {
+                invalid_clock = true;
                 continue;
             }
             (h.parse::<i8>().ok(), m.parse::<i8>().ok())
@@ -351,6 +379,8 @@ fn expression(text: &str, sent: i64, now: &Zoned) -> Option<Option<Zoned>> {
                 return Some(None);
             }
             times.push((hour, minute));
+        } else if clock_shaped {
+            invalid_clock = true;
         }
     }
     if times.is_empty() {
@@ -358,13 +388,20 @@ fn expression(text: &str, sent: i64, now: &Zoned) -> Option<Option<Zoned>> {
     }
     if words.iter().any(|w| {
         [
-            "utc", "gmt", "eet", "eest", "pst", "pdt", "cet", "cest", "noon", "midnight",
+            "utc", "gmt", "eet", "eest", "pst", "pdt", "cet", "cest", "est", "edt", "cst", "cdt",
+            "mst", "mdt", "ast", "adt", "bst", "ist", "jst", "kst", "aest", "aedt", "acst", "acdt",
+            "awst", "nzst", "nzdt", "hkt", "sgt", "msk", "wat", "cat", "sast", "noon", "midnight",
         ]
         .contains(w)
+            || w.contains('/')
+            || w.contains("utc+")
+            || w.contains("utc-")
+            || w.contains("gmt+")
+            || w.contains("gmt-")
     }) {
         return Some(None);
     }
-    if times.len() != 1 || unknown_number {
+    if times.len() != 1 || unknown_number || invalid_clock {
         return Some(None);
     }
     let sent = jiff::Timestamp::from_second(sent)
@@ -461,13 +498,21 @@ pub fn calendar(app: &mut App, ui: &mut egui::Ui) {
         .data(|data| data.get_temp::<Date>(id))
         .unwrap_or(picked.first_of_month());
     ui.horizontal(|ui| {
-        if ui.button("‹").on_hover_text("Previous month").clicked() {
+        if ui
+            .button("‹")
+            .on_hover_text(crate::i18n::gettext(app.locale, "Previous month"))
+            .clicked()
+        {
             month = month
                 .checked_add(jiff::Span::new().months(-1))
                 .unwrap_or(month);
         }
         ui.label(crate::util::month_heading(app.locale, month));
-        if ui.button("›").on_hover_text("Next month").clicked() {
+        if ui
+            .button("›")
+            .on_hover_text(crate::i18n::gettext(app.locale, "Next month"))
+            .clicked()
+        {
             month = month
                 .checked_add(jiff::Span::new().months(1))
                 .unwrap_or(month);
@@ -550,6 +595,10 @@ mod tests {
             "at 29:00",
             "18.11 at 14:30",
             "tomorrow at 14:30 UTC",
+            "tomorrow at 14:30 EST",
+            "tomorrow at 14:30 America/New_York",
+            "tomorrow at 14:30 or 15:00:00",
+            "tomorrow at 14:30 or 15:xx",
             "tomorrow at 14:30 or 16",
         ] {
             assert_eq!(read(text), None, "{text}");

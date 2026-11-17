@@ -11669,10 +11669,9 @@ impl App {
                 }
             }
             Action::OpenSendLater { chat, recurring } => {
-                if self
-                    .chat(&chat)
-                    .is_none_or(|chat| !chat.can_send() || chat.locked)
-                {
+                if self.chat(&chat).is_none_or(|chat| {
+                    !chat.can_send() || (chat.locked && !self.locked_folder_open())
+                }) {
                     return;
                 }
                 self.apply(Action::ShowDialog(Dialog::SendLater), ctx);
@@ -32503,6 +32502,37 @@ mod linked_attachment_tests {
         );
         assert!(app.pending.is_empty());
         assert!(app.attachment_retry_sources.is_empty());
+    }
+
+    #[test]
+    fn send_later_calendar_respects_the_locked_folder_authentication() {
+        let (_root, mut app, ctx, _commands) = fixture();
+        let id = app.chats[0].id.clone();
+        app.chats[0].locked = true;
+        app.composer = "Draft stays here".into();
+        app.apply(
+            Action::OpenSendLater {
+                chat: id.clone(),
+                recurring: false,
+            },
+            &ctx,
+        );
+        assert_ne!(app.dialog, Some(Dialog::SendLater));
+        app.settings.chat_lock_code_hash = Some("synthetic".into());
+        app.chat_lock_session = Some("synthetic".into());
+        app.locked_folder = true;
+        assert!(app.locked_folder_open());
+        app.apply(
+            Action::OpenSendLater {
+                chat: id.clone(),
+                recurring: true,
+            },
+            &ctx,
+        );
+        assert_eq!(app.dialog, Some(Dialog::SendLater));
+        assert_eq!(app.send_later_chat.as_ref(), Some(&id));
+        assert_eq!(app.send_later_repeat, 1);
+        assert_eq!(app.composer, "Draft stays here");
     }
 
     #[test]
