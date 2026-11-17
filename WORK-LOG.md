@@ -161,3 +161,25 @@ and that the removed menu stays removed. Standalone rustc execution passes.
 The linked-person renderer did not apply the traffic-light clearance used by ordinary chat headers. With only the 52-point icon rail left after Cmd+B, the green button overlapped the linked name. Added real-input coverage for repeated hide/show at three zoom levels in both themes. Capture and test results are recorded in the PR; never use private chat data as review media.
 
 About build identity is tracked in a separate PR.
+
+
+## 2026-11-17 - Local Whisper setup (approved sketch C, in progress)
+
+Separate branch feat/local-whisper-setup based on main18416af. Explicit Build
+approval follows the first-run sketch; no automatic model downloads. Current
+work is a pinned, hash-verified, bounded atomic model installer using the
+existing HTTP/hash crates and tempfile already in the lockfile. Move tempfile
+from dev-only to regular dependency for private audio and atomic installation.
+
+Planned: engine selection preserving Wyoming, model controls and progress,
+signed bundled runtime from upstreamv1.9.5 commitd1be6fde11ac6e0407606b4e42fe72d34add8037,
+explicit-auto language, portable bounded process output, shared decoded audio,
+real-recording actual-app verification. Source policy/packaging, licensing
+notices and all native validation remain to be completed. Not a working feature
+yet; no PR or DMG claimed. #357/#358 stay on their separate release track.
+
+Installer checkpoint: production installer test passed in an isolated crate.
+Covers bad hash, truncation, oversize, cancellation, atomic success and cleanup.
+No network/model download performed. Full library/tests compile was killed for
+memory here; no whole-app compile pass claimed. Use serial jobs next time.
+Model revision and exact size verified against the live distributor API.

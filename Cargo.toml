@@ -27,6 +27,8 @@ name = "solmu-reader"
 path = "src/bin/solmu-reader.rs"
 
 [dependencies]
+# Private temporary audio and verified atomic model installation. Already in lockfile.
+tempfile = "3"
 anyhow = "1"
 # Already in the tree transitively; fast first-byte skip for the merged-view search.
 memchr = "2"
@@ -281,7 +283,6 @@ windows = { version = "0.62", features = ["Media_Control", "Foundation_Collectio
 winresource = "0.1"
 
 [dev-dependencies]
-tempfile = "3"
 # Checks the default log filter the way fastframe-log's logger reads it.
 # Already in the tree through fastframe-log, at this version.
 env_logger = { version = "0.11", default-features = false }
