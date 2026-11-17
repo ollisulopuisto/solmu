@@ -189,3 +189,8 @@ whose target moved below the viewport with the fuller header. Focus now waits
 for the visible popup pass; tour targets the semantic Recent stop; tooltip
 fixture explicitly uses compact rows, matching its existing row-stride math.
 Rerun native gate before treating these corrections as validated.
+
+Second native gate: tour and hover fixed; group popup focus/input/create pass.
+Escape remained consumed by TextEdit before Popup saw it. Capture Escape
+before drawing the field, clear the draft and close explicitly; regression
+also checks popup state rather than only a previous-frame widget response.

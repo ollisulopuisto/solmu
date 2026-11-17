@@ -503,6 +503,8 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
                 .width(220.0)
                 .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                 .show(|ui| {
+                    // TextEdit may consume Escape; capture it before the field.
+                    let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
                     ui.label(crate::i18n::gettext(app.locale, "New local group"));
                     let name = ui.add(
                         egui::TextEdit::singleline(&mut app.flat_group_ui.name)
@@ -534,7 +536,12 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
                             ui.close();
                         }
                     });
-                    if create
+                    if escaped {
+                        app.flat_group_ui.name.clear();
+                        ui.close();
+                    }
+                    if !escaped
+                        && create
                         && app
                             .settings
                             .flat_groups

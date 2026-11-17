@@ -24303,6 +24303,11 @@ mod rail_tests {
             frame(&mut app, &ctx, 1180.0, Vec::new());
             assert_eq!(app.settings.flat_groups.items.len(), before + 1);
             assert!(
+                !egui::Popup::is_any_open(&ctx),
+                "Escape closes the popup even when its field has focus"
+            );
+            frame(&mut app, &ctx, 1180.0, Vec::new());
+            assert!(
                 ctx.read_response(egui::Id::new("new-local-group-name"))
                     .is_none()
             );
