@@ -20,6 +20,7 @@ fn collect(
         if page.has_more && next.as_ref().is_some_and(|c| !seen.insert(c.clone())) {
             return Err("Shared-items history cursor repeated".into());
         }
+        let mut row_cap_hit = false;
         for wire in page.items {
             if !wire.chat_id.is_empty() && wire.chat_id != chat {
                 return Err("Shared-items history did not match the requested chat".into());
@@ -30,10 +31,11 @@ fn collect(
             }
             rows.push(map_message(&wire, chat));
             if rows.len() >= 20_000 {
+                row_cap_hit = true;
                 break;
             }
         }
-        incomplete = page.has_more;
+        incomplete = page.has_more || row_cap_hit;
         cursor = next;
         if !incomplete || rows.len() >= 20_000 {
             break;

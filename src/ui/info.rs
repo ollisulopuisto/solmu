@@ -1488,11 +1488,22 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
                                     crate::util::chat_stamp(app.locale, message.timestamp)
                                 ));
                             });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.add_space(78.0);
                             if ui
                                 .small_button(crate::i18n::gettext(app.locale, "Go to chat"))
                                 .clicked()
                             {
                                 go_to(app, message, overlay);
+                            }
+                            if let crate::model::MediaState::Failed(_) = &media.state {
+                                ui.label(crate::i18n::gettext(
+                                    app.locale,
+                                    "Download failed. Retry.",
+                                ));
+                            } else if media.state == crate::model::MediaState::Downloading {
+                                theme::spinner(ui, 14.0, app.palette.secondary);
                             }
                         });
                     });
