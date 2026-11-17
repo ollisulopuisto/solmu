@@ -222,3 +222,12 @@ until a real published URL is available. Download button intentionally disabled.
 Model worker now downloads/verifies runtime first, then model. No model fetched.
 Actual-app real-recording test still unrun. Public helper download needs a
 publish decision separately from unpublished DMG; parent notified.
+
+Adversarial review follow-up: restrict helper job AND caller to public default
+branch before signing secrets are used. No more branch dispatch signing.
+Arm64 artifact passed; Intel build succeeded but notary credential setup failed
+without exposing credentials; remains unverified. Runtime retry replaces invalid
+version directory only after fresh verified archive is staged. Runtime signature
+and hash rechecked for every transcription, model hash once per worker. A fully
+malicious same-user process can still race file paths; no stronger claim made.
+ProviderNone and actual-app/mac-specific installer tests remain merge blockers.

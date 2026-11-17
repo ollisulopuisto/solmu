@@ -142,10 +142,10 @@ fn pcm_wav(pcm: &[u8]) -> Result<tempfile::NamedTempFile, String> {
 
 impl Engine for DecodedWhisper {
     fn transcribe(&mut self, audio: &Path, language: &str) -> Result<String, String> {
+        let spec = crate::whisper_runtime::artifact()
+            .ok_or("Whisper runtime is not configured for this platform")?;
+        crate::whisper_runtime::verify(&self.engine.binary, spec)?;
         if !self.model_verified {
-            let spec = crate::whisper_runtime::artifact()
-                .ok_or("Whisper runtime is not configured for this platform")?;
-            crate::whisper_runtime::verify(&self.engine.binary, spec)?;
             crate::local_whisper::verify_model(&self.engine.model)?;
             self.model_verified = true;
         }

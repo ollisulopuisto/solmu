@@ -237,7 +237,6 @@ zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-c
 # Pauses MPRIS media players while recording or playing voice messages.
 # Already in the tree through fastframe-notifications and fastframe-tray.
 zbus = { version = "5.19", default-features = false, features = ["blocking-api", "tokio"] }
-# Reads the time locale's clock format.
 # The camera for video calls, through Video4Linux, in Rust: no build-time
 # bindings, so building on Linux needs nothing new.
 linuxvideo = "0.3.5"

@@ -149,7 +149,10 @@ pub fn install_archive(
         let destination = parent.join(spec.sha256);
         if destination.exists() {
             // An earlier successful installation is reused only if still valid.
-            verify(&destination.join(relative), spec)?;
+            if verify(&destination.join(relative), spec).is_err() {
+                std::fs::remove_dir_all(&destination).map_err(|e| e.to_string())?;
+                std::fs::rename(staging.path(), &destination).map_err(|e| e.to_string())?;
+            }
         } else {
             std::fs::rename(staging.path(), &destination).map_err(|e| e.to_string())?;
         }

@@ -141,9 +141,9 @@ impl Download {
                 let spec = crate::whisper_runtime::artifact()
                     .ok_or("No verified prebuilt runtime is available for this platform yet")?;
                 let executable = runtime_path(&app_state);
-                if executable.exists() {
-                    crate::whisper_runtime::verify(&executable, spec)?;
-                } else {
+                if !executable.exists()
+                    || crate::whisper_runtime::verify(&executable, spec).is_err()
+                {
                     enough_space(
                         available_space(parent)?,
                         MODEL_BYTES + spec.bytes + 64 * 1024 * 1024,
