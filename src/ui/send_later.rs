@@ -352,7 +352,7 @@ fn expression(text: &str, sent: i64, now: &Zoned) -> Option<Option<Zoned>> {
             .or_else(|| prefixed.then(|| token.split_once('.')).flatten());
         let (hour, minute) = if let Some((h, m)) = split {
             if h.len() > 2 || m.len() != 2 {
-                invalid_clock = true;
+                invalid_clock |= clock_shaped;
                 continue;
             }
             (h.parse::<i8>().ok(), m.parse::<i8>().ok())
@@ -583,6 +583,14 @@ mod tests {
         };
         assert_eq!(read("Huomenna klo 14.30"), Some("2026-11-18 14:30".into()));
         assert_eq!(read("tomorrow at 2:30 pm"), Some("2026-11-18 14:30".into()));
+        assert_eq!(
+            read("Reminder: tomorrow at 14:30"),
+            Some("2026-11-18 14:30".into())
+        );
+        assert_eq!(
+            read("Note: hello: tomorrow at 14:30"),
+            Some("2026-11-18 14:30".into())
+        );
         assert_eq!(read("at 08:00"), Some("2026-11-18 08:00".into()));
         assert_eq!(read("2026-11-20 at 18:45"), Some("2026-11-20 18:45".into()));
         for text in [
