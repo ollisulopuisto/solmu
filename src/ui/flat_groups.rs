@@ -485,7 +485,7 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
                         18.0,
                         app.palette.secondary,
                         app.palette.text,
-                        "New local group",
+                        &crate::i18n::gettext(app.locale, "New local group"),
                     )
                 })
                 .inner

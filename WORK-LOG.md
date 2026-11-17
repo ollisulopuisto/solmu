@@ -177,3 +177,8 @@ clippy -D warnings passed locally. Full native tests and pixels await CI.
 Regression coverage exercises named labels, popup creation/cancel in both
 layouts, old saved-mode migration, mode cycling and no date/unread/mute cutoff.
 No sidebar release build yet; combine with About #357 after review and CI.
+
+Sidebar review follow-up: localized the + tooltip/accessibility label and moved
+its focus stop after Needs me to match visual and tested order. Both library
+and test-target clippy passed locally before this small correction. Screenshot
+evidence still awaits native CI; the review gate remains open.
