@@ -16,6 +16,15 @@ use crate::model::{
 use crate::paths::{AccountDirs, AppDirs};
 use crate::settings::AccountSettings;
 
+/// The composer snapshot held until the scheduler accepts or refuses a request.
+#[derive(Clone, Debug)]
+pub struct SchedulingDraft {
+    pub chat: ChatId,
+    pub source: Option<ChatId>,
+    pub text: String,
+    pub quoting: Option<String>,
+}
+
 /// One WhatsApp account's runtime state.
 pub struct Account {
     /// Pending mutations and outcomes stay with their owning account.
@@ -107,6 +116,7 @@ pub struct Account {
     pub transcription_language_draft: String,
     /// Send Later dialog draft: custom date (YYYY-MM-DD) and time (HH:MM),
     /// plus a validation error to show. Prefilled when the dialog opens.
+    pub scheduling_draft: Option<SchedulingDraft>,
     pub send_later_chat: Option<ChatId>,
     pub send_later_date: String,
     pub send_later_time: String,
@@ -273,6 +283,7 @@ impl Account {
             new_group_sequence: 0,
             new_group_request: None,
             transcription_language_draft: String::new(),
+            scheduling_draft: None,
             send_later_chat: None,
             send_later_date: String::new(),
             send_later_time: String::new(),

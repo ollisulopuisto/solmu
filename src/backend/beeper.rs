@@ -4513,7 +4513,7 @@ pub fn run(
                             )));
                             emit(Event::ScheduledAccepted);
                         }
-                        Err(e) => emit(Event::Info(format!("Send later failed: {e}"))),
+                        Err(e) => emit(Event::ScheduleFailed(format!("Send later failed: {e}"))),
                     }
                 }
                 Command::SetBeeperReminder { chat, at } => {

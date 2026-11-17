@@ -16,6 +16,7 @@ fn popup_id() -> egui::Id {
 #[derive(Clone, Default)]
 struct Menu {
     selected: usize,
+    focus_ids: Vec<egui::Id>,
     chosen: Option<usize>,
     owner: Option<(crate::model::AccountId, String)>,
     morning: Option<Zoned>,
@@ -30,6 +31,13 @@ pub fn keyboard(ctx: &egui::Context) -> bool {
     let mut menu = ctx
         .data_mut(|data| data.get_temp::<Menu>(popup_id()))
         .unwrap_or_default();
+    if ctx
+        .memory(|memory| memory.focused())
+        .is_some_and(|id| id != egui::Id::new("composer-text") && !menu.focus_ids.contains(&id))
+    {
+        egui::Popup::close_id(ctx, popup_id());
+        return false;
+    }
     let mut escaped = false;
     ctx.input_mut(|input| {
         input.events.retain(|event| match event {
@@ -103,7 +111,8 @@ pub fn open(ctx: &egui::Context, app: &App, chat: &Chat) {
 
 /// Used by both the ordinary and linked composers, inside their source route.
 pub fn button(app: &mut App, ui: &mut egui::Ui, chat: &Chat, open: bool) {
-    let enabled = app.editing.is_none()
+    let enabled = app.scheduling_draft.is_none()
+        && app.editing.is_none()
         && !app.composer.trim().is_empty()
         && app.dialog.is_none()
         && !app.has_unsent_media_here();
@@ -147,6 +156,9 @@ pub fn button(app: &mut App, ui: &mut egui::Ui, chat: &Chat, open: bool) {
     if response.clicked() && !expanded {
         self::open(ui.ctx(), app, chat);
     }
+    ui.ctx().data_mut(|data| {
+        data.get_temp_mut_or_default::<Menu>(popup_id()).focus_ids = vec![response.id];
+    });
     let snapshot = ui
         .ctx()
         .data(|data| data.get_temp::<Menu>(popup_id()))
@@ -219,6 +231,11 @@ pub fn button(app: &mut App, ui: &mut egui::Ui, chat: &Chat, open: bool) {
                     available,
                     egui::Button::new(label).selected(index == selected),
                 );
+                ui.ctx().data_mut(|data| {
+                    data.get_temp_mut_or_default::<Menu>(popup_id())
+                        .focus_ids
+                        .push(row.id);
+                });
                 if row.hovered() || row.has_focus() {
                     ui.ctx().data_mut(|data| {
                         data.get_temp_mut_or_default::<Menu>(popup_id()).selected = index;
@@ -693,6 +710,26 @@ mod tests {
                 assert_eq!(ui.ctx().input(|i| i.events.len()), 2);
             },
         );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn popup_does_not_capture_digits_focused_in_another_field() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::Popup::open_id(ui.ctx(), popup_id());
+            ui.ctx()
+                .memory_mut(|m| m.request_focus(egui::Id::new("search-field")));
+            ui.ctx()
+                .input_mut(|i| i.events.push(egui::Event::Text("3".into())));
+            assert!(!keyboard(ui.ctx()));
+            assert!(ui.ctx().input(|i| {
+                i.events
+                    .iter()
+                    .any(|e| matches!(e, egui::Event::Text(t) if t == "3"))
+            }));
+            assert!(!egui::Popup::is_id_open(ui.ctx(), popup_id()));
+        });
         output.textures_delta.clear();
     }
 
