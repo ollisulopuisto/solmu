@@ -624,6 +624,27 @@ fn sections(app: &App) -> Vec<Section> {
             }
         },
     );
+    appearance.row(
+        translated(locale, "Reduce motion"),
+        translated(locale, "Show bubble size changes instantly."),
+        |ui, app| {
+            let mut value = app.settings.reduce_motion;
+            let response = widgets::switch(ui, &app.palette, &mut value);
+            theme::reveal_focus(&response);
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::WidgetType::Checkbox,
+                    ui.is_enabled(),
+                    value,
+                    &*crate::i18n::gettext(app.locale, "Reduce motion"),
+                )
+            });
+            if response.changed() {
+                app.settings.reduce_motion = value;
+                app.actions.push(Action::SettingsChanged);
+            }
+        },
+    );
     appearance.row(translated(locale, "Language"), "", language_picker);
     // macOS keeps its own traffic lights over Solmu's headers.
     if cfg!(any(windows, target_os = "linux")) {

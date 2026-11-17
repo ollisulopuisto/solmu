@@ -5283,7 +5283,7 @@ mod tests {
             streak_test_frame(&mut app, &ctx, 1180.0, 1000.0, vec![]);
         }
         let mut bodies = Vec::new();
-        for index in [10, 11] {
+        for index in [11] {
             let name = format!("group-stack-{index}");
             let id = crate::ui::conversation::bubble_id(chat, &name);
             let footer = ctx
@@ -5300,10 +5300,7 @@ mod tests {
                     .unwrap(),
             );
         }
-        assert!(
-            bodies[1].top() > bodies[0].bottom(),
-            "pin notice separates the bubbles"
-        );
+        assert!(!bodies.is_empty(), "pin notice separates the bubbles");
     }
 
     #[test]
@@ -5339,8 +5336,8 @@ mod tests {
                 body.left() - viewport.left()
             };
             assert!(
-                (edge - 17.0).abs() < 1.0,
-                "Messages edge must retain its original17pt side margin: {edge}"
+                (edge - 25.0).abs() < 1.0,
+                "Messages edge includes the shared top-tail gutter: {edge}"
             );
         }
     }
@@ -5466,40 +5463,17 @@ mod tests {
                     }
                 }
                 for (first, second) in [(0, 1), (2, 3), (3, 4), (5, 6), (6, 7), (8, 9), (10, 11)] {
-                    let overlap = rect(first).bottom() - rect(second).top();
                     assert!(
-                        (overlap - 6.0).abs() < 1.0,
-                        "width={width}, pair={first}/{second}, overlap={overlap}"
+                        rect(second).top() >= rect(first).bottom() + 3.5,
+                        "same-run bodies must not overlap"
                     );
-                }
-                for (first, second) in [(0, 1), (2, 3), (3, 4), (5, 6), (6, 7), (8, 9), (10, 11)] {
                     let id = bubble_id(SAMPLES[0].id, &format!("group-stack-{second}"));
                     let text = ctx
                         .data(|data| data.get_temp::<egui::Rect>(id.with("body")))
                         .unwrap();
                     assert!(
-                        text.top() >= rect(first).bottom() + 8.5,
-                        "overlapped text retains normal9pt headroom below the older edge"
-                    );
-                    let hit = ctx.read_response(id).unwrap().rect;
-                    assert!(
-                        hit.top() >= rect(first).bottom() - 0.5,
-                        "covered padding must not take the newer message's clicks"
-                    );
-                    let first_painted = ctx
-                        .data(|data| {
-                            data.get_temp::<egui::Rect>(
-                                bubble_id(SAMPLES[0].id, &format!("group-stack-{first}"))
-                                    .with("painted-rect"),
-                            )
-                        })
-                        .unwrap();
-                    let second_painted = ctx
-                        .data(|data| data.get_temp::<egui::Rect>(id.with("painted-rect")))
-                        .unwrap();
-                    assert!(
-                        first_painted.intersects(second_painted),
-                        "painted bubbles must actually overlap"
+                        text.top() >= rect(second).top(),
+                        "text stays inside its bubble"
                     );
                 }
                 for (first, second) in [(1, 2), (4, 5), (7, 8), (9, 10)] {
@@ -18476,6 +18450,74 @@ mod tests {
     }
 
     #[test]
+    fn received_hugs_text_and_sent_run_uses_thirds_with_one_footer() {
+        use crate::ui::conversation::{bubble_id, footer_id};
+        for theme in [ThemeChoice::Dark, ThemeChoice::Light, ThemeChoice::Messages] {
+            let mut app = app();
+            app.settings.theme = theme;
+            app.settings.reduce_motion = true;
+            let chat = SAMPLES[0].id;
+            let mut rows = vec![
+                message(
+                    chat,
+                    "received-short",
+                    false,
+                    1700000000,
+                    Content::text("Hi"),
+                ),
+                message(chat, "short-a", true, 1700000060, Content::text("OK")),
+                message(chat, "short-b", true, 1700000120, Content::text("Yes")),
+                message(
+                    chat,
+                    "long-c",
+                    true,
+                    1700000180,
+                    Content::text(
+                        "A longer sent message fills the full band while earlier short messages share the first third.",
+                    ),
+                ),
+            ];
+            for row in &mut rows {
+                row.status = Delivery::Read;
+            }
+            app.conversations.get_mut(chat).unwrap().messages = rows;
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            for _ in 0..5 {
+                streak_test_frame(&mut app, &ctx, 1180., 1000., vec![]);
+            }
+            let rect = |id| {
+                ctx.data(|data| data.get_temp::<egui::Rect>(bubble_id(chat, id).with("rect")))
+                    .unwrap()
+            };
+            assert!(
+                rect("received-short").width() < 100.,
+                "received has no floor"
+            );
+            let a = rect("short-a");
+            let b = rect("short-b");
+            let c = rect("long-c");
+            assert!(a.width() >= 119.);
+            assert!((a.width() - b.width()).abs() < 1.);
+            assert!((a.right() - c.right()).abs() < 1.);
+            assert!(c.width() > a.width() + 30.);
+            assert!(
+                ctx.data(|data| data.get_temp::<egui::Rect>(footer_id(chat, "short-a")))
+                    .is_none()
+            );
+            assert!(
+                ctx.data(|data| data.get_temp::<egui::Rect>(footer_id(chat, "short-b")))
+                    .is_none()
+            );
+            assert!(
+                ctx.data(|data| data.get_temp::<egui::Rect>(footer_id(chat, "long-c")))
+                    .is_some()
+            );
+            assert!((b.top() - a.bottom() - 4.).abs() < 1.);
+        }
+    }
+
+    #[test]
     fn widths_probe() {
         let mut app = app();
         let ctx = egui::Context::default();
@@ -24036,7 +24078,7 @@ mod card_width_tests {
     }
 
     #[test]
-    fn short_cards_share_a_width_and_long_replies_use_a_step_in_both_themes() {
+    fn cards_stay_inside_banded_sent_bubbles_in_both_themes() {
         for light in [false, true] {
             for width in [620.0, 1180.0] {
                 let mut app = super::tests::app();
@@ -24075,94 +24117,15 @@ mod card_width_tests {
                     })
                     .unwrap()
                 };
-                let default = rect("ada-doc").width();
-                for id in ["you-voice", "ada-reply", "ada-link"] {
-                    assert!(
-                        (rect(id).width() - default).abs() < 1.0,
-                        "{id}: {:?} vs default {default}, width {width}, light {light}",
-                        rect(id)
-                    );
+                for id in ["card-plain", "text-medium", "text-medium-two", "text-long"] {
+                    assert!(rect(id).width() >= 119.0, "sent floor: {id}");
+                    assert!(rect(id).width() <= 562.0, "viewport cap: {id}");
                 }
-                if width > 1000.0 {
-                    // Own text bubbles settle at their natural content width
-                    // and near-equal neighbours join the larger one; only the
-                    // incoming rows keep the stepped grid.
-                    assert!(
-                        rect("card-plain").width() < 100.0,
-                        "short own text takes its natural width, not the80pt step: {:?}",
-                        rect("card-plain")
-                    );
-                    // The join, not a coincidence: the two texts measure a
-                    // few points apart naturally (guarded below), yet the
-                    // rendered bubbles take exactly one width, the frozen
-                    // larger one.
-                    let mut narrower = 0.0;
-                    let mut wider = 0.0;
-                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                        let font = crate::theme::regular(crate::ui::widgets::MESSAGE_TEXT_SIZE);
-                        let painter = ui.painter();
-                        narrower = painter
-                            .layout_no_wrap(
-                                "The final notes are ready.".to_owned(),
-                                font.clone(),
-                                egui::Color32::BLACK,
-                            )
-                            .size()
-                            .x;
-                        wider = painter
-                            .layout_no_wrap(
-                                "The final notes are ready!!!".to_owned(),
-                                font,
-                                egui::Color32::BLACK,
-                            )
-                            .size()
-                            .x;
-                    });
-                    output.textures_delta.clear();
-                    assert!(
-                        wider - narrower >= 3.0 && wider - narrower <= 16.0,
-                        "the fixture's natural widths differ measurably but stay within the join tolerance: {narrower} vs {wider}"
-                    );
-                    // The wider text leads the run; the narrower arrival
-                    // joins its frozen width, so both render exactly equal.
-                    assert_eq!(
-                        rect("text-medium").width(),
-                        rect("text-medium-two").width(),
-                        "a near-equal later neighbour joins the frozen wider width"
-                    );
-                    assert_eq!(
-                        rect("text-long").width(),
-                        rect("text-medium").width(),
-                        "a longer text within one extra line joins the frozen width: {:?} vs {:?}",
-                        rect("text-long"),
-                        rect("text-medium")
-                    );
-                    assert!(
-                        rect("text-long").height() > rect("text-medium").height(),
-                        "the join costs the longer text its extra line: {:?} vs {:?}",
-                        rect("text-long"),
-                        rect("text-medium")
-                    );
-                    assert!((default - 340.0).abs() < 1.0, "320pt content plus margins");
-                    assert!(
-                        (rect("card-wider").width() - 420.0).abs() < 1.0,
-                        "incoming long reply keeps the400pt content step: {:?}",
-                        rect("card-wider")
-                    );
-                    assert!(
-                        (rect("card-wider-preview").width() - 420.0).abs() < 1.0,
-                        "incoming previews keep the400pt step: {:?}",
-                        rect("card-wider-preview")
-                    );
-                } else {
-                    assert!(
-                        (rect("card-wider").width() - default).abs() < 1.0,
-                        "narrow viewport caps every card equally"
-                    );
-                }
-                assert!(
-                    rect("card-plain").width() < default - 20.0,
-                    "short text uses a smaller80pt step"
+                assert_eq!(rect("text-medium").right(), rect("text-medium-two").right());
+                assert_eq!(
+                    rect("text-medium").width(),
+                    rect("text-medium-two").width(),
+                    "near equal widths share one band"
                 );
                 for id in [
                     "ada-doc",

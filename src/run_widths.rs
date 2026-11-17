@@ -1,141 +1,229 @@
-//! Neighbour-aware widths for outgoing text bubbles.
-//!
-//! Plain text bubbles from the reader no longer settle on the shared 80pt
-//! grid: each takes the natural width of its balanced layout, and a bubble
-//! keeps its run neighbour's width when wrapping at that width costs at
-//! most one line over the text's minimum. A bubble that would pay more
-//! than that widens to its own natural width. Decisions freeze once made
-//! at a given width cap, so an appended or prepended message never resizes
-//! bubbles already on screen; a later slightly wider message grows alone
-//! instead. Media, quotes, cards and forwarded messages keep the old grid.
-//! This module is the pure decision logic; measuring and balancing text
-//! lives in `crate::wrap` and `crate::ui::conversation` (private modules, so no doc links).
+//! Sent-run thirds and retargetable, nearest-first width transitions.
+use std::collections::{HashMap, HashSet};
 
-use std::collections::HashMap;
+pub const PAUSE: f64 = 0.0875;
+pub const RESIZE: f64 = 0.210;
 
-/// A bubble keeps its neighbour's width while wrapping there costs at
-/// most this many lines over its minimum. From the line-wrap design
-/// sheets: "keep the previous width if it costs <= +1 line vs the text's
-/// minimum; else widen to the min-line layout."
-pub const KEEP_EXTRA_LINES: usize = 1;
-
-/// Frozen width decisions for one conversation at one width cap.
-#[derive(Default)]
-pub struct WidthBook {
-    /// Settled width per message id.
-    decided: HashMap<String, f32>,
-    /// The cap (`f32::to_bits`) the decisions were made at. A viewport or
-    /// font change legitimately re-lays out: everything is decided again.
-    fingerprint: Option<u32>,
+/// Round an outer bubble width up to a third of the run's widest bubble.
+/// The viewport wins over the 120-point floor on very narrow panes.
+pub fn band(natural: f32, widest: f32, cap: f32) -> f32 {
+    let widest = widest.max(120.0).min(cap.max(0.0));
+    if widest <= 0.0 {
+        return 0.0;
+    }
+    let third = widest / 3.0;
+    ((natural / third - 0.00001).ceil() * third)
+        .max(120.0)
+        .min(widest)
 }
 
-impl WidthBook {
-    /// Drops every decision when the cap changed since the last call.
-    pub fn retain_fingerprint(&mut self, cap_bits: u32) {
-        if self.fingerprint != Some(cap_bits) {
-            self.decided.clear();
-            self.fingerprint = Some(cap_bits);
-        }
-    }
-
-    /// The frozen decision for a message already settled, if any.
-    pub fn get(&self, id: &str) -> Option<f32> {
-        self.decided.get(id).copied()
-    }
-
-    /// Forget one message's width, e.g. after its text was edited or the
-    /// message left the chat; it settles again when next measured.
-    pub fn invalidate(&mut self, id: &str) {
-        self.decided.remove(id);
-    }
-
-    /// Settles a message not yet decided: it keeps its run neighbour's
-    /// settled width when balancing at that width costs at most
-    /// [`KEEP_EXTRA_LINES`] over the text's minimum line count, and takes
-    /// its own natural width (its min-line layout at the cap) otherwise.
-    /// `min_lines` and `natural` come from balancing at the width cap;
-    /// `lines_at` balances the text at the neighbour's width. The result
-    /// freezes; later calls return it unchanged.
-    pub fn settle(
-        &mut self,
-        id: &str,
-        min_lines: usize,
-        natural: f32,
-        neighbour: Option<f32>,
-        lines_at: impl FnOnce(f32) -> usize,
-    ) -> f32 {
-        if let Some(width) = self.decided.get(id) {
-            return *width;
-        }
-        let width = match neighbour {
-            Some(kept) if lines_at(kept) <= min_lines + KEEP_EXTRA_LINES => kept,
-            _ => natural,
+fn bounce(t: f32) -> f32 {
+    let keys = [(0.0, 0.0), (0.5, 1.28), (0.78, 0.895), (1.0, 1.0)];
+    let t = t.clamp(0.0, 1.0);
+    for pair in keys.windows(2) {
+        let [(a, x), (b, y)] = pair else {
+            unreachable!()
         };
-        self.decided.insert(id.to_owned(), width);
-        width
+        if t <= *b {
+            return x + (y - x) * (t - a) / (b - a);
+        }
+    }
+    1.0
+}
+
+#[derive(Clone, Copy)]
+struct Transition {
+    from: f32,
+    to: f32,
+    start: f64,
+}
+impl Transition {
+    fn sample(self, now: f64) -> f32 {
+        self.from + (self.to - self.from) * bounce(((now - self.start) / RESIZE) as f32)
+    }
+}
+
+/// One timeline's natural-size cache and current width plan. Only appended
+/// messages animate existing, visible rows. History loads and cap/font changes
+/// snap. State is pruned to the current message set on every plan.
+#[derive(Clone, Default)]
+pub struct WidthBook {
+    natural: HashMap<String, f32>,
+    signatures: HashMap<String, u64>,
+    targets: HashMap<String, f32>,
+    motion: HashMap<String, Transition>,
+    order: Vec<String>,
+    fingerprint: Option<u32>,
+}
+impl WidthBook {
+    pub fn retain_fingerprint(&mut self, fingerprint: u32) {
+        if self.fingerprint != Some(fingerprint) {
+            *self = Self {
+                fingerprint: Some(fingerprint),
+                ..Self::default()
+            };
+        }
+    }
+    pub fn get(&self, id: &str) -> Option<f32> {
+        self.natural.get(id).copied()
+    }
+    pub fn remember(&mut self, id: &str, width: f32) {
+        self.natural.insert(id.into(), width);
+    }
+    pub fn invalidate(&mut self, id: &str) {
+        self.natural
+            .retain(|key, _| key != id && !key.ends_with(&format!("\0{id}")));
+    }
+    pub fn check_signature(&mut self, id: &str, signature: u64) {
+        if self.signatures.insert(id.into(), signature) != Some(signature) {
+            self.natural.remove(id);
+        }
+    }
+
+    /// Entries are (stable row key, final content width, may animate). New
+    /// rows always take their final width immediately. Existing rows retarget
+    /// from their currently painted width, never an old endpoint or a queue.
+    pub fn plan(&mut self, entries: &[(String, f32, bool)], now: f64, animate: bool) {
+        let appended = self.order.last().is_some_and(|last| {
+            entries
+                .iter()
+                .position(|(id, _, _)| id == last)
+                .is_some_and(|i| i + 1 < entries.len())
+        });
+        let ids: HashSet<&str> = entries.iter().map(|(id, _, _)| id.as_str()).collect();
+        self.natural.retain(|id, _| ids.contains(id.as_str()));
+        self.signatures.retain(|id, _| ids.contains(id.as_str()));
+        self.motion
+            .retain(|id, transition| ids.contains(id.as_str()) && now < transition.start + RESIZE);
+        if !animate {
+            self.motion.clear();
+        }
+        let mut rank = 0;
+        for (id, target, visible) in entries.iter().rev() {
+            let old = self.targets.get(id).copied();
+            if old.is_some_and(|old| (old - target).abs() > 0.1)
+                || (appended && self.motion.contains_key(id))
+            {
+                let from = self
+                    .motion
+                    .get(id)
+                    .map_or(old.unwrap(), |motion| motion.sample(now));
+                if animate && appended && *visible {
+                    self.motion.insert(
+                        id.clone(),
+                        Transition {
+                            from,
+                            to: *target,
+                            start: now + PAUSE + f64::from(rank) * RESIZE,
+                        },
+                    );
+                    rank += 1;
+                } else {
+                    self.motion.remove(id);
+                }
+            }
+        }
+        self.targets = entries
+            .iter()
+            .map(|(id, width, _)| (id.clone(), *width))
+            .collect();
+        self.order = entries.iter().map(|(id, _, _)| id.clone()).collect();
+    }
+    pub fn width(&self, id: &str, now: f64) -> Option<f32> {
+        self.motion
+            .get(id)
+            .map(|motion| motion.sample(now))
+            .or_else(|| self.targets.get(id).copied())
+    }
+    pub fn animating(&self, now: f64) -> bool {
+        self.motion
+            .values()
+            .any(|motion| now < motion.start + RESIZE)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn first_bubble_takes_its_natural_width() {
-        let mut book = WidthBook::default();
-        let width = book.settle("a", 2, 359.0, None, |_| unreachable!());
-        assert_eq!(width, 359.0);
+    fn rows(items: &[(&str, f32)]) -> Vec<(String, f32, bool)> {
+        items
+            .iter()
+            .map(|(id, w)| (id.to_string(), *w, true))
+            .collect()
     }
-
     #[test]
-    fn keeps_the_neighbour_within_one_extra_line() {
-        // Sheet 3 at the 440 column: the second bubble wraps to 4 lines at
-        // the neighbour's 359pt, one over its 3-line minimum, and keeps.
-        let mut book = WidthBook::default();
-        book.settle("a", 1, 359.0, None, |_| unreachable!());
-        let width = book.settle("b", 3, 472.0, Some(359.0), |_| 4);
-        assert_eq!(width, 359.0);
+    fn sent_bands_round_up_and_respect_narrow_caps() {
+        assert_eq!(
+            [80., 250., 400.].map(|w| band(w, 450., 560.)),
+            [150., 300., 450.]
+        );
+        for natural in [0., 20., 120., 300., 900.] {
+            let width = band(natural, 900., 75.);
+            assert_eq!(width, 75.);
+        }
+        assert_eq!(band(1., 70., 560.), 120.);
+        assert_eq!(band(450., 450., 560.), 450.);
     }
-
     #[test]
-    fn widens_past_one_extra_line() {
-        // Sheet 3 at the 560 column: the second bubble wraps to 4 lines at
-        // 359pt against a 2-line minimum, and widens to its 591pt min-line
-        // layout.
-        let mut book = WidthBook::default();
-        book.settle("a", 1, 359.0, None, |_| unreachable!());
-        let width = book.settle("b", 2, 591.0, Some(359.0), |_| 4);
-        assert_eq!(width, 591.0);
+    fn arrival_is_final_first_then_older_rows_resize_one_at_a_time() {
+        let mut b = WidthBook::default();
+        b.plan(&rows(&[("a", 100.), ("b", 100.), ("c", 100.)]), 0., true);
+        b.plan(
+            &rows(&[("a", 200.), ("b", 200.), ("c", 200.), ("d", 500.)]),
+            1.,
+            true,
+        );
+        assert_eq!(b.width("d", 1.), Some(500.));
+        assert_eq!(b.width("c", 1. + PAUSE / 2.), Some(100.));
+        assert!(b.width("c", 1. + PAUSE + RESIZE * 0.5).unwrap() > 200.);
+        assert_eq!(b.width("b", 1. + PAUSE + RESIZE * 0.5), Some(100.));
+        assert_eq!(b.width("a", 1. + PAUSE + RESIZE * 1.5), Some(100.));
+        assert!((b.width("a", 1. + PAUSE + RESIZE * 3.).unwrap() - 200.).abs() < 0.01);
+        assert!(!b.animating(2.));
     }
-
     #[test]
-    fn a_kept_width_passes_down_the_run() {
-        // Sheet 3 at 440: the third bubble also holds the run's 359pt.
-        let mut book = WidthBook::default();
-        book.settle("a", 1, 359.0, None, |_| unreachable!());
-        book.settle("b", 3, 472.0, Some(359.0), |_| 4);
-        let width = book.settle("c", 2, 264.0, Some(359.0), |_| 3);
-        assert_eq!(width, 359.0);
+    fn rapid_arrival_retargets_without_a_jump_or_queue() {
+        let mut b = WidthBook::default();
+        b.plan(&rows(&[("a", 100.)]), 0., true);
+        b.plan(&rows(&[("a", 200.), ("b", 300.)]), 1., true);
+        let now = 1. + PAUSE + RESIZE * 0.3;
+        let current = b.width("a", now).unwrap();
+        b.plan(&rows(&[("a", 250.), ("b", 400.), ("c", 600.)]), now, true);
+        assert!((b.width("a", now).unwrap() - current).abs() < 0.01);
+        assert_eq!(b.width("c", now), Some(600.));
+        assert_eq!(b.width("a", 3.), Some(250.));
     }
-
     #[test]
-    fn decisions_freeze() {
-        let mut book = WidthBook::default();
-        book.settle("a", 1, 359.0, None, |_| unreachable!());
-        // A later call never re-measures, whatever the run looks like now.
-        let width = book.settle("a", 5, 100.0, Some(200.0), |_| {
-            panic!("a frozen width is not re-measured")
-        });
-        assert_eq!(width, 359.0);
+    fn reduced_motion_history_resize_and_hidden_rows_snap() {
+        let mut b = WidthBook::default();
+        b.plan(&rows(&[("a", 100.)]), 0., true);
+        b.plan(&rows(&[("a", 200.), ("b", 400.)]), 1., false);
+        assert_eq!(b.width("a", 1.), Some(200.));
+        assert!(!b.animating(1.));
+        b.plan(
+            &rows(&[("older", 500.), ("a", 300.), ("b", 400.)]),
+            2.,
+            true,
+        );
+        assert_eq!(b.width("a", 2.), Some(300.));
+        b.retain_fingerprint(2);
+        assert!(b.width("a", 2.).is_none());
+        b.plan(&rows(&[("a", 100.)]), 3., true);
+        b.plan(
+            &[("a".into(), 250., false), ("b".into(), 500., true)],
+            4.,
+            true,
+        );
+        assert_eq!(b.width("a", 4.), Some(250.));
     }
-
     #[test]
-    fn a_cap_change_decides_again() {
-        let mut book = WidthBook::default();
-        book.retain_fingerprint(1);
-        book.settle("a", 1, 359.0, None, |_| unreachable!());
-        book.retain_fingerprint(2);
-        let width = book.settle("a", 1, 200.0, None, |_| unreachable!());
-        assert_eq!(width, 200.0);
+    fn deletion_prunes_and_edit_invalidates_measurements() {
+        let mut b = WidthBook::default();
+        b.remember("a", 123.);
+        b.remember("b", 456.);
+        b.plan(&rows(&[("a", 123.)]), 0., true);
+        assert!(b.get("b").is_none());
+        b.invalidate("a");
+        assert!(b.get("a").is_none());
     }
 }
