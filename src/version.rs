@@ -1,8 +1,11 @@
 //! The full package identity, including the manual build suffix.
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 
-pub fn display() -> &'static str {
-    static VERSION: LazyLock<String> = LazyLock::new(|| {
+static VERSION: OnceLock<String> = OnceLock::new();
+
+/// Load once during startup, before the event loop or any UI rendering.
+pub fn initialize() {
+    VERSION.get_or_init(|| {
         let packaged = std::env::current_exe().ok().and_then(|exe| {
             let contents = exe.parent()?.parent()?;
             // Only app bundles carry this packaging-owned display metadata.
@@ -12,7 +15,14 @@ pub fn display() -> &'static str {
         });
         choose(packaged.as_deref()).to_owned()
     });
-    &VERSION
+}
+
+/// Rendering only reads memory, even if an embedding did not initialize us.
+pub fn display() -> &'static str {
+    VERSION
+        .get()
+        .map(String::as_str)
+        .unwrap_or(env!("CARGO_PKG_VERSION"))
 }
 
 fn choose(packaged: Option<&str>) -> &str {
