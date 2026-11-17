@@ -3964,9 +3964,7 @@ impl App {
                         forwarded: false,
                         thumbnail: None,
                     });
-                let preview = Content::text(hit.text.clone())
-                    .text_matching(query)
-                    .unwrap_or_else(|| hit.text.lines().next().unwrap_or("").trim().to_owned());
+                let preview = crate::transcriber::preview(&hit.text, query);
                 message.content = Content::text(preview);
                 message
             })
@@ -7232,7 +7230,10 @@ impl App {
         self.transcript_archive = if self.transcriber.is_none() {
             crate::transcriber::Store::new(self.dirs.state.join("transcripts"), 32 << 20)
                 .ok()
-                .map(crate::transcribe_worker::Worker::archive)
+                .map(|store| {
+                    let waker = self.waker.clone();
+                    crate::transcribe_worker::Worker::archive_with_wake(store, move || waker.wake())
+                })
         } else {
             None
         };
@@ -26345,7 +26346,15 @@ mod tests {
             "saved text works with inference disabled"
         );
         app.chat_search_hits.push(message(chat, "known", 100));
-        let hits = app.chat_search_results();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let hits = loop {
+            let hits = app.chat_search_results();
+            if hits.len() == 2 {
+                break hits;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
         assert_eq!(hits.len(), 2);
         let known = hits.iter().find(|hit| hit.id == "known").unwrap();
         assert_eq!(known.timestamp, 100);

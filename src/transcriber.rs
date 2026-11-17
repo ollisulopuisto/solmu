@@ -434,8 +434,25 @@ pub fn wyoming_pcm_from_mono(samples: &[f32], from_rate: u32) -> Vec<u8> {
     pcm
 }
 
+/// Preview selection uses the same normalization as local transcript search.
+pub fn preview(text: &str, query: &str) -> String {
+    let needle = crate::util::search_key(query.trim());
+    text.lines()
+        .find(|line| crate::util::search_key(line).contains(&needle))
+        .unwrap_or_else(|| text.lines().next().unwrap_or(""))
+        .trim()
+        .to_owned()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn preview_uses_search_normalization() {
+        assert_eq!(
+            super::preview("First line.\nMeet at the café.", "cafe"),
+            "Meet at the café."
+        );
+    }
     use super::*;
 
     fn job(id: &str) -> Job {

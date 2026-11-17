@@ -714,7 +714,11 @@ fn hit_row(
     }
     theme::reveal_focus(&response);
     theme::focus_outline(ui, response.id, rect.shrink(2.0), 6.0);
-    let stamp = util::chat_stamp(app.locale, hit.timestamp);
+    let stamp = if hit.timestamp > 0 {
+        util::chat_stamp(app.locale, hit.timestamp)
+    } else {
+        String::new()
+    };
     // The preview comes from the line the query matched: the archive searches
     // the whole text, so a hit on a later line would otherwise preview a first
     // line the query is nowhere in.

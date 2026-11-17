@@ -1417,7 +1417,10 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
         .transcript_reader()
         .map(|worker| worker.saved_in_chat(&app.account().id.0, &listing.chat, ""))
         .unwrap_or_default();
-    if listing.voice.is_empty() && saved.is_empty() {
+    let loading = app
+        .transcript_reader()
+        .is_some_and(|worker| worker.saved_loading(&app.account().id.0, &listing.chat));
+    if listing.voice.is_empty() && saved.is_empty() && !loading {
         widgets::empty_state(
             ui,
             &app.palette,
@@ -1452,7 +1455,12 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
         .iter()
         .filter(|hit| crate::util::search_key(&hit.text).contains(&query))
         .count();
-    if matching == 0 && !query.is_empty() {
+    if loading {
+        ui.label(crate::i18n::gettext(
+            app.locale,
+            "Loading saved transcripts…",
+        ));
+    } else if matching == 0 && !query.is_empty() {
         ui.label(crate::i18n::gettext(
             app.locale,
             "No saved transcripts match.",
@@ -1617,9 +1625,7 @@ fn saved_transcript(app: &mut App, ui: &mut egui::Ui, id: &str, text: &str, inde
     if expanded {
         ui.add(egui::Label::new(text).wrap().selectable(true));
     } else if !app.info_voice_query.trim().is_empty() {
-        let preview = Content::text(text)
-            .text_matching(&app.info_voice_query)
-            .unwrap_or_default();
+        let preview = crate::transcriber::preview(text, &app.info_voice_query);
         ui.add(egui::Label::new(preview).wrap());
     }
 }
