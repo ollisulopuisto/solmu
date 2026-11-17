@@ -256,9 +256,6 @@ fn bookmarks_switch(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(6.0);
 }
 
-/// Size of the Bookmarks icon that ends the mode row.
-const BOOKMARKS_ICON: f32 = 20.0;
-
 /// Glyph size of the icon-only mode tabs.
 const MODE_ICON: f32 = 20.0;
 
@@ -299,10 +296,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                 // nothing is truncated at 300 points. Each icon carries a
                 // tooltip and an accessible label with the mode's name.
                 // "All" is a word, so it gets one and a half shares of the row.
-                let bookmarks_edge = BOOKMARKS_ICON + theme::ICON_BUTTON_PAD;
-                let share =
-                    (ui.available_width() - 4.0 * ui.spacing().item_spacing.x - bookmarks_edge)
-                        / 4.5;
+                let share = (ui.available_width() - 3.0 * ui.spacing().item_spacing.x) / 4.5;
                 for mode in crate::model::ListMode::EVERY {
                     let name = mode.label(app.locale);
                     let icon = match mode {
@@ -358,24 +352,6 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                     if response.clicked() {
                         app.actions.push(Action::SetListMode(mode));
                     }
-                }
-                // Bookmarks is the Saved list, not a mode: Cmd+D skips it and
-                // the header swaps to the list's own Back arrow while it is open.
-                let response = theme::icon_button(
-                    ui,
-                    Icon::Bookmark,
-                    BOOKMARKS_ICON,
-                    app.palette.secondary,
-                    app.palette.text,
-                    "Bookmarks",
-                )
-                .tab_stop(Stop::Bookmarks);
-                #[cfg(test)]
-                ui.ctx().data_mut(|d| {
-                    d.insert_temp(egui::Id::new(("list-mode", "bookmarks")), response.rect)
-                });
-                if response.clicked() {
-                    app.actions.push(Action::ToggleSaved);
                 }
             });
             ui.ctx()
@@ -3817,13 +3793,11 @@ mod tests {
             for pair in rects[1..].windows(2) {
                 assert!((pair[0].width() - pair[1].width()).abs() < 0.01);
             }
-            // The Bookmarks icon ends the same row and stays inside the width.
-            let bookmarks = ctx
-                .data(|d| d.get_temp::<Rect>(egui::Id::new(("list-mode", "bookmarks"))))
-                .unwrap();
-            assert!(bookmarks.left() >= rects[2].right());
-            assert!(bookmarks.right() <= width);
-            assert!((bookmarks.center().y - rects[0].center().y).abs() < 0.01);
+            // Bookmarks lives in the rail and the Go menu, not in this row.
+            assert!(
+                ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("list-mode", "bookmarks"))))
+                    .is_none()
+            );
         }
     }
 

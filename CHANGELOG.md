@@ -14,6 +14,8 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- The Mac menu bar has a Go menu (Chats, Bookmarks, Starred messages, Archived, Locked, Jump to chat, Command palette, Next and Previous number) and a Chat menu (Archive, Favorite, Reply later, Read later, Quote reply, Forward, Jump to newest, Clear, Leave). The View menu lists the four chat-list modes, Next list mode and the group-sections or flat-list switch. Menu items show the same keys as the keyboard; entries without a key stay blank.
+- The bookmark icon at the end of the chat-list mode row is gone, since it duplicated the rail's: Bookmarks opens from the rail, Go > Bookmarks or Cmd+Shift+B. The rail's Saved tooltip now shows the key.
 - The chat list has two independent choices: the mode (All, Unread, Unread 7d, Needs me; Cmd+D) and the layout (group sections or one flat list with the group name on each row; Cmd+G). The layout is remembered for each mode, and every mode starts as group sections, as before.
 - Opening a chat in Unread, Unread 7d or Needs me no longer drops it from the list: it stays in place, read, until you change the view (switch mode, pick a filter or archive). This worked only for the old Unread chip before.
 - The chat-list mode tabs no longer truncate: All keeps its word, and Unread, Unread 7d and Needs me are icons (a filled dot, a calendar with a dot, an alert circle) with the full name as tooltip and screen-reader label.

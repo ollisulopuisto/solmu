@@ -527,7 +527,11 @@ fn destination_plate(
         Destination::Saved => (
             Icon::Bookmark,
             Stop::Saved,
-            gettext(app.locale, "Saved messages").into_owned(),
+            format!(
+                "{} ({})",
+                gettext(app.locale, "Saved messages"),
+                super::keys::label(super::keys::shortcut("bookmarks").label.unwrap_or_default())
+            ),
         ),
         Destination::Archived => {
             // The count the Archived chip carried: archived chats unread.

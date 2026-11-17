@@ -11853,6 +11853,10 @@ impl App {
                 });
             }
             Action::ToggleFlatGroups => {}
+            Action::MenuCommand(id) => {
+                let actions = crate::ui::keys::menu_actions(self, &id);
+                self.actions.extend(actions);
+            }
             Action::ToggleSidebar => self.sidebar_visible = !self.sidebar_visible,
             Action::SetChatFilter(filter) => {
                 if self.locked_folder {
