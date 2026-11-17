@@ -17,7 +17,7 @@ with Try again is shown above them. A failed refresh never implies an empty chat
 Voice has an Expand transcript/Hide transcript control for saved text and a
 search field limited to the panel's account and chat. Search results include
 a matching text line; audio without a saved transcript does not match.
-Searching never downloads audio or queues transcription. The stored text
+Saved matches outside the bounded media listing still offer Expand and Go to chat, without invented audio metadata. Searching never downloads audio or queues transcription. The stored text
 remains local and is searchable even when transcription is disabled. Closing or changing the panel clears its query and expansion.
 
 In-chat search merges saved local transcript matches with backend matches,

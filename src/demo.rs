@@ -10941,6 +10941,7 @@ mod tests {
     fn voice_panel_search_and_transcript_expansion_never_queue_inference() {
         let mut app = app();
         let ctx = egui::Context::default();
+        ctx.enable_accesskit();
         app.attach(&ctx);
         apply_flags(&mut app, Some("voice-transcripts-search"));
         for _ in 0..3 {
@@ -10950,6 +10951,40 @@ mod tests {
         assert!(
             crate::ui::focus::control(&ctx, crate::ui::focus::Stop::InfoVoice(1, 0)).is_none(),
             "nonmatching row hidden"
+        );
+        let first = app.info_media.as_ref().unwrap().voice[0].id.clone();
+        assert!(app.info_voice_expanded.contains(&first));
+        let at = accessible_nodes(&mut app, &ctx, Vec::new())
+            .into_iter()
+            .find(|(label, role, _)| {
+                label == "Hide transcript" && *role == egui::accesskit::Role::Button
+            })
+            .map(|(_, _, centre)| centre)
+            .expect("expanded transcript has a Hide control");
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerMoved(at), press(true)],
+        );
+        frame_with(&mut app, &ctx, vec![press(false)]);
+        render(&mut app, &ctx);
+        assert!(
+            !app.info_voice_expanded.contains(&first),
+            "Hide remains effective while searching"
+        );
+        app.info_media.as_mut().unwrap().voice.clear();
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        assert!(
+            crate::ui::focus::control(&ctx, crate::ui::focus::Stop::InfoVoice(0, 2)).is_some(),
+            "saved matches remain expandable outside the bounded media listing"
         );
         assert!(app.transcriber.as_ref().unwrap().recorded().is_empty());
         app.info_voice_query = "no such words".into();
