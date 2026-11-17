@@ -72,3 +72,14 @@ press Create or Enter; Cancel, Escape, or clicking outside dismisses it without
 creating a group. The field is not part of the scrolling list and works in both
 grouped and flat layouts. This creates a local sidebar section, never a new
 backend group conversation.
+
+
+### Native synthetic sidebar comparison
+
+These captures use only the demo fixture. Before: the previous main sidebar.
+After: the approved named modes and Groups + control. No private chats.
+
+| Before | After |
+| --- | --- |
+| ![Before, light](review-sidebar/sidebar-before-light.png) | ![After, light](review-sidebar/sidebar-final-light.png) |
+| ![Before, dark](review-sidebar/sidebar-before-dark.png) | ![After, dark](review-sidebar/sidebar-final-dark.png) |
