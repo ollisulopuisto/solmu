@@ -235,3 +235,22 @@ version directory only after fresh verified archive is staged. Runtime signature
 and hash rechecked for every transcription, model hash once per worker. A fully
 malicious same-user process can still race file paths; no stronger claim made.
 ProviderNone and actual-app/mac-specific installer tests remain merge blockers.
+
+
+## 2026-11-17 - Local Whisper settings presence review
+
+Moved the model-presence metadata probe out of settings drawing to a background
+cache with generation-checked results and a repaint notification. Refresh on
+startup, engine selection, completed/cancelled/failed install, and model removal.
+The view reads only cached state and shows checking while a probe is pending.
+A model can be removed even while the runtime provider is unavailable.
+
+Failing-first: the blocked-probe regression failed against synchronous refresh
+(refresh waited for a blocked filesystem probe), then passed after background
+execution. Three standalone Rust tests pass: blocked probe plus repeated cached
+reads, stale blocked result cannot overwrite newer removal, and real file
+create/remove refresh with wake. Native rendered-settings regression checks that
+file deletion cannot change a repaint until explicit background refresh. Local
+library/tests demo clippy and formatting pass. Native execution and new synthetic
+light/dark before/after captures are pending. This PR remains unmerged and is not
+part of the current DMG; no helper build or publication was resumed.

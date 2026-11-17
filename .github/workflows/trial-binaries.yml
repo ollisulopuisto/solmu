@@ -244,6 +244,8 @@ jobs:
           shot send-later-menu-dark-1180x780 1180x780 chat,send-later-menu,theme=Catppuccin.json
           shot send-later-calendar-1180x780 1180x780 chat,send-later-calendar
           shot send-later-recurring-1180x780 1180x780 chat,send-later-recurring
+          shot whisper-settings-light-1180x780 1180x780 whisper-setup,light
+          shot whisper-settings-dark-1180x780 1180x780 whisper-setup,theme=Catppuccin.json
           shot chat-1180x780 1180x780 chat
           shot chat-menu-1180x780 1180x780 chat,chat-menu
           shot chat-menu-beeper-1180x780 1180x780 chat,chat-menu-beeper

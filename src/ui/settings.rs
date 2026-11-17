@@ -547,7 +547,9 @@ fn sections(app: &App) -> Vec<Section> {
         if choice == TranscriptionEngine::Local {
             ui.label(gettext(locale, "Whisper Base multilingual. Engine + model download: about 151 MB. Allow 260 MB of free disk space for installation. Audio stays on this computer."));
             let runtime = crate::whisper_runtime::artifact().is_some();
-            let installed = crate::local_whisper::model_path(&app.dirs.state).is_file();
+            let presence = app.local_whisper_presence.get();
+            let installed = presence == Some(true);
+            if presence.is_none() { ui.label(gettext(locale, "Checking downloaded model…")); }
             if !runtime { ui.label(gettext(locale, "A verified runtime download is not available in this draft yet. No engine is bundled with Solmu.")); }
             if let Some(download) = &app.local_whisper_download {
                 if let crate::local_whisper::DownloadState::Downloading { received, total } = download.state() {
@@ -556,9 +558,9 @@ fn sections(app: &App) -> Vec<Section> {
                 if download.cancellation_requested() { ui.label(gettext(locale, "Cancelling download...")); }
                 if ui.add_enabled(!download.cancellation_requested(), egui::Button::new(gettext(locale, "Cancel download"))).clicked() { app.actions.push(Action::CancelLocalWhisperDownload); }
             } else {
-                if installed && runtime {
+                if installed {
                     ui.label(gettext(locale, "Model installed. Verified before its first use."));
-                    if ui.button(gettext(locale, "Verify or repair engine")).clicked() { app.actions.push(Action::DownloadLocalWhisper); }
+                    if ui.add_enabled(runtime, egui::Button::new(gettext(locale, "Verify or repair engine"))).clicked() { app.actions.push(Action::DownloadLocalWhisper); }
                     if ui.button(gettext(locale, "Remove downloaded model")).clicked() { app.actions.push(Action::RemoveLocalWhisperModel); }
                 } else if ui.add_enabled(runtime, egui::Button::new(gettext(locale, "Download engine + model & enable"))).clicked() {
                     app.actions.push(Action::DownloadLocalWhisper);

@@ -2392,6 +2392,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.settings_search = "Voice notes".into();
                 app.settings.transcription_engine =
                     Some(crate::settings::TranscriptionEngine::Local);
+                app.local_whisper_presence = crate::model_presence::Presence::known(false);
             }
             "delete-review" | "delete-review-unsupported" => {
                 let chat = app.open_chat.clone().unwrap();
@@ -4999,6 +5000,51 @@ mod tests {
             },
         );
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn whisper_settings_read_cached_presence_until_explicit_refresh() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("whisper-setup"));
+        let path = crate::local_whisper::model_path(&app.dirs.state);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"synthetic presence fixture, not a model").unwrap();
+        app.refresh_local_whisper_presence();
+        let wait = |app: &App, expected| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while app.local_whisper_presence.get() != Some(expected) {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        };
+        wait(&app, true);
+        std::fs::remove_file(&path).unwrap();
+        // A repaint cannot rediscover deletion: only the background refresh may.
+        for _ in 0..4 {
+            render(&mut app, &ctx);
+        }
+        let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
+        assert!(
+            nodes
+                .iter()
+                .any(|(label, _, _)| label.contains("Model installed.")),
+            "render uses cached presence, not the now-missing file"
+        );
+        assert_eq!(app.local_whisper_presence.get(), Some(true));
+        app.refresh_local_whisper_presence();
+        wait(&app, false);
+        for _ in 0..4 {
+            render(&mut app, &ctx);
+        }
+        let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
+        assert!(
+            !nodes
+                .iter()
+                .any(|(label, _, _)| label.contains("Model installed."))
+        );
     }
 
     #[test]

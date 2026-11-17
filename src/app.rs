@@ -638,6 +638,7 @@ pub struct App {
     transcriber_address: String,
     pub local_whisper_download: Option<crate::local_whisper::Download>,
     pub local_whisper_status: Option<crate::local_whisper::DownloadState>,
+    pub local_whisper_presence: crate::model_presence::Presence,
     /// In-chat video player.
     pub video: crate::video::Player,
     /// Chat of the loaded video; leaving it stops the video.
@@ -1420,6 +1421,7 @@ impl App {
         // Voice-note transcription only with a configured local service.
         app.transcriber = transcriber_worker(waker, &app.dirs, &app.settings);
         app.transcriber_address = app.settings.transcription_worker_key();
+        app.refresh_local_whisper_presence();
         let _ = app.roster.save_to(&app.files, &app.dirs.accounts_file());
         Ok(app)
     }
@@ -1642,6 +1644,7 @@ impl App {
             transcriber_address: String::new(),
             local_whisper_download: None,
             local_whisper_status: None,
+            local_whisper_presence: crate::model_presence::Presence::default(),
             video: crate::video::Player::new(waker.clone()),
             video_chat: None,
             video_wanted: None,
@@ -9055,6 +9058,14 @@ impl App {
         self.follow_outgoing();
     }
 
+    pub fn refresh_local_whisper_presence(&self) {
+        let waker = self.waker.clone();
+        self.local_whisper_presence.refresh(
+            crate::local_whisper::model_path(&self.dirs.state),
+            move || waker.wake(),
+        );
+    }
+
     fn tick(&mut self, ctx: &egui::Context) {
         if let Some(download) = &self.local_whisper_download {
             let state = download.state();
@@ -9063,6 +9074,7 @@ impl App {
                 crate::local_whisper::DownloadState::Downloading { .. }
             ) {
                 self.local_whisper_download = None;
+                self.refresh_local_whisper_presence();
                 if matches!(state, crate::local_whisper::DownloadState::Ready(_)) {
                     // Respect any engine choice made while downloading.
                     self.transcriber = transcriber_worker(&self.waker, &self.dirs, &self.settings);
@@ -12531,6 +12543,7 @@ impl App {
                                 Some(crate::local_whisper::DownloadState::Failed(e.to_string()))
                         }
                     }
+                    self.refresh_local_whisper_presence();
                 }
             }
             Action::SettingsChanged => {
@@ -12538,6 +12551,7 @@ impl App {
                 self.mark_settings_dirty();
                 let address = self.settings.transcription_worker_key();
                 if address != self.transcriber_address {
+                    self.refresh_local_whisper_presence();
                     // A new address means a new worker: the old one's hot
                     // status belongs to a service that may no longer be the
                     // one configured. Its thread ends with the dropped
