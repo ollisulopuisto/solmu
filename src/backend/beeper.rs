@@ -7383,6 +7383,27 @@ mod tests {
         assert_eq!(plain_rich_text(raw), "see this (https://example.com/page)");
     }
 
+    /// The shrug and table flip from Olli's Text Replacements keep every
+    /// backslash, underscore, slash and bracket through the HTML mapper,
+    /// plain or entity-encoded, so the echo of a sent message reads back as
+    /// the text that was typed.
+    #[test]
+    fn the_expanded_shrug_survives_the_html_mapper() {
+        let shrug = "\u{af}\\_(\u{30c4})_/\u{af}";
+        assert_eq!(plain_rich_text(&format!("<p>{shrug}</p>")), shrug);
+        assert_eq!(plain_rich_text(shrug), shrug);
+        assert_eq!(
+            plain_rich_text("<p>&#175;\\_(&#12484;)_&#47;&#175;</p>"),
+            shrug
+        );
+        assert_eq!(
+            plain_rich_text(&format!("<p>well {shrug} ok</p>")),
+            format!("well {shrug} ok")
+        );
+        let flip = "(\u{256f}\u{b0}\u{25a1}\u{b0}\u{ff09}\u{256f}\u{fe35} \u{253b}\u{2501}\u{253b}";
+        assert_eq!(plain_rich_text(&format!("<p>{flip}</p>")), flip);
+    }
+
     #[test]
     fn inline_html_keeps_link_labels_destinations_and_breaks() {
         assert_eq!(plain_rich_text("Hello<br>next"), "Hello\nnext");
