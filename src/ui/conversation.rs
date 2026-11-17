@@ -3576,6 +3576,15 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                 let band = selection.as_ref().map(|_| {
                                     (ui.painter().add(egui::Shape::Noop), ui.cursor().top())
                                 });
+                                let next = conversation
+                                    .messages
+                                    .get(message_index + album.map_or(1, |items| items.len()));
+                                let separated_after = next.is_some_and(|next| {
+                                    view.pin_notices.iter().any(|notice| {
+                                        notice.pinned_at > message.timestamp
+                                            && notice.pinned_at <= next.timestamp
+                                    }) || divider.as_ref().is_some_and(|(id, _, _)| id == &next.id)
+                                });
                                 let view = View {
                                     neighbour_width: neighbour_widths
                                         .get(&width_key(message))
@@ -3604,7 +3613,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                                                 + album
                                                                     .map_or(1, |items| items.len()),
                                                         ),
-                                                    ),
+                                                    ) || separated_after,
                                                     show_sender,
                                                     show_avatar,
                                                     tailed,
@@ -3633,7 +3642,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                                     message_index
                                                         + album.map_or(1, |items| items.len()),
                                                 ),
-                                            ),
+                                            ) || separated_after,
                                             show_sender,
                                             show_avatar,
                                             tailed,
@@ -5623,9 +5632,16 @@ fn bubble_frame(
         let cap = ((max_width - inset).min(ui.available_width())).max(0.0);
         // Metadata is outside the frame, so text/media need no footer slot.
         let reserve = 0.0;
-        let settled = album
-            .map(|_| CARD_WIDTH.min(cap))
-            .or_else(|| view.neighbour_width.map(|width| width.min(cap)))
+        let settled = view
+            .neighbour_width
+            .map(|width| {
+                if own && !bubbleless(&palette, message) {
+                    width.max((120.0 - inset).max(0.0)).min(cap)
+                } else {
+                    width.min(cap)
+                }
+            })
+            .or_else(|| album.map(|_| CARD_WIDTH.min(cap)))
             .or_else(|| {
                 settled_width(ui, view, message, cap).map(|width| {
                     if own {
@@ -5635,6 +5651,13 @@ fn bubble_frame(
                     }
                 })
             });
+        if !bubbleless(&palette, message)
+            && (own || matches!(message.content, Content::Text { .. }))
+        {
+            if let Some(width) = settled {
+                ui.set_min_width(width);
+            }
+        }
         let pending = view.pending_media.and_then(|records| {
             records
                 .values()
@@ -6084,18 +6107,20 @@ fn planned_widths(
     for message in messages {
         let key = width_key(message);
         let mut hash = std::collections::hash_map::DefaultHasher::new();
-        body_for_measurement(&message.content)
-            .map(|(text, _)| text)
-            .hash(&mut hash);
-        std::mem::discriminant(&message.content).hash(&mut hash);
-        message.quoted.is_some().hash(&mut hash);
-        message.forwarded.hash(&mut hash);
+        // Content includes preview presence, interactive image/carousel shape,
+        // media dimensions and captions. The poster and quote affect sizing too.
+        format!("{:?}", message.content).hash(&mut hash);
+        format!("{:?}", message.thumbnail).hash(&mut hash);
         format!("{:?}", message.quoted).hash(&mut hash);
+        message.forwarded.hash(&mut hash);
         for mention in &message.mentions {
             mention.id.hash(&mut hash);
             mention.user.hash(&mut hash);
         }
         book.check_signature(&key, hash.finish());
+        if !message.mentions.is_empty() {
+            book.invalidate(&message.id);
+        }
         let width = book.get(&key).unwrap_or_else(|| {
             let width = natural(message).clamp(0.0, cap);
             book.remember(&key, width);
@@ -6157,7 +6182,10 @@ pub(crate) fn linked_run_widths(
     book: &mut crate::run_widths::WidthBook,
 ) -> HashMap<String, f32> {
     let palette = app.conversation_palette();
-    let cap = own_text_cap(ui, &palette, false);
+    let cap = text_cap_for_width(
+        ui.available_width() - 20.0 - ui.spacing().item_spacing.x,
+        &palette,
+    );
     let inset = if palette.bubbles == theme::BubbleStyle::Messages {
         MESSAGES_BUBBLE_MARGIN.sum().x
     } else {
@@ -6203,12 +6231,16 @@ pub(crate) fn linked_run_widths(
 /// and inset the row computes, without carousel or avatar allowances. The
 /// neighbour-aware pre-pass and the row itself must agree on it.
 fn own_text_cap(ui: &egui::Ui, palette: &Palette, selecting: bool) -> f32 {
+    let available = ui.available_width() - if selecting { SELECT_GUTTER } else { 0.0 };
+    text_cap_for_width(available, palette)
+}
+
+fn text_cap_for_width(available: f32, palette: &Palette) -> f32 {
     let share = if palette.bubbles == theme::BubbleStyle::Messages {
         MESSAGES_WIDTH_SHARE
     } else {
         WHATSAPP_WIDTH_SHARE
     };
-    let available = ui.available_width() - if selecting { SELECT_GUTTER } else { 0.0 };
     let max_width = (available * share).clamp(0.0, 560.0);
     let inset = if palette.bubbles == theme::BubbleStyle::Messages {
         MESSAGES_BUBBLE_MARGIN.sum().x

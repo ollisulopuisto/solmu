@@ -22,3 +22,8 @@ stagger, overshoot, retarget, history/cap changes and pruning. Native geometry,
 footer, card-containment and both-theme tests updated for the approved design.
 Native app compilation, full test suite, and visual capture await CI. Local
 native compilation is blocked by missing PipeWire development headers.
+
+Review follow-up: linked width signatures cover preview/card/poster and quote
+inputs, and the linked planner reserves the same network-chip lane as rendering.
+A same-text no-preview/preview regression and narrow-lane cap assertion cover
+those paths. Pin notices keep both separated bodies and their receipt slots.

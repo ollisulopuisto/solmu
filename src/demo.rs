@@ -5283,7 +5283,7 @@ mod tests {
             streak_test_frame(&mut app, &ctx, 1180.0, 1000.0, vec![]);
         }
         let mut bodies = Vec::new();
-        for index in [11] {
+        for index in [10, 11] {
             let name = format!("group-stack-{index}");
             let id = crate::ui::conversation::bubble_id(chat, &name);
             let footer = ctx
@@ -5300,7 +5300,10 @@ mod tests {
                     .unwrap(),
             );
         }
-        assert!(!bodies.is_empty(), "pin notice separates the bubbles");
+        assert!(
+            bodies[1].top() > bodies[0].bottom(),
+            "pin notice separates the bubbles"
+        );
     }
 
     #[test]
@@ -18447,6 +18450,60 @@ mod tests {
         });
         render(&mut app, &ctx);
         assert!(app.pending.is_empty(), "sent with the caption");
+    }
+
+    #[test]
+    fn linked_same_text_refresh_gets_card_width_and_respects_chip_lane() {
+        let mut app = app();
+        app.settings.reduce_motion = true;
+        let mut linked = app.conversations[SAMPLES[0].id]
+            .message("ada-link")
+            .unwrap()
+            .clone();
+        linked.from_me = false;
+        if let Content::Text { text, .. } = &mut linked.content {
+            *text = "https://example.com".into();
+        }
+        let original = linked.content.clone();
+        if let Content::Text { preview, .. } = &mut linked.content {
+            *preview = None;
+        } else {
+            panic!("preview fixture");
+        }
+        let mut book = crate::run_widths::WidthBook::default();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let mut plain = 0.;
+        let mut card = 0.;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_width(780.);
+            let key = crate::ui::conversation::width_key(&linked);
+            plain =
+                crate::ui::conversation::linked_run_widths(&app, ui, &[&linked], &mut book)[&key];
+            linked.content = original.clone();
+            card =
+                crate::ui::conversation::linked_run_widths(&app, ui, &[&linked], &mut book)[&key];
+        });
+        out.textures_delta.clear();
+        assert!(card >= 319., "preview gets the card minimum: {card}");
+        assert!(
+            card > plain,
+            "unchanged text refresh invalidates linked cache: {plain}/{card}"
+        );
+        // A narrow pane's cap is measured after reserving the network chip.
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_width(300.);
+            let key = crate::ui::conversation::width_key(&linked);
+            card =
+                crate::ui::conversation::linked_run_widths(&app, ui, &[&linked], &mut book)[&key];
+            let expected =
+                ((ui.available_width() - 20. - ui.spacing().item_spacing.x) * 0.72 - 20.).max(0.);
+            assert!(
+                card <= expected + 0.1,
+                "planner must use same post-chip cap: {card}/{expected}"
+            );
+        });
+        out.textures_delta.clear();
     }
 
     #[test]
