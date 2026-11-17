@@ -857,6 +857,12 @@ pub const MEDIA_LIST_LIMIT: usize = 500;
 pub struct ChatMedia {
     pub chat: ChatId,
     pub media: Vec<Message>,
+    pub voice: Vec<Message>,
+    pub voice_truncated: bool,
+    pub photos_truncated: bool,
+    pub videos_truncated: bool,
+    /// The backend checked a bounded history window, not the entire chat.
+    pub history_incomplete: bool,
     pub docs: Vec<Message>,
     pub links: Vec<ChatLink>,
     /// Whether the archive held more than each list carries.
@@ -867,7 +873,7 @@ pub struct ChatMedia {
 
 impl ChatMedia {
     /// Files `rows` under their tabs, newest first, each list cut at
-    /// `limit`. Stickers, audio, deleted and phone-only messages, and text
+    /// `limit`. Stickers, deleted and phone-only messages, and text
     /// without a web link are left out.
     pub fn collect(chat: ChatId, mut rows: Vec<Message>, limit: usize) -> Self {
         rows.sort_by_key(|row| std::cmp::Reverse(row.timestamp));
@@ -879,6 +885,7 @@ impl ChatMedia {
             match &row.content {
                 Content::Image { .. } | Content::Video { .. } => media.media.push(row),
                 Content::Document { .. } => media.docs.push(row),
+                Content::Audio { .. } => media.voice.push(row),
                 Content::Text { .. } => {
                     for (url, title) in row.content.web_links() {
                         media.links.push(ChatLink {
@@ -892,18 +899,41 @@ impl ChatMedia {
                 _ => {}
             }
         }
-        media.media_truncated = media.media.len() > limit;
+        media.voice_truncated = media.voice.len() > limit;
+        media.voice.truncate(limit);
+        let mut photos = 0;
+        let mut videos = 0;
+        media.media.retain(|row| {
+            let count = if matches!(row.content, Content::Image { .. }) {
+                &mut photos
+            } else {
+                &mut videos
+            };
+            *count += 1;
+            *count <= limit
+        });
+        media.photos_truncated = photos > limit;
+        media.videos_truncated = videos > limit;
+        media.media_truncated = media.photos_truncated || media.videos_truncated;
         media.docs_truncated = media.docs.len() > limit;
         media.links_truncated = media.links.len() > limit;
-        media.media.truncate(limit);
         media.docs.truncate(limit);
         media.links.truncate(limit);
         media
     }
 
+    /// Count of the items currently listed, including audio.
+    pub fn listed_count(&self) -> usize {
+        self.media.len() + self.voice.len() + self.docs.len() + self.links.len()
+    }
+
     /// Whether any list was cut.
     pub fn truncated(&self) -> bool {
-        self.media_truncated || self.docs_truncated || self.links_truncated
+        self.history_incomplete
+            || self.voice_truncated
+            || self.media_truncated
+            || self.docs_truncated
+            || self.links_truncated
     }
 }
 
@@ -2450,9 +2480,11 @@ pub struct Gif {
 }
 
 /// The tab open in the info panel's media view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MediaTab {
     Media,
+    Videos,
+    Voice,
     Docs,
     Links,
 }
@@ -2894,6 +2926,11 @@ pub enum Action {
         message: String,
     },
     /// Plays or pauses a downloaded voice or audio message.
+    PlayInfoVoice {
+        chat: ChatId,
+        message: String,
+        path: PathBuf,
+    },
     PlayVoice {
         message: String,
         path: PathBuf,
@@ -4522,6 +4559,7 @@ mod tests {
         let ids = |rows: &[Message]| rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&listed.media), ["new-photo", "clip", "old-photo"]);
         assert_eq!(ids(&listed.docs), ["notes"]);
+        assert_eq!(ids(&listed.voice), ["voice"]);
         assert_eq!(
             listed
                 .links
@@ -4560,6 +4598,72 @@ mod tests {
             !cut.docs_truncated && !cut.links_truncated,
             "the others were not"
         );
+    }
+
+    #[test]
+    fn photos_videos_and_audio_have_independent_limits() {
+        let mut rows = Vec::new();
+        for index in 0..4 {
+            for (prefix, content) in [
+                (
+                    "photo",
+                    Content::Image {
+                        motion: None,
+                        caption: None,
+                        media: media(),
+                    },
+                ),
+                (
+                    "video",
+                    Content::Video {
+                        caption: None,
+                        media: media(),
+                        seconds: None,
+                        gif: false,
+                        note: false,
+                    },
+                ),
+                (
+                    "voice",
+                    Content::Audio {
+                        media: media(),
+                        seconds: None,
+                        voice_note: true,
+                        waveform: Vec::new(),
+                    },
+                ),
+            ] {
+                rows.push(row(&format!("{prefix}-{index}"), index, content));
+            }
+        }
+        let listing = ChatMedia::collect("c".into(), rows, 2);
+        assert_eq!(
+            listing
+                .media
+                .iter()
+                .filter(|m| matches!(m.content, Content::Image { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(
+            listing
+                .media
+                .iter()
+                .filter(|m| matches!(m.content, Content::Video { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(listing.voice.len(), 2);
+        assert_eq!(listing.listed_count(), 6);
+        assert_eq!(
+            ChatMedia {
+                voice: listing.voice.clone(),
+                ..Default::default()
+            }
+            .listed_count(),
+            2
+        );
+        assert!(listing.photos_truncated && listing.videos_truncated && listing.voice_truncated);
     }
 
     #[test]

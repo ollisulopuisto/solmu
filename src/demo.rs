@@ -3274,9 +3274,11 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     message.status = crate::model::Delivery::Failed;
                 }
             }
-            "info" | "info-media" | "info-docs" | "info-links" => {
+            "info" | "info-media" | "info-videos" | "info-voice" | "info-docs" | "info-links" => {
                 let view = match part {
                     "info-media" => InfoView::Media(MediaTab::Media),
+                    "info-videos" => InfoView::Media(MediaTab::Videos),
+                    "info-voice" => InfoView::Media(MediaTab::Voice),
                     "info-docs" => InfoView::Media(MediaTab::Docs),
                     "info-links" => InfoView::Media(MediaTab::Links),
                     _ => InfoView::Overview,
@@ -10870,6 +10872,8 @@ mod tests {
         for (page, view) in [
             ("info", InfoView::Overview),
             ("info-media", InfoView::Media(MediaTab::Media)),
+            ("info-videos", InfoView::Media(MediaTab::Videos)),
+            ("info-voice", InfoView::Media(MediaTab::Voice)),
             ("info-docs", InfoView::Media(MediaTab::Docs)),
             ("info-links", InfoView::Media(MediaTab::Links)),
         ] {
@@ -10906,6 +10910,86 @@ mod tests {
         apply_flags(&mut app, Some("group-info"));
         let listing = app.info_media.as_ref().expect("the group is listed");
         assert!(!listing.media.is_empty(), "the group's photo");
+    }
+
+    #[test]
+    fn shared_voice_failed_refresh_keeps_rows_and_exposes_retry() {
+        use crate::ui::focus::{self, Stop};
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("info-voice"));
+        let count = app.info_media.as_ref().unwrap().voice.len();
+        app.info_media_pending = false;
+        app.info_media_failed = true;
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        assert_eq!(app.info_media.as_ref().unwrap().voice.len(), count);
+        assert!(focus::control(&ctx, Stop::InfoVoice(0, 0)).is_some());
+        assert!(focus::control(&ctx, Stop::InfoControl(crate::ui::info::RETRY_STOP)).is_some());
+    }
+
+    #[test]
+    fn shared_voice_refresh_and_audio_actions_are_keyboard_reachable() {
+        use crate::ui::focus::{self, Stop};
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("info-voice"));
+        assert!(!app.info_media.as_ref().unwrap().voice.is_empty());
+        app.backend.record_demo_commands();
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        let id = focus::control(&ctx, Stop::InfoControl(24)).expect("Links tab");
+        ctx.memory_mut(|memory| memory.request_focus(id));
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Tab, egui::Modifiers::NONE)],
+        );
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            focus::control(&ctx, Stop::InfoControl(25)),
+            "Tab reaches Refresh"
+        );
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Tab, egui::Modifiers::NONE)],
+        );
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            focus::control(&ctx, Stop::InfoVoice(0, 0)),
+            "Tab reaches Download/Play"
+        );
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+        );
+        render(&mut app, &ctx);
+        assert!(
+            app.backend
+                .take_demo_commands()
+                .iter()
+                .any(|command| matches!(
+                    command,
+                    crate::backend::Command::Download { manual: true, .. }
+                )),
+            "Enter downloads the selected audio"
+        );
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::Tab, egui::Modifiers::NONE)],
+        );
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            focus::control(&ctx, Stop::InfoVoice(0, 1)),
+            "Tab reaches Go to chat"
+        );
     }
 
     /// The group dialog offers the pencil and the photo menu only when we may

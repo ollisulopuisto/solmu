@@ -165,3 +165,7 @@ About reads the package-owned Resources/build-version.txt, written by bundle.sh 
 The linked-person renderer did not apply the traffic-light clearance used by ordinary chat headers. With only the 52-point icon rail left after Cmd+B, the green button overlapped the linked name. Added real-input coverage for repeated hide/show at three zoom levels in both themes. Capture and test results are recorded in the PR; never use private chat data as review media.
 
 About build identity is tracked in a separate PR.
+
+## 2026-11-17 - Voice and video shared-item sections
+
+Separate Photos/Videos/Voice tabs, bounded metadata-only Beeper listing worker (the old command was ignored), explicit refresh, and audio download/play/jump rows. Per-kind caps cannot let photos crowd out video or audio. Download results update panel rows even outside the loaded transcript. No schema/settings migration. Local library clippy passes; native tests, before/after synthetic screenshots and actual Devin gate remain pending. No private screenshot reused, no release built.
