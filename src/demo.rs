@@ -22562,6 +22562,60 @@ mod tests {
     }
 
     #[test]
+    fn linked_header_clears_traffic_lights_after_cmd_b() {
+        fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(text) => {
+                    out.push((text.galley.text().to_owned(), text.visual_bounding_rect()))
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| texts(shape, out)),
+                _ => {}
+            }
+        }
+        for zoom in [0.6, 1.0, 2.0] {
+            for light in [false, true] {
+                let mut app = app();
+                apply_flags(
+                    &mut app,
+                    Some(if light { "linked,light" } else { "linked" }),
+                );
+                app.settings.zoom = zoom;
+                let name = app.settings.beeper.people[0].name.clone();
+                let ctx = egui::Context::default();
+                app.attach(&ctx);
+                crate::theme::preview_macos(&ctx);
+                render(&mut app, &ctx);
+                for collapsed in [true, false, true] {
+                    let mut shapes = frame_sized(
+                        &mut app,
+                        &ctx,
+                        780.0,
+                        vec![key(egui::Key::B, egui::Modifiers::COMMAND)],
+                    );
+                    for _ in 0..4 {
+                        shapes = frame_sized(&mut app, &ctx, 780.0, Vec::new());
+                    }
+                    assert_eq!(!app.sidebar_visible, collapsed);
+                    let mut drawn = Vec::new();
+                    for clipped in shapes {
+                        texts(&clipped.shape, &mut drawn);
+                    }
+                    let title = drawn
+                        .iter()
+                        .filter(|(text, rect)| text == &name && rect.top() < 60.0)
+                        .map(|(_, rect)| rect)
+                        .last()
+                        .expect("linked header title");
+                    assert!(
+                        title.left() >= crate::theme::traffic_light_inset(&ctx),
+                        "zoom {zoom}, light {light}, collapsed {collapsed}: {title:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn sidebar_can_be_hidden_and_the_composer_sends() {
         let mut app = app();
         let ctx = egui::Context::default();
