@@ -92,7 +92,13 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Dialog::Palette => super::palette::show(app, ui),
                 Dialog::JumpToChat => super::switcher::show(app, ui),
                 Dialog::WhatsNew => whats_new(app, ui),
-                Dialog::SendLater => send_later(app, ui),
+                Dialog::SendLater => {
+                    let height = (ui.ctx().content_rect().height() - 64.0).max(100.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("send-later-dialog")
+                        .max_height(height)
+                        .show(ui, |ui| send_later(app, ui));
+                }
                 Dialog::ScheduledList => scheduled_list(app, ui),
                 Dialog::TranscriptionLanguage { chat, message } => {
                     transcription_language(app, ui, &chat, &message)
