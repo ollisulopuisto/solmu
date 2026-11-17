@@ -1427,8 +1427,7 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
         return;
     }
     let transcripts: std::collections::HashMap<_, _> = app
-        .transcriber
-        .as_ref()
+        .transcript_reader()
         .map(|worker| worker.saved_in_chat(&app.account().id.0, &listing.chat, ""))
         .unwrap_or_default()
         .into_iter()

@@ -419,6 +419,25 @@ impl Worker {
         hits
     }
 
+    /// Read/delete access to saved text without an engine or worker thread.
+    /// Its channel has no receiver, so it cannot ever start inference.
+    pub fn archive(store: Store) -> Self {
+        let (tx, _rx) = channel();
+        Self {
+            tx,
+            shared: Arc::new(Shared {
+                status: Arc::new(Mutex::new(HashMap::new())),
+                generations: Arc::new(Mutex::new(Generations::default())),
+                store_io: Arc::new(Mutex::new(())),
+                alive: Arc::new(AtomicBool::new(true)),
+            }),
+            store: Some(store),
+            search_cache: Arc::new(Mutex::new(None)),
+            scoped_search_cache: Arc::new(Mutex::new(None)),
+            recorded: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
     /// A worker with no engine behind it, for demos and tests: the given
     /// statuses are what the view sees; queued work is only recorded.
     pub fn stub(pairs: impl IntoIterator<Item = (Key, Status)>) -> Self {

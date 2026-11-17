@@ -636,6 +636,7 @@ pub struct App {
     /// Local voice-note transcription worker; `None` until a Wyoming
     /// service address is set. Audio and transcripts stay on the machine.
     pub transcriber: Option<crate::transcribe_worker::Worker>,
+    transcript_archive: Option<crate::transcribe_worker::Worker>,
     /// The address the current worker was built with; a settings change
     /// respawns the worker only when this differs.
     transcriber_address: String,
@@ -1402,6 +1403,7 @@ impl App {
         app.login_item.read(move || login_waker.wake());
         // Voice-note transcription only with a configured local service.
         app.transcriber = transcriber_worker(waker, &app.dirs, &app.settings);
+        app.refresh_transcript_archive();
         app.transcriber_address = app.settings.transcription_wyoming.trim().to_string();
         let _ = app.roster.save_to(&app.files, &app.dirs.accounts_file());
         Ok(app)
@@ -1624,6 +1626,7 @@ impl App {
             composer_tools_open: false,
             player: Player::new(waker.clone()),
             transcriber: None,
+            transcript_archive: None,
             transcriber_address: String::new(),
             video: crate::video::Player::new(waker.clone()),
             video_chat: None,
@@ -3852,7 +3855,7 @@ impl App {
             })
             .map(|hit| (hit.chat.clone(), hit.id.clone()))
             .collect();
-        if let Some(worker) = &self.transcriber {
+        if let Some(worker) = self.transcript_reader() {
             for hit in
                 self.transcript_hit_messages(worker.search(self.search.trim()), self.search.trim())
             {
@@ -3891,7 +3894,7 @@ impl App {
         // Local voice-note transcripts join the same results. Locked chats
         // stay out like the backend's hits, the secret-code prompt is not a
         // query, and a hit the backend already returned is not duplicated.
-        if let Some(worker) = &self.transcriber
+        if let Some(worker) = self.transcript_reader()
             && !self.locked_folder_open()
             && !self.secret_code_matched()
         {
@@ -5773,7 +5776,7 @@ impl App {
             Event::ChatRemoved { chat } => {
                 self.forget_chat(&chat);
                 self.stars.remove(&chat);
-                if let Some(worker) = &self.transcriber {
+                if let Some(worker) = self.transcript_reader() {
                     worker.remove_chat(self.account().id.0.clone(), chat.clone());
                 }
                 // The note's language overrides follow its transcripts.
@@ -5792,7 +5795,7 @@ impl App {
                 self.reload_lists();
             }
             Event::ChatCleared { chat, through } => {
-                if let Some(worker) = &self.transcriber {
+                if let Some(worker) = self.transcript_reader() {
                     worker.remove_chat(self.account().id.0.clone(), chat.clone());
                 }
                 let prefix = format!("{}\t{chat}\t", self.account().id.0);
@@ -7223,6 +7226,24 @@ impl App {
         self.focus_chat_search = false;
     }
 
+    /// Saved text stays searchable when transcription is disabled. The archive
+    /// has no engine or background thread and is never used to queue jobs.
+    fn refresh_transcript_archive(&mut self) {
+        self.transcript_archive = if self.transcriber.is_none() {
+            crate::transcriber::Store::new(self.dirs.state.join("transcripts"), 32 << 20)
+                .ok()
+                .map(crate::transcribe_worker::Worker::archive)
+        } else {
+            None
+        };
+    }
+
+    pub fn transcript_reader(&self) -> Option<&crate::transcribe_worker::Worker> {
+        self.transcriber
+            .as_ref()
+            .or(self.transcript_archive.as_ref())
+    }
+
     /// Local saved transcripts join in-chat search even if backend search
     /// fails. Unknown message dates never match a day filter; file mtimes
     /// are not message dates. Querying never starts transcription.
@@ -7237,7 +7258,7 @@ impl App {
         if self.chat(chat).is_some_and(|chat| chat.locked) && !self.locked_folder_open() {
             return Vec::new();
         }
-        let Some(worker) = &self.transcriber else {
+        let Some(worker) = self.transcript_reader() else {
             return hits;
         };
         let (from, until) = self.chat_search_range();
@@ -12626,6 +12647,7 @@ impl App {
                     // one configured. Its thread ends with the dropped
                     // channel; the store keeps the transcripts on disk.
                     self.transcriber = transcriber_worker(&self.waker, &self.dirs, &self.settings);
+                    self.refresh_transcript_archive();
                     self.transcriber_address = address;
                 }
             }
@@ -26317,7 +26339,11 @@ mod tests {
         store
             .put(&account, "another-chat", "private", "station secret")
             .unwrap();
-        app.transcriber = Some(crate::transcribe_worker::Worker::stub_with_store(store));
+        app.transcript_archive = Some(crate::transcribe_worker::Worker::archive(store));
+        assert!(
+            app.transcriber.is_none(),
+            "saved text works with inference disabled"
+        );
         app.chat_search_hits.push(message(chat, "known", 100));
         let hits = app.chat_search_results();
         assert_eq!(hits.len(), 2);
@@ -26334,7 +26360,7 @@ mod tests {
             0
         );
         assert!(
-            app.transcriber.as_ref().unwrap().recorded().is_empty(),
+            app.transcript_reader().unwrap().recorded().is_empty(),
             "search queues no inference"
         );
         app.chat_search_day = Some(jiff::civil::Date::new(2026, 11, 17).unwrap());
@@ -26348,6 +26374,14 @@ mod tests {
         assert!(
             app.chat_search_results().is_empty(),
             "a hidden locked chat stays private"
+        );
+        app.chats[0].locked = false;
+        app.transcript_reader()
+            .unwrap()
+            .remove_chat(account, chat.into());
+        assert!(
+            app.chat_search_results().is_empty(),
+            "disabled-engine deletion invalidates results"
         );
     }
 

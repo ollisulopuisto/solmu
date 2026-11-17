@@ -18,7 +18,7 @@ Voice has an Expand transcript/Hide transcript control for saved text and a
 search field limited to the panel's account and chat. Search results include
 a matching text line; audio without a saved transcript does not match.
 Searching never downloads audio or queues transcription. The stored text
-remains local. Closing or changing the panel clears its query and expansion.
+remains local and is searchable even when transcription is disabled. Closing or changing the panel clears its query and expansion.
 
 In-chat search merges saved local transcript matches with backend matches,
 labels the text Voice transcript, and deduplicates by chat/message ID.

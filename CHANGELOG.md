@@ -16,6 +16,8 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- Voice shared items can expand and search saved transcripts; in-chat search includes saved transcript matches without starting transcription.
+
 - Shared items has separate Photos, Videos and Voice tabs. Voice/audio rows can download and play a clip or jump to its message. Beeper listings now answer instead of spinning, with a clear note when only recent history was scanned.
 
 - Both About views show the full packaged build version, including the manual build suffix, instead of only the base Cargo version.
@@ -207,4 +209,3 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 - Attachment uploads to WhatsApp no longer send the request shape that was rejected; a failed send keeps the staged files.
 - The sidebar restores correctly in narrow windows and with the list hidden, and settings rows no longer cut their titles short.
 
-- Voice shared items can expand and search saved transcripts; in-chat search includes saved transcript matches without starting transcription.
