@@ -545,7 +545,7 @@ fn sections(app: &App) -> Vec<Section> {
         });
         if choice != before.0 { app.settings.transcription_engine = Some(choice); }
         if choice == TranscriptionEngine::Local {
-            ui.label(gettext(locale, "Whisper Base multilingual. Download: 148 MB. Allow 165 MB of free disk space and about 500 MB of memory while transcribing. Audio stays on this computer."));
+            ui.label(gettext(locale, "Whisper Base multilingual. Engine + model download: about 151 MB. Allow 260 MB of free disk space for installation. Audio stays on this computer."));
             let runtime = crate::whisper_runtime::artifact().is_some();
             let installed = crate::local_whisper::model_path(&app.dirs.state).is_file();
             if !runtime { ui.label(gettext(locale, "A verified runtime download is not available in this draft yet. No engine is bundled with Solmu.")); }

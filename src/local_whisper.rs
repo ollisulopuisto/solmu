@@ -21,7 +21,7 @@ const DISK_RESERVE: u64 = 16 * 1024 * 1024;
 
 fn enough_space(available: u64, required: u64) -> Result<(), String> {
     if available < required.saturating_add(DISK_RESERVE) {
-        Err("Not enough free disk space. Free at least 165 MB and retry.".into())
+        Err("Not enough free disk space. Free at least 260 MB and retry.".into())
     } else {
         Ok(())
     }
