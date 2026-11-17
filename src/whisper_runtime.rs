@@ -93,7 +93,7 @@ pub fn verify(executable: &Path, spec: Artifact) -> Result<(), String> {
             .and_then(Path::parent)
             .and_then(Path::parent)
             .ok_or("Invalid runtime bundle path")?;
-        let requirement = "anchor apple generic and identifier \"fi.sulopuisto.solmu.whisper\" and certificate leaf[subject.OU] = \"LWSR8T5392\"";
+        let requirement = "=anchor apple generic and identifier \"fi.sulopuisto.solmu.whisper\" and certificate leaf[subject.OU] = \"LWSR8T5392\"";
         bounded_command(
             std::process::Command::new("/usr/bin/codesign")
                 .args(["--verify", "--strict", "--deep", "-R", requirement])
