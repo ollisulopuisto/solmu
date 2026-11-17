@@ -2180,6 +2180,7 @@ pub(crate) fn composer_with_capabilities(
             ui.ctx()
                 .data_mut(|data| data.insert_temp(composer_pill_id(), pill.response.rect));
             if (send_key || send_click)
+                && app.scheduling_draft.is_none()
                 && (!app.composer.trim().is_empty() || !app.pending.is_empty())
             {
                 // Enter reaches the composer as a key event, never a Text
