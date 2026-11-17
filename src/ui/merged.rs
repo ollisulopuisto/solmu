@@ -626,7 +626,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         let had_quote = app.reply_to.is_some();
         let before = app.actions.len();
         let chosen = destination_label(app, state.destination.as_ref());
-        let extras_width = measure_extras(ui);
+        let extras_width = SELECTOR_SIZE + 10.0;
         let mut render = |app: &mut App, ui: &mut egui::Ui| {
             destination_extras(app, ui, &mut state, &valid, &person, cross_over, &chosen);
         };
@@ -1374,12 +1374,6 @@ fn destination_label(app: &App, destination: Option<&Member>) -> String {
         short.push('\u{2026}');
     }
     short
-}
-
-/// The width the composer's extras reserve: the clock, its gap, and the
-/// selector's icon button, plus slack.
-fn measure_extras(ui: &egui::Ui) -> f32 {
-    SELECTOR_SIZE + 10.0
 }
 
 /// The destination selector is the network's icon alone; the network and
