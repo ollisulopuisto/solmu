@@ -185,6 +185,11 @@ jobs:
           shot send-later-menu-dark-1180x780 1180x780 chat,send-later-menu,theme=Catppuccin.json
           shot send-later-calendar-1180x780 1180x780 chat,send-later-calendar
           shot send-later-recurring-1180x780 1180x780 chat,send-later-recurring
+          shot info-photos-1180x780 1180x780 chat,info-media
+          shot info-videos-1180x780 1180x780 chat,info-videos
+          shot info-voice-1180x780 1180x780 chat,info-voice
+          shot info-voice-dark-1180x780 1180x780 chat,info-voice,theme=Catppuccin.json
+          shot info-voice-900x780 900x780 chat,info-voice
           shot chat-1180x780 1180x780 chat
           shot chat-menu-1180x780 1180x780 chat,chat-menu
           shot chat-menu-beeper-1180x780 1180x780 chat,chat-menu-beeper

@@ -1,0 +1,7 @@
+# Shared items
+
+The chat info panel separates Photos, Videos, Voice, Docs and Links. Voice includes audio files as well as voice notes. Download is explicit; after it finishes Play toggles playback, and Go to chat opens the originating message. The clip keeps its own chat speed even if a member info panel is open over a group.
+
+Beeper metadata is read on a separate bounded worker, not on the typing/send worker. One Refresh or opening checks at most ten history pages and 20,000 rows, with a newest-items note if history continues. This is not a promise that every old attachment was found. Each kind has its own display cap. No attachment body is downloaded by listing metadata. Refresh is explicit, not polling. Failed or busy requests show Retry rather than leave a spinner forever. No database schema or saved-setting change.
+
+Validation: model categorization/caps, backend pagination/bounds/scope/errors, audio download state without a loaded transcript, existing info-pane request correlation and demo scenes. Local library clippy passes; native suites and synthetic pixel review are required before merge. Live private messages are not sent, transcribed or downloaded during tests.

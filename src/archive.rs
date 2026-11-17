@@ -1464,8 +1464,10 @@ impl Archive {
     /// chat's pictures and videos, its documents, and its text messages that
     /// hold a web link, each kind newest first and cut at `limit`.
     pub fn media_docs_links(&self, chat: &str, limit: usize) -> Result<Vec<Message>> {
-        let mut rows = self.rows_of_kind(chat, "IN ('image', 'video')", limit)?;
+        let mut rows = self.rows_of_kind(chat, "= 'image'", limit)?;
+        rows.extend(self.rows_of_kind(chat, "= 'video'", limit)?);
         rows.extend(self.rows_of_kind(chat, "= 'document'", limit)?);
+        rows.extend(self.rows_of_kind(chat, "= 'audio'", limit)?);
         // Only text rows with a preview or an address that names its scheme
         // or starts with `www.` are read: finding a bare domain the way the
         // bubble underlines it would parse every text row of a long chat on
@@ -5966,7 +5968,7 @@ mod media_path_tests {
         // lists its documents and links.
         assert_eq!(
             ids(archive.media_docs_links(chat, 1).expect("rows")),
-            ["preview", "clip", "doc"]
+            ["preview", "clip", "doc", "photo"]
         );
     }
 

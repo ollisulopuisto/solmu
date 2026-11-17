@@ -3274,9 +3274,11 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     message.status = crate::model::Delivery::Failed;
                 }
             }
-            "info" | "info-media" | "info-docs" | "info-links" => {
+            "info" | "info-media" | "info-videos" | "info-voice" | "info-docs" | "info-links" => {
                 let view = match part {
                     "info-media" => InfoView::Media(MediaTab::Media),
+                    "info-videos" => InfoView::Media(MediaTab::Videos),
+                    "info-voice" => InfoView::Media(MediaTab::Voice),
                     "info-docs" => InfoView::Media(MediaTab::Docs),
                     "info-links" => InfoView::Media(MediaTab::Links),
                     _ => InfoView::Overview,
@@ -10870,6 +10872,8 @@ mod tests {
         for (page, view) in [
             ("info", InfoView::Overview),
             ("info-media", InfoView::Media(MediaTab::Media)),
+            ("info-videos", InfoView::Media(MediaTab::Videos)),
+            ("info-voice", InfoView::Media(MediaTab::Voice)),
             ("info-docs", InfoView::Media(MediaTab::Docs)),
             ("info-links", InfoView::Media(MediaTab::Links)),
         ] {

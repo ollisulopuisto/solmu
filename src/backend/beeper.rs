@@ -27,6 +27,7 @@ use crate::model::{Chat, ChatId, ChatKind, Content, Delivery, LastMessage, Messa
 use crate::paths::AccountDirs;
 
 mod gallery;
+mod shared;
 mod ws;
 
 const CHAT_PAGE_LIMIT: u32 = 100;
@@ -3486,6 +3487,7 @@ pub fn run(
     }
 
     let gallery_tx = gallery::worker(api.clone(), events.clone(), waker.clone());
+    let shared_tx = shared::worker(api.clone(), events.clone(), waker.clone());
 
     // Bounded single download worker: a slow image must not block typing,
     // read state, history or send confirmations on the control worker.
@@ -4811,6 +4813,16 @@ pub fn run(
                 }
                 Command::Composing { chat, composing } => {
                     let _ = api.typing(&chat, composing);
+                }
+                Command::ListChatShared { chat, request } => {
+                    if let Err(error) = shared_tx.try_send((chat, request)) {
+                        let (std::sync::mpsc::TrySendError::Full((_, request))
+                        | std::sync::mpsc::TrySendError::Disconnected((_, request))) = error;
+                        emit(Event::ChatShared {
+                            request,
+                            result: Err("Shared-items history is busy; try again".into()),
+                        });
+                    }
                 }
                 Command::SearchChatMessages {
                     chat,

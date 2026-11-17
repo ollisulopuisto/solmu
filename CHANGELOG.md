@@ -16,6 +16,8 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- Shared items has separate Photos, Videos and Voice tabs. Voice/audio rows can download and play a clip or jump to its message. Beeper listings now answer instead of spinning, with a clear note when only recent history was scanned.
+
 - Both About views show the full packaged build version, including the manual build suffix, instead of only the base Cargo version.
 
 - Linked-person chat headers keep clear of the Mac traffic lights after Cmd+B hides the chat list, including at different zoom levels.

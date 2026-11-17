@@ -7558,20 +7558,25 @@ impl App {
     ) {
         // The info panel's listing keeps its own copy of the message, so a
         // picture without a preview stops being blank once its file is there.
-        if let Ok(path) = &result
-            && let Some(listing) = self
-                .info_media
-                .as_mut()
-                .filter(|listing| listing.chat == chat)
+        if let Some(listing) = self
+            .info_media
+            .as_mut()
+            .filter(|listing| listing.chat == chat)
             && let Some(row) = listing
                 .media
                 .iter_mut()
                 .chain(listing.docs.iter_mut())
+                .chain(listing.voice.iter_mut())
                 .find(|row| row.id == id)
             && let Some(media) = row.content.media_at_mut(card)
         {
-            media.path = Some(path.clone());
-            media.state = MediaState::Idle;
+            match &result {
+                Ok(path) => {
+                    media.path = Some(path.clone());
+                    media.state = MediaState::Idle;
+                }
+                Err(error) => media.state = MediaState::Failed(error.clone()),
+            }
         }
         // The album can hold a message the transcript has not paged in, so its
         // item, and the viewer's own download state, are updated from here,
@@ -9970,6 +9975,23 @@ impl App {
                     }
                     media.state = MediaState::Downloading;
                 }
+                if let Some(listing) = self
+                    .info_media
+                    .as_mut()
+                    .filter(|listing| listing.chat == chat)
+                    && let Some(row) = listing
+                        .media
+                        .iter_mut()
+                        .chain(listing.docs.iter_mut())
+                        .chain(listing.voice.iter_mut())
+                        .find(|row| row.id == message)
+                    && let Some(media) = row.content.media_at_mut(card)
+                {
+                    if media.state == MediaState::Downloading {
+                        return;
+                    }
+                    media.state = MediaState::Downloading;
+                }
                 self.viewer_media_state
                     .insert(message.clone(), MediaState::Downloading);
                 self.backend.send(Command::Download {
@@ -10906,6 +10928,24 @@ impl App {
                 self.pending.clear();
                 self.pending_view_once = false;
                 self.forget_unstaged_pictures();
+            }
+            Action::PlayInfoVoice {
+                chat,
+                message,
+                path,
+            } => {
+                if self.info.as_ref().is_some_and(|info| info.chat == chat)
+                    && self.info_media_allowed()
+                {
+                    self.video.stop();
+                    self.voice_wanted = None;
+                    self.voice_chat = Some(chat.clone());
+                    self.voice_clip_chat = Some(chat);
+                    self.sync_voice_speed();
+                    if let Err(error) = self.player.toggle(&message, &path) {
+                        self.toast_error(error);
+                    }
+                }
             }
             Action::PlayVoice { message, path } => self.play_voice(message, path),
             Action::PlayVideo { message, path } => self.play_video(message, path),
@@ -27228,6 +27268,68 @@ mod tests {
             Some(std::path::Path::new("photo.jpg"))
         );
         assert!(media_requests(&mut commands).is_empty(), "no query for it");
+    }
+
+    #[test]
+    fn info_voice_download_updates_its_own_row_without_a_loaded_transcript() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let chat = "1@s.whatsapp.net";
+        app.chats.push(Chat::new(chat.into(), "Ada".into()));
+        app.apply(Action::OpenChat(chat.into()), &ctx);
+        app.apply(Action::OpenInfo(chat.into()), &ctx);
+        let mut audio = message(chat, "voice", 10);
+        audio.content = Content::Audio {
+            media: crate::model::Media {
+                album: None,
+                mime: "audio/ogg".into(),
+                size: 1,
+                width: None,
+                height: None,
+                path: None,
+                state: MediaState::Idle,
+            },
+            seconds: Some(3),
+            voice_note: true,
+            waveform: vec![],
+        };
+        app.set_info_media(ChatMedia::collect(chat.into(), vec![audio], 10));
+        app.apply(
+            Action::Download {
+                manual: true,
+                card: None,
+                chat: chat.into(),
+                message: "voice".into(),
+            },
+            &ctx,
+        );
+        assert_eq!(
+            app.info_media.as_ref().unwrap().voice[0]
+                .content
+                .media()
+                .unwrap()
+                .state,
+            MediaState::Downloading
+        );
+        app.handle_media(chat, "voice", None, Ok(PathBuf::from("voice.ogg")));
+        let media = app.info_media.as_ref().unwrap().voice[0]
+            .content
+            .media()
+            .unwrap();
+        assert_eq!(
+            media.path.as_deref(),
+            Some(std::path::Path::new("voice.ogg"))
+        );
+        assert_eq!(media.state, MediaState::Idle);
+        app.handle_media(chat, "voice", None, Err("offline".into()));
+        assert!(matches!(
+            app.info_media.as_ref().unwrap().voice[0]
+                .content
+                .media()
+                .unwrap()
+                .state,
+            MediaState::Failed(_)
+        ));
     }
 
     #[test]

@@ -1073,14 +1073,30 @@ fn media_view(app: &mut App, ui: &mut egui::Ui, chat: &str, tab: MediaTab, overl
     Frame::new()
         .inner_margin(Margin::symmetric(MARGIN as i8, 10))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                for (index, choice) in [MediaTab::Media, MediaTab::Docs, MediaTab::Links]
-                    .into_iter()
-                    .enumerate()
+                for (index, choice) in [
+                    MediaTab::Media,
+                    MediaTab::Videos,
+                    MediaTab::Voice,
+                    MediaTab::Docs,
+                    MediaTab::Links,
+                ]
+                .into_iter()
+                .enumerate()
                 {
                     let count = shown.map_or(0, |media| match choice {
-                        MediaTab::Media => media.media.len(),
+                        MediaTab::Media => media
+                            .media
+                            .iter()
+                            .filter(|m| matches!(m.content, Content::Image { .. }))
+                            .count(),
+                        MediaTab::Videos => media
+                            .media
+                            .iter()
+                            .filter(|m| matches!(m.content, Content::Video { .. }))
+                            .count(),
+                        MediaTab::Voice => media.voice.len(),
                         MediaTab::Docs => media.docs.len(),
                         MediaTab::Links => media.links.len(),
                     });
@@ -1093,6 +1109,15 @@ fn media_view(app: &mut App, ui: &mut egui::Ui, chat: &str, tab: MediaTab, overl
                         app.actions.push(Action::ShowInfo(InfoView::Media(choice)));
                     }
                 }
+                if ui
+                    .add_enabled(
+                        !app.info_media_pending,
+                        egui::Button::new(crate::i18n::gettext(app.locale, "Refresh")),
+                    )
+                    .clicked()
+                {
+                    app.actions.push(Action::RetryInfoMedia);
+                }
             });
         });
     ui.painter().hline(
@@ -1103,15 +1128,20 @@ fn media_view(app: &mut App, ui: &mut egui::Ui, chat: &str, tab: MediaTab, overl
     match shown {
         Some(media) => {
             let cut = match tab {
-                MediaTab::Media => media.media_truncated,
+                MediaTab::Media => media.photos_truncated,
+                MediaTab::Videos => media.videos_truncated,
+                MediaTab::Voice => media.voice_truncated,
                 MediaTab::Docs => media.docs_truncated,
                 MediaTab::Links => media.links_truncated,
             };
-            if cut {
+            if cut || media.history_incomplete {
                 truncated_note(app, ui);
             }
             match tab {
-                MediaTab::Media => media_grid(app, ui, media, &uris, overlay),
+                MediaTab::Media | MediaTab::Videos => {
+                    media_grid(app, ui, media, &uris, overlay, tab)
+                }
+                MediaTab::Voice => voice_list(app, ui, media, overlay),
                 MediaTab::Docs => docs_list(app, ui, media, overlay),
                 MediaTab::Links => links_list(app, ui, media),
             }
@@ -1142,14 +1172,31 @@ fn media_grid(
     listing: &ChatMedia,
     uris: &[String],
     overlay: bool,
+    tab: MediaTab,
 ) {
     let palette = app.palette;
-    if listing.media.is_empty() {
+    let rows: Vec<_> = listing
+        .media
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| match tab {
+            MediaTab::Videos => matches!(m.content, Content::Video { .. }),
+            _ => matches!(m.content, Content::Image { .. }),
+        })
+        .collect();
+    if rows.is_empty() {
         widgets::empty_state(
             ui,
             &palette,
             Icon::Image,
-            &crate::i18n::gettext(app.locale, "No media"),
+            &crate::i18n::gettext(
+                app.locale,
+                if tab == MediaTab::Videos {
+                    "No videos"
+                } else {
+                    "No photos"
+                },
+            ),
             &crate::i18n::gettext(
                 app.locale,
                 "Photos and videos shared in this chat will show here.",
@@ -1164,20 +1211,20 @@ fn media_grid(
         3
     };
     let cell = (width - (columns - 1) as f32 * GAP) / columns as f32;
-    let rows = listing.media.len().div_ceil(columns);
+    let row_count = rows.len().div_ceil(columns);
     ui.add_space(6.0);
     // `show_rows` reads the spacing from outside its closure.
     ui.spacing_mut().item_spacing = vec2(GAP, GAP);
     egui::ScrollArea::vertical()
-        .id_salt(("info-media-grid", listing.chat.as_str()))
+        .id_salt(("info-media-grid", listing.chat.as_str(), tab))
         .auto_shrink([false, false])
-        .show_rows(ui, cell + GAP, rows, |ui, range| {
+        .show_rows(ui, cell + GAP, row_count, |ui, range| {
             for row in range {
                 ui.horizontal(|ui| {
                     ui.add_space(MARGIN);
                     for column in 0..columns {
                         let index = row * columns + column;
-                        let Some(message) = listing.media.get(index) else {
+                        let Some((original_index, message)) = rows.get(index) else {
                             break;
                         };
                         let (rect, response) =
@@ -1188,7 +1235,7 @@ fn media_grid(
                             rect,
                             response,
                             message,
-                            uris.get(index).map(String::as_str),
+                            uris.get(*original_index).map(String::as_str),
                             overlay,
                         );
                     }
@@ -1363,6 +1410,97 @@ fn docs_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: boo
         });
 }
 
+/// Audio/voice clips keep an explicit play/download target and a separate jump.
+fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bool) {
+    if listing.voice.is_empty() {
+        widgets::empty_state(
+            ui,
+            &app.palette,
+            Icon::Mic,
+            &crate::i18n::gettext(app.locale, "No voice messages"),
+            &crate::i18n::gettext(
+                app.locale,
+                "Voice and audio messages shared in this chat will show here.",
+            ),
+        );
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .id_salt(("info-voice", &listing.chat))
+        .auto_shrink([false, false])
+        .show_rows(ui, 86.0, listing.voice.len(), |ui, range| {
+            for message in &listing.voice[range] {
+                let Content::Audio {
+                    media,
+                    seconds,
+                    voice_note,
+                    ..
+                } = &message.content
+                else {
+                    continue;
+                };
+                let status = app.player.status(&message.id);
+                let playing = status.state == crate::audio::State::Playing;
+                Frame::new()
+                    .inner_margin(Margin::symmetric(MARGIN as i8, 8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let label = if playing {
+                                crate::i18n::gettext(app.locale, "Pause")
+                            } else if media.path.is_none() {
+                                crate::i18n::gettext(app.locale, "Download")
+                            } else {
+                                crate::i18n::gettext(app.locale, "Play")
+                            };
+                            if ui
+                                .add_enabled(
+                                    media.state != crate::model::MediaState::Downloading,
+                                    egui::Button::new(label).min_size(vec2(70.0, 40.0)),
+                                )
+                                .clicked()
+                            {
+                                if let Some(path) = &media.path {
+                                    // A member's info pane may be open over a different chat.
+                                    // Set the originating chat explicitly before playback.
+                                    app.actions.push(Action::PlayInfoVoice {
+                                        chat: message.chat.clone(),
+                                        message: message.id.clone(),
+                                        path: path.clone(),
+                                    });
+                                } else {
+                                    app.actions.push(Action::Download {
+                                        manual: true,
+                                        card: None,
+                                        chat: message.chat.clone(),
+                                        message: message.id.clone(),
+                                    });
+                                }
+                            }
+                            ui.vertical(|ui| {
+                                ui.label(if *voice_note {
+                                    crate::i18n::gettext(app.locale, "Voice message")
+                                } else {
+                                    crate::i18n::gettext(app.locale, "Audio")
+                                });
+                                ui.label(format!(
+                                    "{} · {}",
+                                    seconds.map(crate::util::duration).unwrap_or_default(),
+                                    crate::util::chat_stamp(app.locale, message.timestamp)
+                                ));
+                            });
+                            if ui
+                                .small_button(crate::i18n::gettext(app.locale, "Go to chat"))
+                                .clicked()
+                            {
+                                go_to(app, message, overlay);
+                            }
+                        });
+                    });
+                ui.separator();
+            }
+        });
+}
+
 /// The web links written in the chat, newest first: the preview's title or
 /// the address, and the site. A row opens the address in the browser.
 fn links_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia) {
@@ -1462,7 +1600,9 @@ fn truncated_note(app: &App, ui: &mut egui::Ui) {
 /// tells a translator where it sits.
 pub fn tab_label(app: &App, tab: MediaTab) -> String {
     match tab {
-        MediaTab::Media => crate::i18n::pgettext(app.locale, "info tab", "Media"),
+        MediaTab::Media => crate::i18n::pgettext(app.locale, "info tab", "Photos"),
+        MediaTab::Videos => crate::i18n::pgettext(app.locale, "info tab", "Videos"),
+        MediaTab::Voice => crate::i18n::pgettext(app.locale, "info tab", "Voice"),
         MediaTab::Docs => crate::i18n::pgettext(app.locale, "info tab", "Docs"),
         MediaTab::Links => crate::i18n::pgettext(app.locale, "info tab", "Links"),
     }
