@@ -14,7 +14,7 @@ HTTPS from Hugging Face, verifies the pinned SHA-256, and installs the model
 atomically under the app's state directory. Failed or canceled downloads are
 removed. A prior installed model is not replaced with a partial file.
 
-Allow 165 MB free disk space and about 500 MB RAM during transcription.
+Allow 260 MB free disk space for the model, runtime and temporary staging.
 Download cancellation can wait for an in-flight network operation to stop;
 body reads have a five-second timeout. Retry with Download & enable after a
 failure. Remove downloaded model switches transcription off and removes the
@@ -40,13 +40,15 @@ still required. Do not treat the isolated engine tests as end-to-end proof.
 The official b5454 release offers an Apple XCFramework, not a whisper-cli
 executable. Its macOS binary is a universal Mach-O dynamic library. It cannot
 be launched as the CLI. Linux and Windows CLI archives exist in that release.
-No macOS CLI publisher has been selected. Existing user-installed CLI support
-or a separately distributed signed/notarized helper are choices still awaiting
-the maintainer, not silently substituted implementations.
+A separate optional helper pipeline now builds a pinned official CLI source
+revision. It is separate from all Solmu builds. The first arm64 trial passed
+Developer ID signing, notarization, stapling and quarantined Gatekeeper
+assessment. Intel validation and runtime asset publication are still pending.
 
 A pinned hash does not establish Gatekeeper approval. No code strips quarantine,
-weakens library validation or self-signs downloaded executables. Actual
-macOS signing, quarantine and execution remain untested.
+weakens library validation or self-signs downloaded executables. The first helper trial passed
+these checks; production app installation, repair and real Opus inference are
+covered by an explicit manual smoke route whose passing result is still pending.
 
 Sources checked 2026-11-17:
 - https://github.com/ggml-org/whisper.cpp/releases/tag/b5454
