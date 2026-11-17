@@ -7149,6 +7149,11 @@ impl App {
                         .chain(&old.docs)
                         .chain(&old.voice)
                         .find(|m| m.id == row.id)
+                        .filter(|m| {
+                            m.content.media().is_some_and(|media| {
+                                media.path.is_some() || media.state == MediaState::Downloading
+                            })
+                        })
                 })
                 .or_else(|| {
                     self.conversations

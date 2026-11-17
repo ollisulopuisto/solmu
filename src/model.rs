@@ -4655,6 +4655,14 @@ mod tests {
         );
         assert_eq!(listing.voice.len(), 2);
         assert_eq!(listing.listed_count(), 6);
+        assert_eq!(
+            ChatMedia {
+                voice: listing.voice.clone(),
+                ..Default::default()
+            }
+            .listed_count(),
+            2
+        );
         assert!(listing.photos_truncated && listing.videos_truncated && listing.voice_truncated);
     }
 
