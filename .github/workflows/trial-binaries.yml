@@ -221,6 +221,29 @@ jobs:
           cache-generation: test-v1
       - name: Build the demo
         run: mbx build --locked --features demo
+      - name: Failing-first settings repaint regression
+        run: |
+          set -euo pipefail
+          cp src/ui/settings.rs "$RUNNER_TEMP/settings-fixed.rs"
+          trap 'cp "$RUNNER_TEMP/settings-fixed.rs" src/ui/settings.rs' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/ui/settings.rs')
+          text = p.read_text()
+          old = 'let installed = presence == Some(true);'
+          assert old in text
+          p.write_text(text.replace(old, 'let installed = crate::local_whisper::model_path(&app.dirs.state).is_file();', 1))
+          PY
+          if mbx test --locked --lib --features demo whisper_settings_read_cached_presence_until_explicit_refresh -- --nocapture > "$RUNNER_TEMP/presence-before.log" 2>&1; then
+            cat "$RUNNER_TEMP/presence-before.log"
+            echo 'Regression did not catch the old repaint disk probe'; exit 1
+          fi
+          cat "$RUNNER_TEMP/presence-before.log"
+          grep -q 'render uses cached presence, not the now-missing file' "$RUNNER_TEMP/presence-before.log"
+      - name: Verify fixed settings repaint and background presence lifecycle
+        run: |
+          mbx test --locked --lib --features demo whisper_settings_read_cached_presence_until_explicit_refresh -- --nocapture
+          mbx test --locked --lib --features demo model_presence::tests -- --nocapture
       - name: Capture the layouts
         run: |
           set -euo pipefail
