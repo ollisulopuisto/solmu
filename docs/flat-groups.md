@@ -76,10 +76,8 @@ backend group conversation.
 
 ### Native synthetic sidebar comparison
 
-These captures use only the demo fixture. Before: the previous main sidebar.
-After: the approved named modes and Groups + control. No private chats.
-
-| Before | After |
-| --- | --- |
-| ![Before, light](review-sidebar/sidebar-before-light.png) | ![After, light](review-sidebar/sidebar-final-light.png) |
-| ![Before, dark](review-sidebar/sidebar-before-dark.png) | ![After, dark](review-sidebar/sidebar-final-dark.png) |
+The [before-and-after evidence](https://files.instinct.com/1nsz2jzyeew9-solmu-sidebar-before-and-after)
+contains four native demo captures: before and after in light appearance, then
+before and after in dark appearance. Tap an image to inspect its full size.
+The captures use the synthetic demo fixture, never private chats. Screenshots
+are hosted outside the repository, following its no-capture-assets rule.
