@@ -127,12 +127,35 @@ pub fn parse_replacements(input: &str) -> Vec<Replacement> {
         }
         if let (Some(replace), Some(with)) = (field("replace"), field("with")) {
             table.push(Replacement {
-                replace: replace.to_owned(),
-                with: with.to_owned(),
+                replace: decode_residual_escapes(replace),
+                with: decode_residual_escapes(with),
             });
         }
     }
     table
+}
+
+/// Decodes a value that is still plist-escaped after parsing.
+///
+/// `defaults` prints every non-ASCII character as `\Uhhhh` and every
+/// backslash as `\\`, and the parser undoes that once. An entry whose stored
+/// text is itself the escaped form (synced or pasted from such output) comes
+/// out as the literal `\U00af\\_(\U30c4)_/\U00af`, which the composer then
+/// shows as is. A value holding a `\U` plus four hex digits is taken as that
+/// case and decoded a second time; every other value is returned untouched, so
+/// ordinary backslashes such as `C:\Users` are never altered.
+fn decode_residual_escapes(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let escaped = bytes
+        .windows(6)
+        .any(|w| w[0] == b'\\' && w[1] == b'U' && w[2..].iter().all(u8::is_ascii_hexdigit));
+    if !escaped {
+        return value.to_owned();
+    }
+    let quoted = format!("\"{}\"", value.replace('"', "\\\""));
+    Parser::new(&quoted)
+        .quoted()
+        .unwrap_or_else(|| value.to_owned())
 }
 
 /// Old-style plist value: arrays, dictionaries and atoms (quoted or bare).
@@ -383,6 +406,42 @@ mod tests {
         assert_eq!(with("table,,"), Some("(╯°□°）╯︵ ┻━┻"));
         assert_eq!(with("hei"), Some("Hää"));
         assert_eq!(with("omw"), Some("0503554767"));
+    }
+
+    #[test]
+    fn a_stored_value_that_is_itself_escape_text_decodes_to_the_shrug() {
+        // The entry holds the characters `\U00af\\_(\U30c4)_/\U00af`, so
+        // `defaults` prints them escaped again: `\\U00af\\\\_(\\U30c4)_/\\U00af`.
+        // This is what the composer showed literally on the reporting Mac.
+        let input = "({ on = 1; replace = \"shrug,,\"; with = \"\\\\U00af\\\\\\\\_(\\\\U30c4)_/\\\\U00af\"; })";
+        let table = parse_replacements(input);
+        assert_eq!(table.len(), 1);
+        assert_eq!(table[0].with, "\u{af}\\_(\u{30c4})_/\u{af}");
+        assert_eq!(table[0].with, "¯\\_(ツ)_/¯");
+        let (range, with) = expand_at(&table, "shrug,,", 7).expect("shrug,, expands");
+        assert_eq!(range, 0..7);
+        assert_eq!(with, "¯\\_(ツ)_/¯");
+        assert!(!with.contains("\\U"));
+    }
+
+    #[test]
+    fn double_escaped_table_flip_and_finnish_decode_too() {
+        let input = "({ replace = \"flip,,\"; with = \"(\\\\U256f\\\\U00b0\\\\U25a1\\\\U00b0\\\\Uff09\\\\U256f\\\\Ufe35 \\\\U253b\\\\U2501\\\\U253b\"; }, { replace = hei; with = \"H\\\\U00e4\\\\U00e4\"; }, { replace = e; with = \"\\\\Ud83d\\\\Ude00\"; })";
+        let table = parse_replacements(input);
+        assert_eq!(table[0].with, "(╯°□°）╯︵ ┻━┻");
+        assert_eq!(table[1].with, "Hää");
+        assert_eq!(table[2].with, "\u{1F600}");
+    }
+
+    #[test]
+    fn ordinary_backslashes_and_correct_entries_are_not_decoded_again() {
+        // Without a `\Uhhhh` sequence the value is left exactly as parsed.
+        let input = "({ replace = path; with = \"C:\\\\Users\\\\me\"; }, { replace = \"x,,\"; with = \"a\\\\nb\"; }, { replace = ok; with = \"\\U00af\\\\_(\\U30c4)_/\\U00af\"; })";
+        let table = parse_replacements(input);
+        assert_eq!(table[0].with, "C:\\Users\\me");
+        assert_eq!(table[1].with, "a\\nb");
+        // A correctly decoded shrug is stable: no second pass changes it.
+        assert_eq!(table[2].with, "¯\\_(ツ)_/¯");
     }
 
     #[test]
