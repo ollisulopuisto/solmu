@@ -1853,6 +1853,59 @@ mod tests {
         assert!(parse("_(x)_", &[]).iter().any(|span| span.italic));
     }
 
+    /// What the composer inserts for `shrug,,` and `flip,,` (Olli's Text
+    /// Replacements, the first with its leading space) must survive the
+    /// markup renderer byte for byte, whatever it sits next to.
+    #[test]
+    fn expanded_replacements_are_not_mangled_by_markup() {
+        let shrug = "¯\\_(ツ)_/¯";
+        let spaced = " ¯\\_(ツ)_/¯";
+        let flip = "(╯°□°）╯︵ ┻━┻";
+        let unstyled = |text: &str| {
+            parse(text, &[])
+                .iter()
+                .all(|s| !s.italic && !s.bold && !s.strike && !s.mono)
+        };
+        for text in [
+            shrug.to_owned(),
+            spaced.to_owned(),
+            format!("{shrug}{shrug}"),
+            format!("{shrug} {shrug}"),
+            format!("a{spaced}"),
+            format!("hello{spaced}\nsecond line {shrug}"),
+            format!("({shrug})"),
+            format!("{shrug}."),
+            format!("{shrug}!"),
+            format!("{shrug}?"),
+            flip.to_owned(),
+            format!("{flip} {shrug}"),
+        ] {
+            assert_eq!(plain(&text, &[]), text, "{text:?}");
+            assert!(unstyled(&text), "{text:?} gained styling");
+        }
+        // Quote and bullet lines add their own marker; the shrug after it
+        // is unchanged and unstyled.
+        for text in [format!("> {shrug}"), format!("\u{2022} {shrug}")] {
+            assert!(plain(&text, &[]).ends_with(shrug), "{text:?}");
+            assert!(unstyled(&text), "{text:?} gained styling");
+        }
+        // Real emphasis next to it still works and does not pair with the
+        // shrug's underscores, in either order.
+        for text in [
+            format!("{shrug} _word_"),
+            format!("_word_ {shrug}"),
+            format!("*bold* {shrug} ~gone~"),
+        ] {
+            let shown = plain(&text, &[]);
+            assert!(shown.contains(shrug), "{text:?} -> {shown:?}");
+            assert!(!unstyled(&text), "{text:?} lost its emphasis");
+        }
+        assert_eq!(
+            plain(&format!("_word_ {shrug}"), &[]),
+            format!("word {shrug}")
+        );
+    }
+
     #[test]
     fn stray_markers_stay_literal() {
         assert_eq!(plain("2 * 3 = 6", &[]), "2 * 3 = 6");

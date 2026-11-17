@@ -26,3 +26,10 @@ Results jump to the original voice message. Day filters use a known message
 date; an unloaded message whose date is unknown is excluded when filtering
 by day, rather than using the transcript file's modification time. Hidden
 locked chats and another account's transcripts are excluded.
+
+Saved panel and in-chat snapshots keep at most four account/chat/query entries,
+500 matches and 2 MiB of retained text per entry, with 64 KiB per transcript.
+Long text is clipped and an explicit partial-results note is shown. Queries
+are applied before result caps; files over 32 MiB are skipped with the same
+notice. Saved text can be read, searched and deleted without a configured
+transcription engine; none of these actions starts inference.

@@ -1415,12 +1415,14 @@ fn docs_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: boo
 fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bool) {
     let saved = app
         .transcript_reader()
-        .map(|worker| worker.saved_in_chat(&app.account().id.0, &listing.chat, ""))
+        .map(|worker| {
+            worker.saved_in_chat(&app.account().id.0, &listing.chat, &app.info_voice_query)
+        })
         .unwrap_or_default();
-    let loading = app
-        .transcript_reader()
-        .is_some_and(|worker| worker.saved_loading(&app.account().id.0, &listing.chat));
-    if listing.voice.is_empty() && saved.is_empty() && !loading {
+    let loading = app.transcript_reader().is_some_and(|worker| {
+        worker.saved_loading(&app.account().id.0, &listing.chat, &app.info_voice_query)
+    });
+    if listing.voice.is_empty() && saved.is_empty() && !loading && app.info_voice_query.is_empty() {
         widgets::empty_state(
             ui,
             &app.palette,
@@ -1433,9 +1435,14 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
         );
         return;
     }
+    if app.transcript_reader().is_some_and(|worker| {
+        worker.saved_truncated(&app.account().id.0, &listing.chat, &app.info_voice_query)
+    }) {
+        ui.label(crate::i18n::gettext(app.locale, "Saved transcript results are partial: up to 500 matches and 2 MB of text, with long transcripts clipped. Refine your search or open the message."));
+    }
     let transcripts: std::collections::HashMap<_, _> = saved
         .iter()
-        .map(|hit| (hit.message_id.clone(), hit.text.clone()))
+        .map(|hit| (hit.message_id.as_str(), hit.text.as_str()))
         .collect();
     ui.add(
         egui::TextEdit::singleline(&mut app.info_voice_query)
@@ -1451,10 +1458,7 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
         "Only saved transcripts are searched. Searching never starts transcription.",
     ));
     let query = crate::util::search_key(app.info_voice_query.trim());
-    let matching = saved
-        .iter()
-        .filter(|hit| crate::util::search_key(&hit.text).contains(&query))
-        .count();
+    let matching = saved.len();
     if loading {
         ui.label(crate::i18n::gettext(
             app.locale,
@@ -1471,11 +1475,8 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for (index, message) in listing.voice.iter().enumerate() {
-                let transcript = transcripts.get(&message.id);
-                if !query.is_empty()
-                    && !transcript
-                        .is_some_and(|text| crate::util::search_key(text).contains(&query))
-                {
+                let transcript = transcripts.get(message.id.as_str()).copied();
+                if !query.is_empty() && transcript.is_none() {
                     continue;
                 }
                 let Content::Audio {
@@ -1569,11 +1570,10 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
             let outside: Vec<_> = saved
                 .iter()
                 .filter(|hit| {
-                    crate::util::search_key(&hit.text).contains(&query)
-                        && !listing
-                            .voice
-                            .iter()
-                            .any(|message| message.id == hit.message_id)
+                    !listing
+                        .voice
+                        .iter()
+                        .any(|message| message.id == hit.message_id)
                 })
                 .collect();
             for (offset, hit) in outside

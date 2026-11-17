@@ -17,6 +17,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 ## Unreleased
 
 - Voice shared items can expand and search saved transcripts; in-chat search includes saved transcript matches without starting transcription.
+- The sidebar uses named Recent, Unread and Needs me tabs. Recent includes all chats, newest first, without a date cutoff; old Unread 7d settings open Recent. A + beside Groups opens local group creation instead of a permanent input at the end of the list.
 
 - Shared items has separate Photos, Videos and Voice tabs. Voice/audio rows can download and play a clip or jump to its message. Beeper listings now answer instead of spinning, with a clear note when only recent history was scanned.
 
@@ -44,6 +45,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 - Right-click a chat and hover "Assign groups" to see every group at once and pick one; dragging a chat onto a group heading assigns it in every mode, and onto Other takes it out of its group.
 - Drag a group heading onto another to reorder groups; the order is saved.
 - The shrug ¯\_(ツ)_/¯ keeps its underscores in a bubble: an underscore next to a slash or backslash is not emphasis.
+- A macOS Text Replacement whose stored text is still escape text (such as the shrug as `\U00af\\_(\U30c4)_/\U00af`) expands to the characters, not the escape codes.
 - Archive multiple selected chats without deleting messages.
 - Explicit per-chat bridge-supported message deletion scope and age checks.
 - Unsupported-item preflight and request-correlated per-item outcomes, no auto retry.
@@ -208,4 +210,3 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 - The chat list's edge can be dragged to resize it.
 - Attachment uploads to WhatsApp no longer send the request shape that was rejected; a failed send keeps the staged files.
 - The sidebar restores correctly in narrow windows and with the list hidden, and settings rows no longer cut their titles short.
-

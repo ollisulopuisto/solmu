@@ -11,7 +11,7 @@
 //! a re-transcribe after re-adding, or the worker's own drop (a settings
 //! respawn) invalidates the late result for good.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
@@ -106,7 +106,14 @@ pub struct Worker {
 
 /// Search memo: (store version, query, hits).
 type SearchCache = Arc<Mutex<Option<(u64, String, Vec<Hit>)>>>;
-type ScopedSearchCache = Arc<Mutex<Option<(u64, String, String, Option<Vec<Hit>>)>>>;
+const SCOPED_CACHE_SLOTS: usize = 4;
+struct ScopedSnapshot {
+    version: u64,
+    key: (String, String, String),
+    hits: Option<Arc<[Hit]>>,
+    truncated: bool,
+}
+type ScopedSearchCache = Arc<Mutex<VecDeque<ScopedSnapshot>>>;
 
 /// The loop: drain commands until Shutdown or the channel closes. `wake`
 /// repaints the view after each status change.
@@ -245,7 +252,7 @@ impl Worker {
             shared,
             store: Some(store),
             search_cache: Arc::new(Mutex::new(None)),
-            scoped_search_cache: Arc::new(Mutex::new(None)),
+            scoped_search_cache: Arc::new(Mutex::new(VecDeque::new())),
             wake_search,
             recorded: Arc::new(Mutex::new(Vec::new())),
         }
@@ -371,7 +378,7 @@ impl Worker {
 
     /// Saved text only: never queues the engine or downloads audio. A
     /// versioned scoped memo keeps repeated paint passes off disk.
-    pub fn saved_in_chat(&self, account: &str, chat: &str, query: &str) -> Vec<Hit> {
+    pub fn saved_in_chat(&self, account: &str, chat: &str, query: &str) -> Arc<[Hit]> {
         let Some(store) = &self.store else {
             return self
                 .shared
@@ -399,68 +406,91 @@ impl Worker {
                 .collect();
         };
         let version = store.version();
-        let needle = crate::util::search_key(query.trim());
+        let key = (
+            account.to_owned(),
+            chat.to_owned(),
+            crate::util::search_key(query.trim()),
+        );
         let mut memo = self
             .scoped_search_cache
             .lock()
             .unwrap_or_else(|p| p.into_inner());
-        if let Some((v, a, c, hits)) = &*memo
-            && *v == version
-            && a == account
-            && c == chat
-        {
-            return hits
-                .as_ref()
-                .map(|hits| {
-                    hits.iter()
-                        .filter(|hit| {
-                            needle.is_empty()
-                                || crate::util::search_key(&hit.text).contains(&needle)
-                        })
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default();
+        memo.retain(|entry| entry.version == version);
+        if let Some(entry) = memo.iter().find(|entry| entry.key == key) {
+            return entry.hits.clone().unwrap_or_default();
         }
-        *memo = Some((version, account.into(), chat.into(), None));
+        if memo.len() >= SCOPED_CACHE_SLOTS {
+            if let Some(index) = memo.iter().position(|entry| entry.hits.is_some()) {
+                memo.remove(index);
+            } else {
+                return Arc::default();
+            }
+        }
+        memo.push_back(ScopedSnapshot {
+            version,
+            key: key.clone(),
+            hits: None,
+            truncated: false,
+        });
         drop(memo);
         let store = store.clone();
         let cache = Arc::clone(&self.scoped_search_cache);
         let shared = Arc::clone(&self.shared);
         let wake = Arc::clone(&self.wake_search);
-        let account = account.to_owned();
-        let chat = chat.to_owned();
         std::thread::spawn(move || {
-            let hits = {
+            let snapshot = {
                 let _io = shared.store_io.lock().unwrap_or_else(|p| p.into_inner());
-                store.search_scoped("", usize::MAX, Some((&account, &chat)))
+                store.snapshot(&key.2, &key.0, &key.1)
             };
             let mut memo = cache.lock().unwrap_or_else(|p| p.into_inner());
+            // A stale completion wakes once so the next frame can request the
+            // current version. It never replaces newer text or revives deletion.
             if store.version() == version
                 && shared.alive.load(Ordering::Relaxed)
-                && memo
-                    .as_ref()
-                    .is_some_and(|(v, a, c, _)| *v == version && a == &account && c == &chat)
+                && let Some(entry) = memo
+                    .iter_mut()
+                    .find(|entry| entry.version == version && entry.key == key)
             {
-                *memo = Some((version, account, chat, Some(hits)));
+                entry.hits = Some(snapshot.hits.into());
+                entry.truncated = snapshot.truncated;
             }
             drop(memo);
             wake();
         });
-        Vec::new()
+        Arc::default()
     }
 
-    pub fn saved_loading(&self, account: &str, chat: &str) -> bool {
+    pub fn saved_loading(&self, account: &str, chat: &str, query: &str) -> bool {
         let Some(store) = &self.store else {
             return false;
         };
+        let key = (
+            account.to_owned(),
+            chat.to_owned(),
+            crate::util::search_key(query.trim()),
+        );
         self.scoped_search_cache
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .as_ref()
-            .is_none_or(|(version, a, c, hits)| {
-                *version != store.version() || a != account || c != chat || hits.is_none()
-            })
+            .iter()
+            .find(|entry| entry.version == store.version() && entry.key == key)
+            .is_none_or(|entry| entry.hits.is_none())
+    }
+
+    pub fn saved_truncated(&self, account: &str, chat: &str, query: &str) -> bool {
+        let Some(store) = &self.store else {
+            return false;
+        };
+        let key = (
+            account.to_owned(),
+            chat.to_owned(),
+            crate::util::search_key(query.trim()),
+        );
+        self.scoped_search_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .any(|entry| entry.version == store.version() && entry.key == key && entry.truncated)
     }
 
     /// Read/delete access to saved text without an engine or worker thread.
@@ -481,7 +511,7 @@ impl Worker {
             }),
             store: Some(store),
             search_cache: Arc::new(Mutex::new(None)),
-            scoped_search_cache: Arc::new(Mutex::new(None)),
+            scoped_search_cache: Arc::new(Mutex::new(VecDeque::new())),
             wake_search: Arc::new(wake),
             recorded: Arc::new(Mutex::new(Vec::new())),
         }
@@ -528,7 +558,7 @@ impl Worker {
             }),
             store: None,
             search_cache: Arc::new(Mutex::new(None)),
-            scoped_search_cache: Arc::new(Mutex::new(None)),
+            scoped_search_cache: Arc::new(Mutex::new(VecDeque::new())),
             wake_search: Arc::new(|| {}),
             recorded,
         }
@@ -603,7 +633,10 @@ mod tests {
         };
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].message_id, "mine");
-        assert_eq!(worker.saved_in_chat("mine", "same-chat", "").len(), 1);
+        assert_eq!(
+            worker.saved_in_chat("mine", "same-chat", "station").len(),
+            1
+        );
         worker.remove_chat("mine".into(), "same-chat".into());
         assert!(worker.saved_in_chat("mine", "same-chat", "").is_empty());
         assert!(
@@ -612,6 +645,64 @@ mod tests {
                 .iter()
                 .all(|line| !line.starts_with("transcribe"))
         );
+    }
+
+    #[test]
+    fn alternating_scoped_panels_settle_without_rescanning() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), 1 << 20).unwrap();
+        store.put("acc", "a", "a1", "station").unwrap();
+        store.put("acc", "b", "b1", "station").unwrap();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&wakes);
+        let worker = Worker::archive_with_wake(store, move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+        });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while worker.saved_in_chat("acc", "a", "station").is_empty()
+            || worker.saved_in_chat("acc", "b", "station").is_empty()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "alternating panels never settled"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        for _ in 0..20 {
+            assert_eq!(worker.saved_in_chat("acc", "a", "station").len(), 1);
+            assert_eq!(worker.saved_in_chat("acc", "b", "station").len(), 1);
+        }
+        assert_eq!(
+            wakes.load(Ordering::Relaxed),
+            2,
+            "cached frames must not launch scans"
+        );
+    }
+
+    #[test]
+    fn snapshot_completion_after_mutation_never_publishes_old_version() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), 1 << 20).unwrap();
+        store.put("acc", "chat", "old", "station").unwrap();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&wakes);
+        let worker = Worker::archive_with_wake(store.clone(), move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+        });
+        let io = worker.shared.store_io.lock().unwrap();
+        assert!(worker.saved_in_chat("acc", "chat", "station").is_empty());
+        store.remove_chat("acc", "chat").unwrap();
+        store.put("acc", "chat", "fresh", "station").unwrap();
+        drop(io);
+        wait_wakes(&wakes, 1);
+        assert!(
+            worker.saved_in_chat("acc", "chat", "station").is_empty(),
+            "stale completion was published"
+        );
+        wait_wakes(&wakes, 2);
+        let hits = worker.saved_in_chat("acc", "chat", "station");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_id, "fresh");
     }
 
     use std::path::PathBuf;

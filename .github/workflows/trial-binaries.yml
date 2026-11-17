@@ -16,6 +16,7 @@ on:
           - x86_64-pc-windows-msvc
           - all
           - shots-only
+          - whisper-helper
 
 permissions:
   contents: read
@@ -47,11 +48,16 @@ jobs:
               dict(os='windows-2025', target='x86_64-pc-windows-msvc', executable='solmu.exe'),
           ]
           selected = [r for r in rows if os.environ['TARGET'] in ('all', r['target'])]
-          if not selected and os.environ['TARGET'] != 'shots-only':
+          if not selected and os.environ['TARGET'] not in ('shots-only', 'whisper-helper'):
               raise SystemExit('Unknown target; refusing build')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write('matrix=' + json.dumps(dict(include=selected)) + '\n')
           PY
+
+  whisper-helper:
+    if: github.event.repository.private == false && inputs.target == 'whisper-helper' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    uses: ./.github/workflows/whisper-helper.yml
+    secrets: inherit
 
   build:
     needs: select
@@ -60,7 +66,7 @@ jobs:
     # Skip by condition on shots-only runs: an empty matrix skips the job
     # too, but GitHub then concludes the whole run as failed despite
     # every real job passing.
-    if: github.event.repository.private == false && inputs.target != 'shots-only'
+    if: github.event.repository.private == false && inputs.target != 'shots-only' && inputs.target != 'whisper-helper'
 
     timeout-minutes: 90
     strategy:
@@ -162,6 +168,13 @@ jobs:
           cache-generation: test-v1
       - name: Build the demo
         run: mbx build --locked --features demo
+      - name: Saved transcript behavioral regressions
+        run: |
+          mbx test --locked --lib --features demo transcrib -- --nocapture
+          mbx test --locked --lib --features demo alternating_scoped_panels -- --nocapture
+          mbx test --locked --lib --features demo snapshot_completion_after_mutation -- --nocapture
+          mbx test --locked --lib --features demo scoped_snapshot_bounds -- --nocapture
+          mbx test --locked --lib --features demo voice_panel_search_and_transcript_expansion -- --nocapture
       - name: Capture the layouts
         run: |
           set -euo pipefail
@@ -191,6 +204,7 @@ jobs:
           shot info-voice-dark-1180x780 1180x780 chat,info-voice,theme=Catppuccin.json
           shot info-voice-900x780 900x780 chat,info-voice
           shot voice-transcripts-1180x780 1180x780 chat,voice-transcripts
+          shot voice-transcripts-dark-1180x780 1180x780 chat,voice-transcripts,theme=Catppuccin.json
           shot voice-transcripts-search-1180x780 1180x780 chat,voice-transcripts-search
           shot chat-transcript-search-1180x780 1180x780 chat,chat-transcript-search
           shot chat-1180x780 1180x780 chat

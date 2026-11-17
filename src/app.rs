@@ -33,6 +33,24 @@ fn download_notice(error: String) -> String {
     }
 }
 
+#[derive(PartialEq)]
+struct ChatSearchKey {
+    revision: u64,
+    base_len: usize,
+    account: String,
+    chat: Option<String>,
+    query: String,
+    day: Option<jiff::civil::Date>,
+    hidden: bool,
+    locale: Locale,
+    timestamps: Vec<i64>,
+}
+struct ChatSearchMemo {
+    key: ChatSearchKey,
+    saved: std::sync::Arc<[crate::transcriber::Hit]>,
+    rows: std::sync::Arc<[Message]>,
+}
+
 /// Initial and incremental message-page size.
 pub const PAGE: usize = 60;
 /// Minimum delay between phone history requests.
@@ -494,6 +512,8 @@ pub struct App {
     pub chat_search: String,
     /// Matches in the open chat, newest first.
     pub chat_search_hits: Vec<Message>,
+    chat_search_revision: u64,
+    chat_search_memo: std::cell::RefCell<Option<ChatSearchMemo>>,
     /// Whether the archive held more matches than the pane lists.
     pub chat_search_truncated: bool,
     /// Whether an answer for the current query and day is still due.
@@ -1568,6 +1588,8 @@ impl App {
             info_focus: None,
             chat_search: String::new(),
             chat_search_hits: Vec::new(),
+            chat_search_revision: 0,
+            chat_search_memo: Default::default(),
             chat_search_truncated: false,
             chat_search_pending: false,
             beeper_chat_search_error: None,
@@ -1972,6 +1994,7 @@ impl App {
         self.chat_search_open = false;
         self.beeper_chat_search_error = None;
         self.chat_search.clear();
+        self.chat_search_revision = self.chat_search_revision.wrapping_add(1);
         self.chat_search_hits.clear();
         self.chat_search_selected = None;
         self.chat_search_pending = false;
@@ -3651,11 +3674,6 @@ impl App {
         match mode {
             ListMode::Recent => true,
             ListMode::Unread => chat.looks_unread(),
-            ListMode::RecentUnread => {
-                chat.looks_unread()
-                    && !chat.muted(now)
-                    && now.saturating_sub(chat.last_activity) <= ListMode::RECENT_UNREAD_SECS
-            }
             ListMode::NeedsMe => self.needs_me_at(chat, now),
         }
     }
@@ -3928,11 +3946,12 @@ impl App {
     /// navigate to the source by chat + message id.
     fn transcript_hit_messages(
         &self,
-        hits: Vec<crate::transcriber::Hit>,
+        hits: impl AsRef<[crate::transcriber::Hit]>,
         query: &str,
     ) -> Vec<Message> {
         let account = self.account().id.0.clone();
-        hits.into_iter()
+        hits.as_ref()
+            .iter()
             // The store is shared; only the active account's transcripts
             // may surface in its search.
             .filter(|hit| hit.account_id == account)
@@ -5402,6 +5421,7 @@ impl App {
                     && until == want_until
                 {
                     self.beeper_chat_search_error = None;
+                    self.chat_search_revision = self.chat_search_revision.wrapping_add(1);
                     self.chat_search_hits = messages;
                     self.chat_search_truncated = truncated;
                     self.chat_search_pending = false;
@@ -7215,6 +7235,7 @@ impl App {
     fn close_chat_search(&mut self) {
         self.chat_search_open = false;
         self.chat_search.clear();
+        self.chat_search_revision = self.chat_search_revision.wrapping_add(1);
         self.chat_search_hits.clear();
         self.chat_search_truncated = false;
         self.chat_search_pending = false;
@@ -7248,7 +7269,62 @@ impl App {
     /// Local saved transcripts join in-chat search even if backend search
     /// fails. Unknown message dates never match a day filter; file mtimes
     /// are not message dates. Querying never starts transcription.
-    pub fn chat_search_results(&self) -> Vec<Message> {
+    pub fn chat_search_results(&self) -> std::sync::Arc<[Message]> {
+        let saved = self
+            .open_chat
+            .as_deref()
+            .and_then(|chat| {
+                self.transcript_reader().map(|worker| {
+                    worker.saved_in_chat(&self.account().id.0, chat, &self.chat_search)
+                })
+            })
+            .unwrap_or_default();
+        let key = ChatSearchKey {
+            revision: self.chat_search_revision,
+            base_len: self.chat_search_hits.len(),
+            account: self.account().id.0.clone(),
+            chat: self.open_chat.clone(),
+            query: self.chat_search.clone(),
+            day: self.chat_search_day,
+            hidden: self
+                .open_chat
+                .as_deref()
+                .and_then(|id| self.chat(id))
+                .is_some_and(|chat| chat.locked)
+                && !self.locked_folder_open(),
+            locale: self.locale,
+            timestamps: saved
+                .iter()
+                .map(|hit| {
+                    self.conversations
+                        .get(&hit.chat_id)
+                        .and_then(|c| c.message(&hit.message_id))
+                        .or_else(|| {
+                            self.chat_search_hits
+                                .iter()
+                                .find(|m| m.id == hit.message_id && m.chat == hit.chat_id)
+                        })
+                        .map_or(0, |m| m.timestamp)
+                })
+                .collect(),
+        };
+        if let Some(memo) = self.chat_search_memo.borrow().as_ref()
+            && memo.key == key
+            && (std::sync::Arc::ptr_eq(&memo.saved, &saved)
+                || (memo.saved.is_empty() && saved.is_empty()))
+        {
+            return memo.rows.clone();
+        }
+        let rows: std::sync::Arc<[Message]> = self.compute_chat_search_results(&saved).into();
+        *self.chat_search_memo.borrow_mut() = Some(ChatSearchMemo {
+            key,
+            saved,
+            rows: rows.clone(),
+        });
+        rows
+    }
+
+    fn compute_chat_search_results(&self, saved: &[crate::transcriber::Hit]) -> Vec<Message> {
         let mut hits = self.chat_search_hits.clone();
         let Some(chat) = self.open_chat.as_deref() else {
             return hits;
@@ -7259,11 +7335,8 @@ impl App {
         if self.chat(chat).is_some_and(|chat| chat.locked) && !self.locked_folder_open() {
             return Vec::new();
         }
-        let Some(worker) = self.transcript_reader() else {
-            return hits;
-        };
         let (from, until) = self.chat_search_range();
-        for hit in worker.saved_in_chat(&self.account().id.0, chat, &self.chat_search) {
+        for hit in saved {
             let known = self
                 .conversations
                 .get(chat)
@@ -7278,7 +7351,8 @@ impl App {
             {
                 continue;
             }
-            let mut messages = self.transcript_hit_messages(vec![hit], self.chat_search.trim());
+            let mut messages =
+                self.transcript_hit_messages(std::slice::from_ref(hit), self.chat_search.trim());
             let Some(mut message) = messages.pop() else {
                 continue;
             };
@@ -7321,6 +7395,7 @@ impl App {
             .clone()
             .filter(|_| !query.is_empty() || from.is_some())
         else {
+            self.chat_search_revision = self.chat_search_revision.wrapping_add(1);
             self.chat_search_hits.clear();
             self.chat_search_truncated = false;
             self.chat_search_pending = false;
@@ -26356,6 +26431,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         };
         assert_eq!(hits.len(), 2);
+        assert!(
+            std::sync::Arc::ptr_eq(&hits, &app.chat_search_results()),
+            "unchanged frames must reuse combined rows without cloning or sorting"
+        );
         let known = hits.iter().find(|hit| hit.id == "known").unwrap();
         assert_eq!(known.timestamp, 100);
         assert!(known.summary().contains("station"));
@@ -28173,7 +28252,7 @@ mod tests {
     fn unread_type_modes_keep_opened_chats_until_the_view_changes() {
         use crate::model::ListMode;
         let ctx = egui::Context::default();
-        for mode in [ListMode::Unread, ListMode::RecentUnread, ListMode::NeedsMe] {
+        for mode in [ListMode::Unread, ListMode::NeedsMe] {
             let mut app = app();
             let now = crate::util::now();
             let mut ada = Chat::new("1@s.whatsapp.net".into(), "Ada".into());
@@ -32143,37 +32222,20 @@ mod conversation_palette_tests {
     }
 
     #[test]
-    fn unread_7d_mode_keeps_recent_unmuted_unread_chats_only() {
+    fn recent_has_no_unread_mute_or_age_cutoff() {
         use crate::model::ListMode;
         let app = app();
         let now = 10_000_000;
-        let week = ListMode::RECENT_UNREAD_SECS;
-        let mut chat = later_chat("chat-1", now - 60);
-        // Read chat: out, however fresh.
-        assert!(!app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        chat.unread = 1;
-        assert!(app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        // A chat marked unread by hand counts too.
-        chat.unread = 0;
-        chat.marked_unread = true;
-        assert!(app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        chat.marked_unread = false;
-        chat.unread = 3;
-        // The window edge is inclusive; one second past it drops the chat.
-        chat.last_activity = now - week;
-        assert!(app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        chat.last_activity = now - week - 1;
-        assert!(!app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        // The older chat still shows in plain Unread.
-        assert!(app.mode_matches_at(&chat, ListMode::Unread, now));
-        // Muted chats stay out, for ever or until a time that has not come.
-        chat.last_activity = now - 60;
-        chat.muted_until = Some(0);
-        assert!(!app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        chat.muted_until = Some(now + 5);
-        assert!(!app.mode_matches_at(&chat, ListMode::RecentUnread, now));
-        chat.muted_until = Some(now - 5);
-        assert!(app.mode_matches_at(&chat, ListMode::RecentUnread, now));
+        for age in [0, 60, 7 * 86400, 365 * 86400] {
+            for unread in [0, 3] {
+                for muted in [None, Some(0), Some(now + 60)] {
+                    let mut chat = later_chat("chat-1", now - age);
+                    chat.unread = unread;
+                    chat.muted_until = muted;
+                    assert!(app.mode_matches_at(&chat, ListMode::Recent, now));
+                }
+            }
+        }
     }
 
     #[test]
