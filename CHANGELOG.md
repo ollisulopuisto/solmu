@@ -17,6 +17,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 ## Unreleased
 
 - The sidebar uses named Recent, Unread and Needs me tabs. Recent includes all chats, newest first, without a date cutoff; old Unread 7d settings open Recent. A + beside Groups opens local group creation instead of a permanent input at the end of the list.
+- Both About views show the full packaged build version, including the manual build suffix, instead of only the base Cargo version.
 
 - Linked-person chat headers keep clear of the Mac traffic lights after Cmd+B hides the chat list, including at different zoom levels.
 
