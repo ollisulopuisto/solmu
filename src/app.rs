@@ -12494,7 +12494,7 @@ impl App {
             }
             Action::DownloadLocalWhisper => {
                 if self.local_whisper_download.is_none()
-                    && crate::local_whisper::runtime_path(&self.dirs.state).is_file()
+                    && crate::whisper_runtime::artifact().is_some()
                 {
                     self.settings.transcription_engine =
                         Some(crate::settings::TranscriptionEngine::Local);
@@ -12504,7 +12504,7 @@ impl App {
                     self.local_whisper_status = None;
                     let waker = self.waker.clone();
                     self.local_whisper_download = Some(crate::local_whisper::Download::start(
-                        crate::local_whisper::model_path(&self.dirs.state),
+                        self.dirs.state.clone(),
                         move || waker.wake(),
                     ));
                 }

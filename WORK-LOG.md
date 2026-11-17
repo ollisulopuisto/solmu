@@ -212,3 +212,13 @@ it and no release asset is published automatically. Workflow and build script
 are only prepared, not run. Publishing helper plus pinning output URL/size/hash
 and implementing verified runtime installation still pending. Existing app
 engine controls remain disabled until that runtime exists.
+
+Helper arm64 run44130161632 passed build/sign/notarize/staple/Gatekeeper with
+quarantine present and --help execution. Intel still pending. Archive metadata
+/downloads/whisper-helper-arm64 captured; no release published. Runtime module
+now stages archive, checks exact hash/size, signature+team requirement and
+Gatekeeper, then atomically installs outside app bundle. Provider remains None
+until a real published URL is available. Download button intentionally disabled.
+Model worker now downloads/verifies runtime first, then model. No model fetched.
+Actual-app real-recording test still unrun. Public helper download needs a
+publish decision separately from unpublished DMG; parent notified.

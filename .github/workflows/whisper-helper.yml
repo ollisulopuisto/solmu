@@ -80,7 +80,8 @@ jobs:
           metadata = dict(filename=archive.name, size=archive.stat().st_size,
                           sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
                           upstream_revision=os.environ['WHISPER_REVISION'],
-                          executable='SolmuWhisper.app/Contents/MacOS/whisper-cli')
+                          executable='SolmuWhisper.app/Contents/MacOS/whisper-cli',
+                          executable_sha256=hashlib.sha256(pathlib.Path(os.environ['RUNNER_TEMP'], 'helper/SolmuWhisper.app/Contents/MacOS/whisper-cli').read_bytes()).hexdigest())
           archive.with_suffix('.json').write_text(json.dumps(metadata, indent=2)+'\n')
           PY
       - uses: actions/upload-artifact@v7

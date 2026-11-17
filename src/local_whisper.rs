@@ -95,11 +95,7 @@ pub fn verify_model(path: &Path) -> Result<(), String> {
 /// Optional runtime lives in app state, never inside Solmu's signed bundle.
 /// A platform provider must install and verify it before this path is runnable.
 pub fn runtime_path(state: &Path) -> PathBuf {
-    state.join("runtimes/whisper").join(if cfg!(windows) {
-        "whisper-cli.exe"
-    } else {
-        "whisper-cli"
-    })
+    crate::whisper_runtime::executable(state)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -117,10 +113,12 @@ pub struct Download {
 }
 impl Download {
     /// Call only from the Download & enable action, never from startup/render.
-    pub fn start(path: PathBuf, wake: impl Fn() + Send + 'static) -> Self {
+    pub fn start(app_state: PathBuf, wake: impl Fn() + Send + 'static) -> Self {
+        let path = model_path(&app_state);
+        let total = MODEL_BYTES + crate::whisper_runtime::artifact().map_or(0, |a| a.bytes);
         let state = Arc::new(Mutex::new(DownloadState::Downloading {
             received: 0,
-            total: MODEL_BYTES,
+            total,
         }));
         let cancelled = Arc::new(AtomicBool::new(false));
         let download = Self {
@@ -129,10 +127,8 @@ impl Download {
         };
         std::thread::spawn(move || {
             let progress = |received| {
-                *state.lock().unwrap_or_else(|p| p.into_inner()) = DownloadState::Downloading {
-                    received,
-                    total: MODEL_BYTES,
-                };
+                *state.lock().unwrap_or_else(|p| p.into_inner()) =
+                    DownloadState::Downloading { received, total };
                 wake();
             };
             let result = (|| {
@@ -142,25 +138,38 @@ impl Download {
                 if cancelled.load(Ordering::Acquire) {
                     return Err("Download cancelled".into());
                 }
-                let agent: ureq::Agent = ureq::Agent::config_builder()
-                    .https_only(true)
-                    .proxy(crate::proxy::ureq_proxy())
-                    .timeout_global(Some(Duration::from_secs(30 * 60)))
-                    .timeout_resolve(Some(Duration::from_secs(10)))
-                    .timeout_connect(Some(Duration::from_secs(10)))
-                    .timeout_recv_response(Some(Duration::from_secs(10)))
-                    .timeout_per_read(Some(Duration::from_secs(5)))
-                    .build()
-                    .into();
-                let mut response = agent.get(MODEL_URL).call().map_err(|e| e.to_string())?;
-                let mut reader = response.body_mut().as_reader();
-                install(
-                    &mut reader,
+                let spec = crate::whisper_runtime::artifact()
+                    .ok_or("No verified prebuilt runtime is available for this platform yet")?;
+                let executable = runtime_path(&app_state);
+                if executable.exists() {
+                    crate::whisper_runtime::verify(&executable, spec)?;
+                } else {
+                    enough_space(
+                        available_space(parent)?,
+                        MODEL_BYTES + spec.bytes + 64 * 1024 * 1024,
+                    )?;
+                    let temporary = tempfile::tempdir_in(parent).map_err(|e| e.to_string())?;
+                    let archive = temporary.path().join("runtime.zip");
+                    fetch_verified(
+                        spec.url,
+                        &archive,
+                        spec.bytes,
+                        spec.sha256,
+                        &cancelled,
+                        progress,
+                    )?;
+                    crate::whisper_runtime::install_archive(
+                        &archive, &app_state, spec, &cancelled,
+                    )?;
+                }
+                progress(spec.bytes);
+                fetch_verified(
+                    MODEL_URL,
                     &path,
                     MODEL_BYTES,
                     MODEL_SHA256,
                     &cancelled,
-                    progress,
+                    |received| progress(spec.bytes + received),
                 )
             })();
             let final_state = match result {
@@ -187,6 +196,35 @@ impl Drop for Download {
     fn drop(&mut self) {
         self.cancel();
     }
+}
+
+fn fetch_verified(
+    url: &str,
+    path: &Path,
+    bytes: u64,
+    sha256: &str,
+    cancelled: &AtomicBool,
+    progress: impl Fn(u64),
+) -> Result<(), String> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .https_only(true)
+        .proxy(crate::proxy::ureq_proxy())
+        .timeout_global(Some(Duration::from_secs(30 * 60)))
+        .timeout_resolve(Some(Duration::from_secs(10)))
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_recv_response(Some(Duration::from_secs(10)))
+        .timeout_per_read(Some(Duration::from_secs(5)))
+        .build()
+        .into();
+    let mut response = agent.get(url).call().map_err(|e| e.to_string())?;
+    install(
+        &mut response.body_mut().as_reader(),
+        path,
+        bytes,
+        sha256,
+        cancelled,
+        progress,
+    )
 }
 
 fn hex_hash(bytes: &[u8]) -> String {

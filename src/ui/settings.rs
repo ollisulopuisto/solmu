@@ -546,7 +546,7 @@ fn sections(app: &App) -> Vec<Section> {
         if choice != before.0 { app.settings.transcription_engine = Some(choice); }
         if choice == TranscriptionEngine::Local {
             ui.label(gettext(locale, "Whisper Base multilingual. Download: 148 MB. Allow 165 MB of free disk space and about 500 MB of memory while transcribing. Audio stays on this computer."));
-            let runtime = crate::local_whisper::runtime_path(&app.dirs.state).is_file();
+            let runtime = crate::whisper_runtime::artifact().is_some();
             let installed = crate::local_whisper::model_path(&app.dirs.state).is_file();
             if !runtime { ui.label(gettext(locale, "A verified runtime download is not available in this draft yet. No engine is bundled with Solmu.")); }
             if let Some(download) = &app.local_whisper_download {
@@ -559,7 +559,7 @@ fn sections(app: &App) -> Vec<Section> {
                 if installed && runtime {
                     ui.label(gettext(locale, "Model installed. Verified before its first use."));
                     if ui.button(gettext(locale, "Remove downloaded model")).clicked() { app.actions.push(Action::RemoveLocalWhisperModel); }
-                } else if ui.add_enabled(runtime, egui::Button::new(gettext(locale, "Download & enable"))).clicked() {
+                } else if ui.add_enabled(runtime, egui::Button::new(gettext(locale, "Download engine + model & enable"))).clicked() {
                     app.actions.push(Action::DownloadLocalWhisper);
                 }
                 match &app.local_whisper_status {
