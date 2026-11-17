@@ -3,8 +3,9 @@
 All is the full list, latest activity first. Unread lists every chat with
 something unread, muted chats included. Needs me includes unread chats and the
 Deal with later mark, excluding every muted chat. Cmd+D cycles these three.
-Bookmarks is not a mode: the icon after the tabs (or Cmd+Shift+B) opens the
-Saved list, with a Starred and Saved switch under its header. Existing read/reply-later marks count as that same
+Bookmarks is not a mode: the bookmark icon in the left rail, Go > Bookmarks in
+the Mac menu bar, or Cmd+Shift+B opens the Saved list, with a Starred and Saved
+switch under its header. Existing read/reply-later marks count as that same
 mark, and clearing Deal with later clears both old marks.
 
 Every mode uses static section headers. Headers do not collapse or filter the

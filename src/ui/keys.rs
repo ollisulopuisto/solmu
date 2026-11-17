@@ -1063,6 +1063,13 @@ fn message_shortcuts_allowed(app: &App, ctx: &egui::Context) -> bool {
         && !egui::Popup::is_any_open(ctx)
 }
 
+/// Whether the open chat is a linked person's view. Its Cmd+R reply is
+/// routed by the view's own state, which a menu command cannot reach.
+pub fn linked_view(app: &App) -> bool {
+    app.current_chat()
+        .is_some_and(|chat| linked_person(app, chat).is_some())
+}
+
 fn linked_person<'a>(app: &'a App, chat: &Chat) -> Option<&'a crate::merged::Person> {
     super::merged::person_for_view(app, chat)
 }
@@ -1273,7 +1280,11 @@ const JUMP_TO_CHAT: Shortcut = Shortcut {
     keys: &[(Modifiers::COMMAND, Key::K)],
     label: Some("Ctrl+K"),
     description: Some("Jump between recent chats"),
-    menu: None,
+    menu: Some(MenuItem {
+        id: "go-jump",
+        text: "Jump to Chat\u{2026}",
+        accelerator: "Super+KeyK",
+    }),
 };
 const SEARCH_CHATS: Shortcut = Shortcut {
     id: "search-chats",
@@ -1291,7 +1302,11 @@ const PALETTE: Shortcut = Shortcut {
     keys: &[(Modifiers::COMMAND, Key::P)],
     label: Some("Ctrl+P"),
     description: Some("Command palette: chats, filters, actions"),
-    menu: None,
+    menu: Some(MenuItem {
+        id: "go-palette",
+        text: "Command Palette\u{2026}",
+        accelerator: "Super+KeyP",
+    }),
 };
 const FIND: Shortcut = Shortcut {
     id: "find",
@@ -1348,7 +1363,11 @@ const ARCHIVE: Shortcut = Shortcut {
     keys: &[(Modifiers::COMMAND, Key::E)],
     label: Some("Ctrl+E"),
     description: Some("Archive or unarchive the open chat"),
-    menu: None,
+    menu: Some(MenuItem {
+        id: "chat-archive",
+        text: "Archive Chat",
+        accelerator: "Super+KeyE",
+    }),
 };
 const NEXT_ACCOUNT: Shortcut = Shortcut {
     id: "next-account",
@@ -1376,14 +1395,22 @@ const LIST_MODE: Shortcut = Shortcut {
     keys: &[(Modifiers::COMMAND, Key::D)],
     label: Some("Ctrl+D"),
     description: Some("Switch the chat list between All, Unread, Unread 7d and Needs me"),
-    menu: None,
+    menu: Some(MenuItem {
+        id: "view-mode-next",
+        text: "Next List Mode",
+        accelerator: "Super+KeyD",
+    }),
 };
 const LIST_LAYOUT: Shortcut = Shortcut {
     id: "list-layout",
     keys: &[(Modifiers::COMMAND, Key::G)],
     label: Some("Ctrl+G"),
     description: Some("Show the chat list as group sections or as one flat list"),
-    menu: None,
+    menu: Some(MenuItem {
+        id: "view-layout",
+        text: "Group Sections or Flat List",
+        accelerator: "Super+KeyG",
+    }),
 };
 const BOOKMARKS: Shortcut = Shortcut {
     id: "bookmarks",
@@ -1391,7 +1418,11 @@ const BOOKMARKS: Shortcut = Shortcut {
     keys: &[(COMMAND_SHIFT, Key::B)],
     label: Some("Ctrl+Shift+B"),
     description: Some("Open or close Bookmarks"),
-    menu: None,
+    menu: Some(MenuItem {
+        id: "go-bookmarks",
+        text: "Bookmarks",
+        accelerator: "Super+Shift+KeyB",
+    }),
 };
 const INFO_SIDEBAR: Shortcut = Shortcut {
     id: "info-sidebar",
@@ -1474,14 +1505,22 @@ const READ_LATER: Shortcut = Shortcut {
     keys: &[(Modifiers::COMMAND, Key::U)],
     label: Some("Ctrl+U"),
     description: Some("Mark the open chat to deal with later"),
-    menu: None,
+    menu: Some(MenuItem {
+        id: "chat-read-later",
+        text: "Read Later",
+        accelerator: "Super+KeyU",
+    }),
 };
 const REPLY_LATER: Shortcut = Shortcut {
     id: "reply-later",
     keys: &[(Modifiers::COMMAND, Key::I)],
     label: Some("Ctrl+I"),
     description: Some("Mark the open chat to deal with later"),
-    menu: None,
+    menu: Some(MenuItem {
+        id: "chat-reply-later",
+        text: "Reply Later",
+        accelerator: "Super+KeyI",
+    }),
 };
 /// Menu accelerators that edit text natively rather than through `handle`:
 /// winit's view is no NSTextView, so the menu sends the events itself.
@@ -1680,6 +1719,95 @@ pub fn help_rows() -> impl Iterator<Item = (&'static str, &'static str)> {
     })
 }
 
+/// Every command the macOS Go, Chat and View menus send beyond the registry's
+/// own accelerators. `menu_actions` builds each one.
+pub const MENU_COMMANDS: &[&str] = &[
+    "go-chats",
+    "go-bookmarks",
+    "go-starred",
+    "go-archived",
+    "go-locked",
+    "go-jump",
+    "go-palette",
+    "go-next-number",
+    "go-previous-number",
+    "view-mode-all",
+    "view-mode-unread",
+    "view-mode-unread-7d",
+    "view-mode-needs-me",
+    "view-mode-next",
+    "view-layout",
+    "chat-archive",
+    "chat-favorite",
+    "chat-reply-later",
+    "chat-read-later",
+    "chat-quote-reply",
+    "chat-forward",
+    "chat-newest",
+    "chat-clear",
+    "chat-leave",
+];
+
+/// The actions behind a menu command, from the helpers the keys use, so a
+/// menu click and its key cannot differ. Empty while a viewer, editor or
+/// recording owns the window, as the keys are.
+pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
+    use super::rail::Destination;
+    use crate::model::ListMode;
+    if app.picture_edit.is_some()
+        || app.image_preview.is_some()
+        || app.sticker_view.is_some()
+        || app.recording.is_some()
+        || app.picker.is_some()
+        || app.dialog.is_some()
+    {
+        return Vec::new();
+    }
+    let chat = app.current_chat();
+    let action = match id {
+        "go-chats" => return Destination::Chats.actions(app),
+        "go-starred" => return Destination::Starred.actions(app),
+        "go-archived" => return Destination::Archived.actions(app),
+        "go-locked" => return Destination::Locked.actions(app),
+        "go-bookmarks" => Some(Action::ToggleSaved),
+        "go-jump" => Some(Action::ShowDialog(Dialog::JumpToChat)),
+        "go-palette" => Some(Action::ShowDialog(Dialog::Palette)),
+        "go-next-number" => account_switch_action(app, true),
+        "go-previous-number" => account_switch_action(app, false),
+        "view-mode-all" => Some(Action::SetListMode(ListMode::Recent)),
+        "view-mode-unread" => Some(Action::SetListMode(ListMode::Unread)),
+        "view-mode-unread-7d" => Some(Action::SetListMode(ListMode::RecentUnread)),
+        "view-mode-needs-me" => Some(Action::SetListMode(ListMode::NeedsMe)),
+        "view-mode-next" => Some(Action::SetListMode(app.list_mode.next())),
+        "view-layout" => Some(Action::ToggleListLayout),
+        "chat-archive" => archive_action(app),
+        "chat-favorite" => chat.map(|chat| Action::SetFavorite(chat.id.clone(), !chat.favorite)),
+        "chat-reply-later" => reply_later_action(app),
+        "chat-read-later" => read_later_action(app),
+        "chat-quote-reply" => {
+            // As Cmd+R: leave selection mode first, or the toolbar hides the composer.
+            let mut actions = Vec::new();
+            if let Some(reply) = latest_incoming_action(app) {
+                if app.selection.is_some() {
+                    actions.push(Action::CancelSelection);
+                }
+                actions.push(reply);
+            }
+            return actions;
+        }
+        "chat-forward" => forward_action(app),
+        "chat-newest" => chat.map(|_| Action::ScrollToBottom),
+        "chat-clear" => chat
+            .filter(|_| app.is_connected())
+            .map(|chat| Action::ShowDialog(Dialog::ConfirmClearChat(chat.id.clone()))),
+        "chat-leave" => chat
+            .filter(|chat| chat.can_leave(&app.our_ids()))
+            .map(|chat| Action::ShowDialog(Dialog::ConfirmLeaveGroup(chat.id.clone()))),
+        _ => None,
+    };
+    action.into_iter().collect()
+}
+
 /// The muda accelerator string for a binding, for the menu keys the
 /// registry carries: letters name their `Key` code, digits their `Digit`.
 pub fn menu_accelerator(modifiers: Modifiers, key: Key) -> Option<String> {
@@ -1701,10 +1829,15 @@ pub fn menu_accelerator(modifiers: Modifiers, key: Key) -> Option<String> {
         Key::B => "KeyB",
         Key::C => "KeyC",
         Key::D => "KeyD",
+        Key::E => "KeyE",
         Key::F => "KeyF",
+        Key::G => "KeyG",
         Key::I => "KeyI",
+        Key::K => "KeyK",
         Key::N => "KeyN",
+        Key::P => "KeyP",
         Key::Q => "KeyQ",
+        Key::U => "KeyU",
         Key::V => "KeyV",
         Key::W => "KeyW",
         Key::X => "KeyX",
@@ -2097,6 +2230,110 @@ mod tests {
                 "{}: the menu accelerator matches no binding",
                 entry.id
             );
+        }
+    }
+
+    /// Bindings with keys whose menu item carries no accelerator, because the
+    /// handler owns the key (it depends on focus or an exact modifier), with
+    /// the menu command offering the same action. None: no menu item fits.
+    const KEYLESS_MENU: &[(&str, Option<&str>)] = &[
+        ("rail-chats", Some("go-chats")),
+        ("next-account", Some("go-next-number")),
+        ("scroll-bottom", Some("chat-newest")),
+        ("forward-message", Some("chat-forward")),
+        ("focus-messages", None),
+        ("close-chat", None),
+        ("incoming-bridge", None),
+    ];
+
+    #[test]
+    fn every_key_binding_has_a_menu_item_or_a_named_reason() {
+        for row in REGISTRY {
+            let Row::Binding(entry) = row else { continue };
+            if entry.keys.is_empty() || entry.menu.is_some() {
+                continue;
+            }
+            let (_, command) = KEYLESS_MENU
+                .iter()
+                .find(|(id, _)| *id == entry.id)
+                .unwrap_or_else(|| panic!("{}: no menu item and no listed reason", entry.id));
+            if let Some(command) = command {
+                assert!(MENU_COMMANDS.contains(command), "{command} is not built");
+            }
+        }
+    }
+
+    #[test]
+    fn menu_commands_do_nothing_while_a_dialog_is_open() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        assert!(!menu_actions(&app, "chat-favorite").is_empty());
+        app.dialog = Some(Dialog::Palette);
+        for id in ["chat-favorite", "chat-clear", "chat-leave", "go-jump"] {
+            assert!(menu_actions(&app, id).is_empty(), "{id}");
+        }
+    }
+
+    #[test]
+    fn menu_quote_reply_leaves_selection_mode_as_command_r_does() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![
+                    shortcut_message(&chat, "older", true, 10),
+                    shortcut_message(&chat, "latest-incoming", true, 20),
+                ],
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            menu_actions(&app, "chat-quote-reply"),
+            [Action::Reply("latest-incoming".into())]
+        );
+        app.selection = Some((chat, vec!["older".into()]));
+        assert_eq!(
+            menu_actions(&app, "chat-quote-reply"),
+            [
+                Action::CancelSelection,
+                Action::Reply("latest-incoming".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn menu_commands_queue_what_their_keys_queue() {
+        let (_root, mut app, ids) = app_with_chats(2);
+        assert_eq!(menu_actions(&app, "go-bookmarks"), [Action::ToggleSaved]);
+        assert_eq!(
+            menu_actions(&app, "view-mode-unread"),
+            [Action::SetListMode(crate::model::ListMode::Unread)]
+        );
+        assert_eq!(
+            menu_actions(&app, "view-mode-next"),
+            [Action::SetListMode(app.list_mode.next())]
+        );
+        assert_eq!(
+            menu_actions(&app, "go-palette"),
+            [Action::ShowDialog(Dialog::Palette)]
+        );
+        // Chat commands need an open chat, as the keys do.
+        assert!(menu_actions(&app, "chat-archive").is_empty());
+        assert!(menu_actions(&app, "chat-favorite").is_empty());
+        app.open_chat = Some(ids[0].clone());
+        assert_eq!(
+            menu_actions(&app, "chat-archive"),
+            [Action::SetArchived(ids[0].clone(), true)]
+        );
+        assert_eq!(
+            menu_actions(&app, "chat-favorite"),
+            [Action::SetFavorite(ids[0].clone(), true)]
+        );
+        assert!(menu_actions(&app, "no-such-command").is_empty());
+        for id in MENU_COMMANDS {
+            menu_actions(&app, id);
         }
     }
 

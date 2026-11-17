@@ -21718,7 +21718,6 @@ mod tests {
                 Stop::UnreadMode,
                 Stop::RecentUnreadMode,
                 Stop::NeedsMe,
-                Stop::Bookmarks,
                 Stop::NewChat,
             ];
             assert_eq!(
@@ -23985,8 +23984,7 @@ mod rail_tests {
                     Stop::Recent,
                     Stop::UnreadMode,
                     Stop::RecentUnreadMode,
-                    Stop::NeedsMe,
-                    Stop::Bookmarks
+                    Stop::NeedsMe
                 ],
                 "{macos}"
             );

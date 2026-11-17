@@ -132,7 +132,42 @@ fn build_menu() -> tray_icon::menu::Result<Menu> {
         &registered("sidebar"),
         &registered("info-sidebar"),
         &Native::separator(),
+        &item("view-mode-all", "All Chats", None),
+        &item("view-mode-unread", "Unread Chats", None),
+        &item("view-mode-unread-7d", "Unread, Last 7 Days", None),
+        &item("view-mode-needs-me", "Needs Me", None),
+        &registered("list-mode"),
+        &registered("list-layout"),
+        &Native::separator(),
         &Native::fullscreen(None),
+    ])?;
+    let go = Submenu::new("Go", true);
+    go.append_items(&[
+        &item("go-chats", "Chats", None),
+        &registered("bookmarks"),
+        &item("go-starred", "Starred Messages", None),
+        &item("go-archived", "Archived", None),
+        &item("go-locked", "Locked", None),
+        &Native::separator(),
+        &registered("jump-to-chat"),
+        &registered("palette"),
+        &Native::separator(),
+        &item("go-next-number", "Next Number", None),
+        &item("go-previous-number", "Previous Number", None),
+    ])?;
+    let chat = Submenu::new("Chat", true);
+    chat.append_items(&[
+        &registered("archive"),
+        &item("chat-favorite", "Favorite", None),
+        &registered("reply-later"),
+        &registered("read-later"),
+        &Native::separator(),
+        &item("chat-quote-reply", "Quote Reply", None),
+        &item("chat-forward", "Forward\u{2026}", None),
+        &item("chat-newest", "Jump to Newest", None),
+        &Native::separator(),
+        &item("chat-clear", "Clear Chat\u{2026}", None),
+        &item("chat-leave", "Leave\u{2026}", None),
     ])?;
     let window = Submenu::new("Window", true);
     window.append_items(&[
@@ -147,7 +182,7 @@ fn build_menu() -> tray_icon::menu::Result<Menu> {
         &registered("shortcuts"),
         &item("help", "Solmu Help", None),
     ])?;
-    menu.append_items(&[&app, &file, &edit, &view, &window, &help])?;
+    menu.append_items(&[&app, &file, &edit, &view, &go, &chat, &window, &help])?;
     window.set_as_windows_menu_for_nsapp();
     help.set_as_help_menu_for_nsapp();
     Ok(menu)
@@ -546,6 +581,7 @@ fn action(id: &str) -> Option<Action> {
         "help" => Action::OpenUrl("https://zapfast.rocks/using-zapfast/".into()),
         "show-window" => Action::ShowWindow,
         "activate-window" => Action::ActivateWindow,
+        id if crate::ui::keys::MENU_COMMANDS.contains(&id) => Action::MenuCommand(id.to_owned()),
         _ => return None,
     })
 }
@@ -566,6 +602,7 @@ pub fn drain(hidden: bool) -> Vec<Action> {
                 && matches!(
                     action,
                     Action::ShowDialog(_)
+                        | Action::MenuCommand(_)
                         | Action::Open(_)
                         | Action::FocusSearch
                         | Action::OpenChatSearch
