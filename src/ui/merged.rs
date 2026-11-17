@@ -11,6 +11,7 @@ struct RowCache {
     /// strings instead of copying them for every loaded row of every frame.
     heights: std::collections::HashMap<String, std::collections::HashMap<String, f32>>,
     count: usize,
+    widths: crate::run_widths::WidthBook,
 }
 
 impl RowCache {
@@ -778,34 +779,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 .and_then(|conv| conv.messages.get(*idx))
         })
         .collect();
-    // Compute once from the full loaded timeline. Filtering and culling must
-    // neither teach a different cadence nor join non-adjacent originals.
-    let cadence = super::conversation::cadence_limits(&messages);
-    let cadence_edges: std::collections::HashMap<_, _> = messages
-        .windows(2)
-        .enumerate()
-        .map(|(index, pair)| {
-            (
-                (
-                    pair[0].id.as_str(),
-                    pair[0].chat.as_str(),
-                    pair[1].id.as_str(),
-                    pair[1].chat.as_str(),
-                ),
-                cadence[index + 1],
-            )
-        })
-        .collect();
-    let cadence_between = |left: &crate::model::Message, right: &crate::model::Message| {
-        cadence_edges
-            .get(&(
-                left.id.as_str(),
-                left.chat.as_str(),
-                right.id.as_str(),
-                right.chat.as_str(),
-            ))
-            .copied()
-    };
     let filtered = !state.search.trim().is_empty() || state.source_filter.is_some();
     let visible: Vec<_> = messages
         .iter()
@@ -932,8 +905,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.set_max_width(timeline.width());
-                    // The same tight row rhythm as an ordinary chat's transcript.
-                    ui.spacing_mut().item_spacing.y = 3.0;
+                    let run_widths = super::conversation::linked_run_widths(
+                        app,
+                        ui,
+                        &messages,
+                        &mut cache.widths,
+                    );
+                    ui.spacing_mut().item_spacing.y = 4.0;
                     let viewport = ui.clip_rect();
                     if visible.is_empty() {
                         ui.label(if filtered {
@@ -1056,7 +1034,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                 ui.small(crate::util::day_label(app.locale, message.timestamp));
                                 ui.add_space(super::conversation::DAY_SPACE_BELOW);
                             } else if boundary {
-                                ui.add_space(4.0);
+                                ui.add_space(10.0);
                             }
                             // The mark earns its place only where the
                             // network changes from the previous message (or
@@ -1123,25 +1101,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                                 original_message,
                                                 visible.get(visible_index + 1).copied(),
                                             ),
-                                            visible_index
-                                                .checked_sub(1)
-                                                .and_then(|index| visible.get(index).copied()),
-                                            visible.get(visible_index + 1).copied(),
                                             // The shared renderer also aligns outgoing bubbles to
                                             // this edge. Do not restore the full timeline width:
                                             // that would reclaim the network chip's reserved lane.
                                             area.right(),
-                                            (
-                                                visible_index
-                                                    .checked_sub(1)
-                                                    .and_then(|index| visible.get(index))
-                                                    .and_then(|previous| {
-                                                        cadence_between(previous, original_message)
-                                                    }),
-                                                visible.get(visible_index + 1).and_then(|next| {
-                                                    cadence_between(original_message, next)
-                                                }),
-                                            ),
+                                            run_widths
+                                                .get(&super::conversation::width_key(message))
+                                                .copied(),
                                             &mut actions,
                                         )
                                     },

@@ -515,6 +515,9 @@ pub struct Settings {
     /// The hint bar under the composer, hidden with its × and shown again
     /// from the Keyboard shortcuts dialog.
     pub show_shortcut_hints: bool,
+    /// Skip decorative bubble reflow transitions.
+    #[serde(default)]
+    pub reduce_motion: bool,
     /// Recently used emoji, newest first.
     pub recent_emoji: Vec<String>,
     /// Emoji reaction usage on this device, most-used first (recent breaks ties).
@@ -642,6 +645,7 @@ impl Default for Settings {
             wallpaper_image: None,
             last_chat: None,
             show_shortcut_hints: true,
+            reduce_motion: false,
             recent_emoji: Vec::new(),
             reaction_emoji: Vec::new(),
             giphy_key: String::new(),

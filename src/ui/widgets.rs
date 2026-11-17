@@ -1317,7 +1317,7 @@ pub fn bubble_shape_with_shadow(
             ),
             _ => fill,
         };
-        let outline = messages_balloon(rect, tail, MESSAGES_SCALE);
+        let outline = top_tail_outline(rect, tail);
         return egui::Shape::mesh(fill_outline(&outline, color, 1.0 / pixels_per_point));
     }
     let corners = bubble_corners(tail);
@@ -1495,6 +1495,83 @@ pub mod balloon {
     /// (`CKUIBehaviorMac.textBalloonPillContentInsets`), two are 44.6; Solmu
     /// splits the difference.
     pub const SINGLE_LINE_MAX: f32 = 37.0;
+}
+
+/// Shared bubble geometry, retaining Messages' gradient but no bottom curl.
+fn top_tail_outline(rect: Rect, tail: Option<Side>) -> Vec<egui::Pos2> {
+    let radius = f32::from(BUBBLE_RADIUS)
+        .min(rect.height() / 2.0)
+        .min(rect.width() / 2.0);
+    let mut points = Vec::new();
+    for (corner, start, square) in [
+        (
+            pos2(rect.right() - radius, rect.top() + radius),
+            -90.0,
+            tail == Some(Side::Right),
+        ),
+        (
+            pos2(rect.right() - radius, rect.bottom() - radius),
+            0.0,
+            false,
+        ),
+        (
+            pos2(rect.left() + radius, rect.bottom() - radius),
+            90.0,
+            false,
+        ),
+        (
+            pos2(rect.left() + radius, rect.top() + radius),
+            180.0,
+            tail == Some(Side::Left),
+        ),
+    ] {
+        if square {
+            if start < 0.0 {
+                points.extend([
+                    pos2(rect.right() + TAIL_WIDTH, rect.top()),
+                    pos2(rect.right(), rect.top() + TAIL_HEIGHT),
+                ]);
+            } else {
+                points.extend([
+                    pos2(rect.left(), rect.top() + TAIL_HEIGHT),
+                    pos2(rect.left() - TAIL_WIDTH, rect.top()),
+                ]);
+            }
+        } else {
+            for step in 0..=8 {
+                let angle = (start + step as f32 * 90.0 / 8.0).to_radians();
+                points.push(corner + vec2(angle.cos(), angle.sin()) * radius);
+            }
+        }
+    }
+    points
+}
+
+#[cfg(test)]
+mod shared_tail_tests {
+    use super::*;
+    #[test]
+    fn every_tail_leaves_the_outer_top_corner_without_a_bottom_curl() {
+        let rect = Rect::from_min_size(pos2(20., 30.), vec2(160., 80.));
+        for side in [Side::Left, Side::Right] {
+            let path = top_tail_outline(rect, Some(side));
+            let tip = if side == Side::Left {
+                pos2(rect.left() - TAIL_WIDTH, rect.top())
+            } else {
+                pos2(rect.right() + TAIL_WIDTH, rect.top())
+            };
+            assert!(path.contains(&tip));
+            assert!(
+                path.iter()
+                    .all(|p| p.y >= rect.top() && p.y <= rect.bottom())
+            );
+            assert!(
+                path.iter()
+                    .filter(|p| p.x < rect.left() || p.x > rect.right())
+                    .all(|p| p.y == rect.top())
+            );
+        }
+    }
 }
 
 /// The outline of a Messages balloon whose body fills `rect`, clockwise on
@@ -2627,7 +2704,7 @@ mod tests {
         let palette = Palette::messages();
         let rect = Rect::from_min_size(pos2(100.0, 100.0), vec2(200.0, 34.0));
         for tail in [Some(Side::Right), Some(Side::Left), None] {
-            let outline = messages_balloon(rect, tail, MESSAGES_SCALE);
+            let outline = top_tail_outline(rect, tail);
             let area = |a: egui::Pos2, b: egui::Pos2, c: egui::Pos2| {
                 ((b - a).x * (c - a).y - (b - a).y * (c - a).x).abs() / 2.0
             };

@@ -31,25 +31,20 @@ const BODY_SIZE: f32 = widgets::MESSAGE_TEXT_SIZE;
 /// bubbles 3, Messages' own spacing on the Mac
 /// (`CKUIBehaviorMac.balloonNonContiguousSpace` and
 /// `balloonContiguousSpace`).
-const RUN_GAP: f32 = 5.0;
-/// How much of the transcript's width a bubble may take in the Messages
-/// style (`CKUIBehaviorMac.balloonMaxWidthPercent`), and in WhatsApp's.
-const MESSAGES_WIDTH_SHARE: f32 = 0.65;
+const RUN_GAP: f32 = 10.0;
+/// Shared bubble cap across skins.
+const MESSAGES_WIDTH_SHARE: f32 = 0.72;
 const WHATSAPP_WIDTH_SHARE: f32 = 0.72;
-/// The transcript's side margin in the Messages style: Messages' 11 points
-/// (`CKUIBehaviorMac.minTranscriptMarginInsets`) plus the 5 points beside
-/// each balloon's body that its tail curls into, at Solmu's text size.
-const MESSAGES_SIDE_MARGIN: i8 = 17;
+/// Transcript side margin, shared across skins.
+const MESSAGES_SIDE_MARGIN: i8 = 18;
 /// The transcript's side margin in WhatsApp's style.
 const WHATSAPP_SIDE_MARGIN: i8 = 18;
-/// Room around a Messages bubble's contents: Messages' 12 points beside its
-/// text and 7 above and below (`CKUIBehaviorMac.textBalloonPillContentInsets`)
-/// at Solmu's text size, 13.4 and 7.8, rounded.
+/// Content padding, shared across skins.
 const MESSAGES_BUBBLE_MARGIN: Margin = Margin {
-    left: 13,
-    right: 13,
-    top: 8,
-    bottom: 8,
+    left: 10,
+    right: 10,
+    top: 6,
+    bottom: 5,
 };
 /// The side of a selecting row's check box, and the column that holds it.
 const SELECT_BOX: f32 = 18.0;
@@ -2643,10 +2638,8 @@ struct View<'a> {
     clean_links: bool,
     sender_hue: Option<f32>,
     hide_grouped_status: bool,
-    covered_top: Option<f32>,
     show_timestamp: bool,
-    /// The neighbour-aware width the pre-pass settled for this row's own
-    /// plain-text bubble, frozen in the conversation's [`crate::run_widths::WidthBook`].
+    /// Current planned content width from the shared run pre-pass.
     neighbour_width: Option<f32>,
     footer_right: Option<f32>,
     palette: Palette,
@@ -3049,7 +3042,6 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
-        covered_top: None,
         show_timestamp: true,
         footer_right: None,
         neighbour_width: None,
@@ -3128,25 +3120,6 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                 .nth(divider.count.saturating_sub(1) as usize)
                 .map(|message| (message.id.clone(), divider.count, divider.placed))
         });
-    // One boundary decision per adjacent pair drives both receipt collapsing
-    // and overlap. Notices/dividers must not hide a receipt without stacking.
-    let cadence = cadence_limits(&conversation.messages.iter().collect::<Vec<_>>());
-    let stack_edges: Vec<bool> = conversation
-        .messages
-        .windows(2)
-        .enumerate()
-        .map(|(index, pair)| {
-            let previous = &pair[0];
-            let next = &pair[1];
-            let separated = view.pin_notices.iter().any(|notice| {
-                notice.pinned_at > previous.timestamp && notice.pinned_at <= next.timestamp
-            }) || divider.as_ref().is_some_and(|(id, _, _)| id == &next.id);
-            !view.selecting
-                && palette.bubbles != theme::BubbleStyle::Messages
-                && !separated
-                && stack_pair(&view, previous, next, cadence[index + 1])
-        })
-        .collect();
     let mut divider_placed = false;
     let selection: Option<Vec<String>> = app
         .selection
@@ -3378,72 +3351,29 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                 .inner_margin(Margin::symmetric(side, 10))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.spacing_mut().item_spacing.y = 3.0;
+                    ui.spacing_mut().item_spacing.y = 4.0;
                     if under > 0.0 {
                         ui.add_space(under);
                     }
                     top_of_history(ui, &palette, &conversation, chat, &mut actions);
-                    // Neighbour-aware widths for own plain-text bubbles: each
-                    // settles once per width cap, so an appended or prepended
-                    // message never resizes bubbles already on screen. Only
-                    // undecided messages are measured; the run tail always
-                    // walks in list order, which freezes older decisions and
-                    // lets a slightly wider arrival grow alone. Rule and
-                    // tolerance: crate::run_widths.
                     let text_cap = own_text_cap(ui, &palette, selection.is_some());
-                    // The epoch covers the cap and the fonts: reinstalled
-                    // fonts change the metrics a width was measured under.
-                    conversation.width_book.retain_fingerprint(
-                        text_cap.to_bits()
-                            ^ crate::theme::font_generation().wrapping_mul(0x9E37_79B9),
+                    let inset = if palette.bubbles == theme::BubbleStyle::Messages {
+                        MESSAGES_BUBBLE_MARGIN.sum().x
+                    } else {
+                        20.0
+                    };
+                    let neighbour_widths = planned_widths(
+                        ui,
+                        &conversation.messages.iter().collect::<Vec<_>>(),
+                        &mut conversation.width_book,
+                        (text_cap, inset),
+                        !app.settings.reduce_motion && view.animate,
+                        view.mention_names,
+                        |message| {
+                            settled_width(ui, &view, message, planning_cap(ui, message, text_cap))
+                                .unwrap_or(text_cap)
+                        },
                     );
-                    // Taken out of the conversation so the immutable message
-                    // walk can settle new entries; put back below.
-                    let mut book = std::mem::take(&mut conversation.width_book);
-                    let mut run_tail: Option<f32> = None;
-                    let mut neighbour_widths: HashMap<String, f32> = HashMap::new();
-                    for (index, message) in conversation.messages.iter().enumerate() {
-                        if !neighbour_eligible(message) {
-                            run_tail = None;
-                            continue;
-                        }
-                        let settled = if let Some(frozen) = book.get(&message.id) {
-                            frozen
-                        } else {
-                            let neighbour = if index > 0
-                                && same_run(&conversation.messages[index - 1], message)
-                                && crate::util::day_key(conversation.messages[index - 1].timestamp)
-                                    == crate::util::day_key(message.timestamp)
-                            {
-                                run_tail
-                            } else {
-                                None
-                            };
-                            // The neighbour rule counts balanced lines:
-                            // keep the run's width while wrapping there
-                            // costs at most one line over the minimum.
-                            match balanced_metrics(ui, &view, message, text_cap) {
-                                Some((measured, at_cap)) => book.settle(
-                                    &message.id,
-                                    at_cap.lines,
-                                    at_cap.width,
-                                    neighbour,
-                                    |width| {
-                                        crate::wrap::balance(
-                                            &measured.items,
-                                            width,
-                                            measured.hyphen,
-                                        )
-                                        .lines
-                                    },
-                                ),
-                                None => book.settle(&message.id, 1, 0.0, neighbour, |_| 1),
-                            }
-                        };
-                        neighbour_widths.insert(message.id.clone(), settled);
-                        run_tail = Some(settled);
-                    }
-                    conversation.width_book = book;
                     let mut previous: Option<&Message> = None;
                     let mut day_separator_top = f32::NEG_INFINITY;
                     // The pin notices still to place, in time order. Each one
@@ -3625,7 +3555,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                 // phone draws it: a little apart, with a tail.
                                 let first_in_run = new_day
                                     || previous.is_none_or(|previous| !same_run(previous, message));
-                                // Messages curls its tail under a run's last bubble.
+                                // All skins use an outer-top tail on every bubble.
                                 // The sender's picture: beside the first message of a
                                 // run in WhatsApp's style, beside the last in Messages.
                                 let show_avatar = if palette.bubbles == theme::BubbleStyle::Messages
@@ -3636,11 +3566,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                 } else {
                                     show_sender
                                 };
-                                let tailed = if palette.bubbles == theme::BubbleStyle::Messages {
-                                    last_bubble_of_run(&palette, &conversation.messages, index)
-                                } else {
-                                    true
-                                };
+                                let tailed = true;
                                 if first_in_run && !new_day && previous.is_some() {
                                     ui.add_space(RUN_GAP);
                                 }
@@ -3657,8 +3583,19 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                 let band = selection.as_ref().map(|_| {
                                     (ui.painter().add(egui::Shape::Noop), ui.cursor().top())
                                 });
+                                let next = conversation
+                                    .messages
+                                    .get(message_index + album.map_or(1, |items| items.len()));
+                                let separated_after = next.is_some_and(|next| {
+                                    view.pin_notices.iter().any(|notice| {
+                                        notice.pinned_at > message.timestamp
+                                            && notice.pinned_at <= next.timestamp
+                                    }) || divider.as_ref().is_some_and(|(id, _, _)| id == &next.id)
+                                });
                                 let view = View {
-                                    neighbour_width: neighbour_widths.get(&message.id).copied(),
+                                    neighbour_width: neighbour_widths
+                                        .get(&width_key(message))
+                                        .copied(),
                                     ..view
                                 };
                                 let response = if selection.is_some() {
@@ -3683,12 +3620,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                                                 + album
                                                                     .map_or(1, |items| items.len()),
                                                         ),
-                                                    ),
+                                                    ) || separated_after,
                                                     show_sender,
                                                     show_avatar,
                                                     tailed,
-                                                    overlap_previous: None,
-                                                    next_stacks: false,
                                                 },
                                                 &mut actions,
                                             )
@@ -3714,26 +3649,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                                     message_index
                                                         + album.map_or(1, |items| items.len()),
                                                 ),
-                                            ) && !stack_edges
-                                                .get(message_index)
-                                                .copied()
-                                                .unwrap_or(false),
+                                            ) || separated_after,
                                             show_sender,
                                             show_avatar,
                                             tailed,
-                                            next_stacks: stack_edges
-                                                .get(message_index)
-                                                .copied()
-                                                .unwrap_or(false),
-                                            overlap_previous: previous
-                                                .filter(|_| {
-                                                    message_index
-                                                        .checked_sub(1)
-                                                        .is_some_and(|index| stack_edges[index])
-                                                })
-                                                .map(|previous| {
-                                                    bubble_id(&previous.chat, &previous.id)
-                                                }),
                                         },
                                         &mut actions,
                                     )
@@ -4756,8 +4675,6 @@ struct RunPlace {
     show_sender: bool,
     show_avatar: bool,
     tailed: bool,
-    overlap_previous: Option<egui::Id>,
-    next_stacks: bool,
 }
 
 /// Draws a message row and returns its bubble response for scrolling.
@@ -4775,14 +4692,12 @@ fn bubble(
         show_sender,
         show_avatar,
         tailed,
-        overlap_previous,
-        next_stacks,
     } = place;
     let footer_right = view.footer_right.unwrap_or(ui.max_rect().right());
     let view = &View {
         show_timestamp,
         sender_hue,
-        hide_grouped_status: next_stacks,
+        hide_grouped_status: !show_timestamp,
         footer_right: Some(footer_right),
         ..*view
     };
@@ -4810,20 +4725,7 @@ fn bubble(
     // into a selection (#246).
     let id = bubble_id(&view.chat.id, &message.id);
     let previous = ui.ctx().data(|data| data.get_temp::<Rect>(id.with("rect")));
-    let paint_pass = ui.ctx().cumulative_pass_nr();
-    let previous_cover = overlap_previous
-        .filter(|_| !view.selecting && view.palette.bubbles != theme::BubbleStyle::Messages)
-        .and_then(|previous| {
-            ui.ctx().data(|data| {
-                (data.get_temp::<u64>(previous.with("paint-pass")) == Some(paint_pass))
-                    .then(|| data.get_temp::<Rect>(previous.with("rect")))
-                    .flatten()
-            })
-        });
     if let Some(rect) = previous {
-        let rect = rect.with_min_y(
-            previous_cover.map_or(rect.top(), |previous| previous.bottom().max(rect.top())),
-        );
         let strip = Rect::from_x_y_ranges(ui.max_rect().x_range(), rect.y_range());
         let strip = ui.interact(strip, id.with("row"), Sense::click_and_drag());
         if strip.clicked() {
@@ -4837,34 +4739,12 @@ fn bubble(
         }
         reply_on_double_click(&strip, message, actions);
     }
-    let overlap = overlap_previous
-        .filter(|_| !view.selecting && view.palette.bubbles != theme::BubbleStyle::Messages)
-        .and_then(|id| {
-            ui.ctx().data(|data| {
-                if data.get_temp::<u64>(id.with("paint-pass")) != Some(paint_pass) {
-                    return None;
-                }
-                Some((
-                    data.get_temp::<Rect>(id.with("rect"))?,
-                    data.get_temp::<egui::Shape>(id.with("backdrop-shape"))?,
-                ))
-            })
-        });
-    let view = &View {
-        covered_top: overlap.as_ref().map(|(rect, _)| rect.bottom()),
-        ..*view
-    };
-    if overlap.is_some() {
-        ui.add_space(-STREAK_OVERLAP - ui.spacing().item_spacing.y);
-    }
     let mut response = None;
     let mut area = ui.available_rect_before_wrap();
     // Tails are part of the painted bounds, including beside a linked chip.
     area.max.x = area.max.x.min(footer_right);
-    if view.palette.bubbles != theme::BubbleStyle::Messages {
-        area.min.x += widgets::TAIL_WIDTH;
-        area.max.x -= widgets::TAIL_WIDTH;
-    }
+    area.min.x += widgets::TAIL_WIDTH;
+    area.max.x -= widgets::TAIL_WIDTH;
     ui.scope_builder(
         egui::UiBuilder::new()
             .max_rect(area)
@@ -4941,22 +4821,6 @@ fn bubble(
                     actions,
                 ));
             }
-            if let Some((previous, shape)) = &overlap {
-                // Include the older bubble's shadow below its body: clipping
-                // at its bottom erased the depth cue and looked like touching.
-                let seam = Rect::from_min_max(
-                    pos2(
-                        previous.left() - widgets::TAIL_WIDTH - 4.0,
-                        previous.bottom() - STREAK_OVERLAP - 3.0,
-                    ),
-                    pos2(
-                        previous.right() + widgets::TAIL_WIDTH + 4.0,
-                        previous.bottom() + 4.0,
-                    ),
-                );
-                let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(seam));
-                painter.add(shape.clone());
-            }
             // Every reaction belongs to its own message. Flow pills and the
             // timestamp together, wrapping rather than covering either one.
             let members = album.unwrap_or(std::slice::from_ref(message));
@@ -4968,7 +4832,7 @@ fn bubble(
                 let status = shown_delivery(view, last);
                 let visible_status = last.from_me
                     && !matches!(status, Delivery::None | Delivery::Unknown)
-                    && !view.hide_grouped_status;
+                    && (!view.hide_grouped_status || not_sent(last));
                 let metadata = view.show_timestamp
                     || visible_status
                     || starred
@@ -5527,6 +5391,7 @@ fn last_of_run(messages: &[Message], index: usize) -> bool {
 /// Whether `messages[index]` is the last bubble of its run, which Messages
 /// tails: messages drawn without one after it, a lone photo or a sticker,
 /// leave the tail to it.
+#[cfg(test)]
 fn last_bubble_of_run(palette: &Palette, messages: &[Message], index: usize) -> bool {
     let message = &messages[index];
     !messages[index + 1..]
@@ -5541,7 +5406,9 @@ fn last_bubble_of_run(palette: &Palette, messages: &[Message], index: usize) -> 
 /// Whether `next` continues the run `message` belongs to: the same side,
 /// and in a group the same sender.
 fn same_run(message: &Message, next: &Message) -> bool {
-    message.from_me == next.from_me && (message.from_me || message.sender == next.sender)
+    message.chat == next.chat
+        && message.from_me == next.from_me
+        && (message.from_me || message.sender == next.sender)
 }
 
 /// Assign a hue per sender streak, before viewport culling. Adjacent different
@@ -5576,6 +5443,7 @@ pub(crate) fn sender_streak_hues(messages: &[Message]) -> Vec<f32> {
 
 /// A causal cadence limit for each row, computed before viewport filtering.
 /// The candidate gap never teaches its own limit. Long pauses start a new burst.
+#[cfg(test)]
 pub(crate) fn cadence_limits(messages: &[&Message]) -> Vec<i64> {
     use std::collections::{HashMap, VecDeque};
     type History = (i64, VecDeque<(i64, i64)>, i64);
@@ -5621,6 +5489,7 @@ pub(crate) fn cadence_limits(messages: &[&Message]) -> Vec<i64> {
 /// Adjacent rows stack within the sender's current cadence: plain text,
 /// quoted replies, pictures and videos all join a run, in any order. Controls,
 /// metadata, album members and failure states remain hard boundaries.
+#[cfg(test)]
 fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
     let joins = |row: &Message| {
         !row.forwarded
@@ -5659,16 +5528,6 @@ fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
 pub(crate) fn stacks_after(previous: &Message, next: &Message) -> bool {
     stacks_with_limit(previous, next, 120)
 }
-
-fn stack_pair(view: &View<'_>, previous: &Message, next: &Message, limit: i64) -> bool {
-    let marked = |row: &Message| {
-        view.starred.is_some_and(|ids| ids.contains(&row.id))
-            || view.pins.is_some_and(|ids| ids.contains(&row.id))
-    };
-    stacks_with_limit(previous, next, limit) && !marked(previous) && !marked(next)
-}
-
-const STREAK_OVERLAP: f32 = 6.0;
 
 /// Room around a bubble's contents: none around a picture that stands
 /// without one, Messages' insets in its style, WhatsApp's otherwise.
@@ -5726,8 +5585,7 @@ fn bubble_frame(
     // the first frame's rect.
     let rect_id = bubble_id.with("rect");
     let previous = ui.ctx().data(|data| data.get_temp::<Rect>(rect_id));
-    let exposed =
-        |rect: Rect| rect.with_min_y(view.covered_top.unwrap_or(rect.top()).max(rect.top()));
+    let exposed = |rect: Rect| rect;
     let early = previous.map(|rect| ui.interact(exposed(rect), bubble_id, Sense::CLICK));
     // Painted once the contents are measured, beneath them.
     let backdrop = ui.painter().add(egui::Shape::Noop);
@@ -5739,14 +5597,7 @@ fn bubble_frame(
         widgets::Side::Left
     });
     let mut tiles: Vec<(Rect, String)> = Vec::new();
-    let mut margin = bubble_margin(&palette, message, false);
-    if view.hide_grouped_status || view.covered_top.is_some() {
-        margin.top = 9;
-        margin.bottom = 9;
-    }
-    if view.covered_top.is_some() {
-        margin.top += STREAK_OVERLAP as i8;
-    }
+    let margin = bubble_margin(&palette, message, false);
     let inner = Frame::new().inner_margin(margin).show(ui, |ui| {
         ui.set_max_width(max_width);
         ui.spacing_mut().item_spacing.y = 4.0;
@@ -5790,9 +5641,34 @@ fn bubble_frame(
         // Metadata is outside the frame, so text/media need no footer slot.
         let reserve = 0.0;
         let settled = album
+            .filter(|_| !own)
             .map(|_| CARD_WIDTH.min(cap))
-            .or_else(|| view.neighbour_width.map(|width| width.min(cap)))
-            .or_else(|| settled_width(ui, view, message, cap));
+            .or_else(|| {
+                view.neighbour_width
+                    .map(|width| {
+                        if own && !bubbleless(&palette, message) {
+                            width.max((120.0 - inset).max(0.0)).min(cap)
+                        } else {
+                            width.min(cap)
+                        }
+                    })
+                    .or_else(|| album.map(|_| CARD_WIDTH.min(cap)))
+                    .or_else(|| {
+                        settled_width(ui, view, message, cap).map(|width| {
+                            if own {
+                                width.max((120.0 - inset).max(0.0)).min(cap)
+                            } else {
+                                width
+                            }
+                        })
+                    })
+            });
+        if !bubbleless(&palette, message)
+            && (own || matches!(message.content, Content::Text { .. }))
+            && let Some(width) = settled
+        {
+            ui.set_min_width(width);
+        }
         let pending = view.pending_media.and_then(|records| {
             records
                 .values()
@@ -5937,9 +5813,7 @@ fn bubble_frame(
             ui.clip_rect().y_range(),
             widgets::BubbleEffects {
                 sender_shadow,
-                flat_edge: sender_shadow.is_some()
-                    || view.covered_top.is_some()
-                    || view.hide_grouped_status,
+                flat_edge: sender_shadow.is_some() || view.hide_grouped_status,
             },
         );
         ui.painter().set(backdrop, shape.clone());
@@ -6173,6 +6047,51 @@ const CAROUSEL_GAP: f32 = 8.0;
 
 /// Returns the shared card width, bounded by [`CARD_WIDTH`] and `cap`.
 fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
+    natural_call_width(ui, message, cap, view.locale, &view.palette)
+        .or_else(|| natural_content_width(message, cap, natural_text_width(ui, view, message, cap)))
+}
+
+fn natural_call_width(
+    ui: &egui::Ui,
+    message: &Message,
+    cap: f32,
+    locale: crate::i18n::Locale,
+    palette: &Palette,
+) -> Option<f32> {
+    if let Content::Call {
+        video,
+        status,
+        duration,
+        group,
+    } = &message.content
+    {
+        let entry = super::call_log::Entry {
+            from_me: message.from_me,
+            video: *video,
+            status: *status,
+            duration: *duration,
+            group: *group,
+        };
+        let title = ui
+            .painter()
+            .layout_no_wrap(entry.title(locale), theme::medium(14.0), palette.text)
+            .size()
+            .x;
+        let detail = entry.detail(locale).map_or(0., |label| {
+            ui.painter()
+                .layout_no_wrap(label, theme::regular(12.5), palette.secondary)
+                .size()
+                .x
+        });
+        return Some((CALL_BADGE + CALL_BADGE_GAP + title.max(detail)).min(cap));
+    }
+    None
+}
+
+fn natural_content_width(message: &Message, cap: f32, text: Option<f32>) -> Option<f32> {
+    if matches!(&message.content,Content::Image {media,..} if media.album.is_some()) {
+        return Some(CARD_WIDTH.min(cap));
+    }
     if matches!(
         message.content,
         Content::Location { .. } | Content::LiveLocation { .. }
@@ -6198,6 +6117,12 @@ fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) ->
     {
         return Some(CARD_WIDTH.min(cap));
     }
+    if let Content::Image { media, .. } | Content::Video { media, .. } = &message.content
+        && !matches!(message.content, Content::Video {note:false,..} if message.thumbnail.is_none())
+    {
+        let width = frame_size(media, None, cap.min(PICTURE_WIDTH), PICTURE_HEIGHT).x;
+        return Some(width.max(text.unwrap_or(0.)).min(cap));
+    }
     let card = message.quoted.is_some()
         || match &message.content {
             Content::Text { preview, .. } => preview.is_some(),
@@ -6209,30 +6134,231 @@ fn settled_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) ->
             _ => false,
         };
     if card {
-        Some(stepped_card_width(
-            natural_text_width(ui, view, message, cap).unwrap_or(CARD_WIDTH),
-            cap,
-        ))
+        Some(stepped_card_width(text.unwrap_or(CARD_WIDTH), cap))
     } else if matches!(message.content, Content::Text { .. }) {
-        Some(stepped_text_width(
-            natural_text_width(ui, view, message, cap).unwrap_or_default(),
-            cap,
-        ))
+        Some(text.unwrap_or_default().min(cap))
     } else {
         None
     }
+}
+
+pub(crate) fn width_key(message: &Message) -> String {
+    format!("{}\0{}", message.chat, message.id)
+}
+
+/// Only inputs used by natural_content_width belong here. In particular a
+/// poster's bytes, a waveform and an interactive thumbnail never change width.
+fn width_signature(message: &Message) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    std::mem::discriminant(&message.content).hash(&mut hash);
+    body_for_measurement(&message.content)
+        .map(|(text, _)| text)
+        .hash(&mut hash);
+    if let Some(media) = message.content.media() {
+        media.width.hash(&mut hash);
+        media.height.hash(&mut hash);
+    }
+    if let Content::Call {
+        video,
+        status,
+        duration,
+        group,
+    } = &message.content
+    {
+        video.hash(&mut hash);
+        std::mem::discriminant(status).hash(&mut hash);
+        duration.hash(&mut hash);
+        group.hash(&mut hash);
+    }
+    message.quoted.is_some().hash(&mut hash);
+    message.thumbnail.is_some().hash(&mut hash);
+    match &message.content {
+        Content::Text { preview, .. } => preview.is_some().hash(&mut hash),
+        Content::Interactive { card, .. } => {
+            card.is_some().hash(&mut hash);
+            if let Some(card) = card {
+                card.image.is_some().hash(&mut hash);
+                card.carousel.len().hash(&mut hash);
+            }
+        }
+        Content::Video { note, .. } => note.hash(&mut hash),
+        Content::Image { media, .. } => media.album.is_some().hash(&mut hash),
+        _ => {}
+    }
+    hash.finish()
+}
+
+fn resolved_width_signature(message: &Message, name: impl Fn(&str) -> String) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    width_signature(message).hash(&mut hash);
+    for mention in &message.mentions {
+        mention.user.hash(&mut hash);
+        name(&mention.id).hash(&mut hash);
+    }
+    hash.finish()
+}
+
+fn is_carousel(message: &Message) -> bool {
+    matches!(&message.content, Content::Interactive {card:Some(card),..} if !card.carousel.is_empty())
+}
+
+fn planning_cap(ui: &egui::Ui, message: &Message, normal: f32) -> f32 {
+    if is_carousel(message) {
+        ((ui.available_width() * 0.95).min(920.0) - 20.0).max(0.0)
+    } else {
+        normal
+    }
+}
+
+/// Measure once per text revision, then plan sent-run widths across the full
+/// timeline before viewport culling. Incoming rows retain their natural width.
+fn planned_widths(
+    ui: &egui::Ui,
+    messages: &[&Message],
+    book: &mut crate::run_widths::WidthBook,
+    geometry: (f32, f32),
+    animate: bool,
+    mention_name: impl Fn(&str) -> String,
+    natural: impl Fn(&Message) -> f32,
+) -> HashMap<String, f32> {
+    let (cap, inset) = geometry;
+    book.retain_fingerprint(
+        cap.to_bits() ^ crate::theme::font_generation().wrapping_mul(0x9E37_79B9),
+    );
+    let mut entries = Vec::with_capacity(messages.len());
+    for message in messages {
+        let key = width_key(message);
+        book.check_signature(&key, resolved_width_signature(message, &mention_name));
+        let width = book.get(&key).unwrap_or_else(|| {
+            let width = natural(message).clamp(0.0, planning_cap(ui, message, cap));
+            book.remember(&key, width);
+            width
+        });
+        let visible = message.from_me
+            && ui
+                .ctx()
+                .data(|data| {
+                    data.get_temp::<Rect>(bubble_id(&message.chat, &message.id).with("rect"))
+                })
+                .is_some_and(|rect| rect.intersects(ui.clip_rect()));
+        entries.push((key, width, visible));
+    }
+    let mut start = 0;
+    while start < messages.len() {
+        let mut end = start + 1;
+        while end < messages.len()
+            && same_run(messages[end - 1], messages[end])
+            && crate::util::day_key(messages[end - 1].timestamp)
+                == crate::util::day_key(messages[end].timestamp)
+        {
+            end += 1;
+        }
+        if messages[start].from_me {
+            let widest = entries[start..end]
+                .iter()
+                .map(|(_, w, _)| w + inset)
+                .fold(0.0, f32::max);
+            for (offset, (_, width, _)) in entries[start..end].iter_mut().enumerate() {
+                *width = (crate::run_widths::band(
+                    *width + inset,
+                    widest,
+                    planning_cap(ui, messages[start + offset], cap) + inset,
+                ) - inset)
+                    .max(0.0);
+            }
+        }
+        start = end;
+    }
+    let now = ui.input(|input| input.time);
+    let animate = animate
+        && ui.style().animation_time > 0.0
+        && !crate::motion::screen_reader_attached(ui.ctx());
+    book.plan(&entries, now, animate);
+    if book.animating(now) {
+        ui.ctx().request_repaint();
+    }
+    entries
+        .into_iter()
+        .zip(messages)
+        .map(|((id, _, _), message)| {
+            let width = book
+                .width(&id, now)
+                .unwrap_or_default()
+                .clamp(0.0, planning_cap(ui, message, cap));
+            (id, width)
+        })
+        .collect()
+}
+
+/// The same plan for a linked timeline, keyed by source AND message id.
+pub(crate) fn linked_run_widths(
+    app: &App,
+    ui: &egui::Ui,
+    messages: &[&Message],
+    book: &mut crate::run_widths::WidthBook,
+) -> HashMap<String, f32> {
+    let palette = app.conversation_palette();
+    let cap = text_cap_for_width(
+        ui.available_width() - 20.0 - ui.spacing().item_spacing.x,
+        &palette,
+    );
+    let inset = if palette.bubbles == theme::BubbleStyle::Messages {
+        MESSAGES_BUBBLE_MARGIN.sum().x
+    } else {
+        20.0
+    };
+    planned_widths(
+        ui,
+        messages,
+        book,
+        (cap, inset),
+        !app.settings.reduce_motion && app.window_focused,
+        |id| app.mention_name(id),
+        |message| {
+            let cap = planning_cap(ui, message, cap);
+            let text = body_for_measurement(&message.content).map(|(text, grow)| {
+                let mentions: Vec<_> = message
+                    .mentions
+                    .iter()
+                    .map(|mention| markup::Mention {
+                        user: mention.user.clone(),
+                        name: app.mention_name(&mention.id),
+                    })
+                    .collect();
+                let style = markup::Style {
+                    size: BODY_SIZE,
+                    color: palette.text,
+                    secondary: palette.secondary,
+                    link: palette.link,
+                    mention: palette.accent,
+                };
+                let measured = markup::measure(ui, text, &mentions, &style, cap, grow);
+                let plan = crate::wrap::balance(&measured.items, cap, measured.hyphen);
+                if plan.lines == 0 { 0. } else { plan.width }
+            });
+            natural_call_width(ui, message, cap, app.locale, &palette)
+                .or_else(|| natural_content_width(message, cap, text))
+                .unwrap_or(cap)
+        },
+    )
 }
 
 /// The width cap an own plain-text bubble settles within: the same share
 /// and inset the row computes, without carousel or avatar allowances. The
 /// neighbour-aware pre-pass and the row itself must agree on it.
 fn own_text_cap(ui: &egui::Ui, palette: &Palette, selecting: bool) -> f32 {
+    let available = ui.available_width() - if selecting { SELECT_GUTTER } else { 0.0 };
+    text_cap_for_width(available, palette)
+}
+
+fn text_cap_for_width(available: f32, palette: &Palette) -> f32 {
     let share = if palette.bubbles == theme::BubbleStyle::Messages {
         MESSAGES_WIDTH_SHARE
     } else {
         WHATSAPP_WIDTH_SHARE
     };
-    let available = ui.available_width() - if selecting { SELECT_GUTTER } else { 0.0 };
     let max_width = (available * share).clamp(0.0, 560.0);
     let inset = if palette.bubbles == theme::BubbleStyle::Messages {
         MESSAGES_BUBBLE_MARGIN.sum().x
@@ -6242,25 +6368,11 @@ fn own_text_cap(ui: &egui::Ui, palette: &Palette, selecting: bool) -> f32 {
     ((max_width - inset).min(available)).max(0.0)
 }
 
-/// Own plain-text bubbles join neighbour-aware widths; media, quotes,
-/// cards and forwarded messages keep the stepped grid.
-fn neighbour_eligible(message: &Message) -> bool {
-    message.from_me
-        && !message.forwarded
-        && message.quoted.is_none()
-        && matches!(message.content, Content::Text { preview: None, .. })
-}
-
 /// Shared 320/400/480/... content widths, with one narrower final viewport step.
 /// Round up so text that needed a wider card is never squeezed by the rounding.
 fn stepped_card_width(natural: f32, cap: f32) -> f32 {
     let steps = ((natural - CARD_WIDTH).max(0.0) / CARD_WIDTH_STEP).ceil();
     (CARD_WIDTH + steps * CARD_WIDTH_STEP).min(cap.max(0.0))
-}
-
-/// Short text uses80/160/240pt, then joins the same320/400/... grid as cards.
-fn stepped_text_width(natural: f32, cap: f32) -> f32 {
-    ((natural / CARD_WIDTH_STEP).ceil().max(1.0) * CARD_WIDTH_STEP).min(cap.max(0.0))
 }
 
 /// Body text and the emoji growth the renderer uses for it, for width
@@ -6287,28 +6399,6 @@ fn body_for_measurement(content: &Content) -> Option<(&str, bool)> {
     }
 }
 
-/// Body text measured for the width book: the balancer tokens and the
-/// min-line plan at the cap.
-fn balanced_metrics(
-    ui: &egui::Ui,
-    view: &View<'_>,
-    message: &Message,
-    cap: f32,
-) -> Option<(markup::Measured, crate::wrap::Plan)> {
-    let palette = view.palette;
-    let (text, grow) = body_for_measurement(&message.content)?;
-    let style = markup::Style {
-        size: BODY_SIZE,
-        color: palette.text,
-        secondary: palette.secondary,
-        link: palette.link,
-        mention: palette.accent,
-    };
-    let measured = markup::measure(ui, text, &mentions_of(view, message), &style, cap, grow);
-    let at_cap = crate::wrap::balance(&measured.items, cap, measured.hyphen);
-    Some((measured, at_cap))
-}
-
 /// Widest wrapped body-text row. Metadata sits outside the bubble.
 fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f32) -> Option<f32> {
     let palette = view.palette;
@@ -6320,14 +6410,9 @@ fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f3
         link: palette.link,
         mention: palette.accent,
     };
-    let laid = markup::layout(ui, text, &mentions_of(view, message), &style, cap, grow);
-    let widest = laid
-        .galley
-        .rows
-        .iter()
-        .map(|row| row.row.size.x)
-        .fold(0.0, f32::max);
-    Some(widest)
+    let measured = markup::measure(ui, text, &mentions_of(view, message), &style, cap, grow);
+    let plan = crate::wrap::balance(&measured.items, cap, measured.hyphen);
+    Some(if plan.lines == 0 { 0.0 } else { plan.width })
 }
 
 /// Width of a quote's accent bar.
@@ -6844,12 +6929,13 @@ fn not_sent(message: &Message) -> bool {
     message.from_me && message.status == Delivery::Failed
 }
 
-/// Only the final consecutive same-source, same-sender, same-minute bubble gets a clock.
+/// Only the final consecutive same-source, same-sender bubble gets a clock.
+/// Calendar-day boundaries also end a run.
 pub(crate) fn last_minute_in_run(message: &Message, next: Option<&Message>) -> bool {
     next.is_none_or(|next| {
         message.chat != next.chat
             || !same_run(message, next)
-            || message.timestamp.div_euclid(60) != next.timestamp.div_euclid(60)
+            || crate::util::day_key(message.timestamp) != crate::util::day_key(next.timestamp)
     })
 }
 
@@ -6905,7 +6991,7 @@ fn footer(
     let status = shown_delivery(view, message);
     let has_tick = message.from_me
         && !matches!(status, Delivery::None | Delivery::Unknown)
-        && !view.hide_grouped_status;
+        && (!view.hide_grouped_status || not_sent(message));
     let tick_width = if has_tick { 19.0 } else { 0.0 };
     let width = time.size().x
         + edited.as_ref().map_or(0.0, |galley| galley.size().x + 4.0)
@@ -7273,7 +7359,6 @@ pub(crate) fn list_menu(
         link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
-        covered_top: None,
         show_timestamp: true,
         footer_right: None,
         neighbour_width: None,
@@ -7334,10 +7419,8 @@ pub(crate) fn linked_bubble(
     chat: &Chat,
     message: &Message,
     show_timestamp: bool,
-    previous: Option<&Message>,
-    next: Option<&Message>,
     footer_right: f32,
-    cadence: (Option<i64>, Option<i64>),
+    run_width: Option<f32>,
     actions: &mut Vec<Action>,
 ) -> Option<egui::Rect> {
     // The message's own source network hues its bubbles; a small network
@@ -7368,10 +7451,9 @@ pub(crate) fn linked_bubble(
         link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
-        covered_top: None,
         show_timestamp,
         footer_right: Some(footer_right),
-        neighbour_width: None,
+        neighbour_width: run_width,
         palette,
         locale: app.locale,
         chat,
@@ -7419,25 +7501,10 @@ pub(crate) fn linked_bubble(
         None,
         RunPlace {
             sender_hue: None,
-            show_timestamp: show_timestamp
-                && (palette.bubbles == theme::BubbleStyle::Messages
-                    || !next
-                        .zip(cadence.1)
-                        .is_some_and(|(next, limit)| stack_pair(&view, message, next, limit))),
+            show_timestamp,
             show_sender: false,
             show_avatar: false,
             tailed: true,
-            next_stacks: next
-                .zip(cadence.1)
-                .is_some_and(|(next, limit)| stack_pair(&view, message, next, limit))
-                && palette.bubbles != theme::BubbleStyle::Messages,
-            overlap_previous: previous
-                .filter(|previous| {
-                    cadence
-                        .0
-                        .is_some_and(|limit| stack_pair(&view, previous, message, limit))
-                })
-                .map(|previous| bubble_id(&previous.chat, &previous.id)),
         },
         actions,
     )
@@ -12089,6 +12156,96 @@ fn chat_of(chat: &ChatId) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mention_width_is_cached_until_its_resolved_name_changes() {
+        let mut row = message(Content::text("hello @user"));
+        row.mentions = vec![crate::model::MentionRef {
+            id: "contact".into(),
+            user: "@user".into(),
+        }];
+        let key = width_key(&row);
+        let mut book = crate::run_widths::WidthBook::default();
+        book.check_signature(&key, resolved_width_signature(&row, |_| "Ada".into()));
+        book.remember(&key, 123.);
+        book.check_signature(&key, resolved_width_signature(&row, |_| "Ada".into()));
+        assert_eq!(
+            book.get(&key),
+            Some(123.),
+            "unchanged mentions reuse measurement"
+        );
+        book.check_signature(
+            &key,
+            resolved_width_signature(&row, |_| "Ada Lovelace".into()),
+        );
+        assert_eq!(
+            book.get(&key),
+            None,
+            "resolved name change invalidates width"
+        );
+    }
+
+    #[test]
+    fn width_signature_ignores_media_bytes_and_tracks_layout_shape() {
+        let mut row = message(Content::Text {
+            text: "same text".into(),
+            preview: None,
+        });
+        let plain = width_signature(&row);
+        row.thumbnail = Some(vec![1; 1024 * 1024]);
+        let poster = width_signature(&row);
+        row.thumbnail = Some(vec![255; 2 * 1024 * 1024]);
+        assert_eq!(
+            width_signature(&row),
+            poster,
+            "poster bytes do not affect width"
+        );
+        assert_ne!(plain, poster, "poster presence is a layout input");
+        if let Content::Text { preview, .. } = &mut row.content {
+            *preview = Some(crate::model::LinkPreview {
+                url: "https://example.com".into(),
+                title: None,
+                description: None,
+            });
+        }
+        assert_ne!(
+            width_signature(&row),
+            poster,
+            "preview presence invalidates"
+        );
+    }
+
+    #[test]
+    fn plain_photo_planning_uses_its_frame_not_the_viewport() {
+        let row = message(Content::Image {
+            caption: None,
+            media: media(Some(640), Some(480)),
+            motion: None,
+        });
+        assert_eq!(natural_content_width(&row, 540., None), Some(320.));
+        let narrow = message(Content::Image {
+            caption: None,
+            media: media(Some(200), Some(600)),
+            motion: None,
+        });
+        let width = natural_content_width(&narrow, 540., None).unwrap();
+        assert!(
+            width < 160.,
+            "portrait ratio determines the natural width: {width}"
+        );
+    }
+
+    #[test]
+    fn received_album_uses_its_natural_card_width_not_the_viewport() {
+        let mut source = media(None, None);
+        source.album = Some("album".into());
+        let row = message(Content::Image {
+            caption: None,
+            media: source,
+            motion: None,
+        });
+        assert_eq!(natural_content_width(&row, 520., None), Some(320.));
+        assert_eq!(natural_content_width(&row, 200., None), Some(200.));
+    }
 
     #[test]
     fn unknown_delivery_footer_keeps_no_clockless_status_slot() {
@@ -12101,7 +12258,6 @@ mod tests {
                 pending_media: None,
                 sender_hue: None,
                 hide_grouped_status: false,
-                covered_top: None,
                 show_timestamp: false,
                 ..*view
             };
@@ -12309,7 +12465,7 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_only_ends_a_consecutive_same_sender_minute() {
+    fn timestamp_only_ends_a_consecutive_same_sender_run() {
         let mut first = message(Content::text("18:40"));
         first.timestamp = 18 * 3600 + 40 * 60;
         first.from_me = false;
@@ -12317,7 +12473,7 @@ mod tests {
         second.timestamp += 60;
         let mut third = second.clone();
         third.timestamp += 30;
-        assert!(last_minute_in_run(&first, Some(&second)));
+        assert!(!last_minute_in_run(&first, Some(&second)));
         assert!(!last_minute_in_run(&second, Some(&third)));
         assert!(last_minute_in_run(&third, None));
         third.sender = "someone-else".into();
@@ -13379,7 +13535,6 @@ mod tests {
             link_menu_owner: None,
             sender_hue: None,
             hide_grouped_status: false,
-            covered_top: None,
             show_timestamp: true,
             footer_right: None,
             neighbour_width: None,
@@ -14708,26 +14863,6 @@ mod copy_url_tests {
 #[cfg(test)]
 mod card_width_tests {
     use super::*;
-
-    #[test]
-    fn plain_text_uses_small_steps_then_joins_the_card_grid() {
-        for (natural, cap, expected) in [
-            (0.0, 540.0, 80.0),
-            (79.0, 540.0, 80.0),
-            (80.0, 540.0, 80.0),
-            (81.0, 540.0, 160.0),
-            (160.0, 540.0, 160.0),
-            (161.0, 540.0, 240.0),
-            (241.0, 540.0, 320.0),
-            (321.0, 540.0, 400.0),
-            (401.0, 540.0, 480.0),
-            (481.0, 540.0, 540.0),
-            (100.0, 120.0, 120.0),
-            (0.0, 0.0, 0.0),
-        ] {
-            assert_eq!(stepped_text_width(natural, cap), expected);
-        }
-    }
 
     #[test]
     fn cards_round_up_in_shared_steps_and_stop_at_the_viewport() {
