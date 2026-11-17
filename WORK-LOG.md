@@ -183,3 +183,15 @@ Covers bad hash, truncation, oversize, cancellation, atomic success and cleanup.
 No network/model download performed. Full library/tests compile was killed for
 memory here; no whole-app compile pass claimed. Use serial jobs next time.
 Model revision and exact size verified against the live distributor API.
+
+Whisper source-independent checkpoint: explicit Off/Local/Wyoming selection
+with legacy Wyoming migration, opt-in settings controls, progress/cancel and
+remove actions, background download completion, shared decoded PCM to private
+WAV, CLI auto-language, portable bounded output and timeout kill/reap.
+Disk-space checks use existing libc on Unix and the OS API on Windows; no new
+locked dependencies. Switched download transport to existing ureq for bounded
+reads. Local cargo check/clippy --lib --features demo pass with one job.
+15 installer/engine production-module isolated tests pass. Full test compile
+is too large for this worker and was interrupted after 120 seconds. Native
+CI, visual evidence, runtime source decision/bundling and real audio in actual
+app remain open. No model download or bundled upstream code yet.

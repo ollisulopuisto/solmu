@@ -2,6 +2,8 @@
 
 Newest first. One `## <version>` section per release, bullets under it;
 
+- Local transcription setup: explicitly select this computer or your Wyoming server. Download the multilingual Whisper Base model only on request, with progress, cancellation, verification and removal. Existing Wyoming settings are preserved; there is no silent server fallback. Runtime packaging and actual-app verification are still pending on this branch.
+
 - Send Later: composer clock expands into four upward presets (8am nearest, parsed message time, custom calendar, recurring); Cmd/Ctrl+Shift+Enter opens it, arrows and 1–4 choose, Esc returns to the draft.
 the app shows the sections newer than the version the user last
 acknowledged, and the latest sections when opened from Help. The

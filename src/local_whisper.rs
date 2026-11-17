@@ -17,6 +17,70 @@ pub fn model_path(state: &Path) -> PathBuf {
     state.join("models/whisper/ggml-base.bin")
 }
 
+const DISK_RESERVE: u64 = 16 * 1024 * 1024;
+
+fn enough_space(available: u64, required: u64) -> Result<(), String> {
+    if available < required.saturating_add(DISK_RESERVE) {
+        Err("Not enough free disk space. Free at least 165 MB and retry.".into())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn available_space(path: &Path) -> Result<u64, String> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: path is terminated, stats points to writable storage of the right size.
+    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    // SAFETY: successful statvfs initialized every field.
+    let stats = unsafe { stats.assume_init() };
+    let bytes = u128::from(stats.f_bavail) * u128::from(stats.f_frsize);
+    Ok(bytes.min(u128::from(u64::MAX)) as u64)
+}
+
+#[cfg(windows)]
+fn available_space(path: &Path) -> Result<u64, String> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetDiskFreeSpaceExW(
+            path: *const u16,
+            available: *mut u64,
+            total: *mut u64,
+            free: *mut u64,
+        ) -> i32;
+    }
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut available = 0u64;
+    // SAFETY: path is terminated, available is writable; optional outputs are null.
+    if unsafe {
+        GetDiskFreeSpaceExW(
+            path.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(available)
+}
+
+/// Only the app's bundled sibling runtime is used, never an arbitrary PATH hit.
+pub fn runtime_path() -> Option<PathBuf> {
+    let binary = std::env::current_exe().ok()?;
+    Some(binary.parent()?.join(if cfg!(windows) {
+        "whisper-cli.exe"
+    } else {
+        "whisper-cli"
+    }))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DownloadState {
     Downloading { received: u64, total: u64 },
@@ -51,22 +115,26 @@ impl Download {
                 wake();
             };
             let result = (|| {
-                let mut builder = reqwest::blocking::Client::builder()
-                    .connect_timeout(Duration::from_secs(15))
-                    .timeout(Duration::from_secs(30 * 60))
-                    .https_only(true);
-                if let Some(proxy) = crate::proxy::reqwest_proxy() {
-                    builder = builder.proxy(proxy);
+                let parent = path.parent().ok_or("Model path has no directory")?;
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                enough_space(available_space(parent)?, MODEL_BYTES)?;
+                if cancelled.load(Ordering::Acquire) {
+                    return Err("Download cancelled".into());
                 }
-                let mut response = builder
+                let agent: ureq::Agent = ureq::Agent::config_builder()
+                    .https_only(true)
+                    .proxy(crate::proxy::ureq_proxy())
+                    .timeout_global(Some(Duration::from_secs(30 * 60)))
+                    .timeout_resolve(Some(Duration::from_secs(10)))
+                    .timeout_connect(Some(Duration::from_secs(10)))
+                    .timeout_recv_response(Some(Duration::from_secs(10)))
+                    .timeout_per_read(Some(Duration::from_secs(5)))
                     .build()
-                    .map_err(|e| e.to_string())?
-                    .get(MODEL_URL)
-                    .send()
-                    .and_then(|r| r.error_for_status())
-                    .map_err(|e| e.to_string())?;
+                    .into();
+                let mut response = agent.get(MODEL_URL).call().map_err(|e| e.to_string())?;
+                let mut reader = response.body_mut().as_reader();
                 install(
-                    &mut response,
+                    &mut reader,
                     &path,
                     MODEL_BYTES,
                     MODEL_SHA256,
@@ -74,13 +142,10 @@ impl Download {
                     progress,
                 )
             })();
-            let final_state = if cancelled.load(Ordering::Acquire) {
-                DownloadState::Cancelled
-            } else {
-                match result {
-                    Ok(()) => DownloadState::Ready(path),
-                    Err(e) => DownloadState::Failed(e),
-                }
+            let final_state = match result {
+                Ok(()) => DownloadState::Ready(path),
+                Err(_) if cancelled.load(Ordering::Acquire) => DownloadState::Cancelled,
+                Err(e) => DownloadState::Failed(e),
             };
             *state.lock().unwrap_or_else(|p| p.into_inner()) = final_state;
             wake();
@@ -89,6 +154,9 @@ impl Download {
     }
     pub fn state(&self) -> DownloadState {
         self.state.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+    pub fn cancellation_requested(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
     }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
@@ -157,6 +225,13 @@ fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disk_space_includes_room_for_the_atomic_install() {
+        assert!(enough_space(MODEL_BYTES, MODEL_BYTES).is_err());
+        assert!(enough_space(MODEL_BYTES + DISK_RESERVE, MODEL_BYTES).is_ok());
+        let root = tempfile::tempdir().unwrap();
+        assert!(available_space(root.path()).unwrap() > 0);
+    }
     #[test]
     fn verification_and_cancellation_never_replace_a_good_model_with_a_partial() {
         let root = tempfile::tempdir().unwrap();

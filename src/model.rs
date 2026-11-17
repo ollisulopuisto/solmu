@@ -3366,6 +3366,9 @@ pub enum Action {
     ReloadThemes,
     OpenThemesFolder,
     SettingsChanged,
+    DownloadLocalWhisper,
+    CancelLocalWhisperDownload,
+    RemoveLocalWhisperModel,
     /// Writes one WhatsApp account privacy category on the phone.
     SetAccountPrivacy {
         kind: crate::privacy::PrivacyKind,

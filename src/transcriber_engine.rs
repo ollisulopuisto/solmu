@@ -32,49 +32,118 @@ impl WhisperCpp {
 
 impl Engine for WhisperCpp {
     fn transcribe(&mut self, audio: &Path, language: &str) -> Result<String, String> {
+        // A regular private file cannot fill a pipe and deadlock the child.
+        // Limit both the live output and the final read; no transcripts in logs.
+        const MAX_OUTPUT: u64 = 1 << 20;
+        let mut output = tempfile::tempfile().map_err(|e| e.to_string())?;
         let mut cmd = Command::new(&self.binary);
         cmd.arg("-m")
             .arg(&self.model)
             .arg("-f")
             .arg(audio)
             .arg("--no-timestamps")
-            .arg("--output-txt")
-            .arg("-of")
-            .arg("/dev/stdout")
-            .stdout(Stdio::piped())
+            .arg("--no-prints")
+            .arg("-l")
+            .arg(if language.trim().is_empty() {
+                "auto"
+            } else {
+                language
+            })
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(output.try_clone().map_err(|e| e.to_string())?))
             .stderr(Stdio::null());
-        // Auto-detect when no language is pinned; whisper.cpp wants no
-        // -l flag at all for that.
-        if !language.is_empty() {
-            cmd.arg("-l").arg(language);
-        }
         let started = Instant::now();
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("whisper.cpp not runnable at {}: {e}", self.binary.display()))?;
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => {
-                    let mut out = String::new();
-                    use std::io::Read;
-                    child.stdout.take().map(|mut s| s.read_to_string(&mut out));
-                    let text = out.trim().to_string();
-                    if text.is_empty() {
-                        return Err("whisper.cpp produced no transcript".into());
-                    }
-                    return Ok(text);
-                }
-                Ok(Some(status)) => return Err(format!("whisper.cpp exited {status}")),
-                Ok(None) => {
-                    if started.elapsed() > self.timeout {
-                        let _ = child.kill();
-                        return Err("whisper.cpp timed out".into());
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(e) => return Err(format!("whisper.cpp wait failed: {e}")),
+        let result = loop {
+            if started.elapsed() > self.timeout {
+                break Err("whisper.cpp timed out".to_string());
             }
+            match output.metadata() {
+                Ok(meta) if meta.len() > MAX_OUTPUT => {
+                    break Err("whisper.cpp output exceeded its size limit".to_string());
+                }
+                Err(e) => break Err(format!("whisper.cpp output check failed: {e}")),
+                _ => {}
+            }
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => break Ok(()),
+                Ok(Some(status)) => break Err(format!("whisper.cpp exited {status}")),
+                Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+                Err(e) => break Err(format!("whisper.cpp wait failed: {e}")),
+            }
+        };
+        // Reap on every path, including timeouts and unexpected wait errors.
+        if result.is_err() {
+            let _ = child.kill();
         }
+        let _ = child.wait();
+        result?;
+        use std::io::{Read, Seek};
+        output.rewind().map_err(|e| e.to_string())?;
+        let mut text = String::new();
+        output
+            .take(MAX_OUTPUT + 1)
+            .read_to_string(&mut text)
+            .map_err(|e| e.to_string())?;
+        if text.len() as u64 > MAX_OUTPUT {
+            return Err("whisper.cpp output exceeded its size limit".into());
+        }
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return Err("whisper.cpp produced no transcript".into());
+        }
+        Ok(text)
+    }
+}
+
+/// Decode once with the app's audio stack, then use a private standard WAV.
+/// The CLI never needs to know about Opus/M4A/video codecs or remote services.
+pub struct DecodedWhisper {
+    pub engine: WhisperCpp,
+    pub decode: PcmDecoder,
+}
+
+fn pcm_wav(pcm: &[u8]) -> Result<tempfile::NamedTempFile, String> {
+    use std::io::Write;
+    if pcm.is_empty() || !pcm.len().is_multiple_of(2) {
+        return Err("Audio contains no valid samples".into());
+    }
+    let len = u32::try_from(pcm.len())
+        .ok()
+        .filter(|len| *len <= u32::MAX - 36)
+        .ok_or("Audio is too large")?;
+    let mut file = tempfile::Builder::new()
+        .prefix("solmu-transcribe-")
+        .suffix(".wav")
+        .tempfile()
+        .map_err(|e| e.to_string())?;
+    let writer = &mut file;
+    writer
+        .write_all(b"RIFF")
+        .and_then(|()| writer.write_all(&(36 + len).to_le_bytes()))
+        .and_then(|()| writer.write_all(b"WAVEfmt "))
+        .and_then(|()| writer.write_all(&16u32.to_le_bytes()))
+        .and_then(|()| writer.write_all(&1u16.to_le_bytes()))
+        .and_then(|()| writer.write_all(&1u16.to_le_bytes()))
+        .and_then(|()| writer.write_all(&16_000u32.to_le_bytes()))
+        .and_then(|()| writer.write_all(&32_000u32.to_le_bytes()))
+        .and_then(|()| writer.write_all(&2u16.to_le_bytes()))
+        .and_then(|()| writer.write_all(&16u16.to_le_bytes()))
+        .and_then(|()| writer.write_all(b"data"))
+        .and_then(|()| writer.write_all(&len.to_le_bytes()))
+        .and_then(|()| writer.write_all(pcm))
+        .and_then(|()| writer.flush())
+        .map_err(|e| e.to_string())?;
+    Ok(file)
+}
+
+impl Engine for DecodedWhisper {
+    fn transcribe(&mut self, audio: &Path, language: &str) -> Result<String, String> {
+        let pcm = (self.decode)(audio)?;
+        let wav = pcm_wav(&pcm)?;
+        self.engine.transcribe(wav.path(), language)
     }
 }
 
@@ -287,6 +356,46 @@ mod tests {
         let err = engine.transcribe(Path::new("/a.ogg"), "fi").unwrap_err();
         assert!(err.contains("timed out"), "got: {err}");
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn whisper_cpp_requests_auto_language_and_portable_stdout() {
+        let mut engine = WhisperCpp::new(fake_whisper("args.sh"), PathBuf::from("/tmp/model.bin"));
+        let text = engine.transcribe(Path::new("/tmp/a.wav"), "").unwrap();
+        assert!(text.ends_with("-l\nauto"));
+        assert!(text.contains("--no-prints"));
+        assert!(!text.contains("/dev/stdout"));
+        assert!(!text.contains("--output-txt"));
+    }
+
+    #[test]
+    fn whisper_cpp_rejects_excess_output_without_pipe_deadlock() {
+        let mut engine = WhisperCpp::new(fake_whisper("flood.sh"), PathBuf::from("/tmp/model.bin"));
+        engine.timeout = Duration::from_secs(3);
+        let started = Instant::now();
+        assert!(
+            engine
+                .transcribe(Path::new("/tmp/a.wav"), "")
+                .unwrap_err()
+                .contains("size limit")
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn wav_is_standard_mono_16khz_pcm_and_is_removed_on_drop() {
+        let pcm = [0, 0, 255, 127, 0, 128];
+        let file = pcm_wav(&pcm).unwrap();
+        let path = file.path().to_owned();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[..4], b"RIFF");
+        assert_eq!(&bytes[8..16], b"WAVEfmt ");
+        assert_eq!(&bytes[24..28], &16_000u32.to_le_bytes());
+        assert_eq!(&bytes[44..], &pcm);
+        drop(file);
+        assert!(!path.exists());
+        assert!(pcm_wav(&[]).is_err());
+        assert!(pcm_wav(&[0]).is_err());
     }
 
     use std::io::{BufRead, Read, Write};

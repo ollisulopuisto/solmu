@@ -417,6 +417,15 @@ pub struct Silence {
     pub muted_until: Option<i64>,
 }
 
+/// Explicit engine choice. Missing settings preserve an existing Wyoming setup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionEngine {
+    Off,
+    Local,
+    Wyoming,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -432,6 +441,8 @@ pub struct Settings {
     /// empty disables transcription. Local services only, never cloud.
     #[serde(default)]
     pub transcription_wyoming: String,
+    /// None is a migration marker, not an automatic engine fallback.
+    pub transcription_engine: Option<TranscriptionEngine>,
     /// Global transcription language ("fi", "en", ...); empty = auto-detect.
     #[serde(default)]
     pub transcription_language: String,
@@ -609,12 +620,59 @@ pub fn transcription_language_key(account: &str, chat: &str, message: &str) -> S
     format!("{account}\t{chat}\t{message}")
 }
 
+impl Settings {
+    pub fn transcription_engine(&self) -> TranscriptionEngine {
+        self.transcription_engine.unwrap_or_else(|| {
+            if self.transcription_wyoming.trim().is_empty() {
+                TranscriptionEngine::Off
+            } else {
+                TranscriptionEngine::Wyoming
+            }
+        })
+    }
+    pub fn transcription_worker_key(&self) -> String {
+        match self.transcription_engine() {
+            TranscriptionEngine::Off => "off".to_string(),
+            TranscriptionEngine::Local => "local".to_string(),
+            TranscriptionEngine::Wyoming => {
+                format!("wyoming:{}", self.transcription_wyoming.trim())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod transcription_engine_migration_tests {
+    use super::*;
+    #[test]
+    fn existing_wyoming_users_are_preserved_but_explicit_choices_always_win() {
+        let mut settings: Settings =
+            serde_json::from_str(r#"{"transcription_wyoming":"127.0.0.1:10300"}"#).unwrap();
+        assert_eq!(
+            settings.transcription_engine(),
+            TranscriptionEngine::Wyoming
+        );
+        settings.transcription_engine = Some(TranscriptionEngine::Local);
+        assert_eq!(settings.transcription_engine(), TranscriptionEngine::Local);
+        settings.transcription_engine = Some(TranscriptionEngine::Off);
+        assert_eq!(settings.transcription_engine(), TranscriptionEngine::Off);
+        let roundtrip: Settings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(roundtrip.transcription_engine(), TranscriptionEngine::Off);
+        assert_eq!(
+            Settings::default().transcription_engine(),
+            TranscriptionEngine::Off
+        );
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             version: SETTINGS_VERSION,
             scheduler_url: default_scheduler_url(),
             transcription_wyoming: String::new(),
+            transcription_engine: None,
             transcription_language: String::new(),
             transcription_language_overrides: std::collections::BTreeMap::new(),
             theme: ThemeChoice::System,
