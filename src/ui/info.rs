@@ -1445,14 +1445,16 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
                             } else {
                                 crate::i18n::gettext(app.locale, "Play")
                             };
+                            // Keep the focused control in the Tab order while
+                            // downloading. Disabling it would drop focus before
+                            // the reader can Tab to Go to chat.
                             let play = ui
-                                .add_enabled(
-                                    media.state != crate::model::MediaState::Downloading,
-                                    egui::Button::new(label).min_size(vec2(70.0, 40.0)),
-                                )
+                                .add(egui::Button::new(label).min_size(vec2(70.0, 40.0)))
                                 .tab_stop(Stop::InfoVoice(index as u16, 0));
                             theme::reveal_focus(&play);
-                            if play.clicked() {
+                            if play.clicked()
+                                && media.state != crate::model::MediaState::Downloading
+                            {
                                 if let Some(path) = &media.path {
                                     // A member's info pane may be open over a different chat.
                                     // Set the originating chat explicitly before playback.
