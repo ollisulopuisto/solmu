@@ -92,14 +92,14 @@ pub fn verify_model(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Only the app's bundled sibling runtime is used, never an arbitrary PATH hit.
-pub fn runtime_path() -> Option<PathBuf> {
-    let binary = std::env::current_exe().ok()?;
-    Some(binary.parent()?.join(if cfg!(windows) {
+/// Optional runtime lives in app state, never inside Solmu's signed bundle.
+/// A platform provider must install and verify it before this path is runnable.
+pub fn runtime_path(state: &Path) -> PathBuf {
+    state.join("runtimes/whisper").join(if cfg!(windows) {
         "whisper-cli.exe"
     } else {
         "whisper-cli"
-    }))
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

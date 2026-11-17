@@ -15,7 +15,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
-- Local transcription setup: explicitly select this computer or your Wyoming server. Download the multilingual Whisper Base model only on request, with progress, cancellation, verification and removal. Existing Wyoming settings are preserved; there is no silent server fallback. Runtime packaging and actual-app verification are still pending on this branch.
+- Local transcription setup: explicitly select this computer or your Wyoming server. Download the multilingual Whisper Base model only on request, with progress, cancellation, verification and removal. Existing Wyoming settings are preserved; there is no silent server fallback. Prebuilt runtime download selection and actual-app verification are still pending on this branch.
 
 - Linked-person chat headers keep clear of the Mac traffic lights after Cmd+B hides the chat list, including at different zoom levels.
 

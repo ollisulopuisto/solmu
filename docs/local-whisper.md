@@ -5,8 +5,9 @@ server. Existing Wyoming settings keep using that server after an update.
 Selecting a different engine is explicit. A local failure never sends audio
 to a saved server address.
 
-On this computer uses the bundled whisper.cpp engine and a pinned Whisper
-Base multilingual model. The model is not included in the app download.
+On this computer is intended to download a platform-specific prebuilt engine
+and a pinned Whisper Base multilingual model only when requested. Neither is
+included in the app download. Solmu has no Whisper build-time dependency.
 Selecting the engine alone does not fetch anything. Download & enable is the
 only action that starts a model download. It fetches 147,951,465 bytes over
 HTTPS from Hugging Face, verifies the pinned SHA-256, and installs the model
@@ -28,8 +29,27 @@ Accuracy varies, especially for short clips and uncommon languages.
 
 ## Implementation status
 
-Runtime bundling and the source-policy decision are still pending. This
+Runtime download selection is still pending. This
 branch is not a usable released feature. Engine/installer regressions pass
 in isolation and the app library passes check/clippy; whole-app native tests,
-screenshots, signed packaging and real-recording actual-app validation are
+screenshots, downloaded-runtime security validation and real-recording actual-app validation are
 still required. Do not treat the isolated engine tests as end-to-end proof.
+
+## macOS runtime research
+
+The official b5454 release offers an Apple XCFramework, not a whisper-cli
+executable. Its macOS binary is a universal Mach-O dynamic library. It cannot
+be launched as the CLI. Linux and Windows CLI archives exist in that release.
+No macOS CLI publisher has been selected. Existing user-installed CLI support
+or a separately distributed signed/notarized helper are choices still awaiting
+the maintainer, not silently substituted implementations.
+
+A pinned hash does not establish Gatekeeper approval. No code strips quarantine,
+weakens library validation or self-signs downloaded executables. Actual
+macOS signing, quarantine and execution remain untested.
+
+Sources checked 2026-11-17:
+- https://github.com/ggml-org/whisper.cpp/releases/tag/b5454
+- https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-b5454-xcframework.zip
+- https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/.github/workflows/release.yml
+- https://support.apple.com/en-us/102445

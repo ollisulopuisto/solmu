@@ -195,3 +195,12 @@ reads. Local cargo check/clippy --lib --features demo pass with one job.
 is too large for this worker and was interrupted after 120 seconds. Native
 CI, visual evidence, runtime source decision/bundling and real audio in actual
 app remain open. No model download or bundled upstream code yet.
+
+Owner correction 2026-11-17 18:41: download platform-specific prebuilt runtime
+and model only on user action; no bundled runtime or Whisper build-time
+dependencies. Original phonemsg-01M7N65ZM205EJ3XQEZM659VCK recovered.
+Runtime path moved outside signed app bundle into app state. No executable
+provider selected yet: official b5454 has Apple dynamic-library XCFramework,
+not a macOS CLI. Archive inspected and published SHA256 matched. Linux/Windows
+archives exist. Main has reported choices; do not silently choose a third-party
+Mac CLI or add a helper distribution. No xattr bypass or weakened validation.

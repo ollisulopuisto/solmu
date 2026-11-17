@@ -1238,7 +1238,7 @@ fn transcriber_worker(
     });
     let engine: Box<dyn crate::transcriber::Engine + Send> = match choice {
         TranscriptionEngine::Local => {
-            let binary = crate::local_whisper::runtime_path()?;
+            let binary = crate::local_whisper::runtime_path(&dirs.state);
             let model = crate::local_whisper::model_path(&dirs.state);
             if !binary.is_file() || !model.is_file() {
                 return None;
@@ -12494,7 +12494,7 @@ impl App {
             }
             Action::DownloadLocalWhisper => {
                 if self.local_whisper_download.is_none()
-                    && crate::local_whisper::runtime_path().is_some_and(|p| p.is_file())
+                    && crate::local_whisper::runtime_path(&self.dirs.state).is_file()
                 {
                     self.settings.transcription_engine =
                         Some(crate::settings::TranscriptionEngine::Local);
