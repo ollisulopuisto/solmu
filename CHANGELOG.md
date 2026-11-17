@@ -42,6 +42,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 - Right-click a chat and hover "Assign groups" to see every group at once and pick one; dragging a chat onto a group heading assigns it in every mode, and onto Other takes it out of its group.
 - Drag a group heading onto another to reorder groups; the order is saved.
 - The shrug ¯\_(ツ)_/¯ keeps its underscores in a bubble: an underscore next to a slash or backslash is not emphasis.
+- A macOS Text Replacement whose stored text is still escape text (such as the shrug as `\U00af\\_(\U30c4)_/\U00af`) expands to the characters, not the escape codes.
 - Archive multiple selected chats without deleting messages.
 - Explicit per-chat bridge-supported message deletion scope and age checks.
 - Unsupported-item preflight and request-correlated per-item outcomes, no auto retry.
