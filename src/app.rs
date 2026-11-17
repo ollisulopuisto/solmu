@@ -6105,10 +6105,15 @@ impl App {
                 self.scheduled_messages = Some(items);
             }
             Event::ScheduledAccepted => {
-                // The queue owns the message now; an ordinary Send must not
-                // deliver it a second time.
-                self.composer.clear();
-                self.reply_to = None;
+                // Never clear a draft edited or moved to another chat while awaiting the ack.
+                if let Some(draft) = self.scheduling_draft.take()
+                    && draft.source == self.open_chat
+                    && draft.text == self.composer
+                    && draft.quoting == self.reply_to.as_ref().map(|reply| reply.id.clone())
+                {
+                    self.composer.clear();
+                    self.reply_to = None;
+                }
                 self.send_later_replaces = None;
                 self.send_later_draft_backup = None;
                 // Refresh the queue so the composer's schedule icon is current.
@@ -6122,6 +6127,10 @@ impl App {
                 self.send_later_weekdays = 0;
                 self.send_later_ends = 0;
                 self.send_later_ends_value.clear();
+            }
+            Event::ScheduleFailed(error) => {
+                self.scheduling_draft = None;
+                self.toast_error(error);
             }
             Event::ClipboardImage(result) => {
                 self.handle_clipboard_image(result, write_clipboard_image);
@@ -9788,6 +9797,13 @@ impl App {
                 text,
                 quoting,
             } => {
+                if self.scheduling_draft.as_ref().is_some_and(|draft| {
+                    draft.chat == chat
+                        && draft.text.trim() == text.trim()
+                        && draft.quoting == quoting.as_ref().map(|reply| reply.id.clone())
+                }) {
+                    return;
+                }
                 self.send_text(chat, text, quoting);
                 self.reply_to = None;
             }
@@ -11481,12 +11497,21 @@ impl App {
                 replaces,
                 repeat,
             } => {
+                if self.scheduling_draft.is_some() {
+                    return;
+                }
                 if self.has_unsent_media_here() {
                     self.toast_error(crate::i18n::gettext(self.locale, "Send Later cannot include attachments. Remove the staged files before scheduling text.").into_owned());
                     return;
                 }
                 // The composer and quote stay until the scheduler confirms
                 // (`Event::ScheduledAccepted`); a failure loses nothing.
+                self.scheduling_draft = Some(crate::account::SchedulingDraft {
+                    chat: chat.clone(),
+                    source: self.open_chat.clone(),
+                    text: self.composer.clone(),
+                    quoting: self.reply_to.as_ref().map(|reply| reply.id.clone()),
+                });
                 self.backend.send(Command::ScheduleSend {
                     scheduler_url: self.settings.scheduler_url.clone(),
                     scheduler_token: self.scheduler_token(),
@@ -11668,6 +11693,32 @@ impl App {
                     self.toast(crate::i18n::gettext(self.locale, "Marked to read later"));
                 }
             }
+            Action::OpenSendLater { chat, recurring } => {
+                if self.scheduling_draft.is_some() {
+                    return;
+                }
+                if self.chat(&chat).is_none_or(|chat| {
+                    !chat.can_send() || (chat.locked && !self.locked_folder_open())
+                }) {
+                    return;
+                }
+                self.apply(Action::ShowDialog(Dialog::SendLater), ctx);
+                if self.dialog == Some(Dialog::SendLater) {
+                    self.send_later_chat = Some(chat);
+                    let now = jiff::Zoned::now();
+                    let due = now + jiff::SignedDuration::from_hours(1);
+                    self.send_later_date = due.strftime("%Y-%m-%d").to_string();
+                    self.send_later_time = due.strftime("%H:%M").to_string();
+                    self.send_later_repeat = if recurring { 1 } else { 0 };
+                    self.send_later_error = None;
+                    ctx.data_mut(|data| {
+                        data.remove::<jiff::civil::Date>(egui::Id::new((
+                            "send-later-month",
+                            self.account().id.clone(),
+                        )))
+                    });
+                }
+            }
             Action::ShowDialog(dialog) => {
                 if self.composed_forward_running() {
                     self.toast_error("The forward batch is still running. Wait for its results.");
@@ -11695,6 +11746,7 @@ impl App {
                     self.transcription_language_draft = draft;
                 }
                 if dialog == Dialog::SendLater {
+                    self.send_later_chat = self.open_chat.clone();
                     // A fresh Send Later is one send: never inherit a repeat.
                     self.send_later_repeat = 0;
                     self.send_later_every = "1".into();
@@ -32487,6 +32539,115 @@ mod linked_attachment_tests {
         );
         assert!(app.pending.is_empty());
         assert!(app.attachment_retry_sources.is_empty());
+    }
+
+    #[test]
+    fn send_later_calendar_respects_the_locked_folder_authentication() {
+        let (_root, mut app, ctx, _commands) = fixture();
+        let id = app.chats[0].id.clone();
+        app.chats[0].locked = true;
+        app.composer = "Draft stays here".into();
+        app.apply(
+            Action::OpenSendLater {
+                chat: id.clone(),
+                recurring: false,
+            },
+            &ctx,
+        );
+        assert_ne!(app.dialog, Some(Dialog::SendLater));
+        app.settings.chat_lock_code_hash = Some("synthetic".into());
+        app.chat_lock_session = Some("synthetic".into());
+        app.locked_folder = true;
+        assert!(app.locked_folder_open());
+        app.apply(
+            Action::OpenSendLater {
+                chat: id.clone(),
+                recurring: true,
+            },
+            &ctx,
+        );
+        assert_eq!(app.dialog, Some(Dialog::SendLater));
+        assert_eq!(app.send_later_chat.as_ref(), Some(&id));
+        assert_eq!(app.send_later_repeat, 1);
+        assert_eq!(app.composer, "Draft stays here");
+    }
+
+    #[test]
+    fn scheduling_is_single_flight_and_failure_allows_retry_without_losing_the_draft() {
+        let (_root, mut app, ctx, mut commands) = fixture();
+        app.composer = "Keep until accepted".into();
+        let schedule = Action::ScheduleSend {
+            chat: "visible".into(),
+            text: app.composer.clone(),
+            due_at: 9999999999,
+            quoting: None,
+            replaces: None,
+            repeat: None,
+        };
+        app.apply(schedule.clone(), &ctx);
+        app.apply(schedule.clone(), &ctx);
+        app.apply(
+            Action::OpenSendLater {
+                chat: "visible".into(),
+                recurring: false,
+            },
+            &ctx,
+        );
+        assert_ne!(app.dialog, Some(Dialog::SendLater));
+        assert_eq!(
+            std::iter::from_fn(|| commands.try_recv().ok())
+                .filter(|c| matches!(c, Command::ScheduleSend { .. }))
+                .count(),
+            1
+        );
+        app.apply(
+            Action::SendText {
+                chat: "visible".into(),
+                text: app.composer.clone(),
+                quoting: None,
+            },
+            &ctx,
+        );
+        assert!(commands.try_recv().is_err());
+        assert_eq!(app.composer, "Keep until accepted");
+        app.apply_backend_event(Event::ScheduleFailed("synthetic refusal".into()), true);
+        assert!(app.scheduling_draft.is_none());
+        assert_eq!(app.composer, "Keep until accepted");
+        app.apply(schedule, &ctx);
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::ScheduleSend { .. })
+        ));
+        app.apply_backend_event(Event::ScheduledAccepted, true);
+        assert!(app.scheduling_draft.is_none());
+        assert!(app.composer.is_empty());
+    }
+
+    #[test]
+    fn scheduling_ack_never_erases_an_edited_or_different_chat_draft() {
+        for move_chat in [false, true] {
+            let (_root, mut app, ctx, _commands) = fixture();
+            app.composer = "Scheduled text".into();
+            app.apply(
+                Action::ScheduleSend {
+                    chat: "visible".into(),
+                    text: app.composer.clone(),
+                    due_at: 9999999999,
+                    quoting: None,
+                    replaces: None,
+                    repeat: None,
+                },
+                &ctx,
+            );
+            if move_chat {
+                app.open_chat = Some("default".into());
+            } else {
+                app.composer = "New text".into();
+            }
+            let expected = app.composer.clone();
+            app.apply_backend_event(Event::ScheduledAccepted, true);
+            assert_eq!(app.composer, expected);
+        }
     }
 
     #[test]

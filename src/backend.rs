@@ -1526,6 +1526,8 @@ pub enum Event {
     ScheduledList(Vec<crate::scheduler::ScheduledMessage>),
     /// The scheduler accepted the message; the UI clears the composer.
     ScheduledAccepted,
+    /// Scheduling failed; preserve the draft and allow a deliberate retry.
+    ScheduleFailed(String),
     /// A decoded image ready to be written to the clipboard on the interface thread.
     ClipboardImage(Result<crate::model::DecodedImage, String>),
     /// A newer release than this build exists.

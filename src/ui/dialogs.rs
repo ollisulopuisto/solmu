@@ -92,7 +92,13 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Dialog::Palette => super::palette::show(app, ui),
                 Dialog::JumpToChat => super::switcher::show(app, ui),
                 Dialog::WhatsNew => whats_new(app, ui),
-                Dialog::SendLater => send_later(app, ui),
+                Dialog::SendLater => {
+                    let height = (ui.ctx().content_rect().height() - 64.0).max(100.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("send-later-dialog")
+                        .max_height(height)
+                        .show(ui, |ui| send_later(app, ui));
+                }
                 Dialog::ScheduledList => scheduled_list(app, ui),
                 Dialog::TranscriptionLanguage { chat, message } => {
                     transcription_language(app, ui, &chat, &message)
@@ -2659,44 +2665,14 @@ fn send_later(app: &mut App, ui: &mut egui::Ui) {
 
     let now = jiff::Zoned::now();
     let mut chosen: Option<i64> = None;
-    // Every preset names the actual resolved local time, so a preset that
-    // rolled to the next day can never look like today.
-    let mut preset = |ui: &mut egui::Ui, label: String, due: Option<jiff::Zoned>| {
-        if let Some(due) = due {
-            let when = due.strftime("%a %d %b %H:%M");
-            if ui.button(format!("{label} ({when})")).clicked() {
-                chosen = Some(due.timestamp().as_second());
-            }
-        }
-    };
-    ui.horizontal_wrapped(|ui| {
-        preset(
-            ui,
-            "In 1 hour".to_string(),
-            Some(now.clone() + jiff::SignedDuration::from_hours(1)),
-        );
-        let evening = now
-            .date()
-            .at(20, 0, 0, 0)
-            .to_zoned(now.time_zone().clone())
-            .ok()
-            .and_then(|z| if z <= now { z.tomorrow().ok() } else { Some(z) });
-        preset(ui, "This evening".to_string(), evening);
-        let morning = now
-            .date()
-            .at(9, 0, 0, 0)
-            .to_zoned(now.time_zone().clone())
-            .ok()
-            .and_then(|z| if z <= now { z.tomorrow().ok() } else { Some(z) });
-        preset(ui, "Tomorrow morning".to_string(), morning);
-    });
+    super::send_later::calendar(app, ui);
 
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label("Date (YYYY-MM-DD):");
-        ui.text_edit_singleline(&mut app.send_later_date);
+        ui.add(egui::TextEdit::singleline(&mut app.send_later_date).desired_width(110.0));
         ui.label("Time (HH:MM):");
-        ui.text_edit_singleline(&mut app.send_later_time);
+        ui.add(egui::TextEdit::singleline(&mut app.send_later_time).desired_width(70.0));
     });
     repeat_controls(app, ui);
     if ui.button("Schedule at this time").clicked() {
@@ -2786,7 +2762,7 @@ fn send_later(app: &mut App, ui: &mut egui::Ui) {
         match build_repeat(app, due_at) {
             Err(error) => app.send_later_error = Some(error),
             Ok(repeat) => {
-                let chat = app.open_chat.clone().unwrap_or_default();
+                let chat = app.send_later_chat.clone().unwrap_or_default();
                 let text = app.composer.trim().to_string();
                 if !text.is_empty() && !chat.is_empty() {
                     let quoting = app.reply_to.as_ref().map(|target| target.id.clone());
@@ -3242,6 +3218,7 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
                                         app.send_later_ends_value = count.to_string();
                                     }
                                 }
+                                app.send_later_chat = Some(m.chat_id.clone());
                                 app.send_later_replaces = Some(m.id.clone());
                                 app.dialog = Some(Dialog::SendLater);
                             }

@@ -9,6 +9,7 @@ pub enum Stop {
     Composer,
     ViewOnce,
     Schedule,
+    SendLater,
     Send,
     Attach,
     Emoji,

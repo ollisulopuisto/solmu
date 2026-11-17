@@ -1800,6 +1800,9 @@ pub(crate) fn composer_with_capabilities(
             let view_once_width = if view_once { COMPOSER_CONTROL + ui.spacing().item_spacing.x } else { 0.0 };
             let schedule_kind = schedule_indicator(app, chat);
             let schedule_width = if schedule_kind.is_some() { COMPOSER_CONTROL + ui.spacing().item_spacing.x } else { 0.0 };
+            let later_width = if app.editing.is_none() {
+                super::send_later::width(ui.ctx()) + ui.spacing().item_spacing.x
+            } else { 0.0 };
             let extras_width = send_extras
                 .as_ref()
                 .map(|extras| extras.width + ui.spacing().item_spacing.x)
@@ -1879,7 +1882,7 @@ pub(crate) fn composer_with_capabilities(
                 }
                 // The send button closes the row, flush with the field's end.
                 let field_width =
-                    (ui.available_width() - button_width - SEND_BUTTON_GAP - view_once_width - schedule_width - extras_width - ui.spacing().item_spacing.x).max(0.0);
+                    (ui.available_width() - button_width - SEND_BUTTON_GAP - view_once_width - schedule_width - extras_width - later_width - ui.spacing().item_spacing.x).max(0.0);
                 // The ink is centred on the controls, not the line box: the
                 // span from a capital's top to a descender's bottom sits as far
                 // from the field's top as from its bottom. Inter's box leaves
@@ -2098,6 +2101,9 @@ pub(crate) fn composer_with_capabilities(
                         ui.add_space(bottom);
                         });
                     });
+                if app.editing.is_none() {
+                    last_line(ui, line, |ui| super::send_later::button(app, ui, chat, schedule_key));
+                }
                 if let Some(extras) = send_extras.as_mut() {
                     last_line(ui, line, |ui| (extras.render)(app, ui));
                 }
@@ -2162,7 +2168,7 @@ pub(crate) fn composer_with_capabilities(
                         if app.editing.is_none()
                             && (send_response.secondary_clicked() || send_response.long_touched())
                         {
-                            app.actions.push(Action::ShowDialog(Dialog::SendLater));
+                            super::send_later::open(ui.ctx(), app, chat);
                         }
                     }
                     ui.add_space(SEND_BUTTON_GAP);
@@ -2173,10 +2179,8 @@ pub(crate) fn composer_with_capabilities(
             theme::focus_outline(ui, id, pill.response.rect, f32::from(COMPOSER_RADIUS));
             ui.ctx()
                 .data_mut(|data| data.insert_temp(composer_pill_id(), pill.response.rect));
-            if schedule_key && (!app.composer.trim().is_empty() || !app.pending.is_empty()) {
-                app.actions.push(Action::ShowDialog(Dialog::SendLater));
-            }
             if (send_key || send_click)
+                && app.scheduling_draft.is_none()
                 && (!app.composer.trim().is_empty() || !app.pending.is_empty())
             {
                 // Enter reaches the composer as a key event, never a Text
