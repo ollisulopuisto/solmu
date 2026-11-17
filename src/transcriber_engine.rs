@@ -81,6 +81,12 @@ impl Engine for WhisperCpp {
 /// PCM the Wyoming service accepts: 16 kHz mono signed 16-bit LE.
 pub const WYOMING_RATE: u32 = 16_000;
 
+/// Largest event data or payload a Wyoming server may ask us to buffer.
+/// Transcript JSON is a few KB and ASR replies carry no binary payload;
+/// 1 MiB is generous, and anything larger is a buggy or hostile peer,
+/// not a transcript.
+const MAX_WYOMING_EVENT_BYTES: u64 = 1024 * 1024;
+
 /// Converts a downloaded voice note into Wyoming PCM. The app wires its
 /// existing rodio/symphonia decode here; tests inject fixtures. Keeping
 /// it a trait object means the engine module never links the audio stack.
@@ -184,8 +190,30 @@ impl Engine for Wyoming {
             None,
         )?;
 
-        // Events are JSON lines; a payload_length in the header means that
-        // many binary bytes follow before the next line.
+        // Events are header JSON lines. The reference Wyoming library
+        // (rhasspy/wyoming, which wyoming-faster-whisper and the Parakeet
+        // MLX servers build on) never inlines event data: it moves `data`
+        // out of the header into `data_length` raw JSON bytes written right
+        // after the header line, with no newline of their own. A
+        // `payload_length` header likewise means that many binary bytes
+        // follow. Both byte runs must be consumed before the next header
+        // line, and the data bytes merged back into `data`, or every
+        // transcript from a real server reads as empty. Lengths come off
+        // the wire, so they are capped before allocating: a transcript's
+        // JSON data is a few KB and ASR replies carry no binary payload.
+        // The socket read timeout set above bounds stalled reads; map it
+        // to the same timeout error the between-line deadline returns.
+        fn read_err(context: &str) -> impl Fn(std::io::Error) -> String + '_ {
+            move |e| {
+                if e.kind() == std::io::ErrorKind::TimedOut
+                    || e.kind() == std::io::ErrorKind::WouldBlock
+                {
+                    "wyoming timed out waiting for the transcript".to_string()
+                } else {
+                    format!("wyoming {context} read: {e}")
+                }
+            }
+        }
         let mut reader = std::io::BufReader::new(stream);
         let deadline = Instant::now() + timeout;
         loop {
@@ -193,19 +221,47 @@ impl Engine for Wyoming {
                 return Err("wyoming timed out waiting for the transcript".into());
             }
             let mut line = String::new();
-            let n = reader
-                .read_line(&mut line)
-                .map_err(|e| format!("wyoming read: {e}"))?;
+            let n = reader.read_line(&mut line).map_err(read_err("header"))?;
             if n == 0 {
                 return Err("wyoming closed without a transcript".into());
             }
-            let event: serde_json::Value =
+            let mut event: serde_json::Value =
                 serde_json::from_str(line.trim()).map_err(|e| format!("wyoming bad event: {e}"))?;
-            if let Some(len) = event.get("payload_length").and_then(|v| v.as_u64()) {
+            if let Some(len) = event
+                .get("data_length")
+                .and_then(|v| v.as_u64())
+                .filter(|l| *l > 0)
+            {
+                if len > MAX_WYOMING_EVENT_BYTES {
+                    return Err(format!("wyoming event data too large: {len} bytes"));
+                }
                 let mut buf = vec![0u8; len as usize];
-                reader
-                    .read_exact(&mut buf)
-                    .map_err(|e| format!("wyoming payload read: {e}"))?;
+                reader.read_exact(&mut buf).map_err(read_err("data"))?;
+                let extra: serde_json::Value = serde_json::from_slice(&buf)
+                    .map_err(|e| format!("wyoming bad event data: {e}"))?;
+                if let Some(extra) = extra.as_object() {
+                    let data = event
+                        .as_object_mut()
+                        .ok_or_else(|| "wyoming event header is not an object".to_string())?
+                        .entry("data")
+                        .or_insert_with(|| serde_json::json!({}));
+                    if let Some(data) = data.as_object_mut() {
+                        for (k, v) in extra {
+                            data.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+            if let Some(len) = event
+                .get("payload_length")
+                .and_then(|v| v.as_u64())
+                .filter(|l| *l > 0)
+            {
+                if len > MAX_WYOMING_EVENT_BYTES {
+                    return Err(format!("wyoming event payload too large: {len} bytes"));
+                }
+                let mut buf = vec![0u8; len as usize];
+                reader.read_exact(&mut buf).map_err(read_err("payload"))?;
             }
             match event.get("type").and_then(|t| t.as_str()) {
                 Some("transcript") => {
@@ -292,10 +348,10 @@ mod tests {
     use std::io::{BufRead, Read, Write};
     use std::net::TcpListener;
 
-    /// A Wyoming stub: speaks the event protocol, records what it heard,
-    /// replies with a fixed transcript. Proves framing, payload handling
-    /// and language forwarding without the real service.
-    fn wyoming_stub(reply_text: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
+    /// A Wyoming stub that writes `reply` verbatim once audio stops.
+    /// Used both for inline-data replies and for exact reference-library
+    /// framing, where event data travels outside the header line.
+    fn wyoming_stub_raw(reply: Vec<u8>) -> (String, std::sync::mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -317,17 +373,40 @@ mod tests {
                     audio_bytes += len as usize;
                 }
                 if event.get("type").and_then(|t| t.as_str()) == Some("audio-stop") {
-                    let reply = format!(
-                        "{{\"type\":\"transcript\",\"data\":{{\"text\":\"{}\"}}}}\n",
-                        reply_text
-                    );
-                    reader.get_mut().write_all(reply.as_bytes()).unwrap();
+                    reader.get_mut().write_all(&reply).unwrap();
                     break;
                 }
             }
             tx.send(format!("{log}|audio_bytes={audio_bytes}")).unwrap();
         });
         (addr, rx)
+    }
+
+    /// A Wyoming stub: speaks the event protocol, records what it heard,
+    /// replies with a fixed transcript. Proves framing, payload handling
+    /// and language forwarding without the real service.
+    fn wyoming_stub(reply_text: &'static str) -> (String, std::sync::mpsc::Receiver<String>) {
+        let reply = format!(
+            "{{\"type\":\"transcript\",\"data\":{{\"text\":\"{}\"}}}}\n",
+            reply_text
+        );
+        wyoming_stub_raw(reply.into_bytes())
+    }
+
+    /// The exact wire format of the reference Wyoming library
+    /// (rhasspy/wyoming `async_write_event`, used by wyoming-faster-whisper
+    /// and the Parakeet MLX servers): the header line names the type and
+    /// carries `data_length` and a version, the JSON data bytes follow the
+    /// header newline with no newline of their own, then the next event
+    /// header starts immediately.
+    fn rhasspy_event(event_type: &str, data_json: &str) -> Vec<u8> {
+        format!(
+            "{{\"type\":\"{}\",\"data_length\":{},\"version\":\"1.7.0\"}}\n{}",
+            event_type,
+            data_json.len(),
+            data_json
+        )
+        .into_bytes()
     }
 
     fn pcm_fixture(len: usize) -> Vec<u8> {
@@ -348,6 +427,98 @@ mod tests {
         assert!(log.contains("\"rate\":16000"));
         // 9000 bytes = 8192 + 808 in two chunks.
         assert!(log.ends_with("audio_bytes=9000"), "log: {log}");
+    }
+
+    /// The bug behind "wyoming returned an empty transcript" on a working
+    /// server: a reference-library server frames the transcript with
+    /// `data_length` instead of inline `data`, so a reader that only looks
+    /// at the header line sees no text. Reproduced against a stub speaking
+    /// the exact framing; before the fix this test failed with the empty
+    /// transcript error.
+    #[test]
+    fn wyoming_reads_rhasspy_framed_transcript() {
+        let (addr, _rx) = wyoming_stub_raw(rhasspy_event(
+            "transcript",
+            "{\"text\":\"Testaan yht\u{00e4}\u{00e4} juttua.\"}",
+        ));
+        let mut engine = Wyoming::new(addr);
+        engine.decode = Some(Box::new(|_| Ok(pcm_fixture(9000))));
+        let text = engine.transcribe(Path::new("/a.ogg"), "fi").unwrap();
+        assert_eq!(text, "Testaan yht\u{00e4}\u{00e4} juttua.");
+    }
+
+    /// Servers may emit framed non-transcript events (info, timing) before
+    /// the transcript; their data bytes must be consumed or the next header
+    /// line parses as garbage.
+    #[test]
+    fn wyoming_skips_framed_non_transcript_events() {
+        let mut reply = rhasspy_event("not-started", "{\"reason\":\"warming up\"}");
+        reply.extend(rhasspy_event("transcript", "{\"text\":\"hei maailma\"}"));
+        let (addr, _rx) = wyoming_stub_raw(reply);
+        let mut engine = Wyoming::new(addr);
+        engine.decode = Some(Box::new(|_| Ok(pcm_fixture(4))));
+        let text = engine.transcribe(Path::new("/a.ogg"), "fi").unwrap();
+        assert_eq!(text, "hei maailma");
+    }
+
+    /// A genuinely silent clip still errors as empty, never a silent
+    /// fallback; only the framing changed, not the empty-text rule.
+    #[test]
+    fn wyoming_framed_empty_transcript_is_an_error() {
+        let (addr, _rx) = wyoming_stub_raw(rhasspy_event("transcript", "{\"text\":\"  \"}"));
+        let mut engine = Wyoming::new(addr);
+        engine.decode = Some(Box::new(|_| Ok(pcm_fixture(4))));
+        let err = engine.transcribe(Path::new("/a.ogg"), "fi").unwrap_err();
+        assert!(err.contains("empty transcript"), "got: {err}");
+    }
+
+    /// Lengths come off the wire; a huge one must error before any
+    /// allocation, not abort on OOM or stall on a slow stream.
+    #[test]
+    fn wyoming_rejects_absurd_data_length() {
+        let (addr, _rx) = wyoming_stub_raw(
+            b"{\"type\":\"transcript\",\"data_length\":18446744073709551615}\n".to_vec(),
+        );
+        let mut engine = Wyoming::new(addr);
+        engine.decode = Some(Box::new(|_| Ok(pcm_fixture(4))));
+        let err = engine.transcribe(Path::new("/a.ogg"), "fi").unwrap_err();
+        assert!(err.contains("data too large"), "got: {err}");
+    }
+
+    #[test]
+    fn wyoming_rejects_absurd_payload_length() {
+        let (addr, _rx) = wyoming_stub_raw(
+            b"{\"type\":\"transcript\",\"payload_length\":18446744073709551615}\n".to_vec(),
+        );
+        let mut engine = Wyoming::new(addr);
+        engine.decode = Some(Box::new(|_| Ok(pcm_fixture(4))));
+        let err = engine.transcribe(Path::new("/a.ogg"), "fi").unwrap_err();
+        assert!(err.contains("payload too large"), "got: {err}");
+    }
+
+    /// A stalled server must surface the socket read timeout as the same
+    /// timeout error the between-line deadline returns, not a raw io
+    /// error string.
+    #[test]
+    fn wyoming_stalled_server_times_out() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            // Accept and hold: read whatever arrives, never reply.
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = std::io::BufReader::new(stream);
+            let mut sink = String::new();
+            while reader.read_line(&mut sink).unwrap_or(0) > 0 {
+                sink.clear();
+            }
+        });
+        let mut engine = Wyoming::new(addr);
+        engine.timeout = Duration::from_millis(300);
+        engine.decode = Some(Box::new(|_| Ok(pcm_fixture(4))));
+        let started = Instant::now();
+        let err = engine.transcribe(Path::new("/a.ogg"), "fi").unwrap_err();
+        assert!(err.contains("timed out"), "got: {err}");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]
