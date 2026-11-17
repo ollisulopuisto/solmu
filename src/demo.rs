@@ -5336,7 +5336,7 @@ mod tests {
                 body.left() - viewport.left()
             };
             assert!(
-                (edge - 25.0).abs() < 1.0,
+                (edge - 26.0).abs() < 1.0,
                 "Messages edge includes the shared top-tail gutter: {edge}"
             );
         }

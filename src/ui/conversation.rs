@@ -32,24 +32,19 @@ const BODY_SIZE: f32 = widgets::MESSAGE_TEXT_SIZE;
 /// (`CKUIBehaviorMac.balloonNonContiguousSpace` and
 /// `balloonContiguousSpace`).
 const RUN_GAP: f32 = 10.0;
-/// How much of the transcript's width a bubble may take in the Messages
-/// style (`CKUIBehaviorMac.balloonMaxWidthPercent`), and in WhatsApp's.
-const MESSAGES_WIDTH_SHARE: f32 = 0.65;
+/// Shared bubble cap across skins.
+const MESSAGES_WIDTH_SHARE: f32 = 0.72;
 const WHATSAPP_WIDTH_SHARE: f32 = 0.72;
-/// The transcript's side margin in the Messages style: Messages' 11 points
-/// (`CKUIBehaviorMac.minTranscriptMarginInsets`) plus the 5 points beside
-/// each balloon's body that its tail curls into, at Solmu's text size.
-const MESSAGES_SIDE_MARGIN: i8 = 17;
+/// Transcript side margin, shared across skins.
+const MESSAGES_SIDE_MARGIN: i8 = 18;
 /// The transcript's side margin in WhatsApp's style.
 const WHATSAPP_SIDE_MARGIN: i8 = 18;
-/// Room around a Messages bubble's contents: Messages' 12 points beside its
-/// text and 7 above and below (`CKUIBehaviorMac.textBalloonPillContentInsets`)
-/// at Solmu's text size, 13.4 and 7.8, rounded.
+/// Content padding, shared across skins.
 const MESSAGES_BUBBLE_MARGIN: Margin = Margin {
-    left: 13,
-    right: 13,
-    top: 8,
-    bottom: 8,
+    left: 10,
+    right: 10,
+    top: 6,
+    bottom: 5,
 };
 /// The side of a selecting row's check box, and the column that holds it.
 const SELECT_BOX: f32 = 18.0;
@@ -2639,7 +2634,6 @@ struct View<'a> {
     clean_links: bool,
     sender_hue: Option<f32>,
     hide_grouped_status: bool,
-    covered_top: Option<f32>,
     show_timestamp: bool,
     /// Current planned content width from the shared run pre-pass.
     neighbour_width: Option<f32>,
@@ -3044,7 +3038,6 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
-        covered_top: None,
         show_timestamp: true,
         footer_right: None,
         neighbour_width: None,
@@ -5519,8 +5512,6 @@ pub(crate) fn stacks_after(previous: &Message, next: &Message) -> bool {
     stacks_with_limit(previous, next, 120)
 }
 
-const STREAK_OVERLAP: f32 = 6.0;
-
 /// Room around a bubble's contents: none around a picture that stands
 /// without one, Messages' insets in its style, WhatsApp's otherwise.
 fn bubble_margin(palette: &Palette, message: &Message, over_picture: bool) -> Margin {
@@ -5577,8 +5568,7 @@ fn bubble_frame(
     // the first frame's rect.
     let rect_id = bubble_id.with("rect");
     let previous = ui.ctx().data(|data| data.get_temp::<Rect>(rect_id));
-    let exposed =
-        |rect: Rect| rect.with_min_y(view.covered_top.unwrap_or(rect.top()).max(rect.top()));
+    let exposed = |rect: Rect| rect;
     let early = previous.map(|rect| ui.interact(exposed(rect), bubble_id, Sense::CLICK));
     // Painted once the contents are measured, beneath them.
     let backdrop = ui.painter().add(egui::Shape::Noop);
@@ -5590,14 +5580,7 @@ fn bubble_frame(
         widgets::Side::Left
     });
     let mut tiles: Vec<(Rect, String)> = Vec::new();
-    let mut margin = bubble_margin(&palette, message, false);
-    if view.covered_top.is_some() {
-        margin.top = 9;
-        margin.bottom = 9;
-    }
-    if view.covered_top.is_some() {
-        margin.top += STREAK_OVERLAP as i8;
-    }
+    let margin = bubble_margin(&palette, message, false);
     let inner = Frame::new().inner_margin(margin).show(ui, |ui| {
         ui.set_max_width(max_width);
         ui.spacing_mut().item_spacing.y = 4.0;
@@ -5796,9 +5779,7 @@ fn bubble_frame(
             ui.clip_rect().y_range(),
             widgets::BubbleEffects {
                 sender_shadow,
-                flat_edge: sender_shadow.is_some()
-                    || view.covered_top.is_some()
-                    || view.hide_grouped_status,
+                flat_edge: sender_shadow.is_some() || view.hide_grouped_status,
             },
         );
         ui.painter().set(backdrop, shape.clone());
@@ -7233,7 +7214,6 @@ pub(crate) fn list_menu(
         link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
-        covered_top: None,
         show_timestamp: true,
         footer_right: None,
         neighbour_width: None,
@@ -7329,7 +7309,6 @@ pub(crate) fn linked_bubble(
         link_menu_owner: None,
         sender_hue: None,
         hide_grouped_status: false,
-        covered_top: None,
         show_timestamp,
         footer_right: Some(footer_right),
         neighbour_width: run_width,
@@ -12047,7 +12026,6 @@ mod tests {
                 pending_media: None,
                 sender_hue: None,
                 hide_grouped_status: false,
-                covered_top: None,
                 show_timestamp: false,
                 ..*view
             };
@@ -13325,7 +13303,6 @@ mod tests {
             link_menu_owner: None,
             sender_hue: None,
             hide_grouped_status: false,
-            covered_top: None,
             show_timestamp: true,
             footer_right: None,
             neighbour_width: None,
