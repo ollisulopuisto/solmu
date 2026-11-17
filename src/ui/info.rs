@@ -1145,7 +1145,7 @@ fn media_view(app: &mut App, ui: &mut egui::Ui, chat: &str, tab: MediaTab, overl
                 MediaTab::Media | MediaTab::Videos => {
                     media_grid(app, ui, media, &uris, overlay, tab)
                 }
-                MediaTab::Voice => voice_list(app, ui, media, overlay),
+                MediaTab::Voice => voice_list(app, ui, media, overlay, true),
                 MediaTab::Docs => docs_list(app, ui, media, overlay),
                 MediaTab::Links => links_list(app, ui, media),
             }
@@ -1173,6 +1173,7 @@ fn media_view(app: &mut App, ui: &mut egui::Ui, chat: &str, tab: MediaTab, overl
                 ..Default::default()
             },
             overlay,
+            false,
         );
     }
     app.info_uris = uris;
@@ -1424,7 +1425,13 @@ fn docs_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: boo
 }
 
 /// Audio/voice clips keep an explicit play/download target and a separate jump.
-fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bool) {
+fn voice_list(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    listing: &ChatMedia,
+    overlay: bool,
+    metadata_available: bool,
+) {
     let saved = app
         .transcript_reader()
         .map(|worker| {
@@ -1434,7 +1441,8 @@ fn voice_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: bo
     let loading = app.transcript_reader().is_some_and(|worker| {
         worker.saved_loading(&app.account().id.0, &listing.chat, &app.info_voice_query)
     });
-    if listing.voice.is_empty()
+    if metadata_available
+        && listing.voice.is_empty()
         && saved.is_empty()
         && !loading
         && app.info_voice_query.is_empty()
