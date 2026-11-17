@@ -1246,6 +1246,7 @@ fn transcriber_worker(
             Box::new(crate::transcriber_engine::DecodedWhisper {
                 engine: crate::transcriber_engine::WhisperCpp::new(binary, model),
                 decode,
+                model_verified: false,
             })
         }
         TranscriptionEngine::Wyoming => {

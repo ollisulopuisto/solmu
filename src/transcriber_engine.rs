@@ -103,6 +103,7 @@ impl Engine for WhisperCpp {
 pub struct DecodedWhisper {
     pub engine: WhisperCpp,
     pub decode: PcmDecoder,
+    pub model_verified: bool,
 }
 
 fn pcm_wav(pcm: &[u8]) -> Result<tempfile::NamedTempFile, String> {
@@ -141,6 +142,10 @@ fn pcm_wav(pcm: &[u8]) -> Result<tempfile::NamedTempFile, String> {
 
 impl Engine for DecodedWhisper {
     fn transcribe(&mut self, audio: &Path, language: &str) -> Result<String, String> {
+        if !self.model_verified {
+            crate::local_whisper::verify_model(&self.engine.model)?;
+            self.model_verified = true;
+        }
         let pcm = (self.decode)(audio)?;
         let wav = pcm_wav(&pcm)?;
         self.engine.transcribe(wav.path(), language)

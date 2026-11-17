@@ -2387,6 +2387,12 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
     };
     for part in page.split(',').map(str::trim) {
         match part {
+            "whisper-setup" => {
+                app.page = crate::model::Page::Settings;
+                app.settings_search = "Voice notes".into();
+                app.settings.transcription_engine =
+                    Some(crate::settings::TranscriptionEngine::Local);
+            }
             "delete-review" | "delete-review-unsupported" => {
                 let chat = app.open_chat.clone().unwrap();
                 let known = app.chats.iter_mut().find(|c| c.id == chat).unwrap();

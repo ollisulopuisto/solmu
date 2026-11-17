@@ -557,7 +557,7 @@ fn sections(app: &App) -> Vec<Section> {
                 if ui.add_enabled(!download.cancellation_requested(), egui::Button::new(gettext(locale, "Cancel download"))).clicked() { app.actions.push(Action::CancelLocalWhisperDownload); }
             } else {
                 if installed && runtime {
-                    ui.label(gettext(locale, "Model installed. Ready when this engine is selected."));
+                    ui.label(gettext(locale, "Model installed. Verified before its first use."));
                     if ui.button(gettext(locale, "Remove downloaded model")).clicked() { app.actions.push(Action::RemoveLocalWhisperModel); }
                 } else if ui.add_enabled(runtime, egui::Button::new(gettext(locale, "Download & enable"))).clicked() {
                     app.actions.push(Action::DownloadLocalWhisper);

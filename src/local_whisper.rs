@@ -71,6 +71,27 @@ fn available_space(path: &Path) -> Result<u64, String> {
     Ok(available)
 }
 
+/// Recheck a model on the transcription worker, never on the UI thread.
+pub fn verify_model(path: &Path) -> Result<(), String> {
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    if file.metadata().map_err(|e| e.to_string())?.len() != MODEL_BYTES {
+        return Err("Local model is incomplete. Remove it and download again.".into());
+    }
+    let mut hash = Sha256::new();
+    let mut bytes = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut bytes).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&bytes[..count]);
+    }
+    if hex_hash(&hash.finalize()) != MODEL_SHA256 {
+        return Err("Local model verification failed. Remove it and download again.".into());
+    }
+    Ok(())
+}
+
 /// Only the app's bundled sibling runtime is used, never an arbitrary PATH hit.
 pub fn runtime_path() -> Option<PathBuf> {
     let binary = std::env::current_exe().ok()?;
