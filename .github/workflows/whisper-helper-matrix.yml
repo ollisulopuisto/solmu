@@ -1,0 +1,220 @@
+name: Optional Whisper helper matrix
+
+# Unsigned validation builds of the optional Whisper helper for every
+# supported platform. Solmu builds never invoke this workflow or link Whisper.
+# macOS signing and notarization stay in whisper-helper.yml on the default
+# branch; this workflow never requests signing secrets. Nothing is uploaded,
+# cached or published: archives are verified in-job and their metadata JSON is
+# reported in the log.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packaging/whisper-helper/**'
+      - 'packaging/macos/build-whisper-helper.sh'
+      - '.github/workflows/whisper-helper-matrix.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: whisper-helper-matrix-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  WHISPER_REVISION: d1be6fde11ac6e0407606b4e42fe72d34add8037
+  # The #359 installer's real-app smoke test, pinned to a reviewed commit of
+  # feat/local-whisper-setup (coordinated with its author).
+  INSTALLER_REVISION: ff339020772ac45ca261b9e5b45ea75061048719
+
+jobs:
+  macos:
+    if: github.event.repository.private == false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            arch: x86_64
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fetch pinned official runtime source
+        run: bash packaging/whisper-helper/fetch-source.sh "$RUNNER_TEMP/whisper-source"
+      - name: Build unsigned helper bundle
+        run: bash packaging/macos/build-whisper-helper.sh "$RUNNER_TEMP/whisper-source" "$RUNNER_TEMP/helper" '${{ matrix.arch }}'
+      - name: Inference smoke test
+        # Only the standalone smoke test runs here: the installer's real-app
+        # test verifies Gatekeeper on macOS, which an unsigned branch helper
+        # must fail. Signed fixtures come from the default-branch workflow.
+        run: bash packaging/whisper-helper/smoke-test.sh "$RUNNER_TEMP/helper/SolmuWhisper.app/Contents/MacOS/whisper-cli" "$RUNNER_TEMP/whisper-source" "$RUNNER_TEMP/smoke"
+      - name: Package and record exact download metadata
+        run: |
+          set -euo pipefail
+          source packaging/whisper-helper/pins.env
+          mkdir -p dist
+          ditto -c -k --keepParent "$RUNNER_TEMP/helper/SolmuWhisper.app" "dist/solmu-whisper-v$WHISPER_VERSION-${{ matrix.arch }}.zip"
+          bash packaging/whisper-helper/metadata-unix.sh \
+            "dist/solmu-whisper-v$WHISPER_VERSION-${{ matrix.arch }}.zip" \
+            "$RUNNER_TEMP/helper/SolmuWhisper.app/Contents/MacOS/whisper-cli" \
+            'SolmuWhisper.app/Contents/MacOS/whisper-cli' \
+            '${{ matrix.target }}' false false
+
+  linux:
+    if: github.event.repository.private == false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fetch pinned official runtime source
+        run: bash packaging/whisper-helper/fetch-source.sh "$RUNNER_TEMP/whisper-source"
+      - name: Build and smoke-test unsigned helper in the Debian 12 baseline
+        # Debian 12 is the runtime baseline; building and smoke-testing inside
+        # its container proves the helper runs on a minimal Debian 12 install.
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
+            -v "$RUNNER_TEMP:$RUNNER_TEMP" \
+            debian:12 bash -c "
+              set -e
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends build-essential cmake curl ca-certificates >/dev/null
+              bash '$GITHUB_WORKSPACE/packaging/whisper-helper/build-linux.sh' \
+                '$RUNNER_TEMP/whisper-source' '$RUNNER_TEMP/helper' '${{ matrix.arch }}'
+              bash '$GITHUB_WORKSPACE/packaging/whisper-helper/smoke-test.sh' \
+                '$RUNNER_TEMP/helper/package/bin/whisper-cli' \
+                '$RUNNER_TEMP/whisper-source' '$RUNNER_TEMP/smoke'
+              echo 'Helper verified on Debian 12'"
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/helper"
+      - name: Record exact download metadata
+        run: |
+          set -euo pipefail
+          source packaging/whisper-helper/pins.env
+          archive="$RUNNER_TEMP/helper/dist/solmu-whisper-v$WHISPER_VERSION-linux-${{ matrix.arch }}.tar.gz"
+          test -f "$archive"
+          bash packaging/whisper-helper/metadata-unix.sh "$archive" \
+            "$RUNNER_TEMP/helper/package/bin/whisper-cli" \
+            'bin/whisper-cli' '${{ matrix.target }}' false false
+      - name: Native dependencies for the installer test build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libxkbcommon-dev libwayland-dev \
+            libgl1-mesa-dev libasound2-dev libpipewire-0.3-dev \
+            clang libclang-dev cmake perl
+      - name: Check out the pinned #359 installer
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.INSTALLER_REVISION }}
+          path: app
+      - name: Download and verify the pinned model fixture
+        run: bash packaging/whisper-helper/download-model.sh "$RUNNER_TEMP/model/ggml-base.bin"
+      - name: Real-app helper smoke test (#359 installer)
+        env:
+          SOLMU_HELPER_FIXTURE: ${{ runner.temp }}/helper/dist
+          SOLMU_HELPER_METADATA: ${{ runner.temp }}/helper/dist/solmu-whisper-v1.9.5-linux-${{ matrix.arch }}.tar.gz.json
+          SOLMU_MODEL_FIXTURE: ${{ runner.temp }}/model/ggml-base.bin
+          SOLMU_RECORDING_FIXTURE: ${{ runner.temp }}/whisper-source/samples/jfk.wav
+        run: |
+          cd app
+          cargo test --locked --lib --features demo -- --ignored local_whisper_real_recording --nocapture
+
+  windows:
+    if: github.event.repository.private == false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            arch: x64
+            rust-host: x86_64-pc-windows-msvc
+            target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            arch: arm64
+            rust-host: aarch64-pc-windows-msvc
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fetch pinned official runtime source
+        shell: bash
+        run: bash packaging/whisper-helper/fetch-source.sh "$RUNNER_TEMP/whisper-source"
+      - name: Build unsigned helper archive
+        shell: pwsh
+        run: packaging/whisper-helper/build-windows.ps1 -SourceDir "$env:RUNNER_TEMP/whisper-source" -OutDir "$env:RUNNER_TEMP/helper" -Arch '${{ matrix.arch }}'
+      - name: Inference smoke test
+        shell: pwsh
+        run: packaging/whisper-helper/smoke-test.ps1 -Binary "$env:RUNNER_TEMP/helper/package/bin/whisper-cli.exe" -SourceDir "$env:RUNNER_TEMP/whisper-source" -WorkDir "$env:RUNNER_TEMP/smoke"
+      - name: Record exact download metadata
+        shell: pwsh
+        run: |
+          $pins = . packaging/whisper-helper/read-pins.ps1 -Path packaging/whisper-helper/pins.env
+          $archive = "$env:RUNNER_TEMP/helper/dist/solmu-whisper-v$($pins['WHISPER_VERSION'])-windows-${{ matrix.arch }}.tar.gz"
+          if (-not (Test-Path $archive)) { throw "archive missing: $archive" }
+          packaging/whisper-helper/metadata-windows.ps1 -Archive $archive `
+            -ExecutableFile "$env:RUNNER_TEMP/helper/package/bin/whisper-cli.exe" `
+            -ExecutablePath 'bin/whisper-cli.exe' -Target '${{ matrix.target }}'
+      - name: Ensure rustup is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            curl.exe --fail --location --retry 2 --silent --show-error `
+              "https://static.rust-lang.org/rustup/dist/${{ matrix.rust-host }}/rustup-init.exe" `
+              -o "$env:RUNNER_TEMP/rustup-init.exe"
+            & "$env:RUNNER_TEMP/rustup-init.exe" -y --profile minimal --default-host '${{ matrix.rust-host }}'
+            if ($LASTEXITCODE -ne 0) { throw "rustup install failed ($LASTEXITCODE)" }
+            Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
+          }
+      - name: Check out the pinned #359 installer
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.INSTALLER_REVISION }}
+          path: app
+      - name: Download and verify the pinned model fixture
+        shell: pwsh
+        run: |
+          $pins = . packaging/whisper-helper/read-pins.ps1 -Path packaging/whisper-helper/pins.env
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/model" | Out-Null
+          $model = "$env:RUNNER_TEMP/model/$($pins['MODEL_NAME'])"
+          $tmp = "$model.download"
+          curl.exe --fail --location --retry 2 --silent --show-error $pins['MODEL_URL'] -o $tmp
+          if ($LASTEXITCODE -ne 0) { throw "model download failed ($LASTEXITCODE)" }
+          if ((Get-Item $tmp).Length -ne [uint64]$pins['MODEL_BYTES']) { throw 'Model size mismatch' }
+          if ((Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLowerInvariant() -ne $pins['MODEL_SHA256']) { throw 'Model hash mismatch' }
+          Move-Item -Force $tmp $model
+          Write-Output "Model verified: $model"
+      - name: App-flags inference test (full model, PCM WAV)
+        # The installer's engine invokes whisper-cli with exactly these flags.
+        # A failure here isolates the packaged binary from installer behavior.
+        shell: pwsh
+        run: |
+          $bin = "$env:RUNNER_TEMP/helper/package/bin/whisper-cli.exe"
+          & $bin -m "$env:RUNNER_TEMP/model/ggml-base.bin" -f "$env:RUNNER_TEMP/whisper-source/samples/jfk.wav" --no-timestamps --no-prints -l auto
+          if ($LASTEXITCODE -ne 0) { throw "app-flags inference failed ($LASTEXITCODE)" }
+      - name: Real-app helper smoke test (#359 installer)
+        shell: pwsh
+        env:
+          SOLMU_HELPER_FIXTURE: ${{ runner.temp }}\helper\dist
+          SOLMU_HELPER_METADATA: ${{ runner.temp }}\helper\dist\solmu-whisper-v1.9.5-windows-${{ matrix.arch }}.tar.gz.json
+          SOLMU_MODEL_FIXTURE: ${{ runner.temp }}\model\ggml-base.bin
+          SOLMU_RECORDING_FIXTURE: ${{ runner.temp }}\whisper-source\samples\jfk.wav
+        run: |
+          cd app
+          cargo test --locked --lib --features demo -- --ignored local_whisper_real_recording --nocapture
+          if ($LASTEXITCODE -ne 0) { throw "real-app smoke test failed ($LASTEXITCODE)" }
