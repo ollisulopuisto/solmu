@@ -131,10 +131,10 @@ struct Section {
     expander: Option<Expander>,
 }
 
-/// Recent's unread filter for one section: quiet sections list every chat;
-/// a section with something unread - or just opened from it - lists only
-/// those rows. The unread test is the folded heading's: counted or marked,
-/// and never a muted chat.
+/// Recent's unread filter for one group: quiet groups list every chat; a
+/// group with something unread - or just opened from it - lists only those
+/// rows. The unread test is the folded heading's: counted or marked, and
+/// never a muted chat. Other never filters.
 fn recent_filtered(app: &App, chats: &[&Chat], indices: &[usize]) -> Vec<usize> {
     let now = crate::util::now();
     indices
@@ -153,7 +153,9 @@ fn recent_filtered(app: &App, chats: &[&Chat], indices: &[usize]) -> Vec<usize> 
 fn plan_sections(app: &App, chats: &[&Chat], activity: &[i64]) -> Vec<Section> {
     let recent = app.list_mode == crate::model::ListMode::Recent;
     let section = |id: Option<u64>, name: String, all: Vec<usize>| {
-        let filtered = if recent {
+        // Other always lists every chat: it is the default bucket, not a
+        // curated group, so the ungrouped list never hides behind a row.
+        let filtered = if recent && id.is_some() {
             recent_filtered(app, chats, &all)
         } else {
             Vec::new()
@@ -1169,7 +1171,9 @@ mod tests {
             crate::paths::AppDirs::under(root.path()),
             Default::default(),
         );
-        app.list_mode = crate::model::ListMode::Recent;
+        // Recent computes its section order, so headings drag in the modes
+        // that keep the saved order.
+        app.list_mode = crate::model::ListMode::Unread;
         let a = app.settings.flat_groups.create("Alpha").unwrap();
         let b = app.settings.flat_groups.create("Beta").unwrap();
         let c = app.settings.flat_groups.create("Gamma").unwrap();
