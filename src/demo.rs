@@ -6004,6 +6004,10 @@ mod tests {
         let (mut app, _events) = App::headless(AppDirs::under(root.path()), Settings::default());
         ROOTS.with(|roots| roots.borrow_mut().push(root));
         populate(&mut app);
+        // The sample list starts with Other opened past its unread filter,
+        // the full list the tests drive. Tests of the filter itself close
+        // it again or build their own sections.
+        app.flat_group_ui.show_all.insert(None);
         app
     }
 

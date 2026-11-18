@@ -131,10 +131,10 @@ struct Section {
     expander: Option<Expander>,
 }
 
-/// Recent's unread filter for one group: quiet groups list every chat; a
-/// group with something unread - or just opened from it - lists only those
-/// rows. The unread test is the folded heading's: counted or marked, and
-/// never a muted chat. Other never filters.
+/// Recent's unread filter for one section: quiet sections list every chat;
+/// a section with something unread - or just opened from it - lists only
+/// those rows, Other included. The unread test is the folded heading's:
+/// counted or marked, and never a muted chat.
 fn recent_filtered(app: &App, chats: &[&Chat], indices: &[usize]) -> Vec<usize> {
     let now = crate::util::now();
     indices
@@ -153,9 +153,7 @@ fn recent_filtered(app: &App, chats: &[&Chat], indices: &[usize]) -> Vec<usize> 
 fn plan_sections(app: &App, chats: &[&Chat], activity: &[i64]) -> Vec<Section> {
     let recent = app.list_mode == crate::model::ListMode::Recent;
     let section = |id: Option<u64>, name: String, all: Vec<usize>| {
-        // Other always lists every chat: it is the default bucket, not a
-        // curated group, so the ungrouped list never hides behind a row.
-        let filtered = if recent && id.is_some() {
+        let filtered = if recent {
             recent_filtered(app, chats, &all)
         } else {
             Vec::new()
@@ -1166,17 +1164,17 @@ mod tests {
     /// app to save the settings; the pointer path covers the real gesture.
     #[test]
     fn dragging_a_heading_onto_another_reorders_groups_and_saves() {
-        let root = tempfile::tempdir().unwrap();
-        let (mut app, _) = App::headless(
-            crate::paths::AppDirs::under(root.path()),
-            Default::default(),
-        );
+        let (mut app, _root) =
+            recent_app(vec![recent_chat("u1", 100, 1), recent_chat("u2", 90, 1)]);
         // Recent computes its section order, so headings drag in the modes
-        // that keep the saved order.
+        // that keep the saved order; empty groups show only in Recent, so
+        // the dragged headings hold a member each.
         app.list_mode = crate::model::ListMode::Unread;
         let a = app.settings.flat_groups.create("Alpha").unwrap();
         let b = app.settings.flat_groups.create("Beta").unwrap();
         let c = app.settings.flat_groups.create("Gamma").unwrap();
+        app.settings.flat_groups.add(a, member(&app, &app.chats[0]));
+        app.settings.flat_groups.add(c, member(&app, &app.chats[1]));
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
         let frame = |app: &mut App, events: Vec<egui::Event>| {
@@ -1918,5 +1916,31 @@ mod tests {
         // keyboard used to skip her while the drawn list kept her.
         assert_eq!(drawn, vec!["ada", "ben"]);
         assert_eq!(keyboard, drawn);
+    }
+
+    #[test]
+    fn other_filters_like_any_section() {
+        let (mut app, _root) = recent_app(vec![
+            recent_chat("read-a", 100, 0),
+            recent_chat("unread-b", 200, 2),
+        ]);
+        let sections = recent_plan(&app);
+        let other = sections.last().expect("Other is always planned");
+        assert_eq!(other.name, "Other");
+        assert_eq!(other.shown, vec![1]);
+        assert!(other.filtering);
+        assert_eq!(other.expander, Some(Expander::ShowAll));
+    }
+
+    #[test]
+    fn a_chat_claimed_by_two_groups_appears_in_the_first() {
+        let (mut app, _root) = recent_app(vec![recent_chat("a", 100, 0)]);
+        let one = app.settings.flat_groups.create("One").unwrap();
+        let two = app.settings.flat_groups.create("Two").unwrap();
+        let key = member(&app, &app.chats[0]);
+        app.settings.flat_groups.add(one, key.clone());
+        app.settings.flat_groups.add(two, key);
+        let refs: Vec<&Chat> = app.chats.iter().collect();
+        assert_eq!(membership_rows(&app, &refs), vec![vec![0], vec![]]);
     }
 }
