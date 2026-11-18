@@ -4509,13 +4509,15 @@ impl App {
         if self.linked_avatar_ids(id).is_some() {
             return self.avatar_full(id);
         }
-        // A missing thumbnail falls back to the full-size picture, the same
-        // way Contact info shows it: a failed thumbnail fetch caches its
-        // miss, so without this the sidebar shows bare initials for a
-        // contact whose picture has in fact arrived.
+        // A missing thumbnail falls back to an already downloaded full-size
+        // picture, the way Contact info shows it: a failed thumbnail fetch
+        // caches its miss, so without this the sidebar shows bare initials
+        // for a contact whose picture has in fact arrived. Only the cache
+        // is consulted here; a fresh full-size request for every sidebar
+        // row would double the pressure on the avatar worker's small queue.
         self.account_mut()
             .avatar(id)
-            .or_else(|| self.source_avatar_full(id))
+            .or_else(|| self.avatars_full.get(id).cloned().flatten())
     }
 
     /// A linked person shows the largest full-size picture any member has
