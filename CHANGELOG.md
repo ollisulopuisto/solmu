@@ -16,6 +16,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 ## Unreleased
 
 - Long message bodies stop after 25 rendered lines. Show more gives the hidden-line count, Show less folds them again; copy, reply and forward keep the full message.
+- Customize avatars locally from Contact or Group info with an image or initials and colour. The override follows the identity across the sidebar and chat views; reset restores its source picture without changing anyone's profile.
 
 - Local and Wyoming transcription now reject audio longer than five minutes instead of retaining unbounded audio or silently truncating video at fifteen minutes. Encoded audio is limited to 64 MB.
 

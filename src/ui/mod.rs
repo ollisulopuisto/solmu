@@ -16,6 +16,7 @@ pub mod info;
 pub mod keys;
 pub mod labels;
 pub mod list_nav;
+pub mod local_avatars;
 pub mod locations;
 pub mod lock;
 pub mod login;
@@ -42,6 +43,23 @@ use crate::theme::{self, Icon};
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let ctx = &ctx;
+    // Session replacement and account navigation can close a dialog outside its
+    // own event handler. Never leave its draft blocking the next screen's keys.
+    if app.local_avatar_editor.as_ref().is_some_and(|editor| {
+        app.app_lock.is_locked()
+            || !matches!(app.dialog, Some(crate::model::Dialog::CustomizeAvatar))
+            || editor
+                .identities
+                .first()
+                .is_none_or(|key| key.account != app.account().id.0)
+    }) {
+        crate::image_cache::forget_prefix(ctx, "bytes://local-avatar-");
+        app.local_avatar_editor = None;
+        if matches!(app.dialog, Some(crate::model::Dialog::CustomizeAvatar)) {
+            app.dialog = None;
+        }
+    }
+    local_avatars::install(app, ctx);
     track_keyboard_focus(ctx);
     info::release_thumbnails(app, ctx);
     // The message list sets it again when it is drawn with focus.
@@ -60,10 +78,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if let Some(cfg) = app.beeper_signin.connect.take() {
         app.connect_beeper_session(cfg);
     }
-    keys::handle(app, ctx);
-    history_buttons(app, ctx);
+    if app.local_avatar_editor.is_none() {
+        keys::handle(app, ctx);
+        history_buttons(app, ctx);
+    }
     let main_navigation = app.is_linked()
         && app.chat_view()
+        && app.local_avatar_editor.is_none()
         && app.dialog.is_none()
         && !app.show_update
         && app.picker.is_none()

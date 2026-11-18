@@ -423,6 +423,7 @@ pub struct UnreadDivider {
 }
 
 pub struct App {
+    pub local_avatar_editor: Option<crate::ui::local_avatars::Editor>,
     pub beeper_signin: crate::beeper_signin::SignIn,
     pub beeper_network_filter: Option<String>,
     pub beeper_unreplied: bool,
@@ -1548,6 +1549,7 @@ impl App {
         let app_lock = crate::app_lock::AppLock::new(settings.app_lock_hash.is_some());
         let tray_lockable = settings.app_lock_hash.is_some();
         let mut app = Self {
+            local_avatar_editor: None,
             beeper_signin: crate::beeper_signin::SignIn::startup(),
             beeper_network_filter: None,
             beeper_unreplied: false,
@@ -14548,8 +14550,8 @@ impl App {
         }
         self.window_focused = focused;
         self.report_presence();
-        if locked {
-            // Files dropped or pasted on the lock screen go nowhere.
+        if locked || self.local_avatar_editor.is_some() {
+            // Files dropped or pasted on the lock screen or avatar editor go nowhere.
             self.dropping = false;
         } else {
             self.scrolling.apply(ctx);

@@ -282,6 +282,21 @@ pub fn paint_avatar(
     id: &str,
     picture: Option<&Path>,
 ) {
+    if super::local_avatars::paint(ui, rect, id) {
+        return;
+    }
+    paint_source_avatar(ui, palette, rect, name, id, picture);
+}
+
+/// Own-account rows must not inherit an active account's contact override.
+pub fn paint_source_avatar(
+    ui: &Ui,
+    palette: &Palette,
+    rect: Rect,
+    name: &str,
+    id: &str,
+    picture: Option<&Path>,
+) {
     let size = rect.width();
     let mut painted = false;
     if let Some(picture) = picture {

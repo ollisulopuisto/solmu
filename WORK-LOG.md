@@ -396,3 +396,21 @@ are clipped with the body. Hidden count is recomputed at the actual wrap width.
 Failing-first row-limit test observed, then fixed. Native pointer toggle, resize,
 blank-line and full-transcript coverage plus real dark/light collapsed/expanded
 capture scenes added; native results pending. No avatar, menus, #359 or DMG work.
+## 2026-11-18 - Local avatar customization (Contact info entry)
+
+Approved option A: Customize avatar in Contact/Group info opens a local editor
+with image or initials/colour, preview, Save/Cancel and Reset to default. No
+right-click entry added. A shared avatar-painter override covers sidebar,
+favourites, chat rows, headers and info without changing source profile photos.
+Keys include the local account and exact source/account/chat identity; linked
+members share the override. Image import is bounded, decoded and re-encoded as
+a metadata-free square PNG off the UI thread. Prepared-image write must succeed
+before settings adopt it. Files stay outside the disposable source-photo cache.
+
+Failing first: production image import tests rejected the pass-through stub on
+invalid image data. The fixed image/identity module passes three isolated Rust
+tests. Native UI tests cover opening from info, cancellation, save/reset,
+pending-picker cancellation, image persistence and linked identity handling.
+Native compile/tests and real dark/light demo shots are running through the
+existing shots-only workflow; no native result or visual verification claimed
+yet. No #359, helper packaging or release/DMG work included.

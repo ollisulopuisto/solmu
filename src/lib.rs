@@ -33,6 +33,7 @@ pub mod image_preview;
 pub mod link_policy;
 pub mod link_preview;
 mod linked_read;
+pub mod local_avatars;
 pub mod local_whisper;
 #[cfg(target_os = "macos")]
 pub mod macos;

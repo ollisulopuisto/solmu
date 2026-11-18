@@ -429,6 +429,9 @@ pub enum TranscriptionEngine {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Local-only avatar presentation; never sent through a backend.
+    #[serde(default)]
+    pub local_avatars: Vec<crate::local_avatars::Entry>,
     /// [`SETTINGS_VERSION`] when written; missing, and so 0, in older files.
     #[serde(default)]
     pub version: u32,
@@ -669,6 +672,7 @@ mod transcription_engine_migration_tests {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            local_avatars: Vec::new(),
             version: SETTINGS_VERSION,
             scheduler_url: default_scheduler_url(),
             transcription_wyoming: String::new(),
