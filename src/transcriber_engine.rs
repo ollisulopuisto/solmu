@@ -52,6 +52,16 @@ impl Engine for WhisperCpp {
             .stdin(Stdio::null())
             .stdout(Stdio::from(output.try_clone().map_err(|e| e.to_string())?))
             .stderr(Stdio::null());
+        // Diagnostics are enabled only for the explicit synthetic helper smoke.
+        // Keep a bounded private file, never a pipe or production transcript log.
+        #[cfg(test)]
+        let mut diagnostic = if std::env::var_os("SOLMU_HELPER_FIXTURE").is_some() {
+            let file = tempfile::tempfile().map_err(|e| e.to_string())?;
+            cmd.stderr(Stdio::from(file.try_clone().map_err(|e| e.to_string())?));
+            Some(file)
+        } else {
+            None
+        };
         let started = Instant::now();
         let mut child = cmd
             .spawn()
@@ -59,6 +69,12 @@ impl Engine for WhisperCpp {
         let result = loop {
             if started.elapsed() > self.timeout {
                 break Err("whisper.cpp timed out".to_string());
+            }
+            #[cfg(test)]
+            if let Some(file) = diagnostic.as_ref()
+                && file.metadata().map_err(|e| e.to_string())?.len() > MAX_OUTPUT
+            {
+                break Err("whisper.cpp diagnostic output exceeded its size limit".into());
             }
             match output.metadata() {
                 Ok(meta) if meta.len() > MAX_OUTPUT => {
@@ -79,6 +95,16 @@ impl Engine for WhisperCpp {
             let _ = child.kill();
         }
         let _ = child.wait();
+        #[cfg(test)]
+        if let (Err(error), Some(file)) = (&result, diagnostic.as_mut()) {
+            use std::io::{Read, Seek};
+            file.rewind().map_err(|e| e.to_string())?;
+            let mut detail = String::new();
+            file.take(16 * 1024)
+                .read_to_string(&mut detail)
+                .map_err(|e| e.to_string())?;
+            return Err(format!("{error}; synthetic helper stderr: {detail}"));
+        }
         result?;
         use std::io::{Read, Seek};
         output.rewind().map_err(|e| e.to_string())?;
@@ -108,7 +134,7 @@ pub struct DecodedWhisper {
     pub artifact: crate::whisper_runtime::Artifact,
 }
 
-fn pcm_wav(pcm: &[u8]) -> Result<tempfile::NamedTempFile, String> {
+fn pcm_wav(pcm: &[u8]) -> Result<tempfile::TempPath, String> {
     use std::io::Write;
     if pcm.is_empty() || !pcm.len().is_multiple_of(2) {
         return Err("Audio contains no valid samples".into());
@@ -139,7 +165,9 @@ fn pcm_wav(pcm: &[u8]) -> Result<tempfile::NamedTempFile, String> {
         .and_then(|()| writer.write_all(pcm))
         .and_then(|()| writer.flush())
         .map_err(|e| e.to_string())?;
-    Ok(file)
+    // Close the write handle before the CLI opens it. Windows readers that
+    // do not share delete access cannot open a live NamedTempFile handle.
+    Ok(file.into_temp_path())
 }
 
 impl Engine for DecodedWhisper {
@@ -161,7 +189,7 @@ impl Engine for DecodedWhisper {
         }
         let pcm = (self.decode)(audio)?;
         let wav = pcm_wav(&pcm)?;
-        self.engine.transcribe(wav.path(), language)
+        self.engine.transcribe(&wav, language)
     }
 }
 
@@ -460,7 +488,17 @@ mod tests {
     fn wav_is_standard_mono_16khz_pcm_and_is_removed_on_drop() {
         let pcm = [0, 0, 255, 127, 0, 128];
         let file = pcm_wav(&pcm).unwrap();
-        let path = file.path().to_owned();
+        let path = file.to_path_buf();
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // Mirrors a CLI reader that does not share access with an open writer.
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&path)
+                .unwrap();
+        }
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(&bytes[..4], b"RIFF");
         assert_eq!(&bytes[8..16], b"WAVEfmt ");
