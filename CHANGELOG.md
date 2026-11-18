@@ -16,6 +16,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- Voice shared items can expand and search saved transcripts; in-chat search includes saved transcript matches without starting transcription.
 - The sidebar uses named Recent, Unread and Needs me tabs. Recent includes all chats, newest first, without a date cutoff; old Unread 7d settings open Recent. A + beside Groups opens local group creation instead of a permanent input at the end of the list.
 
 - Shared items has separate Photos, Videos and Voice tabs. Voice/audio rows can download and play a clip or jump to its message. Beeper listings now answer instead of spinning, with a clear note when only recent history was scanned.

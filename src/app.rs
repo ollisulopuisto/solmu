@@ -33,6 +33,24 @@ fn download_notice(error: String) -> String {
     }
 }
 
+#[derive(PartialEq)]
+struct ChatSearchKey {
+    revision: u64,
+    base_len: usize,
+    account: String,
+    chat: Option<String>,
+    query: String,
+    day: Option<jiff::civil::Date>,
+    hidden: bool,
+    locale: Locale,
+    timestamps: Vec<i64>,
+}
+struct ChatSearchMemo {
+    key: ChatSearchKey,
+    saved: std::sync::Arc<[crate::transcriber::Hit]>,
+    rows: std::sync::Arc<[Message]>,
+}
+
 /// Initial and incremental message-page size.
 pub const PAGE: usize = 60;
 /// Minimum delay between phone history requests.
@@ -494,6 +512,8 @@ pub struct App {
     pub chat_search: String,
     /// Matches in the open chat, newest first.
     pub chat_search_hits: Vec<Message>,
+    chat_search_revision: u64,
+    chat_search_memo: std::cell::RefCell<Option<ChatSearchMemo>>,
     /// Whether the archive held more matches than the pane lists.
     pub chat_search_truncated: bool,
     /// Whether an answer for the current query and day is still due.
@@ -512,6 +532,8 @@ pub struct App {
     pub info: Option<InfoPanel>,
     /// The listing of the panel's chat, once the worker has answered.
     pub info_media: Option<ChatMedia>,
+    pub info_voice_query: String,
+    pub info_voice_expanded: HashSet<String>,
     /// Whether a listing is on its way from the worker.
     pub info_media_pending: bool,
     /// Whether the chat changed while a listing was on its way, so it is
@@ -634,6 +656,7 @@ pub struct App {
     /// Local voice-note transcription worker; `None` until a Wyoming
     /// service address is set. Audio and transcripts stay on the machine.
     pub transcriber: Option<crate::transcribe_worker::Worker>,
+    transcript_archive: Option<crate::transcribe_worker::Worker>,
     /// The address the current worker was built with; a settings change
     /// respawns the worker only when this differs.
     transcriber_address: String,
@@ -1400,6 +1423,7 @@ impl App {
         app.login_item.read(move || login_waker.wake());
         // Voice-note transcription only with a configured local service.
         app.transcriber = transcriber_worker(waker, &app.dirs, &app.settings);
+        app.refresh_transcript_archive();
         app.transcriber_address = app.settings.transcription_wyoming.trim().to_string();
         let _ = app.roster.save_to(&app.files, &app.dirs.accounts_file());
         Ok(app)
@@ -1550,6 +1574,8 @@ impl App {
             chat_search_open: false,
             info: None,
             info_media: None,
+            info_voice_query: String::new(),
+            info_voice_expanded: HashSet::new(),
             info_media_pending: false,
             info_media_stale: false,
             info_textures: HashSet::new(),
@@ -1562,6 +1588,8 @@ impl App {
             info_focus: None,
             chat_search: String::new(),
             chat_search_hits: Vec::new(),
+            chat_search_revision: 0,
+            chat_search_memo: Default::default(),
             chat_search_truncated: false,
             chat_search_pending: false,
             beeper_chat_search_error: None,
@@ -1620,6 +1648,7 @@ impl App {
             composer_tools_open: false,
             player: Player::new(waker.clone()),
             transcriber: None,
+            transcript_archive: None,
             transcriber_address: String::new(),
             video: crate::video::Player::new(waker.clone()),
             video_chat: None,
@@ -1965,6 +1994,7 @@ impl App {
         self.chat_search_open = false;
         self.beeper_chat_search_error = None;
         self.chat_search.clear();
+        self.chat_search_revision = self.chat_search_revision.wrapping_add(1);
         self.chat_search_hits.clear();
         self.chat_search_selected = None;
         self.chat_search_pending = false;
@@ -3843,8 +3873,11 @@ impl App {
             })
             .map(|hit| (hit.chat.clone(), hit.id.clone()))
             .collect();
-        if let Some(worker) = &self.transcriber {
-            for hit in self.transcript_hit_messages(worker.search(self.search.trim())) {
+        if let Some(worker) = self.transcript_reader() {
+            for hit in self.transcript_hit_messages(
+                worker.saved_for_account(&self.account().id.0, self.search.trim()),
+                self.search.trim(),
+            ) {
                 if self
                     .chat(&hit.chat)
                     .is_some_and(|chat| !chat.locked && !self.chat_scope_matches(chat))
@@ -3880,11 +3913,14 @@ impl App {
         // Local voice-note transcripts join the same results. Locked chats
         // stay out like the backend's hits, the secret-code prompt is not a
         // query, and a hit the backend already returned is not duplicated.
-        if let Some(worker) = &self.transcriber
+        if let Some(worker) = self.transcript_reader()
             && !self.locked_folder_open()
             && !self.secret_code_matched()
         {
-            for hit in self.transcript_hit_messages(worker.search(self.search.trim())) {
+            for hit in self.transcript_hit_messages(
+                worker.saved_for_account(&self.account().id.0, self.search.trim()),
+                self.search.trim(),
+            ) {
                 if self.chat(&hit.chat).is_some_and(|chat| chat.locked) {
                     continue;
                 }
@@ -3910,10 +3946,14 @@ impl App {
     /// it is loaded, a synthetic one otherwise; the preview shows the
     /// transcript line that matched, not the voice-note label. Both kinds
     /// navigate to the source by chat + message id.
-    fn transcript_hit_messages(&self, hits: Vec<crate::transcriber::Hit>) -> Vec<Message> {
-        let query = self.search.trim().to_owned();
+    fn transcript_hit_messages(
+        &self,
+        hits: impl AsRef<[crate::transcriber::Hit]>,
+        query: &str,
+    ) -> Vec<Message> {
         let account = self.account().id.0.clone();
-        hits.into_iter()
+        hits.as_ref()
+            .iter()
             // The store is shared; only the active account's transcripts
             // may surface in its search.
             .filter(|hit| hit.account_id == account)
@@ -3945,9 +3985,7 @@ impl App {
                         forwarded: false,
                         thumbnail: None,
                     });
-                let preview = Content::text(hit.text.clone())
-                    .text_matching(&query)
-                    .unwrap_or_else(|| hit.text.lines().next().unwrap_or("").trim().to_owned());
+                let preview = crate::transcriber::preview(&hit.text, query);
                 message.content = Content::text(preview);
                 message
             })
@@ -5385,6 +5423,7 @@ impl App {
                     && until == want_until
                 {
                     self.beeper_chat_search_error = None;
+                    self.chat_search_revision = self.chat_search_revision.wrapping_add(1);
                     self.chat_search_hits = messages;
                     self.chat_search_truncated = truncated;
                     self.chat_search_pending = false;
@@ -5757,7 +5796,7 @@ impl App {
             Event::ChatRemoved { chat } => {
                 self.forget_chat(&chat);
                 self.stars.remove(&chat);
-                if let Some(worker) = &self.transcriber {
+                if let Some(worker) = self.transcript_reader() {
                     worker.remove_chat(self.account().id.0.clone(), chat.clone());
                 }
                 // The note's language overrides follow its transcripts.
@@ -5776,7 +5815,7 @@ impl App {
                 self.reload_lists();
             }
             Event::ChatCleared { chat, through } => {
-                if let Some(worker) = &self.transcriber {
+                if let Some(worker) = self.transcript_reader() {
                     worker.remove_chat(self.account().id.0.clone(), chat.clone());
                 }
                 let prefix = format!("{}\t{chat}\t", self.account().id.0);
@@ -7078,6 +7117,8 @@ impl App {
     /// answer on its way is for a chat the panel no longer shows.
     fn reset_info_media(&mut self) {
         self.info_media = None;
+        self.info_voice_query.clear();
+        self.info_voice_expanded.clear();
         self.info_released.append(&mut self.info_uris);
         self.info_media_request += 1;
         self.info_media_pending = false;
@@ -7196,6 +7237,7 @@ impl App {
     fn close_chat_search(&mut self) {
         self.chat_search_open = false;
         self.chat_search.clear();
+        self.chat_search_revision = self.chat_search_revision.wrapping_add(1);
         self.chat_search_hits.clear();
         self.chat_search_truncated = false;
         self.chat_search_pending = false;
@@ -7203,6 +7245,142 @@ impl App {
         self.chat_search_day = None;
         self.chat_search_calendar = false;
         self.focus_chat_search = false;
+    }
+
+    /// Saved text stays searchable when transcription is disabled. The archive
+    /// has no engine or background thread and is never used to queue jobs.
+    fn refresh_transcript_archive(&mut self) {
+        self.transcript_archive = if self.transcriber.is_none() {
+            crate::transcriber::Store::new(self.dirs.state.join("transcripts"), 32 << 20)
+                .ok()
+                .map(|store| {
+                    let waker = self.waker.clone();
+                    crate::transcribe_worker::Worker::archive_with_wake(store, move || waker.wake())
+                })
+        } else {
+            None
+        };
+    }
+
+    pub fn transcript_reader(&self) -> Option<&crate::transcribe_worker::Worker> {
+        self.transcriber
+            .as_ref()
+            .or(self.transcript_archive.as_ref())
+    }
+
+    /// Local saved transcripts join in-chat search even if backend search
+    /// fails. Unknown message dates never match a day filter; file mtimes
+    /// are not message dates. Querying never starts transcription.
+    pub fn chat_search_results(&self) -> std::sync::Arc<[Message]> {
+        let saved = self
+            .open_chat
+            .as_deref()
+            .and_then(|chat| {
+                (!self.chat_search.trim().is_empty())
+                    .then(|| {
+                        self.transcript_reader().map(|worker| {
+                            worker.saved_in_chat(&self.account().id.0, chat, &self.chat_search)
+                        })
+                    })
+                    .flatten()
+            })
+            .unwrap_or_default();
+        let key = ChatSearchKey {
+            revision: self.chat_search_revision,
+            base_len: self.chat_search_hits.len(),
+            account: self.account().id.0.clone(),
+            chat: self.open_chat.clone(),
+            query: self.chat_search.clone(),
+            day: self.chat_search_day,
+            hidden: self
+                .open_chat
+                .as_deref()
+                .and_then(|id| self.chat(id))
+                .is_some_and(|chat| chat.locked)
+                && !self.locked_folder_open(),
+            locale: self.locale,
+            timestamps: saved
+                .iter()
+                .map(|hit| {
+                    self.conversations
+                        .get(&hit.chat_id)
+                        .and_then(|c| c.message(&hit.message_id))
+                        .or_else(|| {
+                            self.chat_search_hits
+                                .iter()
+                                .find(|m| m.id == hit.message_id && m.chat == hit.chat_id)
+                        })
+                        .map_or(0, |m| m.timestamp)
+                })
+                .collect(),
+        };
+        if let Some(memo) = self.chat_search_memo.borrow().as_ref()
+            && memo.key == key
+            && (std::sync::Arc::ptr_eq(&memo.saved, &saved)
+                || (memo.saved.is_empty() && saved.is_empty()))
+        {
+            return memo.rows.clone();
+        }
+        let rows: std::sync::Arc<[Message]> = self.compute_chat_search_results(&saved).into();
+        *self.chat_search_memo.borrow_mut() = Some(ChatSearchMemo {
+            key,
+            saved,
+            rows: rows.clone(),
+        });
+        rows
+    }
+
+    fn compute_chat_search_results(&self, saved: &[crate::transcriber::Hit]) -> Vec<Message> {
+        let mut hits = self.chat_search_hits.clone();
+        let Some(chat) = self.open_chat.as_deref() else {
+            return hits;
+        };
+        if self.chat_search.trim().is_empty() {
+            return hits;
+        }
+        if self.chat(chat).is_some_and(|chat| chat.locked) && !self.locked_folder_open() {
+            return Vec::new();
+        }
+        let (from, until) = self.chat_search_range();
+        for hit in saved {
+            let known = self
+                .conversations
+                .get(chat)
+                .and_then(|c| c.message(&hit.message_id))
+                .or_else(|| {
+                    hits.iter()
+                        .find(|m| m.id == hit.message_id && m.chat == chat)
+                });
+            let stamp = known.map_or(0, |m| m.timestamp);
+            if from.is_some_and(|from| stamp == 0 || stamp < from)
+                || until.is_some_and(|until| stamp >= until)
+            {
+                continue;
+            }
+            let mut messages =
+                self.transcript_hit_messages(std::slice::from_ref(hit), self.chat_search.trim());
+            let Some(mut message) = messages.pop() else {
+                continue;
+            };
+            message.timestamp = stamp;
+            let preview = Content::text(message.summary())
+                .text_matching(&self.chat_search)
+                .unwrap_or_else(|| message.summary());
+            message.content = Content::text(format!(
+                "{}: {preview}",
+                crate::i18n::gettext(self.locale, "Voice transcript")
+            ));
+            if let Some(existing) = hits
+                .iter_mut()
+                .find(|m| m.chat == chat && m.id == message.id)
+            {
+                existing.content = message.content;
+            } else {
+                hits.push(message);
+            }
+        }
+        hits.sort_by_key(|message| std::cmp::Reverse(message.timestamp));
+        hits
     }
 
     /// The Unix-second range the day filter stands for, if a day is picked.
@@ -7223,6 +7401,7 @@ impl App {
             .clone()
             .filter(|_| !query.is_empty() || from.is_some())
         else {
+            self.chat_search_revision = self.chat_search_revision.wrapping_add(1);
             self.chat_search_hits.clear();
             self.chat_search_truncated = false;
             self.chat_search_pending = false;
@@ -12550,6 +12729,7 @@ impl App {
                     // one configured. Its thread ends with the dropped
                     // channel; the store keeps the transcripts on disk.
                     self.transcriber = transcriber_worker(&self.waker, &self.dirs, &self.settings);
+                    self.refresh_transcript_archive();
                     self.transcriber_address = address;
                 }
             }
@@ -26189,7 +26369,15 @@ mod tests {
         // No backend hit for the loaded message: its transcript still
         // surfaces it, keeping the real timestamp with the matched
         // transcript line as the preview.
-        let hits = app.scoped_search_hits();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let hits = loop {
+            let hits = app.scoped_search_hits();
+            if hits.len() == 2 {
+                break hits;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
         assert_eq!(hits.len(), 2, "{hits:?}");
         let loaded: Vec<_> = hits.iter().filter(|hit| hit.id == "m1").collect();
         assert_eq!(loaded.len(), 1);
@@ -26214,6 +26402,89 @@ mod tests {
         app.search = "   ".into();
         assert!(app.scoped_search_hits().is_empty());
         std::fs::remove_dir_all(&store_dir).ok();
+    }
+
+    #[test]
+    fn in_chat_saved_transcripts_are_scoped_deduplicated_and_keep_real_dates() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _events) =
+            App::headless(AppDirs::under(directory.path()), Settings::default());
+        let chat = "voice-chat";
+        app.chats.push(Chat::new(chat.into(), "Voice".into()));
+        app.open_chat = Some(chat.into());
+        app.chat_search = "station".into();
+        app.search = "unrelated global query".into();
+        let store =
+            crate::transcriber::Store::new(directory.path().join("saved"), 1 << 20).unwrap();
+        let account = app.account().id.0.clone();
+        store
+            .put(&account, chat, "known", "First line.\nMeet at the station.")
+            .unwrap();
+        store
+            .put(&account, chat, "unloaded", "Another station note")
+            .unwrap();
+        store
+            .put("another-account", chat, "private", "station secret")
+            .unwrap();
+        store
+            .put(&account, "another-chat", "private", "station secret")
+            .unwrap();
+        app.transcript_archive = Some(crate::transcribe_worker::Worker::archive(store));
+        assert!(
+            app.transcriber.is_none(),
+            "saved text works with inference disabled"
+        );
+        app.chat_search_hits.push(message(chat, "known", 100));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let hits = loop {
+            let hits = app.chat_search_results();
+            if hits.len() == 2 {
+                break hits;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(hits.len(), 2);
+        assert!(
+            std::sync::Arc::ptr_eq(&hits, &app.chat_search_results()),
+            "unchanged frames must reuse combined rows without cloning or sorting"
+        );
+        let known = hits.iter().find(|hit| hit.id == "known").unwrap();
+        assert_eq!(known.timestamp, 100);
+        assert!(known.summary().contains("station"));
+        assert!(known.summary().contains("Voice transcript"));
+        assert_eq!(hits.iter().filter(|hit| hit.id == "known").count(), 1);
+        assert_eq!(
+            hits.iter()
+                .find(|hit| hit.id == "unloaded")
+                .unwrap()
+                .timestamp,
+            0
+        );
+        assert!(
+            app.transcript_reader().unwrap().recorded().is_empty(),
+            "search queues no inference"
+        );
+        app.chat_search_day = Some(jiff::civil::Date::new(2026, 11, 17).unwrap());
+        app.chat_search_hits.clear();
+        assert!(
+            app.chat_search_results().is_empty(),
+            "unknown dates must not use file mtime"
+        );
+        app.chat_search_day = None;
+        app.chats[0].locked = true;
+        assert!(
+            app.chat_search_results().is_empty(),
+            "a hidden locked chat stays private"
+        );
+        app.chats[0].locked = false;
+        app.transcript_reader()
+            .unwrap()
+            .remove_chat(account, chat.into());
+        assert!(
+            app.chat_search_results().is_empty(),
+            "disabled-engine deletion invalidates results"
+        );
     }
 
     #[test]

@@ -11,3 +11,25 @@ https://files.instinct.com/6nkicc93b5c9-solmu-shared-voice-and-video
 
 If a refresh fails, existing cached items remain usable and a visible error
 with Try again is shown above them. A failed refresh never implies an empty chat.
+
+## Saved voice transcripts
+
+Voice has an Expand transcript/Hide transcript control for saved text and a
+search field limited to the panel's account and chat. Search results include
+a matching text line; audio without a saved transcript does not match.
+Saved matches outside the bounded media listing still offer Expand and Go to chat, without invented audio metadata. Searching never downloads audio or queues transcription. The stored text
+remains local and is searchable even when transcription is disabled. Closing or changing the panel clears its query and expansion.
+
+In-chat search merges saved local transcript matches with backend matches,
+labels the text Voice transcript, and deduplicates by chat/message ID.
+Results jump to the original voice message. Day filters use a known message
+date; an unloaded message whose date is unknown is excluded when filtering
+by day, rather than using the transcript file's modification time. Hidden
+locked chats and another account's transcripts are excluded.
+
+Saved panel and in-chat snapshots keep at most four account/chat/query entries,
+500 matches and 2 MiB of retained text per entry, with 64 KiB per transcript.
+Long text is clipped and an explicit partial-results note is shown. Queries
+are applied before result caps; files over 32 MiB are skipped with the same
+notice. Saved text can be read, searched and deleted without a configured
+transcription engine; none of these actions starts inference.

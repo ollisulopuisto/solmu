@@ -337,17 +337,34 @@ impl Store {
     /// never leaves the machine; matching uses the same normalization as
     /// chat search, and hits carry the real account/chat/message ids.
     pub fn search(&self, query: &str, limit: usize) -> Vec<Hit> {
+        self.search_scoped(query, limit, None)
+    }
+
+    /// Filter account/chat before the cap, so another chat cannot hide hits.
+    /// An empty scoped query returns saved transcripts for the Voice panel.
+    pub fn search_scoped(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: Option<(&str, &str)>,
+    ) -> Vec<Hit> {
         let needle = crate::util::search_key(query.trim());
         let mut hits = Vec::new();
-        if !needle.is_empty() {
+        if !needle.is_empty() || scope.is_some() {
             for account in subdirs(&self.root) {
                 let Some(account_id) = decode(&account) else {
                     continue;
                 };
+                if scope.is_some_and(|(wanted, _)| wanted != account_id) {
+                    continue;
+                }
                 for chat in subdirs(&self.root.join(&account)) {
                     let Some(chat_id) = decode(&chat) else {
                         continue;
                     };
+                    if scope.is_some_and(|(_, wanted)| wanted != chat_id) {
+                        continue;
+                    }
                     let dir = self.root.join(&account).join(&chat);
                     let Ok(entries) = std::fs::read_dir(&dir) else {
                         continue;
@@ -417,8 +434,236 @@ pub fn wyoming_pcm_from_mono(samples: &[f32], from_rate: u32) -> Vec<u8> {
     pcm
 }
 
+/// Preview selection uses the same normalization as local transcript search.
+pub fn preview(text: &str, query: &str) -> String {
+    let needle = crate::util::search_key(query.trim());
+    text.lines()
+        .find(|line| crate::util::search_key(line).contains(&needle))
+        .unwrap_or_else(|| text.lines().next().unwrap_or(""))
+        .trim()
+        .to_owned()
+}
+
+pub const SNAPSHOT_HITS: usize = 500;
+pub const SNAPSHOT_TEXT_BYTES: usize = 2 << 20;
+pub const SNAPSHOT_HIT_BYTES: usize = 64 << 10;
+const MAX_SOURCE_BYTES: u64 = 32 << 20;
+
+#[derive(Default)]
+pub struct Snapshot {
+    pub hits: Vec<Hit>,
+    pub truncated: bool,
+}
+
+impl Store {
+    /// A bounded display snapshot, not a second archive. Search all ordinary
+    /// source files before applying the result cap; retain only bounded text.
+    /// Oversized external files are skipped and the partial-state notice stays on.
+    pub fn snapshot(&self, query: &str, account: &str, chat: &str) -> Snapshot {
+        self.snapshot_while(query, account, chat, || true)
+    }
+
+    /// Account-wide search uses the same bounded snapshots, filtering before caps.
+    pub fn account_snapshot_while(
+        &self,
+        query: &str,
+        account: &str,
+        current: impl Fn() -> bool,
+    ) -> Snapshot {
+        let mut out = Snapshot::default();
+        if query.trim().is_empty() {
+            return out;
+        }
+        let mut retained = std::collections::BTreeMap::new();
+        let mut bytes = 0;
+        for chat in subdirs(&self.root.join(encode(account))) {
+            if !current() {
+                return Snapshot::default();
+            }
+            let Some(chat) = decode(&chat) else {
+                continue;
+            };
+            let snapshot = self.snapshot_while(query, account, &chat, &current);
+            out.truncated |= snapshot.truncated;
+            for hit in snapshot.hits {
+                bytes += hit.text.len();
+                retained.insert(
+                    (
+                        std::cmp::Reverse(hit.modified),
+                        hit.chat_id.clone(),
+                        hit.message_id.clone(),
+                    ),
+                    hit,
+                );
+                while retained.len() > SNAPSHOT_HITS || bytes > SNAPSHOT_TEXT_BYTES {
+                    if let Some((_, hit)) = retained.pop_last() {
+                        bytes -= hit.text.len();
+                        out.truncated = true;
+                    }
+                }
+            }
+        }
+        out.hits = retained.into_values().collect();
+        out
+    }
+
+    pub fn snapshot_while(
+        &self,
+        query: &str,
+        account: &str,
+        chat: &str,
+        current: impl Fn() -> bool,
+    ) -> Snapshot {
+        use std::io::Read;
+        let mut retained = std::collections::BTreeMap::new();
+        let mut retained_bytes = 0;
+        let mut out = Snapshot::default();
+        let needle = crate::util::search_key(query.trim());
+        let dir = self.root.join(encode(account)).join(encode(chat));
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return out;
+        };
+        for entry in entries.flatten() {
+            if !current() {
+                return Snapshot::default();
+            }
+            let name = entry.file_name();
+            let Some(stem) = name.to_str().and_then(|name| name.strip_suffix(".txt")) else {
+                continue;
+            };
+            let Some(message_id) = decode(stem) else {
+                continue;
+            };
+            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                continue;
+            }
+            let Ok(file) = std::fs::File::open(entry.path()) else {
+                continue;
+            };
+            let modified = file
+                .metadata()
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |time| time.as_secs() as i64);
+            let mut bytes = Vec::new();
+            if file
+                .take(MAX_SOURCE_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .is_err()
+            {
+                continue;
+            }
+            if bytes.len() as u64 > MAX_SOURCE_BYTES {
+                out.truncated = true;
+                continue;
+            }
+            let Ok(mut text) = String::from_utf8(bytes) else {
+                continue;
+            };
+            if !crate::util::search_key(&text).contains(&needle) {
+                continue;
+            }
+            if text.len() > SNAPSHOT_HIT_BYTES {
+                out.truncated = true;
+                // Keep the matching line near the start of a clipped result.
+                let matching = preview(&text, query);
+                text = if needle.is_empty() { text } else { matching };
+                let mut end = text.len().min(SNAPSHOT_HIT_BYTES);
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text.truncate(end);
+            }
+            let hit = Hit {
+                account_id: account.into(),
+                chat_id: chat.into(),
+                message_id,
+                text,
+                modified,
+            };
+            retained_bytes += hit.text.len();
+            retained.insert(
+                (std::cmp::Reverse(hit.modified), hit.message_id.clone()),
+                hit,
+            );
+            while retained.len() > SNAPSHOT_HITS || retained_bytes > SNAPSHOT_TEXT_BYTES {
+                if let Some((_, removed)) = retained.pop_last() {
+                    retained_bytes -= removed.text.len();
+                    out.truncated = true;
+                }
+            }
+        }
+        out.hits = retained.into_values().collect();
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scoped_snapshot_bounds_text_and_hits_and_searches_before_caps() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), u64::MAX).unwrap();
+        let file = store.file_for("acc", "chat", "seed");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        for i in 0..520 {
+            std::fs::write(
+                store.file_for("acc", "chat", &format!("m{i:04}")),
+                "ordinary",
+            )
+            .unwrap();
+        }
+        std::fs::write(store.file_for("acc", "chat", "z-match"), "needle").unwrap();
+        let snapshot = store.snapshot("", "acc", "chat");
+        assert_eq!(snapshot.hits.len(), SNAPSHOT_HITS);
+        assert!(snapshot.truncated);
+        let found = store.snapshot("needle", "acc", "chat");
+        assert_eq!(found.hits.len(), 1, "query must run before result cap");
+        assert_eq!(found.hits[0].message_id, "z-match");
+        for i in 0..40 {
+            std::fs::write(
+                store.file_for("acc", "large", &format!("m{i}")),
+                "ää".repeat(40_000),
+            )
+            .unwrap_or_else(|_| {
+                std::fs::create_dir_all(store.file_for("acc", "large", "x").parent().unwrap())
+                    .unwrap();
+                std::fs::write(
+                    store.file_for("acc", "large", &format!("m{i}")),
+                    "ää".repeat(40_000),
+                )
+                .unwrap();
+            });
+        }
+        let snapshot = store.snapshot("", "acc", "large");
+        assert!(snapshot.truncated);
+        assert!(
+            snapshot
+                .hits
+                .iter()
+                .all(|h| h.text.len() <= SNAPSHOT_HIT_BYTES)
+        );
+        assert!(snapshot.hits.iter().map(|h| h.text.len()).sum::<usize>() <= SNAPSHOT_TEXT_BYTES);
+        assert!(store.snapshot("needle", "other", "chat").hits.is_empty());
+    }
+
+    #[test]
+    fn obsolete_snapshot_stops_before_reading_files() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), 1 << 20).unwrap();
+        store.put("acc", "chat", "one", "station").unwrap();
+        let snapshot = store.snapshot_while("station", "acc", "chat", || false);
+        assert!(snapshot.hits.is_empty());
+    }
+
+    #[test]
+    fn preview_uses_search_normalization() {
+        assert_eq!(
+            super::preview("First line.\nMeet at the café.", "cafe"),
+            "Meet at the café."
+        );
+    }
     use super::*;
 
     fn job(id: &str) -> Job {

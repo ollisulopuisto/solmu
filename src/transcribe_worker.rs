@@ -11,8 +11,8 @@
 //! a re-transcribe after re-adding, or the worker's own drop (a settings
 //! respawn) invalidates the late result for good.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
@@ -98,12 +98,44 @@ pub struct Worker {
     store: Option<Store>,
     /// Search memo: (store version, query, hits).
     search_cache: SearchCache,
+    scoped_search_cache: ScopedSearchCache,
+    active_scans: Arc<AtomicUsize>,
+    wake_search: Arc<dyn Fn() + Send + Sync>,
     /// What a stub was told, for tests; always empty on a live worker.
     recorded: Arc<Mutex<Vec<String>>>,
 }
 
 /// Search memo: (store version, query, hits).
 type SearchCache = Arc<Mutex<Option<(u64, String, Vec<Hit>)>>>;
+const SCOPED_CACHE_SLOTS: usize = 4;
+struct ScopedSnapshot {
+    version: u64,
+    key: (String, String, String, bool),
+    hits: Option<Arc<[Hit]>>,
+    truncated: bool,
+}
+type ScopedSearchCache = Arc<Mutex<VecDeque<ScopedSnapshot>>>;
+
+/// Releases admission and unsettles a failed request even if scanning panics.
+struct ScanPermit {
+    active: Arc<AtomicUsize>,
+    cache: ScopedSearchCache,
+    version: u64,
+    key: (String, String, String, bool),
+    wake: Arc<dyn Fn() + Send + Sync>,
+}
+impl Drop for ScanPermit {
+    fn drop(&mut self) {
+        self.cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|entry| {
+                !(entry.version == self.version && entry.key == self.key && entry.hits.is_none())
+            });
+        self.active.fetch_sub(1, Ordering::Relaxed);
+        (self.wake)();
+    }
+}
 
 /// The loop: drain commands until Shutdown or the channel closes. `wake`
 /// repaints the view after each status change.
@@ -220,7 +252,7 @@ impl Worker {
     pub fn spawn(
         engine: Box<dyn Engine + Send>,
         store: Store,
-        wake: impl Fn() + Send + 'static,
+        wake: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         let (tx, rx) = channel();
         let shared = Arc::new(Shared {
@@ -231,15 +263,20 @@ impl Worker {
         });
         let thread_shared = Arc::clone(&shared);
         let thread_store = store.clone();
+        let wake = Arc::new(wake);
+        let wake_search = wake.clone();
         std::thread::Builder::new()
             .name("transcribe".to_string())
-            .spawn(move || run(rx, engine, thread_store, thread_shared, wake))
+            .spawn(move || run(rx, engine, thread_store, thread_shared, move || wake()))
             .expect("transcribe worker thread");
         Self {
             tx,
             shared,
             store: Some(store),
             search_cache: Arc::new(Mutex::new(None)),
+            scoped_search_cache: Arc::new(Mutex::new(VecDeque::new())),
+            active_scans: Arc::new(AtomicUsize::new(0)),
+            wake_search,
             recorded: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -362,6 +399,207 @@ impl Worker {
         hits
     }
 
+    /// Saved text only: never queues the engine or downloads audio. A
+    /// versioned scoped memo keeps repeated paint passes off disk.
+    pub fn saved_in_chat(&self, account: &str, chat: &str, query: &str) -> Arc<[Hit]> {
+        self.saved_scope(account, chat, query, false)
+    }
+
+    pub fn saved_for_account(&self, account: &str, query: &str) -> Arc<[Hit]> {
+        if query.trim().is_empty() {
+            return Arc::default();
+        }
+        self.saved_scope(account, "", query, true)
+    }
+
+    fn saved_scope(&self, account: &str, chat: &str, query: &str, all_chats: bool) -> Arc<[Hit]> {
+        let Some(store) = &self.store else {
+            return self
+                .shared
+                .status
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .filter_map(|((a, c, m), status)| {
+                    if a != account || (!all_chats && c != chat) {
+                        return None;
+                    }
+                    let Status::Ready(text) = status else {
+                        return None;
+                    };
+                    crate::util::search_key(text)
+                        .contains(&crate::util::search_key(query))
+                        .then(|| Hit {
+                            account_id: a.clone(),
+                            chat_id: c.clone(),
+                            message_id: m.clone(),
+                            text: text.clone(),
+                            modified: 0,
+                        })
+                })
+                .collect();
+        };
+        let version = store.version();
+        let key = (
+            account.to_owned(),
+            chat.to_owned(),
+            crate::util::search_key(query.trim()),
+            all_chats,
+        );
+        let mut memo = self
+            .scoped_search_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        memo.retain(|entry| entry.version == version);
+        if let Some(entry) = memo.iter().find(|entry| entry.key == key) {
+            return entry.hits.clone().unwrap_or_default();
+        }
+        if self.active_scans.load(Ordering::Relaxed) >= SCOPED_CACHE_SLOTS {
+            return Arc::default();
+        }
+        if memo.len() >= SCOPED_CACHE_SLOTS {
+            if let Some(index) = memo.iter().position(|entry| entry.hits.is_some()) {
+                memo.remove(index);
+            } else {
+                return Arc::default();
+            }
+        }
+        memo.push_back(ScopedSnapshot {
+            version,
+            key: key.clone(),
+            hits: None,
+            truncated: false,
+        });
+        drop(memo);
+        self.active_scans.fetch_add(1, Ordering::Relaxed);
+        let active_scans = Arc::clone(&self.active_scans);
+        let store = store.clone();
+        let cache = Arc::clone(&self.scoped_search_cache);
+        let shared = Arc::clone(&self.shared);
+        let wake = Arc::clone(&self.wake_search);
+        let permit = ScanPermit {
+            active: active_scans,
+            cache: cache.clone(),
+            version,
+            key: key.clone(),
+            wake,
+        };
+        std::thread::spawn(move || {
+            let _permit = permit;
+            let snapshot = {
+                let _io = shared.store_io.lock().unwrap_or_else(|p| p.into_inner());
+                let current = || {
+                    shared.alive.load(Ordering::Relaxed)
+                        && store.version() == version
+                        && cache
+                            .lock()
+                            .unwrap_or_else(|p| p.into_inner())
+                            .iter()
+                            .any(|entry| entry.version == version && entry.key == key)
+                };
+                if key.3 {
+                    store.account_snapshot_while(&key.2, &key.0, current)
+                } else {
+                    store.snapshot_while(&key.2, &key.0, &key.1, current)
+                }
+            };
+            let mut memo = cache.lock().unwrap_or_else(|p| p.into_inner());
+            // A stale completion wakes once so the next frame can request the
+            // current version. It never replaces newer text or revives deletion.
+            if store.version() == version
+                && shared.alive.load(Ordering::Relaxed)
+                && let Some(entry) = memo
+                    .iter_mut()
+                    .find(|entry| entry.version == version && entry.key == key)
+            {
+                entry.hits = Some(snapshot.hits.into());
+                entry.truncated = snapshot.truncated;
+            }
+            drop(memo);
+        });
+        Arc::default()
+    }
+
+    pub fn saved_loading(&self, account: &str, chat: &str, query: &str) -> bool {
+        let Some(store) = &self.store else {
+            return false;
+        };
+        let key = (
+            account.to_owned(),
+            chat.to_owned(),
+            crate::util::search_key(query.trim()),
+            false,
+        );
+        self.scoped_search_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|entry| entry.version == store.version() && entry.key == key)
+            .is_none_or(|entry| entry.hits.is_none())
+    }
+
+    pub fn saved_truncated(&self, account: &str, chat: &str, query: &str) -> bool {
+        let Some(store) = &self.store else {
+            return false;
+        };
+        let key = (
+            account.to_owned(),
+            chat.to_owned(),
+            crate::util::search_key(query.trim()),
+            false,
+        );
+        self.scoped_search_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .any(|entry| entry.version == store.version() && entry.key == key && entry.truncated)
+    }
+
+    pub fn saved_account_state(&self, account: &str, query: &str) -> (bool, bool) {
+        let Some(store) = &self.store else {
+            return (false, false);
+        };
+        let key = (
+            account.to_owned(),
+            String::new(),
+            crate::util::search_key(query.trim()),
+            true,
+        );
+        self.scoped_search_cache
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|entry| entry.version == store.version() && entry.key == key)
+            .map_or((true, false), |entry| {
+                (entry.hits.is_none(), entry.truncated)
+            })
+    }
+
+    /// Read/delete access to saved text without an engine or worker thread.
+    /// Its channel has no receiver, so it cannot ever start inference.
+    pub fn archive(store: Store) -> Self {
+        Self::archive_with_wake(store, || {})
+    }
+
+    pub fn archive_with_wake(store: Store, wake: impl Fn() + Send + Sync + 'static) -> Self {
+        let (tx, _rx) = channel();
+        Self {
+            tx,
+            shared: Arc::new(Shared {
+                status: Arc::new(Mutex::new(HashMap::new())),
+                generations: Arc::new(Mutex::new(Generations::default())),
+                store_io: Arc::new(Mutex::new(())),
+                alive: Arc::new(AtomicBool::new(true)),
+            }),
+            store: Some(store),
+            search_cache: Arc::new(Mutex::new(None)),
+            scoped_search_cache: Arc::new(Mutex::new(VecDeque::new())),
+            active_scans: Arc::new(AtomicUsize::new(0)),
+            wake_search: Arc::new(wake),
+            recorded: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
     /// A worker with no engine behind it, for demos and tests: the given
     /// statuses are what the view sees; queued work is only recorded.
     pub fn stub(pairs: impl IntoIterator<Item = (Key, Status)>) -> Self {
@@ -403,6 +641,9 @@ impl Worker {
             }),
             store: None,
             search_cache: Arc::new(Mutex::new(None)),
+            scoped_search_cache: Arc::new(Mutex::new(VecDeque::new())),
+            active_scans: Arc::new(AtomicUsize::new(0)),
+            wake_search: Arc::new(|| {}),
             recorded,
         }
     }
@@ -452,8 +693,216 @@ impl Drop for Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_chat_snapshot_filters_before_limit_and_invalidates_on_delete() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), 1 << 20).unwrap();
+        for i in 0..60 {
+            store
+                .put("other", "same-chat", &format!("m{i}"), "station")
+                .unwrap();
+        }
+        store
+            .put("mine", "same-chat", "mine", "at the station")
+            .unwrap();
+        let worker = Worker::stub_with_store(store);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let hits = loop {
+            let hits = worker.saved_in_chat("mine", "same-chat", "station");
+            if !hits.is_empty() {
+                break hits;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_id, "mine");
+        assert_eq!(
+            worker.saved_in_chat("mine", "same-chat", "station").len(),
+            1
+        );
+        worker.remove_chat("mine".into(), "same-chat".into());
+        assert!(worker.saved_in_chat("mine", "same-chat", "").is_empty());
+        assert!(
+            worker
+                .recorded()
+                .iter()
+                .all(|line| !line.starts_with("transcribe"))
+        );
+    }
+
+    #[test]
+    fn truncation_is_reported_even_when_no_saved_match_can_be_displayed() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), u64::MAX).unwrap();
+        store.put("acc", "chat", "huge", "station").unwrap();
+        let dir = root.path().join("acc/chat");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.join("huge.txt"))
+            .unwrap()
+            .set_len((32 << 20) + 1)
+            .unwrap();
+        let worker = Worker::archive(store);
+        worker.saved_in_chat("acc", "chat", "station");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while worker.saved_loading("acc", "chat", "station") {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(worker.saved_in_chat("acc", "chat", "station").is_empty());
+        assert!(worker.saved_truncated("acc", "chat", "station"));
+    }
+
+    #[test]
+    fn panicking_scan_releases_admission_and_pending_entry() {
+        let active = Arc::new(AtomicUsize::new(1));
+        let key = ("acc".into(), "chat".into(), "query".into(), false);
+        let cache = Arc::new(Mutex::new(VecDeque::from([ScopedSnapshot {
+            version: 0,
+            key: key.clone(),
+            hits: None,
+            truncated: false,
+        }])));
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = wakes.clone();
+        let permit = ScanPermit {
+            active: active.clone(),
+            cache: cache.clone(),
+            version: 0,
+            key,
+            wake: Arc::new(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }),
+        };
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let _permit = permit;
+                panic!("synthetic scan panic");
+            }))
+            .is_err()
+        );
+        assert_eq!(active.load(Ordering::Relaxed), 0);
+        assert!(cache.lock().unwrap().is_empty());
+        assert_eq!(wakes.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn scan_threads_stay_bounded_across_queries_and_store_versions() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), 1 << 20).unwrap();
+        let worker = Worker::archive(store.clone());
+        let io = worker.shared.store_io.lock().unwrap();
+        for i in 0..20 {
+            store
+                .put("acc", "chat", "one", &format!("station {i}"))
+                .unwrap();
+            worker.saved_in_chat("acc", "chat", &i.to_string());
+            assert!(worker.active_scans.load(Ordering::Relaxed) <= SCOPED_CACHE_SLOTS);
+        }
+        assert_eq!(
+            worker.active_scans.load(Ordering::Relaxed),
+            SCOPED_CACHE_SLOTS
+        );
+        drop(io);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while worker.active_scans.load(Ordering::Relaxed) != 0 {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn account_search_never_waits_for_disk_and_filters_before_caps() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), u64::MAX).unwrap();
+        store.put("mine", "chat", "mine", "station").unwrap();
+        for i in 0..60 {
+            store
+                .put("other", "chat", &format!("m{i}"), "station")
+                .unwrap();
+        }
+        let worker = Worker::archive(store);
+        let io = worker.shared.store_io.lock().unwrap();
+        assert!(worker.saved_for_account("mine", "station").is_empty());
+        assert!(worker.saved_account_state("mine", "station").0);
+        drop(io);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let hits = loop {
+            let hits = worker.saved_for_account("mine", "station");
+            if !hits.is_empty() {
+                break hits;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_id, "mine");
+        assert!(Arc::ptr_eq(
+            &hits,
+            &worker.saved_for_account("mine", "station")
+        ));
+    }
+
+    #[test]
+    fn alternating_scoped_panels_settle_without_rescanning() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), 1 << 20).unwrap();
+        store.put("acc", "a", "a1", "station").unwrap();
+        store.put("acc", "b", "b1", "station").unwrap();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&wakes);
+        let worker = Worker::archive_with_wake(store, move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+        });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while worker.saved_in_chat("acc", "a", "station").is_empty()
+            || worker.saved_in_chat("acc", "b", "station").is_empty()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "alternating panels never settled"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        for _ in 0..20 {
+            assert_eq!(worker.saved_in_chat("acc", "a", "station").len(), 1);
+            assert_eq!(worker.saved_in_chat("acc", "b", "station").len(), 1);
+        }
+        assert_eq!(
+            wakes.load(Ordering::Relaxed),
+            2,
+            "cached frames must not launch scans"
+        );
+    }
+
+    #[test]
+    fn snapshot_completion_after_mutation_never_publishes_old_version() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), 1 << 20).unwrap();
+        store.put("acc", "chat", "old", "station").unwrap();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&wakes);
+        let worker = Worker::archive_with_wake(store.clone(), move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+        });
+        let io = worker.shared.store_io.lock().unwrap();
+        assert!(worker.saved_in_chat("acc", "chat", "station").is_empty());
+        store.remove_chat("acc", "chat").unwrap();
+        store.put("acc", "chat", "fresh", "station").unwrap();
+        drop(io);
+        wait_wakes(&wakes, 1);
+        assert!(
+            worker.saved_in_chat("acc", "chat", "station").is_empty(),
+            "stale completion was published"
+        );
+        wait_wakes(&wakes, 2);
+        let hits = worker.saved_in_chat("acc", "chat", "station");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_id, "fresh");
+    }
+
     use std::path::PathBuf;
-    use std::sync::atomic::AtomicUsize;
     use std::time::{Duration, Instant};
 
     struct EchoEngine;

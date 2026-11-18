@@ -2254,6 +2254,26 @@ fn results(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let chats: Vec<Chat> = app.beeper_display_chats();
     let hits: Vec<Message> = app.scoped_search_hits();
+    if !app.search.trim().is_empty()
+        && !app.locked_folder_open()
+        && !app.secret_code_matched()
+        && let Some(worker) = app.transcript_reader()
+    {
+        let (loading, truncated) = worker.saved_account_state(&app.account().id.0, &app.search);
+        if loading {
+            ui.label(crate::i18n::gettext(
+                app.locale,
+                "Loading saved transcripts…",
+            ));
+        }
+        if truncated {
+            ui.label(crate::i18n::gettext(
+                app.locale,
+                "Saved transcript results are partial. Refine your search or open the message.",
+            ));
+        }
+    }
+
     if let Some((query, error, truncated)) = &app.beeper_search_state
         && query == app.search.trim()
     {

@@ -168,6 +168,13 @@ jobs:
           cache-generation: test-v1
       - name: Build the demo
         run: mbx build --locked --features demo
+      - name: Saved transcript behavioral regressions
+        run: |
+          mbx test --locked --lib --features demo transcrib -- --nocapture
+          mbx test --locked --lib --features demo alternating_scoped_panels -- --nocapture
+          mbx test --locked --lib --features demo snapshot_completion_after_mutation -- --nocapture
+          mbx test --locked --lib --features demo scoped_snapshot_bounds -- --nocapture
+          mbx test --locked --lib --features demo voice_panel_search_and_transcript_expansion -- --nocapture
       - name: Capture the layouts
         run: |
           set -euo pipefail
@@ -196,6 +203,10 @@ jobs:
           shot info-voice-1180x780 1180x780 chat,info-voice
           shot info-voice-dark-1180x780 1180x780 chat,info-voice,theme=Catppuccin.json
           shot info-voice-900x780 900x780 chat,info-voice
+          shot voice-transcripts-1180x780 1180x780 chat,voice-transcripts
+          shot voice-transcripts-dark-1180x780 1180x780 chat,voice-transcripts,theme=Catppuccin.json
+          shot voice-transcripts-search-1180x780 1180x780 chat,voice-transcripts-search
+          shot chat-transcript-search-1180x780 1180x780 chat,chat-transcript-search
           shot chat-1180x780 1180x780 chat
           shot chat-menu-1180x780 1180x780 chat,chat-menu
           shot chat-menu-beeper-1180x780 1180x780 chat,chat-menu-beeper
