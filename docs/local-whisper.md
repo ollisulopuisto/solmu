@@ -17,8 +17,11 @@ removed. A prior installed model is not replaced with a partial file.
 Allow 260 MB free disk space for the model, runtime and temporary staging.
 Download cancellation can wait for an in-flight network operation to stop;
 body reads have a five-second timeout. Retry with Download & enable after a
-failure. Remove downloaded model switches transcription off and removes the
-model, but keeps transcripts. Deleting transcripts is a separate action.
+failure. Remove downloaded engine and model switches transcription off and removes both
+runtime and model, but keeps transcripts. Repair verifies the existing model
+and downloads it again only if missing or damaged. Named interrupted downloads
+are cleaned in the background on next startup; an active-download lock protects
+another running instance. Deleting transcripts is a separate action.
 
 Audio decoding and transcription run in a worker. Local audio is converted to
 private temporary 16 kHz mono WAV input; temporary audio and output are
@@ -57,3 +60,9 @@ Sources checked 2026-11-17:
 - https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-b5454-xcframework.zip
 - https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/.github/workflows/release.yml
 - https://support.apple.com/en-us/102445
+
+Transcription accepts up to five minutes of audio. Encoded audio is limited to
+64 MB and non-Opus decoded input has a separate memory bound; oversized input
+fails with a message, never silently transcribes only the beginning. Runtime
+signature/Gatekeeper assessment runs on first use per worker, with the executable
+hash checked again on later jobs. Long audio may need splitting first.

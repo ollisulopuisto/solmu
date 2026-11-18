@@ -592,12 +592,38 @@ pub fn decode_for_transcription(path: &Path) -> Result<Vec<f32>, String> {
     if is_video_file(path) {
         return extract_audio_with_ffmpeg(path);
     }
-    decode_file(path)
+    const MAX_ENCODED: u64 = 64 << 20;
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    if file.metadata().map_err(|error| error.to_string())?.len() > MAX_ENCODED {
+        return Err("Audio file is too large for transcription (maximum 64 MB)".into());
+    }
+    let mut header = [0; 4];
+    use std::io::Read;
+    (&file)
+        .read_exact(&mut header)
+        .map_err(|error| error.to_string())?;
+    if &header == b"OggS" {
+        let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+        return voice::decode_bounded(&bytes, TRANSCRIPTION_MAX_SAMPLES);
+    }
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let decoder = rodio::Decoder::new(std::io::BufReader::new(file))
+        .map_err(|error| format!("Could not decode the audio: {error}"))?;
+    let channels = decoder.channels().get();
+    let rate = decoder.sample_rate().get();
+    let duration_bound = u64::from(rate) * u64::from(channels) * u64::from(VIDEO_AUDIO_LIMIT_SECS);
+    // Bound source PCM too, even for unusual rates or channel counts.
+    let limit = duration_bound.min(16_000_000) as usize;
+    let interleaved: Vec<f32> = decoder.take(limit + 1).collect();
+    if interleaved.len() > limit {
+        return Err("Audio exceeds the five-minute transcription or decoded-size limit".into());
+    }
+    Ok(voice::mono_at_rate(&interleaved, channels, rate))
 }
 
-/// Longest stretch of a video's audio sent for transcription, in seconds.
-/// Decoded samples are held in memory (48 kHz, four bytes each).
-const VIDEO_AUDIO_LIMIT_SECS: u32 = 900;
+/// Five minutes bounds PCM retained for voice and video transcription.
+const VIDEO_AUDIO_LIMIT_SECS: u32 = 300;
+const TRANSCRIPTION_MAX_SAMPLES: usize = VIDEO_AUDIO_LIMIT_SECS as usize * voice::RATE as usize;
 
 /// Whether the file is a video container whose audio track needs ffmpeg.
 fn is_video_file(path: &Path) -> bool {
@@ -620,7 +646,7 @@ fn extract_audio_with_ffmpeg(path: &Path) -> Result<Vec<f32>, String> {
         .arg(path)
         .args(["-vn", "-ac", "1", "-ar"])
         .arg(crate::voice::RATE.to_string())
-        .args(["-t", &VIDEO_AUDIO_LIMIT_SECS.to_string()])
+        .args(["-t", &(VIDEO_AUDIO_LIMIT_SECS + 1).to_string()])
         .args(["-f", "f32le", "pipe:1"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -632,6 +658,9 @@ fn extract_audio_with_ffmpeg(path: &Path) -> Result<Vec<f32>, String> {
     let samples = samples_from_f32le(&output.stdout);
     if samples.is_empty() {
         return Err("This video has no audio to transcribe".to_owned());
+    }
+    if samples.len() > TRANSCRIPTION_MAX_SAMPLES {
+        return Err("Video audio is too long for transcription (maximum five minutes)".into());
     }
     Ok(samples)
 }

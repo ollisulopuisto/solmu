@@ -540,7 +540,9 @@ fn sections(app: &App) -> Vec<Section> {
         let mut choice = app.settings.transcription_engine();
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut choice, TranscriptionEngine::Off, gettext(locale, "Off"));
-            ui.selectable_value(&mut choice, TranscriptionEngine::Local, gettext(locale, "On this computer"));
+            ui.add_enabled_ui(crate::whisper_runtime::artifact().is_some(), |ui| {
+                ui.selectable_value(&mut choice, TranscriptionEngine::Local, gettext(locale, "On this computer"));
+            });
             ui.selectable_value(&mut choice, TranscriptionEngine::Wyoming, gettext(locale, "My Wyoming server"));
         });
         if choice != before.0 { app.settings.transcription_engine = Some(choice); }
@@ -561,7 +563,7 @@ fn sections(app: &App) -> Vec<Section> {
                 if installed {
                     ui.label(gettext(locale, "Model installed. Verified before its first use."));
                     if ui.add_enabled(runtime, egui::Button::new(gettext(locale, "Verify or repair engine"))).clicked() { app.actions.push(Action::DownloadLocalWhisper); }
-                    if ui.button(gettext(locale, "Remove downloaded model")).clicked() { app.actions.push(Action::RemoveLocalWhisperModel); }
+                    if ui.button(gettext(locale, "Remove downloaded engine and model")).clicked() { app.actions.push(Action::RemoveLocalWhisperModel); }
                 } else if ui.add_enabled(runtime, egui::Button::new(gettext(locale, "Download engine + model & enable"))).clicked() {
                     app.actions.push(Action::DownloadLocalWhisper);
                 }

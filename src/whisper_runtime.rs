@@ -84,8 +84,12 @@ fn hash_file(path: &Path, expected: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn verify_hash(executable: &Path, spec: Artifact) -> Result<(), String> {
+    hash_file(executable, spec.executable_sha256)
+}
+
 pub fn verify(executable: &Path, spec: Artifact) -> Result<(), String> {
-    hash_file(executable, spec.executable_sha256)?;
+    verify_hash(executable, spec)?;
     #[cfg(target_os = "macos")]
     {
         let app = executable
@@ -134,7 +138,10 @@ pub fn install_archive(
     #[cfg(target_os = "macos")]
     std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
-    let staging = tempfile::tempdir_in(&parent).map_err(|e| e.to_string())?;
+    let staging = tempfile::Builder::new()
+        .prefix("solmu-whisper-stage-")
+        .tempdir_in(&parent)
+        .map_err(|e| e.to_string())?;
     #[cfg(target_os = "macos")]
     bounded_command(
         std::process::Command::new("/usr/bin/ditto")

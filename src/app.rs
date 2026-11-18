@@ -1271,6 +1271,7 @@ fn transcriber_worker(
                 engine: crate::transcriber_engine::WhisperCpp::new(binary, model),
                 decode,
                 model_verified: false,
+                runtime_verified: false,
             })
         }
         TranscriptionEngine::Wyoming => {
@@ -1445,6 +1446,10 @@ impl App {
         app.transcriber = transcriber_worker(waker, &app.dirs, &app.settings);
         app.transcriber_address = app.settings.transcription_worker_key();
         app.refresh_local_whisper_presence();
+        let download_state = app.dirs.state.clone();
+        std::thread::spawn(move || {
+            crate::local_whisper::cleanup_abandoned_downloads(&download_state)
+        });
         app.refresh_transcript_archive();
         let _ = app.roster.save_to(&app.files, &app.dirs.accounts_file());
         Ok(app)
@@ -12798,16 +12803,10 @@ impl App {
                         Some(crate::settings::TranscriptionEngine::Off);
                     self.transcriber_address = self.settings.transcription_worker_key();
                     self.mark_settings_dirty();
-                    match std::fs::remove_file(crate::local_whisper::model_path(&self.dirs.state)) {
-                        Ok(()) => self.local_whisper_status = None,
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                            self.local_whisper_status = None
-                        }
-                        Err(e) => {
-                            self.local_whisper_status =
-                                Some(crate::local_whisper::DownloadState::Failed(e.to_string()))
-                        }
-                    }
+                    self.local_whisper_status =
+                        crate::local_whisper::remove_installation(&self.dirs.state)
+                            .err()
+                            .map(crate::local_whisper::DownloadState::Failed);
                     self.refresh_local_whisper_presence();
                 }
             }

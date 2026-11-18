@@ -71,9 +71,9 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: jdx/mr-boxington-action@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1
         with:
           cache-generation: test-v1
       - name: Fetch explicitly selected signed helper and pinned test data
@@ -88,6 +88,7 @@ jobs:
           gh run download "$HELPER_RUN" --repo "$REPOSITORY" --name optional-whisper-arm64 --dir "$RUNNER_TEMP/whisper-smoke/helper"
           curl --fail --location --retry 2 'https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin' -o "$RUNNER_TEMP/whisper-smoke/model.bin"
           curl --fail --location --retry 2 'https://raw.githubusercontent.com/ggml-org/whisper.cpp/d1be6fde11ac6e0407606b4e42fe72d34add8037/samples/jfk.wav' -o "$RUNNER_TEMP/whisper-smoke/recording.wav"
+          echo '60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe  '"$RUNNER_TEMP/whisper-smoke/model.bin" | shasum -a 256 -c -
           echo '59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e  '"$RUNNER_TEMP/whisper-smoke/recording.wav" | shasum -a 256 -c -
           echo "SOLMU_HELPER_FIXTURE=$RUNNER_TEMP/whisper-smoke/helper" >> "$GITHUB_ENV"
           echo "SOLMU_MODEL_FIXTURE=$RUNNER_TEMP/whisper-smoke/model.bin" >> "$GITHUB_ENV"

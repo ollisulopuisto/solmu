@@ -17,6 +17,11 @@ const BITRATE: i32 = 32_000;
 
 /// Mono samples at `RATE` from an OGG/Opus file.
 pub fn decode(bytes: &[u8]) -> Result<Vec<f32>, String> {
+    decode_bounded(bytes, usize::MAX)
+}
+
+/// Reject overlong transcription input while decoding, before growing its PCM.
+pub fn decode_bounded(bytes: &[u8], max_samples: usize) -> Result<Vec<f32>, String> {
     let bytes = without_stray_first_pages(bytes);
     let mut reader = ogg::PacketReader::new(Cursor::new(&bytes[..]));
     let mut stream: Option<Stream> = None;
@@ -55,6 +60,9 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<f32>, String> {
         // Remove the encoder lookahead from the decoded output.
         let skip = current.skip.min(mono.len());
         current.skip -= skip;
+        if out.len().saturating_add(mono.len() - skip) > max_samples {
+            return Err("Audio is too long for transcription (maximum five minutes)".into());
+        }
         out.extend_from_slice(&mono[skip..]);
     }
     if stream.is_none() {
@@ -289,6 +297,17 @@ mod tests {
 
     fn rms(samples: &[f32]) -> f32 {
         (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn transcription_decode_rejects_overlong_opus_before_growing_pcm() {
+        let bytes = encode(&tone(1.0)).unwrap();
+        assert!(decode_bounded(&bytes, 100).is_err());
+        assert!(
+            !decode_bounded(&bytes, RATE as usize * 2)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

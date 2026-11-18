@@ -17,6 +17,71 @@ pub fn model_path(state: &Path) -> PathBuf {
     state.join("models/whisper/ggml-base.bin")
 }
 
+// An advisory lock prevents startup cleanup from touching an active download
+// in another process. Only our own named temporary files are removed.
+fn download_lock(state: &Path) -> Result<std::fs::File, String> {
+    let parent = model_path(state).parent().unwrap().to_owned();
+    std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(parent.join(".download.lock"))
+        .map_err(|e| e.to_string())?;
+    file.try_lock()
+        .map_err(|_| "Another local engine download is running".to_owned())?;
+    Ok(file)
+}
+
+fn clean_download_temps(state: &Path) {
+    for (parent, prefix) in [
+        (
+            model_path(state).parent().unwrap().to_owned(),
+            "solmu-whisper-download-",
+        ),
+        (state.join("runtimes/whisper"), "solmu-whisper-stage-"),
+    ] {
+        let Ok(entries) = std::fs::read_dir(parent) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if !entry.file_name().to_string_lossy().starts_with(prefix) {
+                continue;
+            }
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            } else {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+pub fn remove_installation(state: &Path) -> Result<(), String> {
+    let _lock = download_lock(state)?;
+    for path in [model_path(state), state.join("runtimes/whisper")] {
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if let Err(error) = result
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(error.to_string());
+        }
+    }
+    clean_download_temps(state);
+    Ok(())
+}
+
+pub fn cleanup_abandoned_downloads(state: &Path) {
+    if let Ok(_lock) = download_lock(state) {
+        clean_download_temps(state);
+    }
+}
+
 const DISK_RESERVE: u64 = 16 * 1024 * 1024;
 
 fn enough_space(available: u64, required: u64) -> Result<(), String> {
@@ -73,8 +138,12 @@ fn available_space(path: &Path) -> Result<u64, String> {
 
 /// Recheck a model on the transcription worker, never on the UI thread.
 pub fn verify_model(path: &Path) -> Result<(), String> {
+    verify_file(path, MODEL_BYTES, MODEL_SHA256)
+}
+
+fn verify_file(path: &Path, expected_bytes: u64, expected_hash: &str) -> Result<(), String> {
     let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    if file.metadata().map_err(|e| e.to_string())?.len() != MODEL_BYTES {
+    if file.metadata().map_err(|e| e.to_string())?.len() != expected_bytes {
         return Err("Local model is incomplete. Remove it and download again.".into());
     }
     let mut hash = Sha256::new();
@@ -86,7 +155,7 @@ pub fn verify_model(path: &Path) -> Result<(), String> {
         }
         hash.update(&bytes[..count]);
     }
-    if hex_hash(&hash.finalize()) != MODEL_SHA256 {
+    if hex_hash(&hash.finalize()) != expected_hash {
         return Err("Local model verification failed. Remove it and download again.".into());
     }
     Ok(())
@@ -132,6 +201,8 @@ impl Download {
                 wake();
             };
             let result = (|| {
+                let _lock = download_lock(&app_state)?;
+                clean_download_temps(&app_state);
                 let parent = path.parent().ok_or("Model path has no directory")?;
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
                 enough_space(available_space(parent)?, MODEL_BYTES)?;
@@ -148,7 +219,10 @@ impl Download {
                         available_space(parent)?,
                         MODEL_BYTES + spec.bytes + 64 * 1024 * 1024,
                     )?;
-                    let temporary = tempfile::tempdir_in(parent).map_err(|e| e.to_string())?;
+                    let temporary = tempfile::Builder::new()
+                        .prefix("solmu-whisper-download-")
+                        .tempdir_in(parent)
+                        .map_err(|e| e.to_string())?;
                     let archive = temporary.path().join("runtime.zip");
                     fetch_verified(
                         spec.url,
@@ -206,6 +280,10 @@ fn fetch_verified(
     cancelled: &AtomicBool,
     progress: impl Fn(u64),
 ) -> Result<(), String> {
+    if verify_file(path, bytes, sha256).is_ok() {
+        progress(bytes);
+        return Ok(());
+    }
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .https_only(true)
         .proxy(crate::proxy::ureq_proxy())
@@ -248,7 +326,10 @@ fn install(
 ) -> Result<(), String> {
     let parent = path.parent().ok_or("Model path has no directory")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+    let mut file = tempfile::Builder::new()
+        .prefix("solmu-whisper-download-")
+        .tempfile_in(parent)
+        .map_err(|e| e.to_string())?;
     let mut hash = Sha256::new();
     let mut received = 0u64;
     let mut buf = [0u8; 64 * 1024];
@@ -284,6 +365,46 @@ fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cleanup_respects_live_download_and_remove_clears_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        let lock = download_lock(root.path()).unwrap();
+        let temp = model_path(root.path())
+            .parent()
+            .unwrap()
+            .join("solmu-whisper-download-abandoned");
+        std::fs::write(&temp, b"partial").unwrap();
+        cleanup_abandoned_downloads(root.path());
+        assert!(temp.exists(), "live download lock protects temporary files");
+        drop(lock);
+        cleanup_abandoned_downloads(root.path());
+        assert!(!temp.exists());
+        let runtime = root.path().join("runtimes/whisper/old");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::write(model_path(root.path()), b"model").unwrap();
+        remove_installation(root.path()).unwrap();
+        assert!(!runtime.exists());
+        assert!(!model_path(root.path()).exists());
+    }
+
+    #[test]
+    fn verified_existing_download_never_uses_the_network() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("model.bin");
+        std::fs::write(&path, b"verified model").unwrap();
+        let digest = hex_hash(&Sha256::digest(b"verified model"));
+        fetch_verified(
+            "not a URL",
+            &path,
+            14,
+            &digest,
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"verified model");
+    }
+
     #[test]
     fn disk_space_includes_room_for_the_atomic_install() {
         assert!(enough_space(MODEL_BYTES, MODEL_BYTES).is_err());
