@@ -1761,4 +1761,32 @@ mod tests {
         app.flat_group_ui.collapsed.insert(Some(play));
         assert_eq!(order(&app), ["unread-b", "other"]);
     }
+
+    #[test]
+    fn reveal_lifts_a_sections_unread_filter() {
+        let (mut app, _root) = recent_app(vec![
+            recent_chat("read-a", 100, 0),
+            recent_chat("unread-b", 200, 2),
+        ]);
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[0]));
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[1]));
+        app.settings.flat_groups.grouped_view = true;
+        // Revealing a read chat opens its filtered section to every member,
+        // and the reveal request is consumed.
+        app.scroll_chat_into_view = Some("read-a".into());
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| list(&mut app, ui, false));
+        output.textures_delta.clear();
+        assert!(app.scroll_chat_into_view.is_none());
+        assert!(app.flat_group_ui.show_all.contains(&Some(work)));
+        let sections = recent_plan(&app);
+        assert_eq!(sections[0].shown, vec![0, 1]);
+        assert_eq!(sections[0].expander, Some(Expander::UnreadOnly));
+    }
 }
