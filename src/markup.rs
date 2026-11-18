@@ -34,14 +34,22 @@ pub struct Style {
 /// Message text prepared for painting.
 pub struct Text {
     pub galley: Arc<Galley>,
-    placements: Vec<String>,
     /// Character ranges linked to web addresses.
     pub links: Vec<(Range<usize>, String)>,
+    /// Whether the message is emoji-only and should use a larger size.
+    pub big: bool,
+    /// Everything else about the layout, shared so a cached body rebuilds
+    /// its frame's `Text` (a fresh egui galley) without cloning these.
+    shared: Arc<Shared>,
+}
+
+/// The parts of a prepared body that survive a font reload: everything but
+/// the galley, which egui re-shapes from the job every pass.
+struct Shared {
+    placements: Vec<String>,
     /// The link ranges in `unbroken_text` coordinates: what copy should
     /// read. Equals `links` for a greedy layout.
     copy_links: Vec<(Range<usize>, String)>,
-    /// Whether the message is emoji-only and should use a larger size.
-    pub big: bool,
     accessible_text: String,
     /// Balanced layout only: the laid-out text before the balancer's
     /// inserted hyphens and newlines, for copy and transcript formatting.
@@ -55,7 +63,7 @@ pub struct Text {
 impl Text {
     /// Emoji sequences represented by placeholder glyphs.
     pub fn placements(&self) -> &[String] {
-        &self.placements
+        &self.shared.placements
     }
 
     /// Returns the link at a character index.
@@ -70,7 +78,8 @@ impl Text {
     /// what copy and transcript formatting should see. Equals the galley's
     /// text for a greedy layout.
     pub fn unbroken_text(&self) -> &str {
-        self.unbroken
+        self.shared
+            .unbroken
             .as_deref()
             .unwrap_or_else(|| self.galley.text())
     }
@@ -78,7 +87,7 @@ impl Text {
     /// The text a link covers, read from the unbroken text: what copying
     /// the link puts on the clipboard. Indexed like `links`.
     pub fn link_copy_text(&self, index: usize) -> String {
-        let (range, _) = &self.copy_links[index];
+        let (range, _) = &self.shared.copy_links[index];
         self.unbroken_text()
             .chars()
             .skip(range.start)
@@ -89,13 +98,13 @@ impl Text {
     /// The galley text when it carries the balancer's inserted breaks and
     /// so differs from `unbroken_text`: what a drag selection copies.
     pub fn broken_text(&self) -> Option<&str> {
-        self.unbroken.is_some().then(|| self.galley.text())
+        self.shared.unbroken.is_some().then(|| self.galley.text())
     }
 
     /// Byte ranges in the galley text holding the balancer's inserted
     /// characters. Empty for a greedy layout.
     pub fn inserted(&self) -> &[(usize, usize)] {
-        &self.inserted
+        &self.shared.inserted
     }
 }
 
@@ -161,15 +170,18 @@ fn finish(
     inserted: Vec<(usize, usize)>,
 ) -> Text {
     let galley = bidi::layout_job(ui, built.job);
+    let copy_links = copy_links.unwrap_or_else(|| built.links.clone());
     Text {
         galley,
-        placements: built.placements,
-        copy_links: copy_links.unwrap_or_else(|| built.links.clone()),
         links: built.links,
         big: built.big,
-        accessible_text: built.accessible_text,
-        unbroken,
-        inserted,
+        shared: Arc::new(Shared {
+            placements: built.placements,
+            copy_links,
+            accessible_text: built.accessible_text,
+            unbroken,
+            inserted,
+        }),
     }
 }
 
@@ -459,13 +471,103 @@ impl PreparedKey {
     }
 }
 
-/// A prepared layout with the inputs it was built from, kept so a hash
-/// collision in [`PreparedKey`] can never serve another body's layout.
-struct PreparedEntry {
+/// A prepared body: the final job and everything around it, but no galley.
+/// The galley comes from egui's own cache on every pass (`draw`), so painted
+/// glyphs always match the live font atlas, across reloads and resets. The
+/// raw inputs ride along so a hash collision in [`PreparedKey`] can never
+/// serve another body's layout.
+struct Prepared {
     text: Box<str>,
     mentions: Box<[Mention]>,
-    prepared: Arc<Text>,
+    job: LayoutJob,
+    links: Vec<(Range<usize>, String)>,
+    big: bool,
+    shared: Arc<Shared>,
 }
+
+impl Prepared {
+    fn build(
+        ui: &egui::Ui,
+        text: &str,
+        mentions: &[Mention],
+        style: &Style,
+        max_width: f32,
+        grow_emoji: bool,
+    ) -> Self {
+        let built = build(ui, text, mentions, style, max_width, grow_emoji);
+        let whole = |built: Built| Self {
+            text: text.into(),
+            mentions: mentions.into(),
+            job: built.job,
+            links: built.links.clone(),
+            big: built.big,
+            shared: Arc::new(Shared {
+                placements: built.placements,
+                copy_links: built.links,
+                accessible_text: built.accessible_text,
+                unbroken: None,
+                inserted: Vec::new(),
+            }),
+        };
+        if built.big || max_width <= 0.0 {
+            // Emoji-only text never balances; a zero cap leaves nothing to do.
+            return whole(built);
+        }
+        let breaks = balanced_breaks(ui, &built, style.size, max_width);
+        if breaks.is_empty() {
+            return whole(built);
+        }
+        let unbroken = built.job.text.clone();
+        let copy_links = built.links.clone();
+        let (mut job, links, inserted) = insert_breaks(built.job, &built.links, &breaks);
+        // Breaks are hard newlines now; keep egui from re-wrapping a line
+        // that shaped a hair wider than the balancer measured.
+        job.wrap.max_width = f32::INFINITY;
+        Self {
+            text: text.into(),
+            mentions: mentions.into(),
+            job,
+            links,
+            big: built.big,
+            shared: Arc::new(Shared {
+                placements: built.placements,
+                copy_links,
+                accessible_text: built.accessible_text,
+                unbroken: Some(unbroken),
+                inserted,
+            }),
+        }
+    }
+
+    /// Shapes this pass's galley. egui caches galleys by job and drops them
+    /// when the atlas changes, so a font reload never paints stale glyphs.
+    fn draw(&self, ui: &egui::Ui) -> Text {
+        Text {
+            galley: bidi::layout_job(ui, self.job.clone()),
+            links: self.links.clone(),
+            big: self.big,
+            shared: self.shared.clone(),
+        }
+    }
+}
+
+/// Prepared bodies plus the font generation they were built under. A
+/// generation change clears the map: the old jobs name the old fonts.
+#[derive(Default)]
+struct PreparedCache {
+    generation: u32,
+    entries: std::collections::HashMap<PreparedKey, Arc<Prepared>>,
+}
+
+/// How many prepared bodies are cached. Covers a long chat's loaded set;
+/// past the cap new bodies are laid out fresh every frame rather than
+/// evicting, because evicting under a full-timeline scan (an active text
+/// selection lays out every loaded row) thrashes the cache into permanent
+/// misses. An over-cap chat keeps a stable cached subset instead.
+const PREPARED_CAP: usize = 1024;
+
+static PREPARED: std::sync::OnceLock<std::sync::Mutex<PreparedCache>> =
+    std::sync::OnceLock::new();
 
 /// Lays text out like [`layout`], but with line breaks from the wrap
 /// balancer (`crate::wrap`, private, so no doc link) instead of greedy first-fit: raggedness is
@@ -473,10 +575,12 @@ struct PreparedEntry {
 /// fit the cap. The inserted hyphens and newlines are layout-time only;
 /// [`Text::unbroken_text`] carries the text without them for copying.
 ///
-/// A body is laid out once per input set and then served from a cache: the
+/// A body is prepared once per input set and then served from a cache: the
 /// conversation view calls this every frame for every visible bubble while
 /// texts, widths and fonts rarely change. An edit, a renamed mention, a new
-/// width or a new typeface misses and is laid out again.
+/// width or a new typeface misses and is prepared again. The galley is
+/// re-shaped from the cached job on every call (through egui's cache), so
+/// painted glyphs track the live font atlas.
 pub fn layout_balanced(
     ui: &egui::Ui,
     text: &str,
@@ -486,71 +590,27 @@ pub fn layout_balanced(
     grow_emoji: bool,
 ) -> Arc<Text> {
     let key = PreparedKey::new(text, mentions, style, max_width, grow_emoji);
-    type Cache = std::sync::Mutex<std::collections::HashMap<PreparedKey, PreparedEntry>>;
-    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
-    if let Some(entry) = cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key)
-        && entry.text.as_ref() == text
-        && entry.mentions.as_ref() == mentions
+    let cache = PREPARED.get_or_init(|| std::sync::Mutex::new(PreparedCache::default()));
     {
-        return entry.prepared.clone();
+        let mut cache = cache.lock().unwrap_or_else(|p| p.into_inner());
+        if cache.generation != key.font_generation {
+            cache.entries.clear();
+            cache.generation = key.font_generation;
+        }
+        if let Some(prepared) = cache.entries.get(&key)
+            && prepared.text.as_ref() == text
+            && prepared.mentions.as_ref() == mentions
+        {
+            return Arc::new(prepared.draw(ui));
+        }
     }
-    let prepared = Arc::new(layout_balanced_now(
-        ui, text, mentions, style, max_width, grow_emoji,
-    ));
+    let prepared = Prepared::build(ui, text, mentions, style, max_width, grow_emoji);
+    let laid = Arc::new(prepared.draw(ui));
     let mut cache = cache.lock().unwrap_or_else(|p| p.into_inner());
-    // Entries hold full texts and galleys, so the cap is far below the
-    // breaks cache's: a long chat keeps roughly a screenful warm.
-    if cache.len() >= 128 {
-        cache.clear();
+    if cache.entries.len() < PREPARED_CAP {
+        cache.entries.insert(key, Arc::new(prepared));
     }
-    cache.insert(
-        key,
-        PreparedEntry {
-            text: text.into(),
-            mentions: mentions.into(),
-            prepared: prepared.clone(),
-        },
-    );
-    prepared
-}
-
-fn layout_balanced_now(
-    ui: &egui::Ui,
-    text: &str,
-    mentions: &[Mention],
-    style: &Style,
-    max_width: f32,
-    grow_emoji: bool,
-) -> Text {
-    let built = build(ui, text, mentions, style, max_width, grow_emoji);
-    if built.big || max_width <= 0.0 {
-        // Emoji-only text never balances; a zero cap leaves nothing to do.
-        return finish(ui, built, None, None, Vec::new());
-    }
-    let breaks = balanced_breaks(ui, &built, style.size, max_width);
-    if breaks.is_empty() {
-        return finish(ui, built, None, None, Vec::new());
-    }
-    let unbroken = built.job.text.clone();
-    let copy_links = built.links.clone();
-    let (mut job, links, inserted) = insert_breaks(built.job, &built.links, &breaks);
-    // Breaks are hard newlines now; keep egui from re-wrapping a line that
-    // shaped a hair wider than the balancer measured.
-    job.wrap.max_width = f32::INFINITY;
-    finish(
-        ui,
-        Built {
-            job,
-            placements: built.placements,
-            links,
-            big: built.big,
-            accessible_text: built.accessible_text,
-        },
-        Some(unbroken),
-        Some(copy_links),
-        inserted,
-    )
+    laid
 }
 
 /// Cache key: text, body size, wrap width, font generation, and a hash of
@@ -714,7 +774,7 @@ fn insert_breaks(
 /// Paints laid-out text at `pos`.
 pub fn paint(ui: &egui::Ui, text: &Text, pos: Pos2, fallback: Color32) {
     ui.painter().galley(pos, text.galley.clone(), fallback);
-    emoji::paint(ui, &text.galley, pos, &text.placements);
+    emoji::paint(ui, &text.galley, pos, &text.shared.placements);
 }
 
 /// Paints selectable text. The response must sense clicks and drags. Set
@@ -746,7 +806,7 @@ pub fn paint_selectable_height(
         egui::WidgetInfo::labeled(
             egui::WidgetType::Label,
             ui.is_enabled(),
-            &text.accessible_text,
+            &text.shared.accessible_text,
         )
     });
     // egui treats non-overlapping text bounds as separate columns. Incoming
@@ -780,7 +840,7 @@ pub fn paint_selectable_height(
         egui::Stroke::NONE,
     );
     if visible {
-        emoji::paint(ui, &text.galley, pos, &text.placements);
+        emoji::paint(ui, &text.galley, pos, &text.shared.placements);
     }
 }
 
@@ -1694,7 +1754,7 @@ mod tests {
                 );
             }
             assert_eq!(
-                text.accessible_text,
+                text.shared.accessible_text,
                 "A long title across rows (https://example.com/path?q=a_b_c)"
             );
         });
@@ -1775,7 +1835,7 @@ mod tests {
             for character in 0..text.galley.text().chars().count() {
                 assert_eq!(text.link_at(character), Some(target));
             }
-            assert_eq!(text.accessible_text, source);
+            assert_eq!(text.shared.accessible_text, source);
         });
         output.textures_delta.clear();
     }
@@ -2245,84 +2305,194 @@ mod tests {
         }
     }
 
+    /// The prepared-body cache is process-global; these tests serialise and
+    /// reset it. Other suites reinstall fonts, so a generation change
+    /// mid-attempt discards the attempt rather than failing it.
+    fn prepared_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn clear_prepared_cache() {
+        PREPARED
+            .get_or_init(|| std::sync::Mutex::new(PreparedCache::default()))
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entries
+            .clear();
+    }
+
     /// Unchanged inputs reuse the prepared layout instead of rebuilding the
     /// markup and re-inserting the balancer's breaks every frame.
     #[test]
     fn a_balanced_layout_is_prepared_once_per_input_set() {
+        let _guard = prepared_test_lock();
         let ctx = egui::Context::default();
-        let mut output = ctx.run_ui(Default::default(), |ui| {
-            let text = "words that wrap and balance over several lines ".repeat(20);
-            let first = layout_balanced(ui, &text, &[], &body_style(), 300.0, true);
-            let second = layout_balanced(ui, &text, &[], &body_style(), 300.0, true);
+        for _ in 0..3 {
+            clear_prepared_cache();
+            let generation = crate::theme::font_generation();
+            let mut laid = None;
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let text = "words that wrap and balance over several lines ".repeat(20);
+                let first = layout_balanced(ui, &text, &[], &body_style(), 300.0, true);
+                let second = layout_balanced(ui, &text, &[], &body_style(), 300.0, true);
+                let narrower = layout_balanced(ui, &text, &[], &body_style(), 200.0, true);
+                let larger = layout_balanced(
+                    ui,
+                    &text,
+                    &[],
+                    &Style {
+                        size: 18.0,
+                        ..body_style()
+                    },
+                    300.0,
+                    true,
+                );
+                laid = Some((first, second, narrower, larger));
+            });
+            output.textures_delta.clear();
+            if crate::theme::font_generation() != generation {
+                continue;
+            }
+            let (first, second, narrower, larger) = laid.expect("laid out");
             assert!(
-                std::sync::Arc::ptr_eq(&first, &second),
+                std::sync::Arc::ptr_eq(&first.shared, &second.shared),
                 "unchanged inputs reuse the prepared layout"
             );
-            let narrower = layout_balanced(ui, &text, &[], &body_style(), 200.0, true);
             assert!(
-                !std::sync::Arc::ptr_eq(&first, &narrower),
+                !std::sync::Arc::ptr_eq(&first.shared, &narrower.shared),
                 "a new wrap width lays out again"
             );
             assert_eq!(first.unbroken_text(), narrower.unbroken_text());
-            let larger = layout_balanced(
-                ui,
-                &text,
-                &[],
-                &Style {
-                    size: 18.0,
-                    ..body_style()
-                },
-                300.0,
-                true,
-            );
             assert!(
-                !std::sync::Arc::ptr_eq(&first, &larger),
+                !std::sync::Arc::ptr_eq(&first.shared, &larger.shared),
                 "a new body size lays out again"
             );
+            return;
+        }
+        panic!("the font generation kept changing under the test");
+    }
+
+    /// The cached copy matches a fresh build, and an edited body or a
+    /// renamed mention never reuses it.
+    #[test]
+    fn a_prepared_layout_matches_fresh_and_tracks_edits() {
+        let _guard = prepared_test_lock();
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            clear_prepared_cache();
+            let generation = crate::theme::font_generation();
+            let mut laid = None;
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let text = "hey @35850123, lunch tomorrow? ".repeat(8);
+                let mentions = [Mention {
+                    user: "35850123".into(),
+                    name: "Ada".into(),
+                }];
+                let fresh = Prepared::build(ui, &text, &mentions, &body_style(), 300.0, true);
+                let fresh_drawn = fresh.draw(ui);
+                let cached = layout_balanced(ui, &text, &mentions, &body_style(), 300.0, true);
+                let again = layout_balanced(ui, &text, &mentions, &body_style(), 300.0, true);
+                let edited = format!("{text}!");
+                let relaid = layout_balanced(ui, &edited, &mentions, &body_style(), 300.0, true);
+                let renamed = [Mention {
+                    user: "35850123".into(),
+                    name: "Ada Lovelace".into(),
+                }];
+                let renamed_layout =
+                    layout_balanced(ui, &text, &renamed, &body_style(), 300.0, true);
+                laid = Some((fresh_drawn, cached, again, relaid, renamed_layout, edited));
+            });
+            output.textures_delta.clear();
+            if crate::theme::font_generation() != generation {
+                continue;
+            }
+            let (fresh_drawn, cached, again, relaid, renamed_layout, edited) =
+                laid.expect("laid out");
+            assert!(std::sync::Arc::ptr_eq(&cached.shared, &again.shared));
+            assert_eq!(fresh_drawn.galley.text(), again.galley.text());
+            assert_eq!(fresh_drawn.galley.rows.len(), again.galley.rows.len());
+            assert_eq!(fresh_drawn.unbroken_text(), again.unbroken_text());
+            assert_eq!(fresh_drawn.inserted(), again.inserted());
+            assert!(
+                !std::sync::Arc::ptr_eq(&cached.shared, &relaid.shared),
+                "an edited body lays out again"
+            );
+            assert_eq!(relaid.unbroken_text(), edited);
+            assert!(
+                !std::sync::Arc::ptr_eq(&cached.shared, &renamed_layout.shared),
+                "a renamed mention lays out again"
+            );
+            assert_ne!(cached.galley.text(), renamed_layout.galley.text());
+            return;
+        }
+        panic!("the font generation kept changing under the test");
+    }
+
+    /// A font reload clears the prepared jobs (they name the old fonts) and
+    /// the next pass re-shapes from egui's fresh fonts: no stale glyphs.
+    #[test]
+    fn a_font_reload_reshapes_a_cached_body() {
+        let _guard = prepared_test_lock();
+        let ctx = egui::Context::default();
+        clear_prepared_cache();
+        let mut first = None;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            first = Some(layout_balanced(ui, "font *reload* check body text", &[], &body_style(), 300.0, true));
+        });
+        output.textures_delta.clear();
+        let first = first.expect("laid out");
+        crate::theme::set_font(&ctx, crate::settings::FontChoice::Inter);
+        crate::theme::set_font(&ctx, crate::settings::FontChoice::System);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let relaid = layout_balanced(ui, "font *reload* check body text", &[], &body_style(), 300.0, true);
+            assert!(
+                !std::sync::Arc::ptr_eq(&first.galley, &relaid.galley),
+                "a font reload reshapes the body instead of painting the old atlas"
+            );
+            assert_eq!(first.galley.text(), relaid.galley.text());
         });
         output.textures_delta.clear();
     }
 
-    /// The cached copy is the layout a fresh build produces, and an edited
-    /// body or a renamed mention never reuses it.
+    /// More bodies than the old small cap: an active text selection lays
+    /// out every loaded row each frame, and evicting under that scan
+    /// thrashes the cache into permanent misses. The cache instead keeps a
+    /// stable subset, and later passes reuse it.
     #[test]
-    fn a_prepared_layout_matches_fresh_and_tracks_edits() {
+    fn a_full_timeline_scan_keeps_its_cached_subset() {
+        let _guard = prepared_test_lock();
         let ctx = egui::Context::default();
-        let mut output = ctx.run_ui(Default::default(), |ui| {
-            let text = "hey @35850123, lunch tomorrow? ".repeat(8);
-            let mentions = [Mention {
-                user: "35850123".into(),
-                name: "Ada".into(),
-            }];
-            let fresh = layout_balanced_now(ui, &text, &mentions, &body_style(), 300.0, true);
-            let cached = layout_balanced(ui, &text, &mentions, &body_style(), 300.0, true);
-            let again = layout_balanced(ui, &text, &mentions, &body_style(), 300.0, true);
-            assert!(std::sync::Arc::ptr_eq(&cached, &again));
-            assert_eq!(fresh.galley.text(), again.galley.text());
-            assert_eq!(fresh.galley.rows.len(), again.galley.rows.len());
-            assert_eq!(fresh.unbroken_text(), again.unbroken_text());
-            assert_eq!(fresh.inserted(), again.inserted());
-
-            let edited = format!("{text}!");
-            let relaid = layout_balanced(ui, &edited, &mentions, &body_style(), 300.0, true);
-            assert!(
-                !std::sync::Arc::ptr_eq(&cached, &relaid),
-                "an edited body lays out again"
-            );
-            assert_eq!(relaid.unbroken_text(), edited);
-
-            let renamed = [Mention {
-                user: "35850123".into(),
-                name: "Ada Lovelace".into(),
-            }];
-            let renamed_layout = layout_balanced(ui, &text, &renamed, &body_style(), 300.0, true);
-            assert!(
-                !std::sync::Arc::ptr_eq(&cached, &renamed_layout),
-                "a renamed mention lays out again"
-            );
-            assert_ne!(cached.galley.text(), renamed_layout.galley.text());
-        });
-        output.textures_delta.clear();
+        for _ in 0..3 {
+            clear_prepared_cache();
+            let generation = crate::theme::font_generation();
+            let mut hits = 0;
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let texts: Vec<String> = (0..(PREPARED_CAP + 76))
+                    .map(|i| format!("scan body {i} with a few words to wrap"))
+                    .collect();
+                let first: Vec<_> = texts
+                    .iter()
+                    .map(|t| layout_balanced(ui, t, &[], &body_style(), 300.0, true))
+                    .collect();
+                let second: Vec<_> = texts
+                    .iter()
+                    .map(|t| layout_balanced(ui, t, &[], &body_style(), 300.0, true))
+                    .collect();
+                hits = first
+                    .iter()
+                    .zip(&second)
+                    .filter(|(a, b)| std::sync::Arc::ptr_eq(&a.shared, &b.shared))
+                    .count();
+            });
+            output.textures_delta.clear();
+            if crate::theme::font_generation() != generation {
+                continue;
+            }
+            assert_eq!(hits, PREPARED_CAP, "a scan reuses the stable subset");
+            return;
+        }
+        panic!("the font generation kept changing under the test");
     }
 }
 
