@@ -10242,7 +10242,6 @@ fn local_link_previews(
         if supplied.is_some_and(|card| card.covers_url(&url)) {
             continue;
         }
-        drawn = true;
         let request_url = if view.clean_links {
             crate::link_policy::without_tracking(&url)
         } else {
@@ -10259,6 +10258,12 @@ fn local_link_previews(
             automatic,
             retry,
         };
+        // A failed fetch stays quiet: no unavailable row, no retry button,
+        // no extra space under the text.
+        if matches!(state, Some(crate::preview_worker::Status::Failed)) {
+            continue;
+        }
+        drawn = true;
         let requested = state.is_some();
         ui.add_space(5.0);
         ui.push_id(("local-preview", &url), |ui| {
@@ -10308,12 +10313,7 @@ fn local_link_previews(
                     ui.ctx().request_repaint_after(Duration::from_millis(100));
                 }
                 Some(crate::preview_worker::Status::Failed) => {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(crate::i18n::gettext(view.locale, "Preview unavailable"));
-                        if ui.small_button(crate::i18n::gettext(view.locale, "Retry preview")).on_hover_text(&url).clicked() {
-                            actions.push(action(false, true));
-                        }
-                    });
+                    // Skipped before this card: a failed fetch stays quiet.
                 }
                 None => {
                     let response = ui.small_button(crate::i18n::gettext(view.locale, "Fetch preview")).on_hover_text(crate::i18n::gettext(view.locale, "Contacts this website directly, sharing your IP address and this URL:\n{url}").replace("{url}", &request_url));
@@ -14059,9 +14059,60 @@ mod tests {
         });
     }
 
+    /// A link whose preview fetch failed paints no card at all: no
+    /// unavailable row, no retry button, no reserved space.
+    #[test]
+    fn a_failed_local_preview_paints_no_row() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let worker = crate::preview_worker::Worker::new();
+        worker.seed_failure("test", "https://example.com/page");
+        with_still_view_and(
+            |view| {
+                let message = crate::archive::tests::message("1@s.whatsapp.net", "m1", 0, false);
+                let mut actions = Vec::new();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(400.0, 200.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let drawn = local_link_previews(
+                            ui,
+                            view,
+                            &message,
+                            "see https://example.com/page",
+                            None,
+                            300.0,
+                            &mut actions,
+                        );
+                        assert!(!drawn, "a failed preview reserves no space");
+                    },
+                );
+                output.textures_delta.clear();
+                assert!(actions.is_empty());
+            },
+            Some(&worker),
+            true,
+        );
+    }
+
     /// Runs `check` with a still view of one plain chat, as a footer test
     /// needs one to paint into.
     fn with_still_view(check: impl FnOnce(&View<'_>)) {
+        with_still_view_and(check, None, false);
+    }
+
+    /// The same still view, optionally with local link previews enabled and
+    /// a preview worker to seed states into.
+    fn with_still_view_and(
+        check: impl FnOnce(&View<'_>),
+        preview_worker: Option<&crate::preview_worker::Worker>,
+        local_previews: bool,
+    ) {
         let directory = tempfile::tempdir().unwrap();
         let (app, _events) = App::headless(
             crate::paths::AppDirs::under(directory.path()),
@@ -14081,8 +14132,8 @@ mod tests {
             footer_right: None,
             neighbour_width: None,
             saved: None,
-            preview_worker: None,
-            local_previews: false,
+            preview_worker,
+            local_previews,
             auto_previews: false,
             clean_links: false,
             transcriber: None,
