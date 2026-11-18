@@ -19101,9 +19101,10 @@ mod tests {
             let a = rect("short-a");
             let b = rect("short-b");
             let c = rect("long-c");
-            // Near-equal short texts join the wider one; the thirds floor
-            // is gone, so they hug their text.
-            assert!(a.width() < 119.);
+            // Near-equal short texts join each other; with no banding they
+            // hug their text (plus the inline footer) instead of stretching
+            // toward the long message or a thirds floor.
+            assert!(a.width() < 160.);
             assert!((a.width() - b.width()).abs() < 1.);
             assert!((a.right() - c.right()).abs() < 1.);
             assert!(c.width() > a.width() + 30.);

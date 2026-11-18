@@ -5,10 +5,10 @@ use std::collections::{HashMap, HashSet};
 pub const PAUSE: f64 = 0.0875;
 pub const RESIZE: f64 = 0.210;
 
-/// Join a sent text bubble to its run's shared width when the two are
-/// near-equal: within 16 points AND 15% of the larger (#282's tolerance).
-/// Otherwise the bubble keeps its natural width, so a run holding one wide
-/// message never inflates the short replies around it.
+/// Join a sent text bubble to the previous text bubble's width when the
+/// two are near-equal: within 16 points AND 15% of the larger (#282's
+/// tolerance). Otherwise the bubble keeps its natural width, so a run
+/// holding one wide message never inflates the short replies around it.
 pub fn join(natural: f32, widest: f32) -> f32 {
     let diff = (widest - natural).abs();
     if diff <= 16.0 && diff <= 0.15 * natural.max(widest) {

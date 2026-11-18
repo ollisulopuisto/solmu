@@ -6256,29 +6256,27 @@ fn planned_widths(
             end += 1;
         }
         if messages[start].from_me {
-            // Only plain text bubbles share a run's width, and only when
-            // they are near-equal to its widest text: a big screenshot,
-            // card or pasted dump must not inflate short replies.
+            // Only plain text bubbles share a run's width. Each joins the
+            // previous text bubble when the two are near-equal, so a chain
+            // of look-alike replies shares one width while a big
+            // screenshot, card or long dump never inflates the short ones.
             let shares_width = |message: &Message| {
                 matches!(&message.content, Content::Text { preview: None, .. })
                     && message.quoted.is_none()
                     && !message.forwarded
             };
-            let widest = entries[start..end]
-                .iter()
+            let mut shared: Option<f32> = None;
+            for ((_, width, _), message) in entries[start..end]
+                .iter_mut()
                 .zip(messages[start..end].iter())
-                .filter(|(_, message)| shares_width(message))
-                .map(|((_, w, _), _)| *w + inset)
-                .fold(0.0, f32::max);
-            if widest > 0.0 {
-                for ((_, width, _), message) in entries[start..end]
-                    .iter_mut()
-                    .zip(messages[start..end].iter())
-                {
-                    if shares_width(message) {
-                        *width = (crate::run_widths::join(*width + inset, widest) - inset).max(0.0);
-                    }
+            {
+                if !shares_width(message) {
+                    continue;
                 }
+                if let Some(previous) = shared {
+                    *width = (crate::run_widths::join(*width + inset, previous) - inset).max(0.0);
+                }
+                shared = Some(*width + inset);
             }
         }
         start = end;
