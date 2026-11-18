@@ -6146,14 +6146,18 @@ pub(crate) fn width_key(message: &Message) -> String {
     format!("{}\0{}", message.chat, message.id)
 }
 
-/// Only inputs used by natural_content_width belong here. In particular a
-/// poster's bytes, a waveform and an interactive thumbnail never change width.
-fn width_signature(message: &Message) -> u64 {
+/// Every natural_content_width input but the body text, hashed: cheap
+/// enough to run per frame over the full timeline. In particular a poster's
+/// bytes, a waveform and an interactive thumbnail never change width. The
+/// body is compared byte for byte in the width book instead of hashed here,
+/// so a frame over an unchanged chat never re-reads its old bodies for a
+/// hash.
+fn width_flags(message: &Message) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     std::mem::discriminant(&message.content).hash(&mut hash);
     body_for_measurement(&message.content)
-        .map(|(text, _)| text)
+        .is_some()
         .hash(&mut hash);
     if let Some(media) = message.content.media() {
         media.width.hash(&mut hash);
@@ -6189,10 +6193,11 @@ fn width_signature(message: &Message) -> u64 {
     hash.finish()
 }
 
-fn resolved_width_signature(message: &Message, name: impl Fn(&str) -> String) -> u64 {
+/// Mention inputs to a body's measured width: the raw mention handles and
+/// their resolved display names. Renaming a contact re-measures its rows.
+fn mention_flags(message: &Message, name: impl Fn(&str) -> String) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    width_signature(message).hash(&mut hash);
     for mention in &message.mentions {
         mention.user.hash(&mut hash);
         name(&mention.id).hash(&mut hash);
@@ -6230,12 +6235,17 @@ fn planned_widths(
     let mut entries = Vec::with_capacity(messages.len());
     for message in messages {
         let key = width_key(message);
-        book.check_signature(&key, resolved_width_signature(message, &mention_name));
-        let width = book.get(&key).unwrap_or_else(|| {
+        let body = body_for_measurement(&message.content).map(|(text, _)| text);
+        let flags = width_flags(message);
+        let mentions = mention_flags(message, &mention_name);
+        let width = if book.fresh(&key, body, flags, mentions) {
+            book.get(&key)
+                .expect("a fresh snapshot has a measured width")
+        } else {
             let width = natural(message).clamp(0.0, planning_cap(ui, message, cap));
-            book.remember(&key, width);
+            book.remember(&key, width, body, flags, mentions);
             width
-        });
+        };
         let visible = message.from_me
             && ui
                 .ctx()
@@ -9936,7 +9946,7 @@ fn rich_body_full(
     reserve: Option<f32>,
     span: Option<f32>,
     actions: &mut Vec<Action>,
-    laid: markup::Text,
+    laid: std::sync::Arc<markup::Text>,
     displayed_height: Option<f32>,
 ) -> Option<Rect> {
     let palette = view.palette;
@@ -10079,7 +10089,7 @@ fn rich_body_full(
     if visible || selection_alive {
         markup::paint_selectable_height(
             ui,
-            &laid,
+            laid.as_ref(),
             &response,
             origin,
             palette.text,
@@ -12307,38 +12317,36 @@ mod tests {
             user: "@user".into(),
         }];
         let key = width_key(&row);
+        let body = body_for_measurement(&row.content).map(|(text, _)| text);
+        let flags = width_flags(&row);
+        let mentions = mention_flags(&row, |_| "Ada".into());
         let mut book = crate::run_widths::WidthBook::default();
-        book.check_signature(&key, resolved_width_signature(&row, |_| "Ada".into()));
-        book.remember(&key, 123.);
-        book.check_signature(&key, resolved_width_signature(&row, |_| "Ada".into()));
-        assert_eq!(
-            book.get(&key),
-            Some(123.),
+        assert!(!book.fresh(&key, body, flags, mentions));
+        book.remember(&key, 123., body, flags, mentions);
+        assert!(
+            book.fresh(&key, body, flags, mentions),
             "unchanged mentions reuse measurement"
         );
-        book.check_signature(
-            &key,
-            resolved_width_signature(&row, |_| "Ada Lovelace".into()),
-        );
-        assert_eq!(
-            book.get(&key),
-            None,
+        assert_eq!(book.get(&key), Some(123.));
+        let renamed = mention_flags(&row, |_| "Ada Lovelace".into());
+        assert!(
+            !book.fresh(&key, body, flags, renamed),
             "resolved name change invalidates width"
         );
     }
 
     #[test]
-    fn width_signature_ignores_media_bytes_and_tracks_layout_shape() {
+    fn width_flags_ignore_media_bytes_and_track_layout_shape() {
         let mut row = message(Content::Text {
             text: "same text".into(),
             preview: None,
         });
-        let plain = width_signature(&row);
+        let plain = width_flags(&row);
         row.thumbnail = Some(vec![1; 1024 * 1024]);
-        let poster = width_signature(&row);
+        let poster = width_flags(&row);
         row.thumbnail = Some(vec![255; 2 * 1024 * 1024]);
         assert_eq!(
-            width_signature(&row),
+            width_flags(&row),
             poster,
             "poster bytes do not affect width"
         );
@@ -12350,10 +12358,31 @@ mod tests {
                 description: None,
             });
         }
-        assert_ne!(
-            width_signature(&row),
-            poster,
-            "preview presence invalidates"
+        assert_ne!(width_flags(&row), poster, "preview presence invalidates");
+    }
+
+    #[test]
+    fn editing_a_body_makes_its_remembered_width_stale() {
+        let mut row = message(Content::text("hello world"));
+        let key = width_key(&row);
+        let mut book = crate::run_widths::WidthBook::default();
+        fn snapshot(row: &Message) -> (Option<&str>, u64, u64) {
+            (
+                body_for_measurement(&row.content).map(|(text, _)| text),
+                width_flags(row),
+                mention_flags(row, |_| "Ada".into()),
+            )
+        }
+        let (body, flags, mentions) = snapshot(&row);
+        book.remember(&key, 123., body, flags, mentions);
+        assert!(book.fresh(&key, body, flags, mentions));
+        if let Content::Text { text, .. } = &mut row.content {
+            *text = "hello_world".into();
+        }
+        let (body, flags, mentions) = snapshot(&row);
+        assert!(
+            !book.fresh(&key, body, flags, mentions),
+            "an edited body is measured again"
         );
     }
 
