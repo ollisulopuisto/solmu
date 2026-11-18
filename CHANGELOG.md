@@ -17,6 +17,8 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 - Sent text bubbles share a run's width only when they are near-equal to its widest text (within 16 points and 15%); media, cards, quotes and forwards keep their own width and no longer inflate short replies around them.
 - The chat list shows a contact's full-size picture when their thumbnail fetch missed, instead of bare initials while Contact info already has the photo.
+- Fenced code blocks and quotes sit on quiet inset panels with a pale accent bar, inline code gets a small inset, and each code panel has a Copy code button that copies the exact block contents.
+
 - Long message bodies stop after 25 rendered lines. Show more gives the hidden-line count, Show less folds them again; copy, reply and forward keep the full message.
 - Customize avatars locally from Contact or Group info with an image or initials and colour. The override follows the identity across the sidebar and chat views; reset restores its source picture without changing anyone's profile.
 - Context menus show working message and chat shortcut hints. While a menu is open its keys act on that right-clicked item, not the background chat; palette and Saved-list shortcuts stay separate.
