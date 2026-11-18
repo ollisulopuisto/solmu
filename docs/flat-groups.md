@@ -53,5 +53,31 @@ A chat opened from the list, or stepped to with the keyboard, in Unread, Unread
 (a mode, a filter, Archived) forgets it. Chats opened from a notification or a
 search result are not kept.
 
-Not tested on screen: the sandbox cannot build the app, so the first compile and
-test run is CI. No screenshots.
+Native macOS before/after captures are available in the
+[sidebar review](https://files.instinct.com/1nsz2jzyeew9-solmu-sidebar-before-and-after)
+and linked in PR #358. They show the old and new sidebar in light and dark,
+using synthetic demo chats only. The final named modes, description line and
+Groups + control were checked visually. Default/all-feature Mac tests and the
+full Linux/Nix CI gate passed for bcefc08.
+
+
+The chat-list modes are **Recent**, **Unread**, and **Needs me**. Recent contains
+all chats in the current scope, newest activity first within each group (or
+globally in flat layout), with no age limit. Unread includes muted chats; Needs
+me includes unread or manually marked-for-later chats but excludes muted ones.
+Old Unread 7d settings migrate to Recent. Cmd+D cycles these three modes.
+
+The **+** beside the Groups heading opens **New local group**. Enter a name and
+press Create or Enter; Cancel, Escape, or clicking outside dismisses it without
+creating a group. The field is not part of the scrolling list and works in both
+grouped and flat layouts. This creates a local sidebar section, never a new
+backend group conversation.
+
+
+### Native synthetic sidebar comparison
+
+The [before-and-after evidence](https://files.instinct.com/1nsz2jzyeew9-solmu-sidebar-before-and-after)
+contains four native demo captures: before and after in light appearance, then
+before and after in dark appearance. Tap an image to inspect its full size.
+The captures use the synthetic demo fixture, never private chats. Screenshots
+are hosted outside the repository, following its no-capture-assets rule.

@@ -26,6 +26,8 @@ pub enum Stop {
     /// pointer and accessibility targets, like chat rows.
     InfoClose,
     InfoControl(u8),
+    /// Shared audio rows, then play/download and jump, in newest-first order.
+    InfoVoice(u16, u8),
     /// The open chat's message list: one stop, the arrows walk its messages.
     Messages,
     /// The rail on the left, top to bottom, then the list header's Back
@@ -45,8 +47,8 @@ pub enum Stop {
     Search,
     Recent,
     UnreadMode,
-    RecentUnreadMode,
     NeedsMe,
+    NewLocalGroup,
     /// The first chip, All, on the chat list.
     All,
     Unread,

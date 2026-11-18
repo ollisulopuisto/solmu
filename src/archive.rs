@@ -1463,9 +1463,17 @@ impl Archive {
     /// The rows the info panel files as media, documents and links: this
     /// chat's pictures and videos, its documents, and its text messages that
     /// hold a web link, each kind newest first and cut at `limit`.
-    pub fn media_docs_links(&self, chat: &str, limit: usize) -> Result<Vec<Message>> {
-        let mut rows = self.rows_of_kind(chat, "IN ('image', 'video')", limit)?;
+    /// Returns at most five times `limit` rows: photos/videos/docs/audio/links.
+    /// No runtime caller currently uses this archive helper; Beeper uses its
+    /// bounded metadata worker and ChatMedia applies independent per-kind caps.
+    pub fn media_docs_links_per_kind(&self, chat: &str, limit: usize) -> Result<Vec<Message>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut rows = self.rows_of_kind(chat, "= 'image'", limit)?;
+        rows.extend(self.rows_of_kind(chat, "= 'video'", limit)?);
         rows.extend(self.rows_of_kind(chat, "= 'document'", limit)?);
+        rows.extend(self.rows_of_kind(chat, "= 'audio'", limit)?);
         // Only text rows with a preview or an address that names its scheme
         // or starts with `www.` are read: finding a bare domain the way the
         // bubble underlines it would parse every text row of a long chat on
@@ -5955,18 +5963,27 @@ mod media_path_tests {
             archive.insert_message(&row, None).expect("stored");
         }
         let ids = |rows: Vec<Message>| rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
-        let rows = archive.media_docs_links(chat, 10).expect("rows");
+        let rows = archive.media_docs_links_per_kind(chat, 10).expect("rows");
         // Text rows leave their preview blob behind: the panel never draws it.
         for row in &rows {
             let text = matches!(row.content, Content::Text { .. });
             assert_eq!(row.thumbnail.is_none(), text, "{}", row.id);
         }
-        assert_eq!(ids(rows), ["preview", "clip", "link", "doc", "photo"]);
+        assert_eq!(
+            ids(rows),
+            ["preview", "clip", "link", "doc", "voice", "photo"]
+        );
+        assert!(
+            archive
+                .media_docs_links_per_kind(chat, 0)
+                .unwrap()
+                .is_empty()
+        );
         // The limit applies to each kind, so a chat full of photos still
         // lists its documents and links.
         assert_eq!(
-            ids(archive.media_docs_links(chat, 1).expect("rows")),
-            ["preview", "clip", "doc"]
+            ids(archive.media_docs_links_per_kind(chat, 1).expect("rows")),
+            ["preview", "clip", "doc", "voice", "photo"]
         );
     }
 
@@ -5990,7 +6007,7 @@ mod media_path_tests {
         }
         let ids = |rows: Vec<Message>| rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
         assert_eq!(
-            ids(archive.media_docs_links(chat, 2).expect("rows")),
+            ids(archive.media_docs_links_per_kind(chat, 2).expect("rows")),
             ["link"]
         );
     }

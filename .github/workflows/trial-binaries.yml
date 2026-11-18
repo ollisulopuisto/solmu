@@ -244,6 +244,13 @@ jobs:
         run: |
           mbx test --locked --lib --features demo whisper_settings_read_cached_presence_until_explicit_refresh -- --nocapture
           mbx test --locked --lib --features demo model_presence::tests -- --nocapture
+      - name: Saved transcript behavioral regressions
+        run: |
+          mbx test --locked --lib --features demo transcrib -- --nocapture
+          mbx test --locked --lib --features demo alternating_scoped_panels -- --nocapture
+          mbx test --locked --lib --features demo snapshot_completion_after_mutation -- --nocapture
+          mbx test --locked --lib --features demo scoped_snapshot_bounds -- --nocapture
+          mbx test --locked --lib --features demo voice_panel_search_and_transcript_expansion -- --nocapture
       - name: Capture the layouts
         run: |
           set -euo pipefail
@@ -269,6 +276,15 @@ jobs:
           shot send-later-recurring-1180x780 1180x780 chat,send-later-recurring
           shot whisper-settings-light-1180x780 1180x780 whisper-setup,light
           shot whisper-settings-dark-1180x780 1180x780 whisper-setup,theme=Catppuccin.json
+          shot info-photos-1180x780 1180x780 chat,info-media
+          shot info-videos-1180x780 1180x780 chat,info-videos
+          shot info-voice-1180x780 1180x780 chat,info-voice
+          shot info-voice-dark-1180x780 1180x780 chat,info-voice,theme=Catppuccin.json
+          shot info-voice-900x780 900x780 chat,info-voice
+          shot voice-transcripts-1180x780 1180x780 chat,voice-transcripts
+          shot voice-transcripts-dark-1180x780 1180x780 chat,voice-transcripts,theme=Catppuccin.json
+          shot voice-transcripts-search-1180x780 1180x780 chat,voice-transcripts-search
+          shot chat-transcript-search-1180x780 1180x780 chat,chat-transcript-search
           shot chat-1180x780 1180x780 chat
           shot chat-menu-1180x780 1180x780 chat,chat-menu
           shot chat-menu-beeper-1180x780 1180x780 chat,chat-menu-beeper

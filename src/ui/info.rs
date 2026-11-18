@@ -38,7 +38,7 @@ const COPY_LINK_STOP: u8 = 13;
 const RESET_LINK_STOP: u8 = 14;
 const TAB_STOP: u8 = 20;
 const LEAVE_STOP: u8 = 30;
-const RETRY_STOP: u8 = 31;
+pub(crate) const RETRY_STOP: u8 = 31;
 
 /// The media view's title, and the overview row that opens it.
 fn media_title(app: &App) -> String {
@@ -938,12 +938,7 @@ fn media_row(app: &mut App, ui: &mut egui::Ui, chat: &str, overlay: bool) {
     let listing = app.info_media.take();
     let uris = std::mem::take(&mut app.info_uris);
     let shown = listing.as_ref().filter(|media| media.chat == chat);
-    let count = shown.map(|media| {
-        (
-            media.media.len() + media.docs.len() + media.links.len(),
-            media.truncated(),
-        )
-    });
+    let count = shown.map(|media| (media.listed_count(), media.truncated()));
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
     let response = response.tab_stop(Stop::InfoControl(MEDIA_ROW_STOP));
     if app.info_focus == Some(InfoFocus::MediaRow) {
@@ -1073,14 +1068,30 @@ fn media_view(app: &mut App, ui: &mut egui::Ui, chat: &str, tab: MediaTab, overl
     Frame::new()
         .inner_margin(Margin::symmetric(MARGIN as i8, 10))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                for (index, choice) in [MediaTab::Media, MediaTab::Docs, MediaTab::Links]
-                    .into_iter()
-                    .enumerate()
+                for (index, choice) in [
+                    MediaTab::Media,
+                    MediaTab::Videos,
+                    MediaTab::Voice,
+                    MediaTab::Docs,
+                    MediaTab::Links,
+                ]
+                .into_iter()
+                .enumerate()
                 {
                     let count = shown.map_or(0, |media| match choice {
-                        MediaTab::Media => media.media.len(),
+                        MediaTab::Media => media
+                            .media
+                            .iter()
+                            .filter(|m| matches!(m.content, Content::Image { .. }))
+                            .count(),
+                        MediaTab::Videos => media
+                            .media
+                            .iter()
+                            .filter(|m| matches!(m.content, Content::Video { .. }))
+                            .count(),
+                        MediaTab::Voice => media.voice.len(),
                         MediaTab::Docs => media.docs.len(),
                         MediaTab::Links => media.links.len(),
                     });
@@ -1093,6 +1104,16 @@ fn media_view(app: &mut App, ui: &mut egui::Ui, chat: &str, tab: MediaTab, overl
                         app.actions.push(Action::ShowInfo(InfoView::Media(choice)));
                     }
                 }
+                if ui
+                    .add_enabled(
+                        !app.info_media_pending,
+                        egui::Button::new(crate::i18n::gettext(app.locale, "Refresh")),
+                    )
+                    .tab_stop(Stop::InfoControl(TAB_STOP + 5))
+                    .clicked()
+                {
+                    app.actions.push(Action::RetryInfoMedia);
+                }
             });
         });
     ui.painter().hline(
@@ -1102,16 +1123,29 @@ fn media_view(app: &mut App, ui: &mut egui::Ui, chat: &str, tab: MediaTab, overl
     );
     match shown {
         Some(media) => {
+            // Retain usable cached rows, but never disguise a failed refresh
+            // as a successful current listing.
+            if app.info_media_failed {
+                ui.horizontal(|ui| {
+                    ui.add_space(MARGIN);
+                    failure_line(app, ui);
+                });
+            }
             let cut = match tab {
-                MediaTab::Media => media.media_truncated,
+                MediaTab::Media => media.photos_truncated,
+                MediaTab::Videos => media.videos_truncated,
+                MediaTab::Voice => media.voice_truncated,
                 MediaTab::Docs => media.docs_truncated,
                 MediaTab::Links => media.links_truncated,
             };
-            if cut {
+            if cut || media.history_incomplete {
                 truncated_note(app, ui);
             }
             match tab {
-                MediaTab::Media => media_grid(app, ui, media, &uris, overlay),
+                MediaTab::Media | MediaTab::Videos => {
+                    media_grid(app, ui, media, &uris, overlay, tab)
+                }
+                MediaTab::Voice => voice_list(app, ui, media, overlay, true),
                 MediaTab::Docs => docs_list(app, ui, media, overlay),
                 MediaTab::Links => links_list(app, ui, media),
             }
@@ -1129,6 +1163,19 @@ fn media_view(app: &mut App, ui: &mut egui::Ui, chat: &str, tab: MediaTab, overl
         }
         None => {}
     }
+    // Saved text does not depend on a successful media-metadata response.
+    if shown.is_none() && tab == MediaTab::Voice {
+        voice_list(
+            app,
+            ui,
+            &ChatMedia {
+                chat: chat.to_owned(),
+                ..Default::default()
+            },
+            overlay,
+            false,
+        );
+    }
     app.info_uris = uris;
     app.info_media = listing;
 }
@@ -1142,14 +1189,28 @@ fn media_grid(
     listing: &ChatMedia,
     uris: &[String],
     overlay: bool,
+    tab: MediaTab,
 ) {
     let palette = app.palette;
-    if listing.media.is_empty() {
+    let rows: Vec<_> = listing
+        .media
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| match tab {
+            MediaTab::Videos => matches!(m.content, Content::Video { .. }),
+            _ => matches!(m.content, Content::Image { .. }),
+        })
+        .collect();
+    if rows.is_empty() {
         widgets::empty_state(
             ui,
             &palette,
             Icon::Image,
-            &crate::i18n::gettext(app.locale, "No media"),
+            &if tab == MediaTab::Videos {
+                crate::i18n::gettext(app.locale, "No videos")
+            } else {
+                crate::i18n::gettext(app.locale, "No photos")
+            },
             &crate::i18n::gettext(
                 app.locale,
                 "Photos and videos shared in this chat will show here.",
@@ -1164,20 +1225,20 @@ fn media_grid(
         3
     };
     let cell = (width - (columns - 1) as f32 * GAP) / columns as f32;
-    let rows = listing.media.len().div_ceil(columns);
+    let row_count = rows.len().div_ceil(columns);
     ui.add_space(6.0);
     // `show_rows` reads the spacing from outside its closure.
     ui.spacing_mut().item_spacing = vec2(GAP, GAP);
     egui::ScrollArea::vertical()
-        .id_salt(("info-media-grid", listing.chat.as_str()))
+        .id_salt(("info-media-grid", listing.chat.as_str(), tab))
         .auto_shrink([false, false])
-        .show_rows(ui, cell + GAP, rows, |ui, range| {
+        .show_rows(ui, cell + GAP, row_count, |ui, range| {
             for row in range {
                 ui.horizontal(|ui| {
                     ui.add_space(MARGIN);
                     for column in 0..columns {
                         let index = row * columns + column;
-                        let Some(message) = listing.media.get(index) else {
+                        let Some((original_index, message)) = rows.get(index) else {
                             break;
                         };
                         let (rect, response) =
@@ -1188,7 +1249,7 @@ fn media_grid(
                             rect,
                             response,
                             message,
-                            uris.get(index).map(String::as_str),
+                            uris.get(*original_index).map(String::as_str),
                             overlay,
                         );
                     }
@@ -1363,6 +1424,236 @@ fn docs_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia, overlay: boo
         });
 }
 
+/// Audio/voice clips keep an explicit play/download target and a separate jump.
+fn voice_list(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    listing: &ChatMedia,
+    overlay: bool,
+    metadata_available: bool,
+) {
+    let saved = app
+        .transcript_reader()
+        .map(|worker| {
+            worker.saved_in_chat(&app.account().id.0, &listing.chat, &app.info_voice_query)
+        })
+        .unwrap_or_default();
+    let loading = app.transcript_reader().is_some_and(|worker| {
+        worker.saved_loading(&app.account().id.0, &listing.chat, &app.info_voice_query)
+    });
+    if metadata_available
+        && listing.voice.is_empty()
+        && saved.is_empty()
+        && !loading
+        && app.info_voice_query.is_empty()
+        && !app.info_media_failed
+        && !app.info_media_pending
+    {
+        widgets::empty_state(
+            ui,
+            &app.palette,
+            Icon::Mic,
+            &crate::i18n::gettext(app.locale, "No voice messages"),
+            &crate::i18n::gettext(
+                app.locale,
+                "Voice and audio messages shared in this chat will show here.",
+            ),
+        );
+        return;
+    }
+    if app.transcript_reader().is_some_and(|worker| {
+        worker.saved_truncated(&app.account().id.0, &listing.chat, &app.info_voice_query)
+    }) {
+        ui.label(crate::i18n::gettext(app.locale, "Saved transcript results are partial: up to 500 matches and 2 MB of text, with long transcripts clipped. Refine your search or open the message."));
+    }
+    let transcripts: std::collections::HashMap<_, _> = saved
+        .iter()
+        .map(|hit| (hit.message_id.as_str(), hit.text.as_str()))
+        .collect();
+    ui.add(
+        egui::TextEdit::singleline(&mut app.info_voice_query)
+            .hint_text(crate::i18n::gettext(
+                app.locale,
+                "Search saved voice transcripts",
+            ))
+            .desired_width(f32::INFINITY),
+    )
+    .tab_stop(Stop::InfoControl(26));
+    ui.label(crate::i18n::gettext(
+        app.locale,
+        "Only saved transcripts are searched. Searching never starts transcription.",
+    ));
+    let query = crate::util::search_key(app.info_voice_query.trim());
+    let matching = saved.len();
+    if loading {
+        ui.label(crate::i18n::gettext(
+            app.locale,
+            "Loading saved transcripts…",
+        ));
+    } else if matching == 0 && !query.is_empty() {
+        ui.label(crate::i18n::gettext(
+            app.locale,
+            "No saved transcripts match.",
+        ));
+    }
+    egui::ScrollArea::vertical()
+        .id_salt(("info-voice", &listing.chat))
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for (index, message) in listing.voice.iter().enumerate() {
+                let transcript = transcripts.get(message.id.as_str()).copied();
+                if !query.is_empty() && transcript.is_none() {
+                    continue;
+                }
+                let Content::Audio {
+                    media,
+                    seconds,
+                    voice_note,
+                    ..
+                } = &message.content
+                else {
+                    continue;
+                };
+                let status = app.player.status(&message.id);
+                let playing = status.state == crate::audio::State::Playing;
+                Frame::new()
+                    .inner_margin(Margin::symmetric(MARGIN as i8, 8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let label = if playing {
+                                crate::i18n::gettext(app.locale, "Pause")
+                            } else if media.path.is_none() {
+                                crate::i18n::gettext(app.locale, "Download")
+                            } else {
+                                crate::i18n::gettext(app.locale, "Play")
+                            };
+                            // Keep the focused control in the Tab order while
+                            // downloading. Disabling it would drop focus before
+                            // the reader can Tab to Go to chat.
+                            let play = ui
+                                .add(egui::Button::new(label).min_size(vec2(70.0, 40.0)))
+                                .tab_stop(Stop::InfoVoice(index as u16, 0));
+                            theme::reveal_focus(&play);
+                            if play.clicked()
+                                && media.state != crate::model::MediaState::Downloading
+                            {
+                                if let Some(path) = &media.path {
+                                    // A member's info pane may be open over a different chat.
+                                    // Set the originating chat explicitly before playback.
+                                    app.actions.push(Action::PlayInfoVoice {
+                                        chat: message.chat.clone(),
+                                        message: message.id.clone(),
+                                        path: path.clone(),
+                                    });
+                                } else {
+                                    app.actions.push(Action::Download {
+                                        manual: true,
+                                        card: None,
+                                        chat: message.chat.clone(),
+                                        message: message.id.clone(),
+                                    });
+                                }
+                            }
+                            ui.vertical(|ui| {
+                                ui.label(if *voice_note {
+                                    crate::i18n::gettext(app.locale, "Voice message")
+                                } else {
+                                    crate::i18n::gettext(app.locale, "Audio")
+                                });
+                                ui.label(format!(
+                                    "{} · {}",
+                                    seconds.map(crate::util::duration).unwrap_or_default(),
+                                    crate::util::chat_stamp(app.locale, message.timestamp)
+                                ));
+                            });
+                        });
+                        ui.horizontal(|ui| {
+                            ui.add_space(78.0);
+                            let jump = ui
+                                .small_button(crate::i18n::gettext(app.locale, "Go to chat"))
+                                .tab_stop(Stop::InfoVoice(index as u16, 1));
+                            theme::reveal_focus(&jump);
+                            if jump.clicked() {
+                                go_to(app, message, overlay);
+                            }
+                            if let crate::model::MediaState::Failed(_) = &media.state {
+                                ui.label(crate::i18n::gettext(
+                                    app.locale,
+                                    "Download failed. Retry.",
+                                ));
+                            } else if media.state == crate::model::MediaState::Downloading {
+                                theme::spinner(ui, 14.0, app.palette.secondary);
+                            }
+                        });
+                        if let Some(text) = transcript {
+                            saved_transcript(app, ui, &message.id, text, index);
+                        } else {
+                            ui.label(crate::i18n::gettext(app.locale, "No saved transcript"));
+                        }
+                    });
+                ui.separator();
+            }
+            let outside: Vec<_> = saved
+                .iter()
+                .filter(|hit| {
+                    !listing
+                        .voice
+                        .iter()
+                        .any(|message| message.id == hit.message_id)
+                })
+                .collect();
+            for (offset, hit) in outside
+                .iter()
+                .take(crate::model::MEDIA_LIST_LIMIT)
+                .enumerate()
+            {
+                let index = listing.voice.len() + offset;
+                ui.label(crate::i18n::gettext(app.locale, "Saved voice transcript"));
+                if ui
+                    .small_button(crate::i18n::gettext(app.locale, "Go to chat"))
+                    .tab_stop(Stop::InfoVoice(index as u16, 1))
+                    .clicked()
+                {
+                    app.actions.push(Action::OpenMessage {
+                        chat: listing.chat.clone(),
+                        message: hit.message_id.clone(),
+                    });
+                    if overlay {
+                        app.actions.push(Action::CloseInfo);
+                    }
+                }
+                saved_transcript(app, ui, &hit.message_id, &hit.text, index);
+                ui.separator();
+            }
+            if outside.len() > crate::model::MEDIA_LIST_LIMIT {
+                ui.label(crate::i18n::gettext(
+                    app.locale,
+                    "Only the newest saved matches are listed. Refine your search.",
+                ));
+            }
+        });
+}
+
+fn saved_transcript(app: &mut App, ui: &mut egui::Ui, id: &str, text: &str, index: usize) {
+    let expanded = app.info_voice_expanded.contains(id);
+    let label = if expanded {
+        crate::i18n::gettext(app.locale, "Hide transcript")
+    } else {
+        crate::i18n::gettext(app.locale, "Expand transcript")
+    };
+    let toggle = ui.button(label).tab_stop(Stop::InfoVoice(index as u16, 2));
+    theme::reveal_focus(&toggle);
+    if toggle.clicked() && !app.info_voice_expanded.remove(id) {
+        app.info_voice_expanded.insert(id.to_owned());
+    }
+    if expanded {
+        ui.add(egui::Label::new(text).wrap().selectable(true));
+    } else if !app.info_voice_query.trim().is_empty() {
+        let preview = crate::transcriber::preview(text, &app.info_voice_query);
+        ui.add(egui::Label::new(preview).wrap());
+    }
+}
+
 /// The web links written in the chat, newest first: the preview's title or
 /// the address, and the site. A row opens the address in the browser.
 fn links_list(app: &mut App, ui: &mut egui::Ui, listing: &ChatMedia) {
@@ -1462,7 +1753,9 @@ fn truncated_note(app: &App, ui: &mut egui::Ui) {
 /// tells a translator where it sits.
 pub fn tab_label(app: &App, tab: MediaTab) -> String {
     match tab {
-        MediaTab::Media => crate::i18n::pgettext(app.locale, "info tab", "Media"),
+        MediaTab::Media => crate::i18n::pgettext(app.locale, "info tab", "Photos"),
+        MediaTab::Videos => crate::i18n::pgettext(app.locale, "info tab", "Videos"),
+        MediaTab::Voice => crate::i18n::pgettext(app.locale, "info tab", "Voice"),
         MediaTab::Docs => crate::i18n::pgettext(app.locale, "info tab", "Docs"),
         MediaTab::Links => crate::i18n::pgettext(app.locale, "info tab", "Links"),
     }

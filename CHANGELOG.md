@@ -16,6 +16,11 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 ## Unreleased
 
 - Local transcription setup: explicitly select this computer or your Wyoming server. Download the multilingual Whisper Base model only on request, with progress, cancellation, verification and removal. Existing Wyoming settings are preserved; there is no silent server fallback. Prebuilt runtime download selection and actual-app verification are still pending on this branch.
+- Voice shared items can expand and search saved transcripts; in-chat search includes saved transcript matches without starting transcription.
+- The sidebar uses named Recent, Unread and Needs me tabs. Recent includes all chats, newest first, without a date cutoff; old Unread 7d settings open Recent. A + beside Groups opens local group creation instead of a permanent input at the end of the list.
+
+- Shared items has separate Photos, Videos and Voice tabs. Voice/audio rows can download and play a clip or jump to its message. Beeper listings now answer instead of spinning, with a clear note when only recent history was scanned.
+
 - Both About views show the full packaged build version, including the manual build suffix, instead of only the base Cargo version.
 
 - Linked-person chat headers keep clear of the Mac traffic lights after Cmd+B hides the chat list, including at different zoom levels.
@@ -40,6 +45,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 - Right-click a chat and hover "Assign groups" to see every group at once and pick one; dragging a chat onto a group heading assigns it in every mode, and onto Other takes it out of its group.
 - Drag a group heading onto another to reorder groups; the order is saved.
 - The shrug ¯\_(ツ)_/¯ keeps its underscores in a bubble: an underscore next to a slash or backslash is not emphasis.
+- A macOS Text Replacement whose stored text is still escape text (such as the shrug as `\U00af\\_(\U30c4)_/\U00af`) expands to the characters, not the escape codes.
 - Archive multiple selected chats without deleting messages.
 - Explicit per-chat bridge-supported message deletion scope and age checks.
 - Unsupported-item preflight and request-correlated per-item outcomes, no auto retry.

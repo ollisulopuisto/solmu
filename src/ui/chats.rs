@@ -256,9 +256,6 @@ fn bookmarks_switch(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(6.0);
 }
 
-/// Glyph size of the icon-only mode tabs.
-const MODE_ICON: f32 = 20.0;
-
 /// Search, title and queues, then the composed scope. Shared by every platform.
 fn header(app: &mut App, ui: &mut egui::Ui) {
     if app.show_starred || app.show_saved || app.show_archived || app.locked_folder_open() {
@@ -292,59 +289,20 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             super::batch_actions::archive_bar(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
-                // "All" keeps its word; the other three modes are icons, so
-                // nothing is truncated at 300 points. Each icon carries a
-                // tooltip and an accessible label with the mode's name.
-                // "All" is a word, so it gets one and a half shares of the row.
-                let share = (ui.available_width() - 3.0 * ui.spacing().item_spacing.x) / 4.5;
+                let gap = ui.spacing().item_spacing.x;
+                let width = (ui.available_width() - 2.0 * gap) / 3.0;
                 for mode in crate::model::ListMode::EVERY {
                     let name = mode.label(app.locale);
-                    let icon = match mode {
-                        crate::model::ListMode::Recent => None,
-                        crate::model::ListMode::Unread => Some(Icon::Unread),
-                        crate::model::ListMode::RecentUnread => Some(Icon::UnreadRecent),
-                        crate::model::ListMode::NeedsMe => Some(Icon::CircleAlert),
-                    };
-                    let response = match icon {
-                        None => ui.add_sized(
-                            [share * 1.5, 36.0],
-                            egui::Button::selectable(app.list_mode == mode, name.clone()),
-                        ),
-                        Some(icon) => {
-                            let response = ui.add_sized(
-                                [share, 36.0],
-                                egui::Button::selectable(app.list_mode == mode, ""),
-                            );
-                            let label = name.to_string();
-                            response.widget_info(|| {
-                                egui::WidgetInfo::selected(
-                                    egui::WidgetType::SelectableLabel,
-                                    ui.is_enabled(),
-                                    app.list_mode == mode,
-                                    label.clone(),
-                                )
-                            });
-                            theme::paint_icon(ui, icon, response.rect, MODE_ICON, app.palette.text);
-                            response
-                        }
-                    };
+                    let response = ui.add_sized(
+                        [width, 36.0],
+                        egui::Button::selectable(app.list_mode == mode, name),
+                    );
                     let stop = match mode {
                         crate::model::ListMode::Recent => Stop::Recent,
                         crate::model::ListMode::Unread => Stop::UnreadMode,
-                        crate::model::ListMode::RecentUnread => Stop::RecentUnreadMode,
                         crate::model::ListMode::NeedsMe => Stop::NeedsMe,
                     };
                     let response = response.tab_stop(stop);
-                    let response = if mode == crate::model::ListMode::RecentUnread {
-                        response.on_hover_text(crate::i18n::gettext(
-                            app.locale,
-                            "Unread chats active in the last 7 days, muted ones left out",
-                        ))
-                    } else if icon.is_some() {
-                        response.on_hover_text(name.clone())
-                    } else {
-                        response
-                    };
                     #[cfg(test)]
                     ui.ctx().data_mut(|d| {
                         d.insert_temp(egui::Id::new(("list-mode", mode.key())), response.rect)
@@ -357,6 +315,21 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(header_row_id(), row.response.rect));
             ui.add_space(6.0);
+            let description = match app.list_mode {
+                crate::model::ListMode::Recent => {
+                    crate::i18n::gettext(app.locale, "All chats · newest activity first")
+                }
+                crate::model::ListMode::Unread => {
+                    crate::i18n::gettext(app.locale, "Unread chats · including muted")
+                }
+                crate::model::ListMode::NeedsMe => {
+                    crate::i18n::gettext(app.locale, "Unread or marked for later · muted excluded")
+                }
+            };
+            ui.label(egui::RichText::new(description).small());
+            if app.search.trim().is_empty() {
+                super::flat_groups::controls(app, ui);
+            }
             if app.global_search {
                 ui.label(
                     egui::RichText::new(crate::i18n::gettext(
@@ -2281,6 +2254,26 @@ fn results(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let chats: Vec<Chat> = app.beeper_display_chats();
     let hits: Vec<Message> = app.scoped_search_hits();
+    if !app.search.trim().is_empty()
+        && !app.locked_folder_open()
+        && !app.secret_code_matched()
+        && let Some(worker) = app.transcript_reader()
+    {
+        let (loading, truncated) = worker.saved_account_state(&app.account().id.0, &app.search);
+        if loading {
+            ui.label(crate::i18n::gettext(
+                app.locale,
+                "Loading saved transcripts…",
+            ));
+        }
+        if truncated {
+            ui.label(crate::i18n::gettext(
+                app.locale,
+                "Saved transcript results are partial. Refine your search or open the message.",
+            ));
+        }
+    }
+
     if let Some((query, error, truncated)) = &app.beeper_search_state
         && query == app.search.trim()
     {
@@ -3773,7 +3766,6 @@ mod tests {
             let rects = [
                 crate::model::ListMode::Recent,
                 crate::model::ListMode::Unread,
-                crate::model::ListMode::RecentUnread,
                 crate::model::ListMode::NeedsMe,
             ]
             .map(|f| {
@@ -3788,9 +3780,8 @@ mod tests {
             for pair in rects.windows(2) {
                 assert_eq!(pair[0].center().y, pair[1].center().y);
             }
-            // "All" is a word and wider; the three icon tabs are equal.
-            assert!(rects[0].width() > rects[1].width());
-            for pair in rects[1..].windows(2) {
+            // All three named tabs have equal space.
+            for pair in rects.windows(2) {
                 assert!((pair[0].width() - pair[1].width()).abs() < 0.01);
             }
             // Bookmarks lives in the rail and the Go menu, not in this row.

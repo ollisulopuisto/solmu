@@ -9,6 +9,8 @@ use std::collections::{HashMap, HashSet};
 #[derive(Default)]
 pub struct State {
     pub name: String,
+    /// Popup sizing passes cannot keep text focus; wait for its visible pass.
+    focus_name: bool,
     pub assigning: Option<(Member, Vec<u64>)>,
     /// Headings folded shut this session: a group's id, or `None` for Other.
     pub collapsed: HashSet<Option<u64>>,
@@ -468,6 +470,98 @@ fn header_hidden(app: &App, empty: bool) -> bool {
     empty && app.list_mode != crate::model::ListMode::Recent
 }
 
+/// Local group creation belongs beside the group heading, not after the rows.
+/// It stays available in either grouped or flat layout, including an empty list.
+pub fn controls(app: &mut App, ui: &mut egui::Ui) {
+    use super::focus::{Stop, TabStop};
+    ui.add_space(6.0);
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(crate::i18n::gettext(app.locale, "Groups")).strong());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let response = ui
+                .push_id("new-local-group", |ui| {
+                    crate::theme::icon_button(
+                        ui,
+                        crate::theme::Icon::Plus,
+                        18.0,
+                        app.palette.secondary,
+                        app.palette.text,
+                        &crate::i18n::gettext(app.locale, "New local group"),
+                    )
+                })
+                .inner
+                .tab_stop(Stop::NewLocalGroup);
+            #[cfg(test)]
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new("new-local-group-rect"), response.rect));
+            if response.clicked() {
+                app.flat_group_ui.name.clear();
+                app.flat_group_ui.focus_name = true;
+            }
+            egui::Popup::menu(&response)
+                .width(220.0)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    // TextEdit may consume Escape; capture it before the field.
+                    let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                    ui.label(crate::i18n::gettext(app.locale, "New local group"));
+                    let name = ui.add(
+                        egui::TextEdit::singleline(&mut app.flat_group_ui.name)
+                            .id(egui::Id::new("new-local-group-name"))
+                            .hint_text(crate::i18n::gettext(app.locale, "Group name"))
+                            .char_limit(80)
+                            .desired_width(200.0),
+                    );
+                    if app.flat_group_ui.focus_name && ui.is_visible() {
+                        name.request_focus();
+                        app.flat_group_ui.focus_name = false;
+                    }
+                    let enter = name.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let mut create = false;
+                    ui.horizontal(|ui| {
+                        let button = ui.add_enabled(
+                            !app.flat_group_ui.name.trim().is_empty(),
+                            egui::Button::new(crate::i18n::gettext(app.locale, "Create")),
+                        );
+                        #[cfg(test)]
+                        ui.ctx().data_mut(|d| {
+                            d.insert_temp(egui::Id::new("create-local-group-rect"), button.rect)
+                        });
+                        create = button.clicked() || enter;
+                        if ui
+                            .button(crate::i18n::gettext(app.locale, "Cancel"))
+                            .clicked()
+                        {
+                            ui.close();
+                        }
+                    });
+                    if escaped {
+                        app.flat_group_ui.name.clear();
+                        ui.close();
+                    }
+                    if !escaped
+                        && create
+                        && app
+                            .settings
+                            .flat_groups
+                            .create(&app.flat_group_ui.name)
+                            .is_some()
+                    {
+                        app.flat_group_ui.name.clear();
+                        app.actions.push(Action::SettingsChanged);
+                        ui.close();
+                    }
+                });
+            ui.label(if app.list_is_flat() {
+                crate::i18n::gettext(app.locale, "Flat list")
+            } else {
+                crate::i18n::gettext(app.locale, "Grouped")
+            });
+        });
+    });
+}
+
 pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
     #[cfg(any(test, feature = "demo"))]
     {
@@ -720,28 +814,6 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
                 virtual_aliases(app, ui, &ungrouped, ("other", 0));
             }
         }
-        ui.separator();
-        ui.horizontal(|ui| {
-            let name = ui.add(
-                egui::TextEdit::singleline(&mut app.flat_group_ui.name)
-                    .hint_text(crate::i18n::gettext(app.locale, "New group"))
-                    .char_limit(80)
-                    .desired_width(140.0),
-            );
-            crate::theme::reveal_focus(&name);
-            let create = ui.button(crate::i18n::gettext(app.locale, "Create"));
-            crate::theme::reveal_focus(&create);
-            if create.clicked()
-                && app
-                    .settings
-                    .flat_groups
-                    .create(&app.flat_group_ui.name)
-                    .is_some()
-            {
-                app.flat_group_ui.name.clear();
-                changed = true;
-            }
-        });
     });
     if !copy {
         ui.ctx()
