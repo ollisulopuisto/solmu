@@ -618,11 +618,37 @@ pub fn decode_for_transcription(path: &Path) -> Result<Vec<f32>, String> {
     transcription_samples(decoder)
 }
 
-fn transcription_samples(source: impl rodio::Source<Item = f32>) -> Result<Vec<f32>, String> {
-    let mono = rodio::source::UniformSourceIterator::new(source, mono(), rate());
-    let samples: Vec<f32> = mono.take(TRANSCRIPTION_MAX_SAMPLES + 1).collect();
-    if samples.len() > TRANSCRIPTION_MAX_SAMPLES {
-        return Err("Audio is too long for transcription (maximum five minutes)".into());
+fn transcription_samples(mut source: impl rodio::Source<Item = f32>) -> Result<Vec<f32>, String> {
+    let channels = usize::from(source.channels().get());
+    let source_rate = u64::from(source.sample_rate().get());
+    if channels > 32 || !(8_000..=384_000).contains(&source_rate) {
+        return Err("Unsupported audio rate or channel count for transcription".into());
+    }
+    let mut frame = || {
+        let mut sum = 0.0;
+        for _ in 0..channels {
+            sum += source.next()?;
+        }
+        Some(sum / channels as f32)
+    };
+    let Some(mut previous) = frame() else {
+        return Ok(Vec::new());
+    };
+    let mut samples = vec![previous];
+    let mut input_index = 0u64;
+    while let Some(current) = frame() {
+        input_index += 1;
+        // Integer positions avoid rounding accumulating over a long recording.
+        while samples.len() as u64 * source_rate <= input_index * u64::from(voice::RATE) {
+            if samples.len() == TRANSCRIPTION_MAX_SAMPLES {
+                return Err("Audio is too long for transcription (maximum five minutes)".into());
+            }
+            let position = samples.len() as u64 * source_rate;
+            let left = (input_index - 1) * u64::from(voice::RATE);
+            let fraction = (position - left) as f32 / voice::RATE as f32;
+            samples.push(previous + (current - previous) * fraction);
+        }
+        previous = current;
     }
     Ok(samples)
 }
@@ -1090,22 +1116,59 @@ mod tests {
 
     #[test]
     fn transcription_stereo_duration_is_limited_after_resampling() {
-        for sample_rate in [44_100, 48_000] {
-            let stereo =
-                rodio::source::SineWave::new(440.0).take_duration(Duration::from_secs(240));
-            let stereo = rodio::source::UniformSourceIterator::new(
-                stereo,
-                NonZero::new(2).unwrap(),
-                NonZero::new(sample_rate).unwrap(),
-            );
-            let decoded = transcription_samples(stereo).unwrap();
-            assert!((decoded.len() as i64 - 240 * i64::from(voice::RATE)).abs() < 10);
+        struct Exact {
+            left: usize,
+            rate: u32,
         }
-        let long = rodio::source::SineWave::new(440.0).take_duration(Duration::from_secs(301));
+        impl Iterator for Exact {
+            type Item = f32;
+            fn next(&mut self) -> Option<f32> {
+                if self.left == 0 {
+                    None
+                } else {
+                    self.left -= 1;
+                    Some(0.25)
+                }
+            }
+        }
+        impl rodio::Source for Exact {
+            fn current_span_len(&self) -> Option<usize> {
+                None
+            }
+            fn channels(&self) -> NonZero<u16> {
+                NonZero::new(2).unwrap()
+            }
+            fn sample_rate(&self) -> NonZero<u32> {
+                NonZero::new(self.rate).unwrap()
+            }
+            fn total_duration(&self) -> Option<Duration> {
+                None
+            }
+        }
+        for sample_rate in [44_100, 48_000] {
+            let decoded = transcription_samples(Exact {
+                left: sample_rate as usize * 2 * 240,
+                rate: sample_rate,
+            })
+            .unwrap();
+            assert!(
+                (decoded.len() as i64 - 240 * i64::from(voice::RATE)).abs() < 10,
+                "rate={sample_rate}, decoded={}",
+                decoded.len()
+            );
+            assert!(
+                decoded
+                    .iter()
+                    .all(|sample| (*sample - 0.25).abs() < f32::EPSILON)
+            );
+        }
         assert!(
-            transcription_samples(long)
-                .unwrap_err()
-                .contains("five minutes")
+            transcription_samples(Exact {
+                left: 48_000 * 2 * 301,
+                rate: 48_000
+            })
+            .unwrap_err()
+            .contains("five minutes")
         );
     }
 
