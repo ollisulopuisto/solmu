@@ -2429,30 +2429,90 @@ mod tests {
         panic!("the font generation kept changing under the test");
     }
 
-    /// A font reload clears the prepared jobs (they name the old fonts) and
-    /// the next pass re-shapes from egui's fresh fonts: no stale glyphs.
+    /// A font reload drops the prepared jobs (they name the old fonts) and
+    /// the body is prepared again under the new generation; the re-shaped
+    /// galley's metrics match a from-scratch layout under the current fonts.
+    /// Only Inter is available headless, so glyph-metric differences between
+    /// typefaces cannot manifest here: the reload handling is proven through
+    /// the rebuild, and the galley always comes from egui's own per-pass
+    /// cache, which tracks the live atlas.
     #[test]
-    fn a_font_reload_reshapes_a_cached_body() {
+    fn a_font_reload_rebuilds_a_cached_body() {
         let _guard = prepared_test_lock();
         let ctx = egui::Context::default();
-        clear_prepared_cache();
-        let mut first = None;
-        let mut output = ctx.run_ui(Default::default(), |ui| {
-            first = Some(layout_balanced(ui, "font *reload* check body text", &[], &body_style(), 300.0, true));
-        });
-        output.textures_delta.clear();
-        let first = first.expect("laid out");
+        let (first, again) = {
+            let mut pair = None;
+            for _ in 0..3 {
+                clear_prepared_cache();
+                let generation = crate::theme::font_generation();
+                let mut laid = None;
+                let mut output = ctx.run_ui(Default::default(), |ui| {
+                    let first = layout_balanced(
+                        ui,
+                        "font *reload* check body text",
+                        &[],
+                        &body_style(),
+                        300.0,
+                        true,
+                    );
+                    let again = layout_balanced(
+                        ui,
+                        "font *reload* check body text",
+                        &[],
+                        &body_style(),
+                        300.0,
+                        true,
+                    );
+                    laid = Some((first, again));
+                });
+                output.textures_delta.clear();
+                if crate::theme::font_generation() == generation {
+                    pair = laid;
+                    break;
+                }
+            }
+            pair.expect("the font generation kept changing under the test")
+        };
+        assert!(
+            std::sync::Arc::ptr_eq(&first.shared, &again.shared),
+            "without a reload the prepared body is reused"
+        );
         crate::theme::set_font(&ctx, crate::settings::FontChoice::Inter);
         crate::theme::set_font(&ctx, crate::settings::FontChoice::System);
+        let mut laid = None;
         let mut output = ctx.run_ui(Default::default(), |ui| {
-            let relaid = layout_balanced(ui, "font *reload* check body text", &[], &body_style(), 300.0, true);
-            assert!(
-                !std::sync::Arc::ptr_eq(&first.galley, &relaid.galley),
-                "a font reload reshapes the body instead of painting the old atlas"
+            let relaid = layout_balanced(
+                ui,
+                "font *reload* check body text",
+                &[],
+                &body_style(),
+                300.0,
+                true,
             );
-            assert_eq!(first.galley.text(), relaid.galley.text());
+            let fresh = Prepared::build(
+                ui,
+                "font *reload* check body text",
+                &[],
+                &body_style(),
+                300.0,
+                true,
+            )
+            .draw(ui);
+            laid = Some((relaid, fresh));
         });
         output.textures_delta.clear();
+        let (relaid, fresh) = laid.expect("laid out");
+        assert!(
+            !std::sync::Arc::ptr_eq(&first.shared, &relaid.shared),
+            "a font reload rebuilds the prepared job under the new generation"
+        );
+        assert_eq!(first.galley.text(), relaid.galley.text());
+        assert_eq!(
+            relaid.galley.size(),
+            fresh.galley.size(),
+            "metrics match a fresh layout under the current fonts"
+        );
+        assert_eq!(relaid.galley.rows.len(), fresh.galley.rows.len());
     }
 
     /// More bodies than the old small cap: an active text selection lays
