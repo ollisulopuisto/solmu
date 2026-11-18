@@ -15545,7 +15545,10 @@ mod tests {
         let boxes: Vec<_> = tree
             .nodes
             .iter()
-            .filter(|(_, node)| node.role() == egui::accesskit::Role::CheckBox)
+            .filter(|(_, node)| {
+                node.role() == egui::accesskit::Role::CheckBox
+                    && node.label() != Some("Group by section")
+            })
             .map(|(_, node)| node)
             .collect();
         assert_eq!(boxes.len(), 3);
@@ -24546,8 +24549,6 @@ mod rail_tests {
     fn section_label_clicks_and_both_targets_show_the_key_only_on_hover() {
         let (mut app, ctx) = open("chat", false);
         let label = recorded(&ctx, egui::Id::new("list-layout-label")).unwrap();
-        click(&mut app, &ctx, 1180.0, label.center());
-        assert!(app.list_is_flat());
         let switch = stop_rect(&ctx, Stop::ListLayout).unwrap();
         for target in [label.center(), switch.center()] {
             // Disable animation/timing gates in this fixture. We are checking
@@ -24574,6 +24575,10 @@ mod rail_tests {
                 "tooltip missing at {target:?}: {painted:?}"
             );
         }
+        // Clicking suppresses egui tooltips until the next pointer movement,
+        // so verify hover before testing the label's click action.
+        click(&mut app, &ctx, 1180.0, label.center());
+        assert!(app.list_is_flat());
     }
 
     #[test]
