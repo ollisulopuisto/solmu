@@ -70,10 +70,9 @@
                   libxi
                   libxrandr
                 ];
-              # NixOS and sandbox builds have no /usr/bin/tar. Keep the extractor
-            # in the runtime closure and pin its absolute path at compile time.
-            SOLMU_TAR = "${pkgs.gnutar}/bin/tar";
-            SOLMU_TEST_RTL_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf";
+              # NixOS development shells have no /usr/bin/tar.
+              SOLMU_TAR = "${pkgs.gnutar}/bin/tar";
+              SOLMU_TEST_RTL_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf";
             }
             // pkgs.lib.optionalAttrs isLinux {
               # The GUI dlopens its Wayland, X11 and GL libraries at run time.
@@ -153,6 +152,9 @@
                 libx11
               ]
             );
+            # Pin the extractor in the package itself, not only the dev shell.
+            # Its store reference retains GNU tar in the runtime closure.
+            SOLMU_TAR = "${pkgs.gnutar}/bin/tar";
             SOLMU_TEST_RTL_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf";
             # The build sandbox has no system time zone database, and jiff
             # reads one for the mute-morning tests. TZDIR points it at the
