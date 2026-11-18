@@ -230,9 +230,9 @@ fn finish(
 
 /// Per galley row: which rows belong to a fenced code block or a quote, so
 /// the painter can give them an inset panel. The ranges are
-/// character-indexed in the galley's text; galley sections are byte ranges,
-/// so convert with that text. A blank row carries no sections and stays
-/// inside the surrounding panel.
+/// character-indexed in the galley's text; each glyph's `cluster` is the
+/// byte offset of its source character, so convert with that text. A blank
+/// row carries no glyphs and stays inside the surrounding panel.
 fn row_kinds(
     galley: &Galley,
     blocks: &[(usize, Range<usize>)],
@@ -250,10 +250,9 @@ fn row_kinds(
         .iter()
         .map(|row| {
             let hit = |start: usize, end: usize| {
-                row.sections.iter().any(|section| {
-                    let section_start: usize = section.byte_range.start.into();
-                    let section_end: usize = section.byte_range.end.into();
-                    start < section_end && section_start < end
+                row.row.glyphs.iter().any(|glyph| {
+                    let offset = glyph.cluster as usize;
+                    start <= offset && offset < end
                 })
             };
             if let Some((index, _)) = blocks
@@ -272,7 +271,7 @@ fn row_kinds(
         })
         .collect();
     for index in 1..kinds.len() {
-        if kinds[index] == RowKind::Normal && galley.rows[index].sections.is_empty() {
+        if kinds[index] == RowKind::Normal && galley.rows[index].row.glyphs.is_empty() {
             kinds[index] = kinds[index - 1];
         }
     }
