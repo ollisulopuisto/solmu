@@ -110,6 +110,7 @@ jobs:
           bash packaging/whisper-helper/metadata-unix.sh "$archive" \
             "$RUNNER_TEMP/helper/package/bin/whisper-cli" \
             'bin/whisper-cli' '${{ matrix.target }}' false false
+          echo "HELPER_METADATA=$archive.json" >> "$GITHUB_ENV"
       - name: Native dependencies for the installer test build
         run: |
           sudo apt-get update
@@ -127,7 +128,7 @@ jobs:
       - name: Real-app helper smoke test (#359 installer)
         env:
           SOLMU_HELPER_FIXTURE: ${{ runner.temp }}/helper/dist
-          SOLMU_HELPER_METADATA: ${{ runner.temp }}/helper/dist/solmu-whisper-v1.9.5-linux-${{ matrix.arch }}.tar.gz.json
+          SOLMU_HELPER_METADATA: ${{ env.HELPER_METADATA }}
           SOLMU_MODEL_FIXTURE: ${{ runner.temp }}/model/ggml-base.bin
           SOLMU_RECORDING_FIXTURE: ${{ runner.temp }}/whisper-source/samples/jfk.wav
         run: |
@@ -170,6 +171,7 @@ jobs:
           packaging/whisper-helper/metadata-windows.ps1 -Archive $archive `
             -ExecutableFile "$env:RUNNER_TEMP/helper/package/bin/whisper-cli.exe" `
             -ExecutablePath 'bin/whisper-cli.exe' -Target '${{ matrix.target }}'
+          Add-Content $env:GITHUB_ENV "HELPER_METADATA=$archive.json"
       - name: Ensure rustup is available
         shell: pwsh
         run: |
@@ -211,7 +213,7 @@ jobs:
         shell: pwsh
         env:
           SOLMU_HELPER_FIXTURE: ${{ runner.temp }}\helper\dist
-          SOLMU_HELPER_METADATA: ${{ runner.temp }}\helper\dist\solmu-whisper-v1.9.5-windows-${{ matrix.arch }}.tar.gz.json
+          SOLMU_HELPER_METADATA: ${{ env.HELPER_METADATA }}
           SOLMU_MODEL_FIXTURE: ${{ runner.temp }}\model\ggml-base.bin
           SOLMU_RECORDING_FIXTURE: ${{ runner.temp }}\whisper-source\samples\jfk.wav
         run: |
