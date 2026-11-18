@@ -19057,7 +19057,7 @@ mod tests {
     }
 
     #[test]
-    fn received_hugs_text_and_sent_run_uses_thirds_with_one_footer() {
+    fn received_hugs_text_and_sent_run_joins_near_equal_texts_with_one_footer() {
         use crate::ui::conversation::{bubble_id, footer_id};
         for theme in [ThemeChoice::Dark, ThemeChoice::Light, ThemeChoice::Messages] {
             let mut app = app();
@@ -19080,7 +19080,7 @@ mod tests {
                     true,
                     1700000180,
                     Content::text(
-                        "A longer sent message fills the full band while earlier short messages share the first third.",
+                        "A longer sent message keeps its own width and leaves the short replies hugging their text.",
                     ),
                 ),
             ];
@@ -19104,7 +19104,10 @@ mod tests {
             let a = rect("short-a");
             let b = rect("short-b");
             let c = rect("long-c");
-            assert!(a.width() >= 119.);
+            // Near-equal short texts join each other; with no banding they
+            // hug their text (plus the inline footer) instead of stretching
+            // toward the long message or a thirds floor.
+            assert!(a.width() < 160.);
             assert!((a.width() - b.width()).abs() < 1.);
             assert!((a.right() - c.right()).abs() < 1.);
             assert!(c.width() > a.width() + 30.);
@@ -19122,6 +19125,52 @@ mod tests {
             );
             assert!((b.top() - a.bottom() - 4.).abs() < 1.);
         }
+    }
+
+    /// A sent run mixing a wide photo with short texts: the photo keeps its
+    /// frame width and the texts hug their text instead of joining it.
+    #[test]
+    fn sent_run_with_media_does_not_inflate_text_bubbles() {
+        use crate::ui::conversation::bubble_id;
+        let mut app = app();
+        app.settings.reduce_motion = true;
+        let chat = SAMPLES[0].id;
+        let mut rows = vec![
+            message(chat, "text-a", true, 1700000000, Content::text("OK")),
+            message(
+                chat,
+                "photo-b",
+                true,
+                1700000060,
+                Content::Image {
+                    motion: None,
+                    caption: None,
+                    media: media("image/jpeg", 100_000, Some(800), Some(600)),
+                },
+            ),
+            message(chat, "text-c", true, 1700000120, Content::text("Yes")),
+        ];
+        for row in &mut rows {
+            row.status = Delivery::Read;
+        }
+        app.conversations.get_mut(chat).unwrap().messages = rows;
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..5 {
+            streak_test_frame(&mut app, &ctx, 1180., 1000., vec![]);
+        }
+        let rect = |id| {
+            ctx.data(|data| data.get_temp::<egui::Rect>(bubble_id(chat, id).with("rect")))
+                .unwrap()
+        };
+        let text = rect("text-a");
+        let photo = rect("photo-b");
+        assert!(
+            text.width() < photo.width() / 2.,
+            "a short text hugs its text beside a wide photo: {text:?} vs {photo:?}"
+        );
+        assert!((rect("text-c").width() - text.width()).abs() < 1.);
+        assert!(photo.width() > 200., "the photo keeps its frame: {photo:?}");
     }
 
     #[test]
