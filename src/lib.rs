@@ -86,3 +86,5 @@ pub mod merged;
 pub mod suggest;
 
 pub mod whisper_runtime;
+
+pub mod bubble_collapse;
