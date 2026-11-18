@@ -159,11 +159,10 @@ class WorkflowTests(unittest.TestCase):
         # artifacts for release assembly; exactly these four names, never the
         # signed macOS artifacts, never with secrets, and never cached.
         import re
+        # One upload step per unsigned job (the matrix expands the legs).
         uploads = re.findall(r'name: (optional-whisper-[^\n]+)', text)
         self.assertEqual(sorted(uploads), sorted([
             'optional-whisper-linux-${{ matrix.arch }}',
-            'optional-whisper-linux-${{ matrix.arch }}',
-            'optional-whisper-windows-${{ matrix.arch_name }}',
             'optional-whisper-windows-${{ matrix.arch_name }}',
         ]))
         self.assertEqual(text.count('retention-days: 5'), 2)
