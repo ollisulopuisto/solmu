@@ -3,9 +3,10 @@ name: Optional Whisper helper matrix
 # Unsigned validation builds of the optional Whisper helper for every
 # supported platform. Solmu builds never invoke this workflow or link Whisper.
 # macOS signing and notarization stay in whisper-helper.yml on the default
-# branch; this workflow never requests signing secrets. Nothing is uploaded,
-# cached or published: archives are verified in-job and their metadata JSON is
-# reported in the log.
+# branch; this workflow never requests signing secrets. Unsigned Linux and
+# Windows archives are verified in-job and uploaded as short-retention
+# artifacts so a reviewed release can be assembled from exact, hash-pinned
+# bytes; the artifacts themselves are never a release.
 on:
   workflow_dispatch:
   pull_request:
@@ -134,6 +135,17 @@ jobs:
         run: |
           cd app
           cargo test --locked --lib --features demo -- --ignored local_whisper_real_recording --nocapture
+      # Uploaded only after every build, metadata and installer verification
+      # step has passed; the artifact is never a release.
+      - name: Upload unsigned helper archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: optional-whisper-linux-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/helper/dist/solmu-whisper-v*-linux-${{ matrix.arch }}.tar.gz
+            ${{ runner.temp }}/helper/dist/solmu-whisper-v*-linux-${{ matrix.arch }}.tar.gz.json
+          if-no-files-found: error
+          retention-days: 5
 
   windows:
     if: github.event.repository.private == false
@@ -222,3 +234,14 @@ jobs:
           cd app
           cargo test --locked --lib --features demo -- --ignored local_whisper_real_recording --nocapture
           if ($LASTEXITCODE -ne 0) { throw "real-app smoke test failed ($LASTEXITCODE)" }
+      # Uploaded only after every build, metadata and installer verification
+      # step has passed; the artifact is never a release.
+      - name: Upload unsigned helper archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: optional-whisper-windows-${{ matrix.arch_name }}
+          path: |
+            ${{ runner.temp }}/helper/dist/solmu-whisper-v*-windows-${{ matrix.arch_name }}.tar.gz
+            ${{ runner.temp }}/helper/dist/solmu-whisper-v*-windows-${{ matrix.arch_name }}.tar.gz.json
+          if-no-files-found: error
+          retention-days: 5

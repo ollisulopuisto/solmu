@@ -69,9 +69,13 @@ pinned to a reviewed `feat/local-whisper-setup` commit) against the produced
 archive, its metadata, the verified Base model and the public JFK sample. On
 macOS only the standalone smoke test runs: the real-app test verifies
 Gatekeeper, which an unsigned branch helper must fail, and verification is
-never bypassed. The workflow uploads no artifacts, uses no caches, publishes
+never bypassed. The workflow uses no caches, publishes
 no releases and requests no secrets: macOS signing and notarization stay
-exclusively in `whisper-helper.yml`, which only runs on the default branch. The hashes of
+exclusively in `whisper-helper.yml`, which only runs on the default branch.
+After every verification step passes, each unsigned Linux and Windows leg
+uploads its archive and metadata JSON as a short-retention (5 day) artifact
+so a reviewed release can be assembled from exact, verified bytes; the
+artifacts themselves are never a release. The hashes of
 unsigned branch builds are not the release pins; when the maintainer
 publishes, the metadata is recomputed from the published archives (signed and
 notarized on macOS) and recorded in `src/whisper_runtime.rs`.
