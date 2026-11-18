@@ -70,3 +70,5 @@ Linux and Windows runtime identity currently relies on the reviewed pinned
 executable hash delivered by Solmu's signed/reviewed release, not an independent
 OS code signature. No unsigned download is described as Authenticode-signed.
 Apple runtime bundles additionally require Developer ID and Gatekeeper checks.
+
+Nix packages pin their GNU tar extractor from the Nix store at compile time. Other Linux packages use `/usr/bin/tar`; Windows uses its system `tar.exe`. The extractor path is not read from a runtime environment variable.

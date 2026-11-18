@@ -70,7 +70,10 @@
                   libxi
                   libxrandr
                 ];
-              SOLMU_TEST_RTL_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf";
+              # NixOS and sandbox builds have no /usr/bin/tar. Keep the extractor
+            # in the runtime closure and pin its absolute path at compile time.
+            SOLMU_TAR = "${pkgs.gnutar}/bin/tar";
+            SOLMU_TEST_RTL_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf";
             }
             // pkgs.lib.optionalAttrs isLinux {
               # The GUI dlopens its Wayland, X11 and GL libraries at run time.

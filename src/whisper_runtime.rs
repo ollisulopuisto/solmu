@@ -235,7 +235,7 @@ pub fn install_archive(
         )
         .join("System32/tar.exe");
         #[cfg(not(target_os = "windows"))]
-        let tar = PathBuf::from("/usr/bin/tar");
+        let tar = PathBuf::from(option_env!("SOLMU_TAR").unwrap_or("/usr/bin/tar"));
         bounded_command(
             std::process::Command::new(tar)
                 .arg("-xf")
