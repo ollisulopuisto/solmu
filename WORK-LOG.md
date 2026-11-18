@@ -414,3 +414,12 @@ pending-picker cancellation, image persistence and linked identity handling.
 Native compile/tests and real dark/light demo shots are running through the
 existing shots-only workflow; no native result or visual verification claimed
 yet. No #359, helper packaging or release/DMG work included.
+## 2026-11-18 - Context menu key hints, approved sketches
+
+Separate feature branch. Message menu owns exact Reply Cmd-R, Star Opt-Cmd-S,
+Pin Opt-Cmd-P, Save Opt-Cmd-B and existing Forward Cmd-L chords against its
+message. Chat menu owns Archive Cmd-E, Deal with later Cmd-I and Info Opt-Cmd-I
+against its chat, not the open background chat. Global shortcuts defer while a
+popup is open. Hints use the shared shortcut registry/platform notation. No
+avatar right-click entry. Native target/collision tests and dark/light capture
+scenes added; results pending. No release, #359 or DMG work.

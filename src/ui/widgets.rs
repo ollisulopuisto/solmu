@@ -606,6 +606,27 @@ pub fn menu_item(ui: &mut Ui, palette: &Palette, icon: Option<Icon>, label: &str
     menu_item_enabled(ui, palette, icon, label, true)
 }
 
+/// A context-menu action whose key is consumed here, against this menu's target.
+pub fn menu_item_bound(
+    ui: &mut Ui,
+    palette: &Palette,
+    icon: Option<Icon>,
+    label: &str,
+    binding: &str,
+) -> bool {
+    let shortcut = super::keys::shortcut(binding);
+    let hint = super::keys::hint(binding);
+    let clicked = menu_item_hinted(ui, palette, icon, label, true, hint.as_deref());
+    let pressed = shortcut
+        .keys
+        .iter()
+        .any(|(modifiers, key)| super::keys::take_exact(ui.ctx(), *modifiers, *key));
+    if pressed {
+        ui.close();
+    }
+    clicked || pressed
+}
+
 pub fn menu_item_enabled(
     ui: &mut Ui,
     palette: &Palette,
@@ -2824,5 +2845,52 @@ mod tests {
         assert!(off_outline > 0.0, "the off track is outlined");
         assert_eq!(on_outline, 0.0, "the on track is filled, not outlined");
         assert!(on_knob > off_knob, "the knob grows when on");
+    }
+}
+
+#[cfg(test)]
+mod context_menu_binding_tests {
+    use super::*;
+    #[test]
+    fn context_menu_save_exact_chord_does_not_steal_palette_or_saved_list() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for (key, alt, shift, expected) in [
+            (egui::Key::B, true, false, true),
+            (egui::Key::B, false, true, false),
+            (egui::Key::P, false, false, false),
+            (egui::Key::B, true, true, false),
+        ] {
+            let mut fired = false;
+            let modifiers = egui::Modifiers {
+                command: true,
+                alt,
+                shift,
+                ..egui::Modifiers::NONE
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ui| {
+                    fired = menu_item_bound(
+                        ui,
+                        &Palette::dark(),
+                        Some(Icon::Bookmark),
+                        "Save",
+                        "message-save",
+                    );
+                },
+            );
+            output.textures_delta.clear();
+            assert_eq!(fired, expected);
+        }
     }
 }

@@ -41,6 +41,11 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         sticker_view_keys(app, ctx);
         return;
     }
+    // An open context menu owns its explicit target and consumes its own
+    // exact chords. Global shortcuts must not act on the background chat.
+    if egui::Popup::is_any_open(ctx) {
+        return;
+    }
     if app.page == Page::Chats
         && app.dialog.is_none()
         && !app.show_update
@@ -1054,7 +1059,7 @@ fn sticker_view_keys(app: &mut App, ctx: &egui::Context) {
 }
 
 /// Consume one exact modifier chord without swallowing its shifted variants.
-fn take_exact(ctx: &egui::Context, modifiers: Modifiers, key: Key) -> bool {
+pub(crate) fn take_exact(ctx: &egui::Context, modifiers: Modifiers, key: Key) -> bool {
     ctx.input_mut(|input| {
         let mut pressed = false;
         input.events.retain(|event| {
@@ -1345,6 +1350,27 @@ const INCOMING_BRIDGE: Shortcut = Shortcut {
     description: Some("Quote-reply to the latest incoming message (on its source in linked chats)"),
     menu: None,
 };
+const MESSAGE_STAR: Shortcut = Shortcut {
+    id: "message-star",
+    keys: &[(COMMAND_ALT, Key::S)],
+    label: Some("Ctrl+Alt+S"),
+    description: Some("Star or unstar the context-menu message"),
+    menu: None,
+};
+const MESSAGE_PIN: Shortcut = Shortcut {
+    id: "message-pin",
+    keys: &[(COMMAND_ALT, Key::P)],
+    label: Some("Ctrl+Alt+P"),
+    description: Some("Pin or unpin the context-menu message"),
+    menu: None,
+};
+const MESSAGE_SAVE: Shortcut = Shortcut {
+    id: "message-save",
+    keys: &[(COMMAND_ALT, Key::B)],
+    label: Some("Ctrl+Alt+B"),
+    description: Some("Save or unsave the context-menu message"),
+    menu: None,
+};
 const FORWARD: Shortcut = Shortcut {
     id: "forward-message",
     keys: &[(Modifiers::COMMAND, Key::L)],
@@ -1626,6 +1652,9 @@ pub static REGISTRY: &[Row] = &[
     Row::Binding(&FIND),
     Row::Binding(&INCOMING_BRIDGE),
     Row::Binding(&FORWARD),
+    Row::Binding(&MESSAGE_STAR),
+    Row::Binding(&MESSAGE_PIN),
+    Row::Binding(&MESSAGE_SAVE),
     Row::Help(
         "\u{2191} / \u{2193}, Enter",
         "Walk the open chat's search results and jump to one",
@@ -1766,6 +1795,43 @@ pub const MENU_COMMANDS: &[&str] = &[
     "chat-clear",
     "chat-leave",
 ];
+
+/// AppKit consumes registered menu accelerators before egui receives a key.
+/// Re-inject the matching chord while a popup is open so the popup, not the
+/// background chat, owns the target. Kept platform-independent for regression
+/// coverage of the exact native-action route.
+pub(crate) fn route_native_actions(ctx: &egui::Context, actions: Vec<Action>) -> Vec<Action> {
+    if !egui::Popup::is_any_open(ctx) {
+        return actions;
+    }
+    actions
+        .into_iter()
+        .filter_map(|action| {
+            let binding = match &action {
+                Action::MenuCommand(id) => match id.as_str() {
+                    "chat-archive" => "archive",
+                    "chat-reply-later" => "reply-later",
+                    "chat-quote-reply" => "incoming-bridge",
+                    "chat-forward" => "forward-message",
+                    _ => return Some(action),
+                },
+                Action::ToggleInfoSidebar => "info-sidebar",
+                _ => return Some(action),
+            };
+            let (modifiers, key) = shortcut(binding).keys[0];
+            ctx.input_mut(|input| {
+                input.events.push(egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                })
+            });
+            None
+        })
+        .collect()
+}
 
 /// The actions behind a menu command, from the helpers the keys use, so a
 /// menu click and its key cannot differ. Empty while a viewer, editor or
