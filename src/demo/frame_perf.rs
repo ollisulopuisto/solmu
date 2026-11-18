@@ -19,7 +19,10 @@ use std::time::{Duration, Instant};
 
 /// The cell's chat: `rows` messages in the first sample conversation, every
 /// seventh one very long when `long`, spread over one day.
-fn perf_chat(rows: usize, long: bool) -> (App, egui::Context, String, crate::util::fixed_clock::Guard) {
+fn perf_chat(
+    rows: usize,
+    long: bool,
+) -> (App, egui::Context, String, crate::util::fixed_clock::Guard) {
     let clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
         // 14:00 UTC on Wednesday 11 March 2026, as in long_chat_tests.
         now: 1_773_237_600,
@@ -35,11 +38,7 @@ fn perf_chat(rows: usize, long: bool) -> (App, egui::Context, String, crate::uti
     // A body near 30 KB with one unbreakable token near 3 000 chars: the
     // pasted-article shape that made manual.55 crawl.
     let sentence = "The quick brown fox jumps over the lazy dog near Helsinki harbour. ";
-    let long_body = format!(
-        "{}{}",
-        sentence.repeat(430),
-        "a".repeat(3_000)
-    );
+    let long_body = format!("{}{}", sentence.repeat(430), "a".repeat(3_000));
     conversation.messages.clear();
     for n in 0..rows {
         let mut row = template.clone();
@@ -67,7 +66,7 @@ fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -> Durati
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(1180.0, 780.0),
+                egui::vec2(1180.0, 420.0),
             )),
             events,
             ..Default::default()
@@ -82,10 +81,19 @@ fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -> Durati
     start.elapsed()
 }
 
-/// Starts a drag selection over the visible messages and keeps the button
-/// held. Returns whether a selection is live afterwards.
-fn hold_selection(app: &mut App, ctx: &egui::Context) -> bool {
-    let press = egui::pos2(600.0, 700.0);
+/// Selects text inside a visible message body and releases the button.
+/// Returns whether a selection is live afterwards.
+fn hold_selection(app: &mut App, ctx: &egui::Context, chat: &str, rows: usize) -> bool {
+    // Use an actual visible body, never a guessed point in empty space.
+    let body = (0..rows)
+        .rev()
+        .find_map(|n| {
+            let id = crate::ui::conversation::bubble_id(chat, &format!("perf-{n}"));
+            ctx.data(|data| data.get_temp::<egui::Rect>(id.with("body")))
+                .filter(|rect| rect.center().y > 120.0 && rect.center().y < 280.0)
+        })
+        .expect("fixture has a visible text body");
+    let press = egui::pos2(body.left() + 2.0, body.center().y);
     frame(
         app,
         ctx,
@@ -99,17 +107,19 @@ fn hold_selection(app: &mut App, ctx: &egui::Context) -> bool {
             },
         ],
     );
-    // Drag upward over several frames so the sweep crosses message rows.
-    for step in 1..=6 {
-        frame(
-            app,
-            ctx,
-            vec![egui::Event::PointerMoved(egui::pos2(
-                600.0,
-                700.0 - 70.0 * step as f32,
-            ))],
-        );
+    for _ in 0..2 {
+        frame(app, ctx, vec![egui::Event::PointerMoved(body.center())]);
     }
+    frame(
+        app,
+        ctx,
+        vec![egui::Event::PointerButton {
+            pos: body.center(),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    );
     ctx.plugin_opt::<egui::text_selection::LabelSelectionState>()
         .is_some_and(|plugin| plugin.lock().has_selection())
 }
@@ -117,29 +127,70 @@ fn hold_selection(app: &mut App, ctx: &egui::Context) -> bool {
 /// One matrix cell: cold frame, then warm frames, median reported. A slow
 /// cell stops early rather than hold the harness for minutes.
 fn cell(rows: usize, long: bool, select: bool) {
-    let (mut app, ctx, _chat, _clock) = perf_chat(rows, long);
+    let (mut app, ctx, chat, _clock) = perf_chat(rows, long);
     let cold = frame(&mut app, &ctx, Vec::new());
     frame(&mut app, &ctx, Vec::new());
-    let selecting = select && hold_selection(&mut app, &ctx);
-    let budget = Duration::from_secs(60);
-    let mut warm: Vec<Duration> = Vec::new();
-    let spent = Instant::now();
-    for _ in 0..5 {
-        if !warm.is_empty() && spent.elapsed() > budget {
-            break;
-        }
-        warm.push(frame(&mut app, &ctx, Vec::new()));
-    }
-    warm.sort();
-    let median = warm[warm.len() / 2];
-    println!(
-        "CELL messages={rows} body={} selection={} selecting={selecting} cold_ms={:.1} warm_median_ms={:.1} frames={}",
-        if long { "long" } else { "short" },
-        if select { "on" } else { "off" },
-        cold.as_secs_f64() * 1e3,
-        median.as_secs_f64() * 1e3,
-        warm.len()
+    let selecting = select && hold_selection(&mut app, &ctx, &chat, rows);
+    assert_eq!(
+        selecting, select,
+        "selection fixture must exercise its claimed path"
     );
+    for scrolling in [false, true] {
+        let budget = Duration::from_secs(60);
+        let mut warm: Vec<Duration> = Vec::new();
+        let spent = Instant::now();
+        let metrics = || {
+            ctx.data(|data| {
+                data.get_temp::<(f32, f32)>(crate::ui::conversation::scroll_metrics_id(&chat))
+            })
+            .expect("chat has scroll metrics")
+            .0
+        };
+        let mut moved = false;
+        for _ in 0..5 {
+            if !warm.is_empty() && spent.elapsed() > budget {
+                break;
+            }
+            let before = metrics();
+            let events = if scrolling {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(700.0, 200.0)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
+                        delta: egui::vec2(0.0, 90.0),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            } else {
+                Vec::new()
+            };
+            warm.push(frame(&mut app, &ctx, events));
+            moved |= (metrics() - before).abs() > 0.01;
+            if select {
+                assert!(
+                    ctx.plugin_opt::<egui::text_selection::LabelSelectionState>()
+                        .is_some_and(|plugin| plugin.lock().has_selection()),
+                    "selection must survive every measured frame"
+                );
+            }
+        }
+        assert!(
+            !scrolling || moved,
+            "scroll frames must move the transcript"
+        );
+        warm.sort();
+        let median = warm[warm.len() / 2];
+        println!(
+            "CELL messages={rows} body={} selection={} selecting={selecting} motion={} moved={moved} cold_ms={:.1} warm_median_ms={:.1} frames={}",
+            if long { "long" } else { "short" },
+            if select { "on" } else { "off" },
+            if scrolling { "scroll" } else { "idle" },
+            cold.as_secs_f64() * 1e3,
+            median.as_secs_f64() * 1e3,
+            warm.len()
+        );
+    }
 }
 
 #[test]
@@ -160,4 +211,11 @@ fn frame_perf_matrix() {
             }
         }
     }
+}
+
+/// Keep fixture setup honest even when the expensive matrix is not requested.
+#[test]
+fn frame_perf_exercises_selection_and_scroll() {
+    cell(10, false, false);
+    cell(10, false, true);
 }

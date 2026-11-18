@@ -1,14 +1,14 @@
 name: Frame benchmark
 on:
   push:
-    branches: [perf/frame-bench-before, perf/frame-bench-after]
+    branches: ['perf/frame-bench-*']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   bench:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -16,4 +16,4 @@ jobs:
         run: |
           sudo python3 .github/scripts/install-ubuntu-build-deps.py libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpipewire-0.3-dev clang libclang-dev cmake perl
       - name: Frame benchmark
-        run: cargo test --locked --lib --features demo frame_perf -- --ignored --nocapture
+        run: cargo test --locked --lib --features demo frame_perf_matrix -- --ignored --nocapture
