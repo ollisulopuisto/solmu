@@ -24547,10 +24547,17 @@ mod rail_tests {
 
     #[test]
     fn section_label_clicks_and_both_targets_show_the_key_only_on_hover() {
-        let (mut app, ctx) = open("chat", false);
-        let label = recorded(&ctx, egui::Id::new("list-layout-label")).unwrap();
-        let switch = stop_rect(&ctx, Stop::ListLayout).unwrap();
-        for target in [label.center(), switch.center()] {
+        // Each target gets a fresh context: egui allows one tooltip per layer,
+        // and a previous label tooltip can mask the switch's tooltip next frame.
+        for hover_label in [true, false] {
+            let (mut app, ctx) = open("chat", false);
+            let label = recorded(&ctx, egui::Id::new("list-layout-label")).unwrap();
+            let switch = stop_rect(&ctx, Stop::ListLayout).unwrap();
+            let target = if hover_label {
+                label.center()
+            } else {
+                switch.center()
+            };
             // Disable animation/timing gates in this fixture. We are checking
             // tooltip contents and targets, not egui's hover-delay policy.
             ctx.all_styles_mut(|style| {
@@ -24574,11 +24581,10 @@ mod rail_tests {
                 painted.contains(&expected),
                 "tooltip missing at {target:?}: {painted:?}"
             );
+            // Verify label activation only after hover, since clicks suppress tooltips.
+            click(&mut app, &ctx, 1180.0, label.center());
+            assert!(app.list_is_flat());
         }
-        // Clicking suppresses egui tooltips until the next pointer movement,
-        // so verify hover before testing the label's click action.
-        click(&mut app, &ctx, 1180.0, label.center());
-        assert!(app.list_is_flat());
     }
 
     #[test]
