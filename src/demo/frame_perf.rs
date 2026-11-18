@@ -211,3 +211,10 @@ fn frame_perf_matrix() {
         }
     }
 }
+
+/// Keep fixture setup honest even when the expensive matrix is not requested.
+#[test]
+fn frame_perf_exercises_selection_and_scroll() {
+    cell(10, false, false);
+    cell(10, false, true);
+}
