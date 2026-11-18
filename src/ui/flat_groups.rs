@@ -1920,7 +1920,7 @@ mod tests {
 
     #[test]
     fn other_filters_like_any_section() {
-        let (mut app, _root) = recent_app(vec![
+        let (app, _root) = recent_app(vec![
             recent_chat("read-a", 100, 0),
             recent_chat("unread-b", 200, 2),
         ]);
@@ -1936,15 +1936,15 @@ mod tests {
     fn a_chat_claimed_by_two_groups_appears_in_the_first() {
         // One key of a linked pair in each group: both groups claim the
         // pair's chats, and the first group in the saved order wins.
-        let (mut app, _root, a, b) = linked_pair();
+        let (mut app, _root, _a, _b) = linked_pair();
         let one = app.settings.flat_groups.create("One").unwrap();
         let two = app.settings.flat_groups.create("Two").unwrap();
         app.settings
             .flat_groups
-            .add(one, crate::merged::Member::of(&a).unwrap());
+            .add(one, member(&app, &app.chats[0]));
         app.settings
             .flat_groups
-            .add(two, crate::merged::Member::of(&b).unwrap());
+            .add(two, member(&app, &app.chats[1]));
         let refs: Vec<&Chat> = app.chats.iter().collect();
         assert_eq!(membership_rows(&app, &refs), vec![vec![0, 1], vec![]]);
     }
