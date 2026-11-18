@@ -106,7 +106,7 @@ jobs:
         if: inputs.validate_public_download
         run: echo 'SOLMU_VALIDATE_PUBLIC_DOWNLOAD=1' >> "$GITHUB_ENV"
       - name: Production installer, repair, decoder and real Opus transcription
-        run: mbx test --locked --lib local_whisper_real_recording -- --ignored
+        run: mbx test --locked --lib --features demo local_whisper_real_recording -- --ignored
 
   whisper-helper:
     if: github.event.repository.private == false && inputs.target == 'whisper-helper' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
