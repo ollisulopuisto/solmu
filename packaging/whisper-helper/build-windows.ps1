@@ -12,6 +12,8 @@ $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pins = . (Join-Path $here 'read-pins.ps1') -Path (Join-Path $here 'pins.env')
 $vsArch = if ($Arch -eq 'x64') { 'x64' } else { 'ARM64' }
+# Archive names follow the documented target spelling (x86_64), not CMake's x64.
+$archName = if ($Arch -eq 'x64') { 'x86_64' } else { 'arm64' }
 # GGML_NATIVE=OFF alone still enables AVX2/FMA/BMI2 in pinned GGML on x64.
 # Use a portable baseline so the helper runs on any x64 machine.
 # On ARM64, pinned GGML requires GGML_NATIVE=ON with MSVC proper and then
@@ -49,7 +51,7 @@ Copy-Item (Join-Path $SourceDir 'LICENSE') (Join-Path $stage 'whisper-LICENSE')
   Set-Content -NoNewline (Join-Path $stage 'README.txt')
 $dist = Join-Path $OutDir 'dist'
 New-Item -ItemType Directory -Force $dist | Out-Null
-$archive = "solmu-whisper-v$($pins['WHISPER_VERSION'])-windows-$Arch.tar.gz"
+$archive = "solmu-whisper-v$($pins['WHISPER_VERSION'])-windows-$archName.tar.gz"
 tar -czf (Join-Path $dist $archive) -C $stage bin whisper-LICENSE README.txt
 if ($LASTEXITCODE -ne 0) { throw "tar failed ($LASTEXITCODE)" }
 Write-Output (Join-Path $dist $archive)

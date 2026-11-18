@@ -145,10 +145,12 @@ jobs:
         include:
           - os: windows-2025
             arch: x64
+            arch_name: x86_64
             rust-host: x86_64-pc-windows-msvc
             target: x86_64-pc-windows-msvc
           - os: windows-11-arm
             arch: arm64
+            arch_name: arm64
             rust-host: aarch64-pc-windows-msvc
             target: aarch64-pc-windows-msvc
     steps:
@@ -166,7 +168,7 @@ jobs:
         shell: pwsh
         run: |
           $pins = . packaging/whisper-helper/read-pins.ps1 -Path packaging/whisper-helper/pins.env
-          $archive = "$env:RUNNER_TEMP/helper/dist/solmu-whisper-v$($pins['WHISPER_VERSION'])-windows-${{ matrix.arch }}.tar.gz"
+          $archive = "$env:RUNNER_TEMP/helper/dist/solmu-whisper-v$($pins['WHISPER_VERSION'])-windows-${{ matrix.arch_name }}.tar.gz"
           if (-not (Test-Path $archive)) { throw "archive missing: $archive" }
           packaging/whisper-helper/metadata-windows.ps1 -Archive $archive `
             -ExecutableFile "$env:RUNNER_TEMP/helper/package/bin/whisper-cli.exe" `
