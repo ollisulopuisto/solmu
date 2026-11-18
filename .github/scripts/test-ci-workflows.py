@@ -153,6 +153,25 @@ class WorkflowTests(unittest.TestCase):
                 for instruction in ['AVX', 'AVX2', 'FMA', 'F16C', 'BMI2', 'SSE42']:
                     self.assertEqual('-DGGML_'+instruction+'=OFF' in calls, arch == 'x86_64', instruction)
 
+    def test_helper_matrix_is_unsigned_uncached_and_covers_all_platforms(self):
+        text = workflow('whisper-helper-matrix.yml')
+        self.assertNotIn('upload-artifact', text)
+        self.assertNotIn('actions/cache', text)
+        self.assertNotIn('${{ secrets.', text)
+        self.assertNotIn('uses: ./.github/workflows/whisper-helper.yml', text)
+        self.assertNotIn('secrets: inherit', text)
+        for target in ['aarch64-apple-darwin', 'x86_64-apple-darwin',
+                       'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu',
+                       'x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc']:
+            self.assertIn(target, text)
+        self.assertIn('debian:12', text)
+        self.assertIn("github.event.repository.private == false", text)
+        self.assertIn('SOLMU_HELPER_METADATA', text)
+        self.assertIn('local_whisper_real_recording', text)
+        self.assertIn('INSTALLER_REVISION', text)
+        for step in ['Inference smoke test', 'metadata', 'fetch-source']:
+            self.assertIn(step, text)
+
     def test_ci_selection_modes(self):
         text = workflow('ci.yml')
         block = run_block(text.split('id: scope', 1)[1], '        run: |\n')

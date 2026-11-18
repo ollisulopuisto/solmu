@@ -347,6 +347,12 @@ fallback and downsamples incrementally before the five-minute PCM cap. Changelog
 states that this limit applies to Wyoming too. Local demo library/test Clippy
 passes; 27 production-module engine/installer tests and ten workflow tests pass.
 Native regressions and all-platform real application verification remain pending.
+## 2026-11-18 - Whisper helper packaging matrix
+
+Six-platform packaging pipeline for the optional Whisper helper (#359 option A), separate from the signed default-branch macOS workflow: `packaging/whisper-helper/` (pins, fetch, Linux/Windows builders, smoke tests, metadata emitters, runtime README template) plus `whisper-helper-matrix.yml`. Linux builds in a debian:12 container (Debian 12 baseline, ldd allowlist guard, OpenMP off so no libgomp), Windows links the MSVC runtime statically and packs .tar.gz with system tar.exe, macOS reuses the existing unsigned bundle script. Every leg runs an inference smoke test (pinned tiny model + JFK sample) and prints per-target metadata JSON; Linux and Windows also run the #359 installer's real-app smoke test (pinned installer commit) with the produced archive, verified Base model and public JFK sample; unsigned macOS legs skip it because Gatekeeper verification must not be bypassed. Nothing is uploaded, cached or published, and the workflow requests no secrets. The linux/x86_64 path was run end-to-end locally (fetch, build, archive, smoke, metadata); the other five legs are CI-verified on the PR. Final pins for `src/whisper_runtime.rs` are computed from the published archives (signed/notarized on macOS) when the maintainer publishes.
+
+CI round 1 fixes: PowerShell pin parsing now strips pins.env's bash single quotes (shared read-pins.ps1; the phrase check had failed on a correct transcript); Windows ARM64 builds with GGML_NATIVE unset (pinned GGML requires MSVC ARM native; MSVC targets the ARMv8.0 baseline anyway); Linux metadata step chowns the root-owned docker output first. macOS legs were already green.
+
 ## 2026-11-18 - Group by section header switch
 
 Approved option A: removed mode explainer text and replaced the passive Grouped/Flat list label with the shared switch widget. Existing Cmd/Ctrl+G and the switch use ToggleListLayout and keep per-mode settings. Shortcut appears only on hover; + remains independent. Focus order and pointer/keyboard behaviour have regression coverage. Tests, synthetic before/after pixels and reviews pending. Incoming-message section sorting is separately coordinated.
