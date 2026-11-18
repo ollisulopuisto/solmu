@@ -1,5 +1,20 @@
 # Work log
 
+## 2026-11-18: Repair #379 fallout that left main red
+
+Branch fix/context-menu-shortcut-fallout off main 2192fd3. #379 (context-menu
+shortcut hints, head d54bb0a) merged red: quality clippy failed on
+route_native_actions (dead outside macOS builds), and four tests failed
+(chat-menu width floor, key help-rows literal, keyless-menu catalog, and the
+native-command demo regression). Repairs: route_native_actions is now cfg-gated
+to macOS or test+demo builds, the chat context menu keeps the compact 190pt
+width floor in both places #379 had widened it (hinted labels already
+truncate), the key-catalog tests learn that context menus own the
+message-star/pin/save chords and the three new help rows, and the demo
+regression holds the chat menu open through the native-action frame the way
+egui memory does in production. Not run locally: no Rust toolchain on this
+box (libspa-sys needs libpipewire); fmt, clippy and tests run in CI.
+
 ## 2026-11-18: Final helper pins from the published whisper-helper-v1.9.5 release
 
 Olli approved publication 14:49. #375 merged (matrix now uploads unsigned
