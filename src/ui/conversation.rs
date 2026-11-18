@@ -6156,7 +6156,9 @@ fn width_flags(message: &Message) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     std::mem::discriminant(&message.content).hash(&mut hash);
-    body_for_measurement(&message.content).is_some().hash(&mut hash);
+    body_for_measurement(&message.content)
+        .is_some()
+        .hash(&mut hash);
     if let Some(media) = message.content.media() {
         media.width.hash(&mut hash);
         media.height.hash(&mut hash);
@@ -6237,7 +6239,8 @@ fn planned_widths(
         let flags = width_flags(message);
         let mentions = mention_flags(message, &mention_name);
         let width = if book.fresh(&key, body, flags, mentions) {
-            book.get(&key).expect("a fresh snapshot has a measured width")
+            book.get(&key)
+                .expect("a fresh snapshot has a measured width")
         } else {
             let width = natural(message).clamp(0.0, planning_cap(ui, message, cap));
             book.remember(&key, width, body, flags, mentions);
@@ -12345,11 +12348,7 @@ mod tests {
                 description: None,
             });
         }
-        assert_ne!(
-            width_flags(&row),
-            poster,
-            "preview presence invalidates"
-        );
+        assert_ne!(width_flags(&row), poster, "preview presence invalidates");
     }
 
     #[test]

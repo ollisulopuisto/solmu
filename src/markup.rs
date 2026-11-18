@@ -566,8 +566,7 @@ struct PreparedCache {
 /// misses. An over-cap chat keeps a stable cached subset instead.
 const PREPARED_CAP: usize = 1024;
 
-static PREPARED: std::sync::OnceLock<std::sync::Mutex<PreparedCache>> =
-    std::sync::OnceLock::new();
+static PREPARED: std::sync::OnceLock<std::sync::Mutex<PreparedCache>> = std::sync::OnceLock::new();
 
 /// Lays text out like [`layout`], but with line breaks from the wrap
 /// balancer (`crate::wrap`, private, so no doc link) instead of greedy first-fit: raggedness is

@@ -19,7 +19,10 @@ use std::time::{Duration, Instant};
 
 /// The cell's chat: `rows` messages in the first sample conversation, every
 /// seventh one very long when `long`, spread over one day.
-fn perf_chat(rows: usize, long: bool) -> (App, egui::Context, String, crate::util::fixed_clock::Guard) {
+fn perf_chat(
+    rows: usize,
+    long: bool,
+) -> (App, egui::Context, String, crate::util::fixed_clock::Guard) {
     let clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
         // 14:00 UTC on Wednesday 11 March 2026, as in long_chat_tests.
         now: 1_773_237_600,
@@ -35,11 +38,7 @@ fn perf_chat(rows: usize, long: bool) -> (App, egui::Context, String, crate::uti
     // A body near 30 KB with one unbreakable token near 3 000 chars: the
     // pasted-article shape that made manual.55 crawl.
     let sentence = "The quick brown fox jumps over the lazy dog near Helsinki harbour. ";
-    let long_body = format!(
-        "{}{}",
-        sentence.repeat(430),
-        "a".repeat(3_000)
-    );
+    let long_body = format!("{}{}", sentence.repeat(430), "a".repeat(3_000));
     conversation.messages.clear();
     for n in 0..rows {
         let mut row = template.clone();
