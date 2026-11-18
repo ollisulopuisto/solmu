@@ -28,17 +28,17 @@ const ROW_HEIGHT: f32 = 60.0;
 /// invite link's buttons, the media view's tabs (or the permission
 /// switches), Leave, and Try again.
 const PHOTO_STOP: u8 = 0;
-const PENCIL_STOP: u8 = 1;
-const NAME_CHECK_STOP: u8 = 2;
-const ACTION_STOP: u8 = 3;
-pub const MEDIA_ROW_STOP: u8 = 10;
-const PERMISSIONS_STOP: u8 = 11;
-const ADD_MEMBERS_STOP: u8 = 12;
-const COPY_LINK_STOP: u8 = 13;
-const RESET_LINK_STOP: u8 = 14;
+const PENCIL_STOP: u8 = 2;
+const NAME_CHECK_STOP: u8 = 3;
+const ACTION_STOP: u8 = 4;
+pub const MEDIA_ROW_STOP: u8 = 11;
+const PERMISSIONS_STOP: u8 = 12;
+const ADD_MEMBERS_STOP: u8 = 13;
+const COPY_LINK_STOP: u8 = 14;
+const RESET_LINK_STOP: u8 = 15;
 const TAB_STOP: u8 = 20;
-const LEAVE_STOP: u8 = 30;
-pub(crate) const RETRY_STOP: u8 = 31;
+const LEAVE_STOP: u8 = 31;
+pub(crate) const RETRY_STOP: u8 = 32;
 
 /// The media view's title, and the overview row that opens it.
 fn media_title(app: &App) -> String {
@@ -313,8 +313,21 @@ fn identity(app: &mut App, ui: &mut egui::Ui, shown: &Shown, overlay: bool) {
     ui.vertical_centered(|ui| {
         if group_editable {
             group_action = group_photo(app, ui, name, id, photo, picture.as_deref());
+            ui.small(crate::i18n::gettext(
+                app.locale,
+                "Click photo to change it for everyone",
+            ));
         } else {
             widgets::avatar(ui, &palette, name, id, photo, picture.as_deref());
+        }
+        let customize = ui
+            .button(crate::i18n::gettext(app.locale, "Customize avatar…"))
+            .tab_stop(Stop::InfoControl(1));
+        #[cfg(test)]
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(egui::Id::new("local-avatar-open"), customize.rect));
+        if customize.clicked() {
+            super::local_avatars::open(app, id, name);
         }
         ui.add_space(6.0);
         if let Some(draft) = renaming.as_mut() {
@@ -2309,5 +2322,55 @@ mod tests {
             domain("https://user:pass@www.attacker.example:8080/"),
             "attacker.example"
         );
+    }
+}
+
+#[cfg(test)]
+mod avatar_focus_regression {
+    use super::*;
+    #[test]
+    fn voice_refresh_and_search_have_distinct_focus_stops() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            crate::settings::Settings::default(),
+        );
+        crate::demo::populate(&mut app);
+        crate::demo::apply_flags(&mut app, Some("info-voice"));
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..4 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1180.0, 900.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.background_frame(ui.ctx());
+                    app.frame_ui(ui);
+                },
+            );
+            output.textures_delta.clear();
+        }
+        let stops = super::super::focus::stops(&ctx);
+        assert!(
+            stops.iter().any(|(stop, _)| *stop == Stop::InfoControl(25)),
+            "Voice Refresh remains in actual Tab order"
+        );
+        assert!(
+            stops.iter().any(|(stop, _)| *stop == Stop::InfoControl(26)),
+            "Voice search remains in actual Tab order"
+        );
+        let refresh = stops
+            .iter()
+            .find(|(stop, _)| *stop == Stop::InfoControl(25))
+            .unwrap()
+            .1;
+        let search = stops
+            .iter()
+            .find(|(stop, _)| *stop == Stop::InfoControl(26))
+            .unwrap()
+            .1;
+        assert_ne!(refresh, search);
     }
 }

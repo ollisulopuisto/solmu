@@ -198,7 +198,7 @@ fn account_row(app: &App, ui: &mut egui::Ui, entry: &Entry) -> Option<RowClick> 
             pos2(rect.left() + 8.0 + ROW_AVATAR / 2.0, rect.center().y),
             Vec2::splat(ROW_AVATAR),
         );
-        widgets::paint_avatar(
+        widgets::paint_source_avatar(
             ui,
             &palette,
             avatar,
@@ -393,4 +393,46 @@ pub fn corner(app: &mut App, ctx: &egui::Context) {
         .show(ctx, |ui| {
             avatar_button(app, ui, 34.0);
         });
+}
+
+#[cfg(test)]
+mod avatar_owner_tests {
+    use super::*;
+    #[test]
+    fn inactive_account_row_does_not_use_matching_active_contact_override() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            crate::settings::Settings::default(),
+        );
+        crate::demo::populate(&mut app);
+        crate::demo::apply_flags(&mut app, Some("accounts"));
+        let target = app.accounts[1].me.clone().unwrap();
+        app.chats.push(crate::model::Chat::new(
+            target.clone(),
+            "Other account as contact".into(),
+        ));
+        crate::local_avatars::replace(
+            &mut app.settings.local_avatars,
+            vec![crate::local_avatars::Identity {
+                account: app.accounts[0].id.0.clone(),
+                origin: None,
+                backend_account: None,
+                chat: target,
+            }],
+            Some(crate::local_avatars::Appearance::Initials {
+                text: "BAD".into(),
+                colour: [255, 0, 0],
+            }),
+        );
+        let entries = entries(&mut app);
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        crate::ui::local_avatars::install(&app, &ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            account_row(&app, ui, &entries[1]);
+        });
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "BAD")), "inactive account must paint its own source picture/initials");
+        output.textures_delta.clear();
+    }
 }

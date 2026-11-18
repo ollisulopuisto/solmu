@@ -7,6 +7,10 @@ use crate::model::{Action, ChatId, Dialog};
 use crate::theme::{self, Icon};
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
+    if matches!(app.dialog, Some(Dialog::CustomizeAvatar)) {
+        super::local_avatars::show(app, ctx);
+        return;
+    }
     let Some(dialog) = app.dialog.clone() else {
         return;
     };
@@ -26,6 +30,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         .backdrop_color(palette.shadow)
         .show(ctx, |ui| {
             ui.set_width(match dialog {
+                Dialog::CustomizeAvatar => 420.0,
                 Dialog::Shortcuts => shortcuts_width(ui.ctx().content_rect().width()),
                 Dialog::About => 380.0,
                 Dialog::ConfirmUnlink => 380.0,
@@ -70,6 +75,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             });
             ui.spacing_mut().item_spacing.y = 8.0;
             match dialog {
+                Dialog::CustomizeAvatar => {}
                 Dialog::CreatePoll(chat) => super::polls::create(app, ui, &chat),
                 Dialog::SendLocation(chat) => super::locations::send(app, ui, &chat),
                 Dialog::PollResults { chat, message } => {

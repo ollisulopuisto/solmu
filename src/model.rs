@@ -2494,6 +2494,8 @@ pub struct InfoPanel {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dialog {
+    /// Local-only avatar presentation editor, never a remote profile edit.
+    CustomizeAvatar,
     Shortcuts,
     About,
     ConfirmUnlink,

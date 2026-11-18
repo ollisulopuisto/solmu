@@ -18,6 +18,10 @@ on:
           - shots-only
           - whisper-helper
           - whisper-smoke
+      capture_avatar_baseline:
+        description: 'Opt in to the one-off pre-avatar comparison build'
+        type: boolean
+        default: false
       validate_public_download:
         description: 'Explicitly exercise the pinned public runtime/model downloader'
         type: boolean
@@ -238,6 +242,38 @@ jobs:
         with:
           name: long-bubble-shots
           path: ${{ runner.temp }}/long-bubble-shots/*.png
+          retention-days: 7
+      - name: Local avatar behavior regressions
+        run: |
+          mbx test --locked --lib --features demo local_avatars:: -- --test-threads=1
+          mbx test --locked --lib --features demo avatar_owner_tests -- --test-threads=1
+          mbx test --locked --lib --features demo avatar_focus_regression -- --test-threads=1
+      - name: Capture baseline avatar evidence
+        if: ${{ inputs.capture_avatar_baseline }}
+        run: |
+          set -euo pipefail
+          before="$RUNNER_TEMP/avatar-before"
+          out="$RUNNER_TEMP/local-avatar-shots"
+          mkdir -p "$out"
+          git fetch --depth=1 origin 32b63f08270ecee4bbe5f909a4f7e69b49cef5a3
+          git worktree add --detach "$before" FETCH_HEAD
+          mbx build --locked --features demo --manifest-path "$before/Cargo.toml" --target-dir "$RUNNER_TEMP/avatar-before-target"
+          for theme in light dark; do
+            "$RUNNER_TEMP/avatar-before-target/debug/solmu" --demo-shot "$out/before-$theme.png" --demo-size 1180x780 --demo-page "info,$theme" --demo-shot-delay 6000
+          done
+          git worktree remove "$before"
+      - name: Capture local avatar review evidence
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/local-avatar-shots"
+          mkdir -p "$out"
+          for page in avatar-info,light avatar-info,dark avatar-editor,dark avatar-editor,light avatar-custom,dark avatar-custom,light avatar-custom,rail,light avatar-image,rail,dark; do
+            ./target/debug/solmu --demo-shot "$out/$page.png" --demo-size 1180x780 --demo-page "$page" --demo-shot-delay 6000
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: local-avatar-shots
+          path: ${{ runner.temp }}/local-avatar-shots/*.png
           retention-days: 7
       - name: Failing-first settings repaint regression
         run: |

@@ -2421,6 +2421,41 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.open_chat = Some(chat.into());
                 app.scroll_to_bottom = false;
             }
+            "avatar-editor" | "avatar-custom" | "avatar-info" | "avatar-image" => {
+                apply_flags(app, Some("info"));
+                let id = app.open_chat.clone().unwrap();
+                let name = app
+                    .chat(&id)
+                    .map(|chat| app.chat_title(chat))
+                    .unwrap_or_default();
+                crate::ui::local_avatars::open(app, &id, &name);
+                if part == "avatar-custom" || part == "avatar-image" {
+                    app.dialog = None;
+                    let editor = app.local_avatar_editor.take().unwrap();
+                    let appearance = if part == "avatar-image" {
+                        let source = app.dirs.cache.join("avatar-import-fixture.png");
+                        std::fs::write(&source, sample_thumbnail(7)).unwrap();
+                        let (file, png) = crate::local_avatars::import(&source).unwrap();
+                        let path =
+                            crate::local_avatars::image_path(&app.dirs.state, &file).unwrap();
+                        fastframe_file::write_private(&path, &png).unwrap();
+                        crate::local_avatars::Appearance::Image { file }
+                    } else {
+                        crate::local_avatars::Appearance::Initials {
+                            text: crate::local_avatars::initials(&crate::util::initials(&name)),
+                            colour: [115, 89, 165],
+                        }
+                    };
+                    crate::local_avatars::replace(
+                        &mut app.settings.local_avatars,
+                        editor.identities,
+                        Some(appearance),
+                    );
+                } else if part == "avatar-info" {
+                    app.dialog = None;
+                    app.local_avatar_editor = None;
+                }
+            }
             "whisper-setup" => {
                 app.page = crate::model::Page::Settings;
                 app.settings_search = "Voice notes".into();
