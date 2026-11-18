@@ -1827,7 +1827,7 @@ mod tests {
             out.textures_delta.clear();
         };
         let center = |id: &str| {
-            ctx.data(|d| d.get_temp::<egui::Rect>(crate::ui::chats::chat_row_id(&id.into())))
+            ctx.data(|d| d.get_temp::<egui::Rect>(crate::ui::chats::chat_row_id(id)))
                 .expect("row was laid out")
                 .center()
         };
