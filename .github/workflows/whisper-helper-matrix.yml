@@ -25,7 +25,7 @@ env:
   WHISPER_REVISION: d1be6fde11ac6e0407606b4e42fe72d34add8037
   # The #359 installer's real-app smoke test, pinned to a reviewed commit of
   # feat/local-whisper-setup (coordinated with its author).
-  INSTALLER_REVISION: ff339020772ac45ca261b9e5b45ea75061048719
+  INSTALLER_REVISION: 8586739a2863f53c3e8b7f083309689621e29f4e
 
 jobs:
   macos:
