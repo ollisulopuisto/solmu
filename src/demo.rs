@@ -67,6 +67,8 @@ pub fn rail_content_height() -> f32 {
 
 #[cfg(test)]
 mod focus_trace;
+#[cfg(test)]
+mod frame_perf;
 
 use std::collections::HashMap;
 
