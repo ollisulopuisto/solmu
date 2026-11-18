@@ -1,5 +1,28 @@
 # Work log
 
+## 2026-11-18: Recent grouped sections: activity order, unread filter, dim-on-read
+
+Branch feat/recent-unread-sections. Read README/WORK-LOG; no root agent/board
+file present. Approved design (user picked option 4A of the sketches, with the
+4C read transition as the default): in the Recent view's grouped list, sections
+sort by their freshest chat (stable; Other pinned last), a section with unread
+rows lists only those rows plus a "Show all N in {group}" row that opens the
+full member list (and folds back), quiet sections list every member, and a
+chat opened from a filtered section stays in the filtered list - dimmed via
+unread_kept - until the view changes. Unread and Needs me modes keep the saved
+drag order and full member lists; the flat Recent list is unchanged. Drag
+reorder of headings is disabled in Recent (order is computed); member drops,
+folding and keyboard navigation follow the drawn plan, and revealing a chat
+lifts a section's filter when the chat sits outside the filtered rows.
+controls() untouched (owned by another branch). Tests: section activity order
+with Other last, saved order in other modes, unread filter plus expander
+toggle, dim-on-read until SetListMode, flat list keeps nothing, keyboard walks
+shown rows only. Verified locally: cargo fmt only - this Linux box lacks the
+libxkbcommon/alsa/pipewire dev packages, so cargo check/test/clippy run in CI.
+No DMG, no release.
+
+
+
 ## 2026-11-17: Wyoming transcript read as empty (data_length framing)
 
 Branch fix/wyoming-data-length. Read README/WORK-LOG; no root agent/board file

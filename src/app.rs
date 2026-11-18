@@ -3542,6 +3542,13 @@ impl App {
         self.later_contains(&self.settings.beeper.reply_later, chat)
     }
 
+    /// Chats a filtered list keeps visible until the view changes; see
+    /// `Action::KeepUnread`. Recent's grouped sections use this to hold an
+    /// opened chat - dimmed - in their unread-filtered rows.
+    pub fn unread_kept_contains(&self, id: &ChatId) -> bool {
+        self.unread_kept.contains(id)
+    }
+
     pub fn composed_forward_running(&self) -> bool {
         self.forward_items.iter().any(|item| {
             matches!(
@@ -12426,8 +12433,12 @@ impl App {
             // Only the filtered list sends this: search results and
             // notifications open chats without keeping them.
             Action::KeepUnread(id) => {
+                // Recent's grouped sections filter to unread rows too, so an
+                // opened chat stays - dimmed - until the view changes. Its
+                // flat list is unfiltered and keeps nothing.
                 if self.chat_filter == ChatFilter::Unread
                     || self.list_mode != crate::model::ListMode::Recent
+                    || !self.list_is_flat()
                 {
                     self.unread_kept.insert(id);
                 }
