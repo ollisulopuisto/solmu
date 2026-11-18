@@ -12,7 +12,9 @@ pub const RESIZE: f64 = 0.210;
 pub fn join(natural: f32, widest: f32) -> f32 {
     let diff = (widest - natural).abs();
     if diff <= 16.0 && diff <= 0.15 * natural.max(widest) {
-        widest
+        // Near-equal bubbles share the LARGER width: joining never shrinks
+        // a bubble under its own text.
+        natural.max(widest)
     } else {
         natural
     }
@@ -203,6 +205,10 @@ mod tests {
         // Within both tolerances: joins, including the 16-point edge.
         assert_eq!(join(100., 116.), 116.);
         assert_eq!(join(90., 105.), 105.);
+        // A wider bubble joining a narrower predecessor never shrinks:
+        // both end at the larger width.
+        assert_eq!(join(116., 100.), 116.);
+        assert_eq!(join(105., 90.), 105.);
         // Past 16 points or past 15% of the larger: keeps its natural width.
         assert_eq!(join(100., 117.), 100.);
         assert_eq!(join(80., 95.9), 80.);
