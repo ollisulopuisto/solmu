@@ -477,7 +477,12 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     ui.separator();
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::gettext(app.locale, "Groups")).strong());
+        let label = crate::i18n::gettext(app.locale, "Group by section");
+        let tooltip = format!(
+            "{} ({})",
+            label,
+            super::keys::hint("list-layout").unwrap_or_default()
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let response = ui
                 .push_id("new-local-group", |ui| {
@@ -553,11 +558,45 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
                         ui.close();
                     }
                 });
-            ui.label(if app.list_is_flat() {
-                crate::i18n::gettext(app.locale, "Flat list")
-            } else {
-                crate::i18n::gettext(app.locale, "Grouped")
+            let mut grouped = !app.list_is_flat();
+            let response = super::widgets::switch(ui, &app.palette, &mut grouped)
+                .tab_stop(Stop::ListLayout)
+                .on_hover_text(&tooltip);
+            crate::theme::reveal_focus(&response);
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::WidgetType::Checkbox,
+                    ui.is_enabled(),
+                    grouped,
+                    &label,
+                )
             });
+            if response.changed() {
+                app.actions.push(crate::model::Action::ToggleListLayout);
+            }
+            // Reserve both controls before sizing the label. A longer translation
+            // truncates on one line rather than pushing + outside the sidebar.
+            let label_response = ui
+                .allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), 22.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add(
+                            egui::Label::new(label.as_ref())
+                                .truncate()
+                                .sense(egui::Sense::click()),
+                        )
+                    },
+                )
+                .inner
+                .on_hover_text(&tooltip);
+            #[cfg(test)]
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(egui::Id::new("list-layout-label"), label_response.rect)
+            });
+            if label_response.clicked() {
+                app.actions.push(crate::model::Action::ToggleListLayout);
+            }
         });
     });
 }

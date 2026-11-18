@@ -18,6 +18,8 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 - Local and Wyoming transcription now reject audio longer than five minutes instead of retaining unbounded audio or silently truncating video at fifteen minutes. Encoded audio is limited to 64 MB.
 
 - Local transcription setup: explicitly select this computer or your Wyoming server. Download the multilingual Whisper Base model only on request, with progress, cancellation, verification and removal. Existing Wyoming settings are preserved; there is no silent server fallback. Prebuilt runtime download selection and actual-app verification are still pending on this branch.
+- The chat list has a real Group by section switch beside +. Cmd+G (Ctrl+G on Linux/Windows) does the same; the key appears on hover only. Removed the extra mode explainer line.
+
 - Voice shared items can expand and search saved transcripts; in-chat search includes saved transcript matches without starting transcription.
 - The sidebar uses named Recent, Unread and Needs me tabs. Recent includes all chats, newest first, without a date cutoff; old Unread 7d settings open Recent. A + beside Groups opens local group creation instead of a permanent input at the end of the list.
 

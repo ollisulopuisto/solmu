@@ -324,3 +324,6 @@ fallback and downsamples incrementally before the five-minute PCM cap. Changelog
 states that this limit applies to Wyoming too. Local demo library/test Clippy
 passes; 27 production-module engine/installer tests and ten workflow tests pass.
 Native regressions and all-platform real application verification remain pending.
+## 2026-11-18 - Group by section header switch
+
+Approved option A: removed mode explainer text and replaced the passive Grouped/Flat list label with the shared switch widget. Existing Cmd/Ctrl+G and the switch use ToggleListLayout and keep per-mode settings. Shortcut appears only on hover; + remains independent. Focus order and pointer/keyboard behaviour have regression coverage. Tests, synthetic before/after pixels and reviews pending. Incoming-message section sorting is separately coordinated.

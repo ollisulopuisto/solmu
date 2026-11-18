@@ -81,3 +81,5 @@ contains four native demo captures: before and after in light appearance, then
 before and after in dark appearance. Tap an image to inspect its full size.
 The captures use the synthetic demo fixture, never private chats. Screenshots
 are hosted outside the repository, following its no-capture-assets rule.
+
+The list header uses a Group by section switch and a separate + for local group creation. The switch and Cmd+G (Ctrl+G outside macOS) share the same per-mode setting. Its shortcut is shown only in the hover tooltip; the extra mode explainer line is removed.
