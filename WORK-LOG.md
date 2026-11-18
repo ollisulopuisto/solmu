@@ -14,6 +14,20 @@ message-star/pin/save chords and the three new help rows, and the demo
 regression holds the chat menu open through the native-action frame the way
 egui memory does in production. Not run locally: no Rust toolchain on this
 box (libspa-sys needs libpipewire); fmt, clippy and tests run in CI.
+## 2026-11-18: Sidebar falls back to the full-size avatar (feat/avatar-full-fallback)
+
+Cause: App::avatar (src/app.rs:4508) served non-linked chats from the
+thumbnail cache only, while Contact info (src/ui/info.rs:300) already falls
+back to the full-size picture. A failed thumbnail fetch caches its miss
+(Event::Avatar full:false path None, src/app.rs:5711) and only the Beeper
+account path rechecks after 15 minutes (src/account.rs:397-408), so the
+sidebar could keep showing bare initials for a contact whose full-size
+picture had in fact arrived. Fix: avatar() now falls back to
+source_avatar_full (cached hit or one fetch), mirroring the info panel.
+Failing-first test covers miss-then-fallback and a real thumbnail winning.
+Verified by rustc parse-check only; fmt/clippy/tests run in CI (this Ubuntu
+box cannot build the crate: PipeWire headers too old).
+
 
 ## 2026-11-18: Final helper pins from the published whisper-helper-v1.9.5 release
 
