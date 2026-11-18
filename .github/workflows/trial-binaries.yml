@@ -275,6 +275,24 @@ jobs:
           name: local-avatar-shots
           path: ${{ runner.temp }}/local-avatar-shots/*.png
           retention-days: 7
+      - name: Context menu shortcut regressions
+        run: |
+          mbx test --locked --lib --features demo context_menu_shortcut -- --test-threads=1
+          mbx test --locked --lib --features demo context_menu_key_tests -- --test-threads=1
+          mbx test --locked --lib --features demo context_menu_binding_tests -- --test-threads=1
+      - name: Capture context menu review evidence
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/menu-key-shots"
+          mkdir -p "$out"
+          for page in message-menu-keys,light message-menu-keys,dark chat-menu,light chat-menu,dark; do
+            ./target/debug/solmu --demo-shot "$out/$page.png" --demo-size 1180x780 --demo-page "$page" --demo-shot-delay 6000
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: menu-key-shots
+          path: ${{ runner.temp }}/menu-key-shots/*.png
+          retention-days: 7
       - name: Failing-first settings repaint regression
         run: |
           set -euo pipefail

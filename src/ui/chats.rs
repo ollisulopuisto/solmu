@@ -1803,7 +1803,7 @@ fn favorite_chip(
             true,
         ) + 24.0,
     )
-    .max(190.0);
+    .max(280.0);
     let popup = egui::Popup::context_menu(&response)
         .width(menu_width)
         .frame(widgets::menu_frame(&menu_palette));
@@ -2930,7 +2930,7 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
             true,
         ) + 24.0,
     )
-    .max(190.0);
+    .max(280.0);
     let popup = egui::Popup::context_menu(&response)
         .width(menu_width)
         .frame(widgets::menu_frame(&menu_palette));
@@ -3306,7 +3306,7 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
     } else {
         crate::i18n::gettext(locale, "Deal with later")
     };
-    if widgets::menu_item(ui, palette, Some(Icon::Clock), &label) {
+    if widgets::menu_item_bound(ui, palette, Some(Icon::Clock), &label, "reply-later") {
         app.actions.push(Action::ToggleDealLater(chat.id.clone()));
     }
     // Move a one-to-one chat out of its automatic category for good. The
@@ -3354,7 +3354,13 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
     } else {
         crate::i18n::gettext(locale, "Archive")
     };
-    if widgets::menu_item(ui, palette, Some(Icon::Archive), archive_label.as_ref()) {
+    if widgets::menu_item_bound(
+        ui,
+        palette,
+        Some(Icon::Archive),
+        archive_label.as_ref(),
+        "archive",
+    ) {
         app.actions
             .push(Action::SetArchived(chat.id.clone(), !chat.archived));
     }
@@ -3439,7 +3445,7 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
             app.actions.push(Action::OpenChat(chat.id.clone()));
             app.actions.push(Action::OpenInfo(chat.id.clone()));
         }
-        if widgets::menu_item(ui, palette, Some(Icon::Info), "Info") {
+        if widgets::menu_item_bound(ui, palette, Some(Icon::Info), "Info", "info-sidebar") {
             app.actions.push(Action::OpenChat(chat.id.clone()));
             app.actions.push(Action::OpenInfo(chat.id.clone()));
         }
@@ -3481,11 +3487,12 @@ fn context_menu(app: &mut App, ui: &mut egui::Ui, chat: &Chat, palette: &Palette
     {
         app.actions.push(Action::CopyText(format!("+{phone}")));
     }
-    if widgets::menu_item(
+    if widgets::menu_item_bound(
         ui,
         palette,
         Some(Icon::Info),
         &crate::i18n::gettext(locale, "Info"),
+        "info-sidebar",
     ) {
         // The panel sits beside the conversation, so the chat opens first.
         app.actions.push(Action::OpenChat(chat.id.clone()));
@@ -5015,5 +5022,67 @@ mod tests {
             app.actions.contains(&Action::OpenChat(counted.id.clone())),
             "clicking a favorite chip opens the chat"
         );
+    }
+}
+
+#[cfg(test)]
+mod context_menu_key_tests {
+    use super::*;
+    #[test]
+    fn context_menu_chat_keys_target_the_right_clicked_not_open_chat() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            crate::settings::Settings::default(),
+        );
+        crate::demo::populate(&mut app);
+        let open = app.open_chat.clone().unwrap();
+        let target = app
+            .chats
+            .iter()
+            .find(|chat| chat.id != open)
+            .unwrap()
+            .clone();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for (key, alt) in [
+            (egui::Key::E, false),
+            (egui::Key::I, false),
+            (egui::Key::I, true),
+        ] {
+            app.actions.clear();
+            let modifiers = egui::Modifiers {
+                command: true,
+                alt,
+                ..egui::Modifiers::NONE
+            };
+            let palette = app.palette;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(600.0, 1400.0))),
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ui| context_menu(&mut app, ui, &target, &palette),
+            );
+            output.textures_delta.clear();
+            assert!(app.actions.iter().any(|action| match action {
+                Action::SetArchived(id, _) => key == egui::Key::E && id == &target.id,
+                Action::ToggleDealLater(id) => key == egui::Key::I && !alt && id == &target.id,
+                Action::OpenInfo(id) => key == egui::Key::I && alt && id == &target.id,
+                _ => false,
+            }));
+            assert_eq!(
+                app.open_chat.as_deref(),
+                Some(open.as_str()),
+                "menu does not retarget until its queued action runs"
+            );
+        }
     }
 }

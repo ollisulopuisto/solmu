@@ -13672,7 +13672,10 @@ impl App {
         self.handle_power();
         self.handle_tray();
         #[cfg(target_os = "macos")]
-        self.actions.extend(crate::macos::drain(self.window_hidden));
+        self.actions.extend(crate::ui::keys::route_native_actions(
+            ctx,
+            crate::macos::drain(self.window_hidden),
+        ));
         self.handle_control_commands();
         self.poll_custom_themes();
         let wallpaper = self.account().settings.wallpaper_image.clone();

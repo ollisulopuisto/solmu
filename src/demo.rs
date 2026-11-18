@@ -4537,6 +4537,10 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             }
             // With "voice": the menu of a playable voice message, which
             // lists every playback speed.
+            "message-menu-keys" => {
+                app.open_message_menu = Some("ada-reply".into());
+                app.scroll_to_bottom = true;
+            }
             "voice-menu" => app.open_message_menu = Some("ada-voice".into()),
             "react-menu" => {
                 app.open_message_menu = Some("ada-link".into());
@@ -15131,6 +15135,104 @@ mod tests {
             );
             assert!(!egui::Popup::is_id_open(&ctx, id.with("popup")));
         }
+    }
+
+    #[test]
+    fn context_menu_shortcut_native_commands_keep_other_chat_target() {
+        for command in ["chat-archive", "chat-reply-later", "info-sidebar"] {
+            let mut app = app();
+            let open = app.open_chat.clone().unwrap();
+            let target = app
+                .chats
+                .iter()
+                .find(|chat| chat.id != open && !chat.archived && !chat.locked)
+                .unwrap()
+                .clone();
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            app.open_chat_menu = Some(target.id.clone());
+            render(&mut app, &ctx);
+            assert!(egui::Popup::is_any_open(&ctx), "target menu is open");
+            app.open_chat_menu = None;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1180.0, 780.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let action = if command == "info-sidebar" {
+                        Action::ToggleInfoSidebar
+                    } else {
+                        Action::MenuCommand(command.into())
+                    };
+                    let remaining = crate::ui::keys::route_native_actions(ui.ctx(), vec![action]);
+                    assert!(
+                        remaining.is_empty(),
+                        "native accelerator is consumed by popup routing"
+                    );
+                    app.background_frame(ui.ctx());
+                    app.frame_ui(ui);
+                },
+            );
+            output.textures_delta.clear();
+            render(&mut app, &ctx);
+            match command {
+                "chat-archive" => {
+                    assert!(app.chat(&target.id).unwrap().archived);
+                    assert!(!app.chat(&open).unwrap().archived);
+                }
+                "chat-reply-later" => {
+                    let later = app.later_key(&target);
+                    let background = app.later_key(app.chat(&open).unwrap());
+                    assert!(app.settings.beeper.read_later.contains(&later));
+                    assert!(!app.settings.beeper.read_later.contains(&background));
+                }
+                _ => {
+                    assert_eq!(app.open_chat.as_deref(), Some(target.id.as_str()));
+                    assert!(app.info.is_some());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn context_menu_shortcut_full_frame_reply_uses_right_clicked_message() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        let chat = sample_ids()[0].to_owned();
+        let id = crate::ui::conversation::bubble_id(&chat, "ada-link");
+        let rect = ctx.read_response(id).expect("older message is drawn").rect;
+        let at = egui::pos2(rect.right() + 10.0, rect.center().y);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerMoved(at), button(true)],
+        );
+        frame_with(&mut app, &ctx, vec![button(false)]);
+        assert!(egui::Popup::is_id_open(&ctx, id.with("popup")));
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(egui::Key::R, egui::Modifiers::COMMAND)],
+        );
+        render(&mut app, &ctx);
+        assert_eq!(
+            app.reply_to.as_ref().map(|reply| reply.id.as_str()),
+            Some("ada-link"),
+            "menu target wins over the global latest-incoming shortcut"
+        );
+        assert!(!egui::Popup::is_id_open(&ctx, id.with("popup")));
     }
 
     #[test]

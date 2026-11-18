@@ -7777,11 +7777,12 @@ fn context_menu(
     );
     widgets::menu_separator(ui, &palette);
     if !matches!(message.content, Content::Revoked)
-        && widgets::menu_item(
+        && widgets::menu_item_bound(
             ui,
             &palette,
             Some(Icon::Reply),
             &crate::i18n::gettext(view.locale, "Reply"),
+            "incoming-bridge",
         )
     {
         if matches!(origin, MenuOrigin::List) {
@@ -7815,7 +7816,7 @@ fn context_menu(
         crate::i18n::gettext(view.locale, "Star")
     };
     if !matches!(message.content, Content::Revoked)
-        && widgets::menu_item(ui, &palette, Some(Icon::Star), &star_label)
+        && widgets::menu_item_bound(ui, &palette, Some(Icon::Star), &star_label, "message-star")
     {
         actions.push(Action::SetStar {
             chat: chat.clone(),
@@ -7831,7 +7832,7 @@ fn context_menu(
         crate::i18n::gettext(view.locale, "Pin message")
     };
     if !matches!(message.content, Content::Revoked)
-        && widgets::menu_item(ui, &palette, Some(Icon::Pin), &pin_label)
+        && widgets::menu_item_bound(ui, &palette, Some(Icon::Pin), &pin_label, "message-pin")
     {
         actions.push(Action::SetMessagePinned {
             chat: chat.clone(),
@@ -7840,11 +7841,12 @@ fn context_menu(
         });
     }
     if crate::app::can_select(&message.content)
-        && widgets::menu_item(
+        && widgets::menu_item_bound(
             ui,
             &palette,
             Some(Icon::Forward),
             &crate::i18n::gettext(view.locale, "Forward"),
+            "forward-message",
         )
     {
         actions.push(Action::ShowDialog(Dialog::Forward {
@@ -7862,7 +7864,13 @@ fn context_menu(
     // on the account, and saving never marks the chat read.
     if !matches!(message.content, Content::Revoked)
         && view.saved.is_some()
-        && widgets::menu_item(ui, &palette, Some(Icon::Bookmark), &saved_label)
+        && widgets::menu_item_bound(
+            ui,
+            &palette,
+            Some(Icon::Bookmark),
+            &saved_label,
+            "message-save",
+        )
     {
         actions.push(Action::SetSaved {
             chat: chat.clone(),
@@ -13955,6 +13963,60 @@ mod tests {
             );
             assert_eq!(view.copy_rows.unwrap().lock().unwrap()[0].body, text);
             assert_eq!(message.content, Content::text(&text));
+        });
+    }
+
+    #[test]
+    fn context_menu_shortcut_targets_the_menu_message_not_the_latest() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let message =
+                crate::archive::tests::message("1@s.whatsapp.net", "older-menu-target", 0, false);
+            for (key, alt) in [
+                (Key::R, false),
+                (Key::S, true),
+                (Key::P, true),
+                (Key::L, false),
+            ] {
+                let modifiers = Modifiers {
+                    command: true,
+                    alt,
+                    ..Modifiers::NONE
+                };
+                let mut actions = Vec::new();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(600.0, 1400.0),
+                        )),
+                        events: vec![egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| context_menu(ui, view, &message, MenuOrigin::Chat, &mut actions),
+                );
+                output.textures_delta.clear();
+                assert!(
+                    actions.iter().any(|action| match action {
+                        Action::Reply(id) => key == Key::R && id == "older-menu-target",
+                        Action::SetStar { message, .. } =>
+                            key == Key::S && message == "older-menu-target",
+                        Action::SetMessagePinned { message, .. } =>
+                            key == Key::P && message == "older-menu-target",
+                        Action::ShowDialog(Dialog::Forward { messages, .. }) =>
+                            key == Key::L && messages == &["older-menu-target"],
+                        _ => false,
+                    }),
+                    "{key:?}: menu shortcut must retain its message target"
+                );
+            }
         });
     }
 
