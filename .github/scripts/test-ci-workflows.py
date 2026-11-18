@@ -155,7 +155,14 @@ class WorkflowTests(unittest.TestCase):
 
     def test_helper_matrix_is_unsigned_uncached_and_covers_all_platforms(self):
         text = workflow('whisper-helper-matrix.yml')
-        self.assertNotIn('upload-artifact', text)
+        # Unsigned Linux/Windows archives may be uploaded as short-retention
+        # artifacts for release assembly; never signed macOS legs, never with
+        # secrets, and never cached.
+        self.assertNotIn('optional-whisper-arm64', text)
+        self.assertNotIn('optional-whisper-x86_64', text)
+        if 'upload-artifact' in text:
+            self.assertIn('retention-days:', text)
+            self.assertIn('if-no-files-found: error', text)
         self.assertNotIn('actions/cache', text)
         self.assertNotIn('${{ secrets.', text)
         self.assertNotIn('uses: ./.github/workflows/whisper-helper.yml', text)
