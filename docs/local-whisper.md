@@ -65,3 +65,8 @@ Transcription accepts up to five minutes of audio. Encoded audio is limited to
 64 MB and all source channels are downmixed/resampled incrementally before the PCM cap; oversized input
 fails with a message, never silently transcribes only the beginning. Runtime
 signature/Gatekeeper assessment runs on first use per worker, with a fingerprint of every runtime file checked again on later jobs. Long audio may need splitting first.
+
+Linux and Windows runtime identity currently relies on the reviewed pinned
+executable hash delivered by Solmu's signed/reviewed release, not an independent
+OS code signature. No unsigned download is described as Authenticode-signed.
+Apple runtime bundles additionally require Developer ID and Gatekeeper checks.

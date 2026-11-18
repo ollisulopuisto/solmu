@@ -17,11 +17,25 @@ const BITRATE: i32 = 32_000;
 
 /// Mono samples at `RATE` from an OGG/Opus file.
 pub fn decode(bytes: &[u8]) -> Result<Vec<f32>, String> {
-    decode_bounded(bytes, usize::MAX)
+    decode_bounded(bytes, usize::MAX).map_err(|error| match error {
+        DecodeError::Invalid(message) => message,
+        DecodeError::TooLong => "Audio is too long".into(),
+    })
+}
+
+#[derive(Debug)]
+pub enum DecodeError {
+    Invalid(String),
+    TooLong,
+}
+impl From<String> for DecodeError {
+    fn from(message: String) -> Self {
+        Self::Invalid(message)
+    }
 }
 
 /// Reject overlong transcription input while decoding, before growing its PCM.
-pub fn decode_bounded(bytes: &[u8], max_samples: usize) -> Result<Vec<f32>, String> {
+pub fn decode_bounded(bytes: &[u8], max_samples: usize) -> Result<Vec<f32>, DecodeError> {
     let bytes = without_stray_first_pages(bytes);
     let mut reader = ogg::PacketReader::new(Cursor::new(&bytes[..]));
     let mut stream: Option<Stream> = None;
@@ -31,7 +45,7 @@ pub fn decode_bounded(bytes: &[u8], max_samples: usize) -> Result<Vec<f32>, Stri
         let packet = match reader.read_packet() {
             Ok(Some(packet)) => packet,
             Ok(None) => break,
-            Err(error) => return Err(format!("bad OGG stream: {error}")),
+            Err(error) => return Err(DecodeError::Invalid(format!("bad OGG stream: {error}"))),
         };
         let Some(current) = stream.as_mut() else {
             stream = Some(Stream::open(&packet.data)?);
@@ -61,12 +75,12 @@ pub fn decode_bounded(bytes: &[u8], max_samples: usize) -> Result<Vec<f32>, Stri
         let skip = current.skip.min(mono.len());
         current.skip -= skip;
         if out.len().saturating_add(mono.len() - skip) > max_samples {
-            return Err("Audio is too long for transcription (maximum five minutes)".into());
+            return Err(DecodeError::TooLong);
         }
         out.extend_from_slice(&mono[skip..]);
     }
     if stream.is_none() {
-        return Err("not an OGG stream".to_owned());
+        return Err(DecodeError::Invalid("not an OGG stream".to_owned()));
     }
     Ok(out)
 }

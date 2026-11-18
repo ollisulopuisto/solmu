@@ -606,8 +606,10 @@ pub fn decode_for_transcription(path: &Path) -> Result<Vec<f32>, String> {
         let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
         match voice::decode_bounded(&bytes, TRANSCRIPTION_MAX_SAMPLES) {
             Ok(samples) => return Ok(samples),
-            Err(error) if error.contains("too long for transcription") => return Err(error),
-            Err(_) => {} // Vorbis and unusual Ogg variants still reach rodio.
+            Err(voice::DecodeError::TooLong) => {
+                return Err("Audio is too long for transcription (maximum five minutes)".into());
+            }
+            Err(voice::DecodeError::Invalid(_)) => {} // Vorbis and unusual Ogg variants still reach rodio.
         }
     }
     let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
@@ -1069,14 +1071,21 @@ mod tests {
     /// window for frames of their own; unstepped, they ask again.
     #[test]
     fn non_opus_ogg_reaches_the_general_decoder() {
+        use base64::Engine;
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("not-opus.ogg");
-        std::fs::write(&path, b"OggSnot-an-opus-stream").unwrap();
-        assert!(
-            decode_for_transcription(&path)
-                .unwrap_err()
-                .contains("Could not decode the audio")
-        );
+        let path = root.path().join("tone-vorbis.ogg");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(include_str!("../tests/fixtures/audio/synthetic-tone-vorbis.b64").trim())
+            .unwrap();
+        assert!(matches!(
+            voice::decode_bounded(&bytes, TRANSCRIPTION_MAX_SAMPLES),
+            Err(voice::DecodeError::Invalid(_))
+        ));
+        std::fs::write(&path, bytes).unwrap();
+        let decoded = decode_for_transcription(&path)
+            .expect("Vorbis falls through Opus to the general decoder");
+        assert!(!decoded.is_empty());
+        assert!(decoded.len() < voice::RATE as usize);
     }
 
     #[test]

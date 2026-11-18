@@ -105,6 +105,7 @@ pub struct DecodedWhisper {
     pub decode: PcmDecoder,
     pub model_verified: bool,
     pub runtime_verified: Option<[u8; 32]>,
+    pub artifact: crate::whisper_runtime::Artifact,
 }
 
 fn pcm_wav(pcm: &[u8]) -> Result<tempfile::NamedTempFile, String> {
@@ -143,8 +144,7 @@ fn pcm_wav(pcm: &[u8]) -> Result<tempfile::NamedTempFile, String> {
 
 impl Engine for DecodedWhisper {
     fn transcribe(&mut self, audio: &Path, language: &str) -> Result<String, String> {
-        let spec = crate::whisper_runtime::artifact()
-            .ok_or("Whisper runtime is not configured for this platform")?;
+        let spec = self.artifact;
         if let Some(expected) = self.runtime_verified {
             if crate::whisper_runtime::fingerprint(&self.engine.binary)? != expected {
                 return Err(
@@ -686,7 +686,7 @@ mod tests {
 
 /// Explicit manual runtime validation. The normal suite never downloads a
 /// model or runs a downloaded helper. Inputs come from a selected CI artifact.
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, feature = "demo"))]
 mod real_runtime_smoke {
     use super::*;
     #[test]
@@ -694,10 +694,14 @@ mod real_runtime_smoke {
     fn local_whisper_real_recording_installs_repairs_and_transcribes_opus() {
         let directory =
             PathBuf::from(std::env::var("SOLMU_HELPER_FIXTURE").expect("helper fixture"));
-        let metadata: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(directory.join("solmu-whisper-v1.9.5-arm64.json")).unwrap(),
-        )
-        .unwrap();
+        let metadata_path = std::env::var_os("SOLMU_HELPER_METADATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| directory.join("solmu-whisper-v1.9.5-arm64.json"));
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(metadata_path).unwrap()).unwrap();
+        if let Some(target) = metadata["target"].as_str() {
+            assert_eq!(target, crate::whisper_runtime::target());
+        }
         let archive = directory.join(metadata["filename"].as_str().unwrap());
         assert_eq!(
             metadata["upstream_revision"],
@@ -769,16 +773,62 @@ mod real_runtime_smoke {
         let opus = crate::voice::encode(&samples).expect("encode voice-note Opus");
         let note = state.path().join("recording.ogg");
         std::fs::write(&note, opus).unwrap();
-        let samples = crate::audio::decode_for_transcription(&note).expect("decode voice note");
-        let pcm = crate::transcriber::wyoming_pcm_from_mono(&samples, crate::voice::RATE);
-        let wav = pcm_wav(&pcm).unwrap();
-        crate::whisper_runtime::verify(&binary, spec).unwrap();
-        let mut engine = WhisperCpp::new(binary, model);
-        let transcript = engine.transcribe(wav.path(), "en").expect("real inference");
-        assert!(
-            transcript.to_lowercase().contains("ask not"),
-            "expected speech recognized"
+        let engine = DecodedWhisper {
+            engine: WhisperCpp::new(binary, model),
+            decode: Box::new(|path| {
+                crate::audio::decode_for_transcription(path).map(|samples| {
+                    crate::transcriber::wyoming_pcm_from_mono(&samples, crate::voice::RATE)
+                })
+            }),
+            model_verified: false,
+            runtime_verified: None,
+            artifact: spec,
+        };
+        let (mut app, _) = crate::app::App::headless(
+            crate::paths::AppDirs::under(state.path()),
+            crate::settings::Settings::default(),
         );
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let store =
+            crate::transcriber::Store::new(state.path().join("transcripts"), 32 << 20).unwrap();
+        app.transcriber = Some(crate::transcribe_worker::Worker::spawn(
+            Box::new(engine),
+            store,
+            || {},
+        ));
+        let account = app.account().id.0.clone();
+        app.apply(
+            crate::model::Action::TranscribeVoice {
+                chat: "synthetic-runtime-smoke".into(),
+                message: "voice-1".into(),
+                path: note,
+            },
+            &ctx,
+        );
+        let started = Instant::now();
+        loop {
+            match app.transcriber.as_ref().unwrap().get(
+                &account,
+                "synthetic-runtime-smoke",
+                "voice-1",
+            ) {
+                Some(crate::transcribe_worker::Status::Ready(text)) => {
+                    assert!(
+                        text.to_lowercase().contains("ask not"),
+                        "expected speech recognized"
+                    );
+                    break;
+                }
+                Some(crate::transcribe_worker::Status::Failed(error)) => {
+                    panic!("actual-app transcription failed: {error}")
+                }
+                _ if started.elapsed() < Duration::from_secs(180) => {
+                    std::thread::sleep(Duration::from_millis(50))
+                }
+                _ => panic!("actual-app transcription did not complete"),
+            }
+        }
         // Never print transcripts or fixture contents to CI logs.
     }
 }
