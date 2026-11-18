@@ -1,20 +1,21 @@
-//! Sent-run thirds and retargetable, nearest-first width transitions.
+//! Sent-run width sharing for near-equal text bubbles, plus retargetable,
+//! nearest-first width transitions.
 use std::collections::{HashMap, HashSet};
 
 pub const PAUSE: f64 = 0.0875;
 pub const RESIZE: f64 = 0.210;
 
-/// Round an outer bubble width up to a third of the run's widest bubble.
-/// The viewport wins over the 120-point floor on very narrow panes.
-pub fn band(natural: f32, widest: f32, cap: f32) -> f32 {
-    let widest = widest.max(120.0).min(cap.max(0.0));
-    if widest <= 0.0 {
-        return 0.0;
+/// Join a sent text bubble to its run's shared width when the two are
+/// near-equal: within 16 points AND 15% of the larger (#282's tolerance).
+/// Otherwise the bubble keeps its natural width, so a run holding one wide
+/// message never inflates the short replies around it.
+pub fn join(natural: f32, widest: f32) -> f32 {
+    let diff = (widest - natural).abs();
+    if diff <= 16.0 && diff <= 0.15 * natural.max(widest) {
+        widest
+    } else {
+        natural
     }
-    let third = widest / 3.0;
-    ((natural / third - 0.00001).ceil() * third)
-        .max(120.0)
-        .min(widest)
 }
 
 fn bounce(t: f32) -> f32 {
@@ -198,17 +199,17 @@ mod tests {
     }
 
     #[test]
-    fn sent_bands_round_up_and_respect_narrow_caps() {
-        assert_eq!(
-            [80., 250., 400.].map(|w| band(w, 450., 560.)),
-            [150., 300., 450.]
-        );
-        for natural in [0., 20., 120., 300., 900.] {
-            let width = band(natural, 900., 75.);
-            assert_eq!(width, 75.);
-        }
-        assert_eq!(band(1., 70., 560.), 120.);
-        assert_eq!(band(450., 450., 560.), 450.);
+    fn near_equal_text_widths_join_and_distant_ones_keep_their_own() {
+        // Within both tolerances: joins, including the 16-point edge.
+        assert_eq!(join(100., 116.), 116.);
+        assert_eq!(join(90., 105.), 105.);
+        // Past 16 points or past 15% of the larger: keeps its natural width.
+        assert_eq!(join(100., 117.), 100.);
+        assert_eq!(join(80., 95.9), 80.);
+        // A run with one wide message leaves the short ones alone.
+        assert_eq!(join(120., 540.), 120.);
+        // A bubble as wide as the run joins itself: natural in, natural out.
+        assert_eq!(join(540., 540.), 540.);
     }
     #[test]
     fn arrival_is_final_first_then_older_rows_resize_one_at_a_time() {

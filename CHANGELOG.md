@@ -15,6 +15,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- Sent text bubbles share a run's width only when they are near-equal to its widest text (within 16 points and 15%); media, cards, quotes and forwards keep their own width and no longer inflate short replies around them.
 - Long message bodies stop after 25 rendered lines. Show more gives the hidden-line count, Show less folds them again; copy, reply and forward keep the full message.
 - Customize avatars locally from Contact or Group info with an image or initials and colour. The override follows the identity across the sidebar and chat views; reset restores its source picture without changing anyone's profile.
 - Context menus show working message and chat shortcut hints. While a menu is open its keys act on that right-clicked item, not the background chat; palette and Saved-list shortcuts stay separate.

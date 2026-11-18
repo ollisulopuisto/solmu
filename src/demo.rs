@@ -19054,7 +19054,7 @@ mod tests {
     }
 
     #[test]
-    fn received_hugs_text_and_sent_run_uses_thirds_with_one_footer() {
+    fn received_hugs_text_and_sent_run_joins_near_equal_texts_with_one_footer() {
         use crate::ui::conversation::{bubble_id, footer_id};
         for theme in [ThemeChoice::Dark, ThemeChoice::Light, ThemeChoice::Messages] {
             let mut app = app();
@@ -19077,7 +19077,7 @@ mod tests {
                     true,
                     1700000180,
                     Content::text(
-                        "A longer sent message fills the full band while earlier short messages share the first third.",
+                        "A longer sent message keeps its own width and leaves the short replies hugging their text.",
                     ),
                 ),
             ];
@@ -19101,7 +19101,9 @@ mod tests {
             let a = rect("short-a");
             let b = rect("short-b");
             let c = rect("long-c");
-            assert!(a.width() >= 119.);
+            // Near-equal short texts join the wider one; the thirds floor
+            // is gone, so they hug their text.
+            assert!(a.width() < 119.);
             assert!((a.width() - b.width()).abs() < 1.);
             assert!((a.right() - c.right()).abs() < 1.);
             assert!(c.width() > a.width() + 30.);

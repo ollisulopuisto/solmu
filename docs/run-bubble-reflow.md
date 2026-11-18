@@ -1,12 +1,15 @@
 # Run bubble sizing and reflow
 
-Received text hugs its contents without a minimum. Sent bubbles align right,
-with a 120-point outer minimum unless the pane itself is narrower. Within each
-same-source, same-sender, same-day sent run, natural widths round up to a third,
-two thirds, or all of the widest natural bubble. Quotes and cards stay inside.
-All skins use outer top-corner tails on every bubble, 4-point row gaps and
-14-point run gaps. A run gets its timestamp and normal receipt on its last row;
-per-message reactions, failure actions and marks remain attached to that row.
+Received text hugs its contents without a minimum. Sent bubbles align right.
+Within each same-source, same-sender, same-day sent run, plain text bubbles
+join the run's widest natural text width when they are near-equal to it
+(within 16 points AND 15% of the larger, #282's tolerance); every other
+bubble keeps its natural width, and media, cards, quotes and forwards never
+take part in the shared width at all, so one wide message cannot inflate the
+short replies around it. All skins use outer top-corner tails on every
+bubble, 4-point row gaps and 14-point run gaps. A run gets its timestamp and
+normal receipt on its last row; per-message reactions, failure actions and
+marks remain attached to that row.
 
 When a new message changes a run, it appears at its final width first. After
 87.5ms, changed older visible bubbles resize nearest-to-new first, sequentially,

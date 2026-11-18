@@ -6256,17 +6256,30 @@ fn planned_widths(
             end += 1;
         }
         if messages[start].from_me {
+            // Only plain text bubbles share a run's width, and only when
+            // they are near-equal to its widest text: a big screenshot,
+            // card or pasted dump must not inflate short replies.
+            let shares_width = |message: &Message| {
+                matches!(&message.content, Content::Text { preview: None, .. })
+                    && message.quoted.is_none()
+                    && !message.forwarded
+            };
             let widest = entries[start..end]
                 .iter()
-                .map(|(_, w, _)| w + inset)
+                .zip(messages[start..end].iter())
+                .filter(|(_, message)| shares_width(message))
+                .map(|((_, w, _), _)| *w + inset)
                 .fold(0.0, f32::max);
-            for (offset, (_, width, _)) in entries[start..end].iter_mut().enumerate() {
-                *width = (crate::run_widths::band(
-                    *width + inset,
-                    widest,
-                    planning_cap(ui, messages[start + offset], cap) + inset,
-                ) - inset)
-                    .max(0.0);
+            if widest > 0.0 {
+                for ((_, width, _), message) in entries[start..end]
+                    .iter_mut()
+                    .zip(messages[start..end].iter())
+                {
+                    if shares_width(message) {
+                        *width =
+                            (crate::run_widths::join(*width + inset, widest) - inset).max(0.0);
+                    }
+                }
             }
         }
         start = end;
