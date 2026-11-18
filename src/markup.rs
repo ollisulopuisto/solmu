@@ -2735,7 +2735,11 @@ mod tests {
                 !std::sync::Arc::ptr_eq(&cached.shared, &relaid.shared),
                 "an edited body lays out again"
             );
-            assert_eq!(relaid.unbroken_text(), edited);
+            assert_eq!(
+                relaid.unbroken_text(),
+                edited.replace("@35850123", "@Ada"),
+                "copy text preserves the edit and resolves the mention name"
+            );
             assert!(
                 !std::sync::Arc::ptr_eq(&cached.shared, &renamed_layout.shared),
                 "a renamed mention lays out again"
