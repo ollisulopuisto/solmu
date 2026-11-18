@@ -19123,6 +19123,52 @@ mod tests {
         }
     }
 
+    /// A sent run mixing a wide photo with short texts: the photo keeps its
+    /// frame width and the texts hug their text instead of joining it.
+    #[test]
+    fn sent_run_with_media_does_not_inflate_text_bubbles() {
+        use crate::ui::conversation::bubble_id;
+        let mut app = app();
+        app.settings.reduce_motion = true;
+        let chat = SAMPLES[0].id;
+        let mut rows = vec![
+            message(chat, "text-a", true, 1700000000, Content::text("OK")),
+            message(
+                chat,
+                "photo-b",
+                true,
+                1700000060,
+                Content::Image {
+                    motion: None,
+                    caption: None,
+                    media: media("image/jpeg", 100_000, Some(800), Some(600)),
+                },
+            ),
+            message(chat, "text-c", true, 1700000120, Content::text("Yes")),
+        ];
+        for row in &mut rows {
+            row.status = Delivery::Read;
+        }
+        app.conversations.get_mut(chat).unwrap().messages = rows;
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..5 {
+            streak_test_frame(&mut app, &ctx, 1180., 1000., vec![]);
+        }
+        let rect = |id| {
+            ctx.data(|data| data.get_temp::<egui::Rect>(bubble_id(chat, id).with("rect")))
+                .unwrap()
+        };
+        let text = rect("text-a");
+        let photo = rect("photo-b");
+        assert!(
+            text.width() < photo.width() / 2.,
+            "a short text hugs its text beside a wide photo: {text:?} vs {photo:?}"
+        );
+        assert!((rect("text-c").width() - text.width()).abs() < 1.);
+        assert!(photo.width() > 200., "the photo keeps its frame: {photo:?}");
+    }
+
     #[test]
     fn widths_probe() {
         let mut app = app();
