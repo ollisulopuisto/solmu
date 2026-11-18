@@ -1,5 +1,22 @@
 # Work log
 
+## 2026-11-18: Pin the six prebuilt Whisper runtimes (publication pending)
+
+Branch feat/local-whisper-pins off main 40ea68e (after #359 and #370 merged).
+Wired whisper_runtime::artifact() for all six shipped targets from the
+packaging handoff: macOS arm64/Intel from the signed + notarized main-branch
+run 44301781725, Linux/Windows from the unsigned matrix build. Verified the
+macOS pins independently against the run's metadata JSON and by hashing the
+downloaded archives and their whisper-cli executables; the Linux/Windows
+values could not be re-verified yet because the main-branch matrix run
+44301777978 was still queued and the PR-branch run's artifacts are gone -
+they must be confirmed against that run or the published assets. Download
+URLs are placeholders (https://invalid.invalid/pending-helper-publication/...)
+by design: the helper release is not published, publication needs the owner's
+explicit approval, and every size/hash must be recomputed from the published
+assets before merge. Docs and changelog updated to say so. Not run locally:
+no Rust toolchain on this box; fmt/check/clippy/tests run in CI.
+
 ## 2026-11-18: Recent grouped sections: activity order, unread filter, dim-on-read
 
 Branch feat/recent-unread-sections. Read README/WORK-LOG; no root agent/board

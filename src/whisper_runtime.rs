@@ -13,8 +13,53 @@ pub struct Artifact {
 
 // Populated only from the successfully signed/notarized helper artifact.
 // A missing platform is unavailable, never silently substituted from PATH.
+//
+// PENDING PUBLICATION: the owner has not published the helper release yet,
+// so the download URLs below are placeholders and MUST be replaced with the
+// final public asset URLs, with every size/hash recomputed from the
+// published assets, before this can merge. Until then downloads fail by
+// design, exactly as an unavailable runtime does.
 pub fn artifact() -> Option<Artifact> {
-    None
+    let spec = match target() {
+        "aarch64-apple-darwin" => Artifact {
+            url: "https://invalid.invalid/pending-helper-publication/solmu-whisper-v1.9.5-arm64.zip",
+            bytes: 2_106_898,
+            sha256: "2266754f8e10f79ce7627a82e7878872390db2a38d4e1846bc9881b0bd0be215",
+            executable_sha256: "3ecb9965b5406d3c7ff72c4103379f02b312b9df5ca16a740437c15a71f2473b",
+        },
+        "x86_64-apple-darwin" => Artifact {
+            url: "https://invalid.invalid/pending-helper-publication/solmu-whisper-v1.9.5-x86_64.zip",
+            bytes: 2_206_873,
+            sha256: "a25410c3234683beb0de3045778b42eb149ee8b8b4dea6d184ae28406c632302",
+            executable_sha256: "790bdab490e6a533023eec9cc6c2fa603316002d55fecf6541426e772911dee1",
+        },
+        "x86_64-unknown-linux-gnu" => Artifact {
+            url: "https://invalid.invalid/pending-helper-publication/solmu-whisper-v1.9.5-linux-x86_64.tar.gz",
+            bytes: 1_719_153,
+            sha256: "3f7ffc6a33a948d0eb09c32f84629930ac0b8e165e295b2de286d1f82eece1a3",
+            executable_sha256: "ab7529edbe1cb1d15410f3ac8cc5dc102f57383fe7e08e945e56660da890c7ea",
+        },
+        "aarch64-unknown-linux-gnu" => Artifact {
+            url: "https://invalid.invalid/pending-helper-publication/solmu-whisper-v1.9.5-linux-aarch64.tar.gz",
+            bytes: 1_660_319,
+            sha256: "1ae42fef87c5085a8fb5982e1acefd339c5a3f7d8dc2cd47faef1ea5091b6e0b",
+            executable_sha256: "abf71b67dc6c9d90f3c87ae7371c2a3acd5f30756da8a9ed5c99a32891ab986b",
+        },
+        "x86_64-pc-windows-msvc" => Artifact {
+            url: "https://invalid.invalid/pending-helper-publication/solmu-whisper-v1.9.5-windows-x86_64.tar.gz",
+            bytes: 827_961,
+            sha256: "74077941de44bdb39c873d47b360f40da31e88e3c0d6ebf2c014bd5da41584a2",
+            executable_sha256: "2d63abb10f59099fad01ed432a6e636762aeac395e78d9ab1c04cfbf509b74d5",
+        },
+        "aarch64-pc-windows-msvc" => Artifact {
+            url: "https://invalid.invalid/pending-helper-publication/solmu-whisper-v1.9.5-windows-arm64.tar.gz",
+            bytes: 840_145,
+            sha256: "e3dd71aa08a3cac073ea7af4fe557dd61bb57d20990a28b08ccb9eeb490a5580",
+            executable_sha256: "77d73d58d6503da212f8265505bbae702a5d4f5342ab6f1e11b0dee8b325ac65",
+        },
+        _ => return None,
+    };
+    Some(spec)
 }
 
 pub fn executable(state: &Path) -> PathBuf {

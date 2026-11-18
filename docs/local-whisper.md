@@ -32,11 +32,16 @@ Accuracy varies, especially for short clips and uncommon languages.
 
 ## Implementation status
 
-Runtime download selection is still pending. This
-branch is not a usable released feature. Engine/installer regressions pass
-in isolation and the app library passes check/clippy; whole-app native tests,
-screenshots, downloaded-runtime security validation and real-recording actual-app validation are
-still required. Do not treat the isolated engine tests as end-to-end proof.
+Runtime selection is pinned for all six shipped targets, but the helper
+release is not published yet: the download URLs in
+`whisper_runtime::artifact()` are placeholders and every size/hash must be
+recomputed from the published assets once the owner publishes the release.
+Until then downloads fail by design. The macOS pins come from the signed and
+notarized main-branch helper run; Linux and Windows pins come from the
+unsigned matrix build and are verified against hashes only, not an OS code
+signature. Public-URL download/install/repair validation, whole-app native
+tests and final screenshots are still required before merge. Do not treat
+the isolated engine tests as end-to-end proof.
 
 ## macOS runtime research
 
