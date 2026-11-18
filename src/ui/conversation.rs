@@ -6276,8 +6276,7 @@ fn planned_widths(
                     .zip(messages[start..end].iter())
                 {
                     if shares_width(message) {
-                        *width =
-                            (crate::run_widths::join(*width + inset, widest) - inset).max(0.0);
+                        *width = (crate::run_widths::join(*width + inset, widest) - inset).max(0.0);
                     }
                 }
             }
