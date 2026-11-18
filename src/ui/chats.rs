@@ -1803,7 +1803,7 @@ fn favorite_chip(
             true,
         ) + 24.0,
     )
-    .max(280.0);
+    .max(190.0);
     let popup = egui::Popup::context_menu(&response)
         .width(menu_width)
         .frame(widgets::menu_frame(&menu_palette));
@@ -2930,7 +2930,7 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
             true,
         ) + 24.0,
     )
-    .max(280.0);
+    .max(190.0);
     let popup = egui::Popup::context_menu(&response)
         .width(menu_width)
         .frame(widgets::menu_frame(&menu_palette));

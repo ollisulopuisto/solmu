@@ -1800,6 +1800,7 @@ pub const MENU_COMMANDS: &[&str] = &[
 /// Re-inject the matching chord while a popup is open so the popup, not the
 /// background chat, owns the target. Kept platform-independent for regression
 /// coverage of the exact native-action route.
+#[cfg(any(target_os = "macos", all(test, feature = "demo")))]
 pub(crate) fn route_native_actions(ctx: &egui::Context, actions: Vec<Action>) -> Vec<Action> {
     if !egui::Popup::is_any_open(ctx) {
         return actions;
@@ -2116,6 +2117,9 @@ mod tests {
                 "Quote-reply to the latest incoming message (on its source in linked chats)",
             ),
             ("Ctrl+L", "Forward selected messages, or the latest message"),
+            ("Ctrl+Alt+S", "Star or unstar the context-menu message"),
+            ("Ctrl+Alt+P", "Pin or unpin the context-menu message"),
+            ("Ctrl+Alt+B", "Save or unsave the context-menu message"),
             (
                 "\u{2191} / \u{2193}, Enter",
                 "Walk the open chat's search results and jump to one",
@@ -2320,7 +2324,8 @@ mod tests {
 
     /// Bindings with keys whose menu item carries no accelerator, because the
     /// handler owns the key (it depends on focus or an exact modifier), with
-    /// the menu command offering the same action. None: no menu item fits.
+    /// the menu command offering the same action. None: no menu item fits;
+    /// a context menu owns the chord for its own target instead.
     const KEYLESS_MENU: &[(&str, Option<&str>)] = &[
         ("rail-chats", Some("go-chats")),
         ("next-account", Some("go-next-number")),
@@ -2329,6 +2334,9 @@ mod tests {
         ("focus-messages", None),
         ("close-chat", None),
         ("incoming-bridge", None),
+        ("message-star", None),
+        ("message-pin", None),
+        ("message-save", None),
     ];
 
     #[test]

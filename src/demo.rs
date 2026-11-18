@@ -15153,7 +15153,10 @@ mod tests {
             app.open_chat_menu = Some(target.id.clone());
             render(&mut app, &ctx);
             assert!(egui::Popup::is_any_open(&ctx), "target menu is open");
-            app.open_chat_menu = None;
+            // Keep the hook set for the action frame, the way egui memory
+            // holds the popup open in production: the swallowed chord the
+            // bridge re-injects still meets an open menu whose target is
+            // `target`, not the open chat.
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
