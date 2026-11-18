@@ -1,5 +1,34 @@
 # Work log
 
+## 2026-11-18: Final helper pins from the published whisper-helper-v1.9.5 release
+
+Olli approved publication 14:49. #375 merged (matrix now uploads unsigned
+Linux/Windows archives after installer verification). Release
+whisper-helper-v1.9.5 published with six assets + metadata JSONs, marked
+not-latest: macOS from signed run 44301781725, Linux/Windows from matrix run
+44320859629. Every asset anonymously re-downloaded; size and SHA-256 match
+the in-job metadata exactly, executable hashes re-verified. artifact() now
+carries the real release URLs and recomputed pins; Linux executables are
+byte-reproducible across runs, Windows ones are not (pins taken from the
+published bytes). Docs updated. Not run locally: no Rust toolchain here.
+
+## 2026-11-18: Pin the six prebuilt Whisper runtimes (publication pending)
+
+Branch feat/local-whisper-pins off main 40ea68e (after #359 and #370 merged).
+Wired whisper_runtime::artifact() for all six shipped targets from the
+packaging handoff: macOS arm64/Intel from the signed + notarized main-branch
+run 44301781725, Linux/Windows from the unsigned matrix build. Verified the
+macOS pins independently against the run's metadata JSON and by hashing the
+downloaded archives and their whisper-cli executables; the Linux/Windows
+values could not be re-verified yet because the main-branch matrix run
+44301777978 was still queued and the PR-branch run's artifacts are gone -
+they must be confirmed against that run or the published assets. Download
+URLs are placeholders (https://invalid.invalid/pending-helper-publication/...)
+by design: the helper release is not published, publication needs the owner's
+explicit approval, and every size/hash must be recomputed from the published
+assets before merge. Docs and changelog updated to say so. Not run locally:
+no Rust toolchain on this box; fmt/check/clippy/tests run in CI.
+
 ## 2026-11-18: Recent grouped sections: activity order, unread filter, dim-on-read
 
 Branch feat/recent-unread-sections. Read README/WORK-LOG; no root agent/board

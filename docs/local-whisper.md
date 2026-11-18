@@ -32,11 +32,14 @@ Accuracy varies, especially for short clips and uncommon languages.
 
 ## Implementation status
 
-Runtime download selection is still pending. This
-branch is not a usable released feature. Engine/installer regressions pass
-in isolation and the app library passes check/clippy; whole-app native tests,
-screenshots, downloaded-runtime security validation and real-recording actual-app validation are
-still required. Do not treat the isolated engine tests as end-to-end proof.
+Runtime selection is pinned for all six shipped targets to the published
+`whisper-helper-v1.9.5` release; every URL, size and hash was recomputed
+from the published assets. The macOS archives come from the signed and
+notarized default-branch helper run; Linux and Windows assets are unsigned
+CI builds and are verified against pinned hashes only, not an OS code
+signature. Actual public-URL download/install/repair validation runs through
+the `SOLMU_VALIDATE_PUBLIC_DOWNLOAD` smoke route. Do not treat the isolated
+engine tests as end-to-end proof.
 
 ## macOS runtime research
 
