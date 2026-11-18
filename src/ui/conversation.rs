@@ -9814,7 +9814,7 @@ fn rich_body(
         grow_emoji,
     );
     let total = laid.galley.rows.len();
-    if total <= crate::bubble_collapse::ROW_LIMIT {
+    if total <= 25 {
         return rich_body_full(ui, view, message, text, width, reserve, span, actions, laid);
     }
     // Scoped to this local account, exact source and message revision. An edit
@@ -9843,7 +9843,7 @@ fn rich_body(
         .ctx()
         .data(|data| data.get_temp::<bool>(id))
         .unwrap_or(false);
-    let shown = crate::bubble_collapse::visible_rows(total, expanded);
+    let shown = if expanded { total } else { 25 };
     let height = if expanded {
         laid.galley.size().y
     } else {
@@ -13614,6 +13614,44 @@ mod tests {
             (own - incoming - 19.0).abs() < 0.5,
             "our own messages add the delivery ticks, {own} vs {incoming}"
         );
+    }
+
+    #[test]
+    fn long_bubble_collapse_boundary_uses_actual_rendered_rows() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            for (total, folds) in [(24, false), (25, false), (26, true)] {
+                let text = (0..total).map(|_| "One row").collect::<Vec<_>>().join("\n");
+                let mut message = crate::archive::tests::message(
+                    "1@s.whatsapp.net",
+                    &format!("boundary-{total}"),
+                    0,
+                    false,
+                );
+                message.content = Content::text(&text);
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    rich_body(
+                        ui,
+                        view,
+                        &message,
+                        &text,
+                        600.0,
+                        None,
+                        Some(600.0),
+                        &mut Vec::new(),
+                        true,
+                    );
+                });
+                output.textures_delta.clear();
+                let rows = ctx.data(|data| {
+                    data.get_temp::<(usize, usize)>(
+                        bubble_id(&message.chat, &message.id).with("collapse-rows"),
+                    )
+                });
+                assert_eq!(rows, folds.then_some((25, total)), "{total} laid-out rows");
+            }
+        });
     }
 
     #[test]

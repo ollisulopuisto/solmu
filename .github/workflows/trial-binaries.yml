@@ -222,7 +222,6 @@ jobs:
           cache-generation: test-v1
       - name: Long bubble behavior regressions
         run: |
-          mbx test --locked --lib --features demo bubble_collapse:: -- --test-threads=1
           mbx test --locked --lib --features demo long_bubble_collapse -- --test-threads=1
       - name: Build the demo
         run: mbx build --locked --features demo
