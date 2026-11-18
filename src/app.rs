@@ -653,13 +653,16 @@ pub struct App {
     pub composer_tools_open: bool,
     /// In-chat audio player.
     pub player: Player,
-    /// Local voice-note transcription worker; `None` until a Wyoming
-    /// service address is set. Audio and transcripts stay on the machine.
+    /// Selected transcription engine; absent until its setup is ready.
     pub transcriber: Option<crate::transcribe_worker::Worker>,
     transcript_archive: Option<crate::transcribe_worker::Worker>,
     /// The address the current worker was built with; a settings change
     /// respawns the worker only when this differs.
     transcriber_address: String,
+    pub local_whisper_download: Option<crate::local_whisper::Download>,
+    pub local_whisper_removal: Option<(String, std::sync::mpsc::Receiver<Result<(), String>>)>,
+    pub local_whisper_status: Option<crate::local_whisper::DownloadState>,
+    pub local_whisper_presence: crate::model_presence::Presence,
     /// In-chat video player.
     pub video: crate::video::Player,
     /// Chat of the loaded video; leaving it stops the video.
@@ -1235,17 +1238,16 @@ fn tray_action(event: fastframe_tray::Event, window_hidden: bool) -> Option<Acti
     })
 }
 
-/// Builds the transcription worker when a local Wyoming service is
-/// configured. The address is explicit config: unset disables
-/// transcription, unreachable fails each job with a clear error - there
-/// is no silent fallback and no cloud path.
+/// Builds only the explicitly selected speech engine. Missing local setup
+/// disables jobs rather than falling back to a saved server address.
 fn transcriber_worker(
     waker: &Waker,
     dirs: &crate::paths::AppDirs,
     settings: &Settings,
 ) -> Option<crate::transcribe_worker::Worker> {
-    let address = settings.transcription_wyoming.trim();
-    if address.is_empty() {
+    use crate::settings::TranscriptionEngine;
+    let choice = settings.transcription_engine();
+    if choice == TranscriptionEngine::Off {
         return None;
     }
     let store = match crate::transcriber::Store::new(dirs.state.join("transcripts"), 32 << 20) {
@@ -1255,20 +1257,41 @@ fn transcriber_worker(
             return None;
         }
     };
-    let mut engine = crate::transcriber_engine::Wyoming::new(address);
-    engine.decode = Some(Box::new(|path: &std::path::Path| {
+    let decode: crate::transcriber_engine::PcmDecoder = Box::new(|path: &std::path::Path| {
         crate::audio::decode_for_transcription(path)
             .map(|samples| crate::transcriber::wyoming_pcm_from_mono(&samples, crate::voice::RATE))
-    }));
+    });
+    let engine: Box<dyn crate::transcriber::Engine + Send> = match choice {
+        TranscriptionEngine::Local => {
+            let binary = crate::local_whisper::runtime_path(&dirs.state);
+            let model = crate::local_whisper::model_path(&dirs.state);
+            if !binary.is_file() || !model.is_file() {
+                return None;
+            }
+            Box::new(crate::transcriber_engine::DecodedWhisper {
+                engine: crate::transcriber_engine::WhisperCpp::new(binary, model),
+                decode,
+                model_verified: false,
+                runtime_verified: None,
+                artifact: crate::whisper_runtime::artifact()?,
+            })
+        }
+        TranscriptionEngine::Wyoming => {
+            let address = settings.transcription_wyoming.trim();
+            if address.is_empty() {
+                return None;
+            }
+            let mut engine = crate::transcriber_engine::Wyoming::new(address);
+            engine.decode = Some(decode);
+            Box::new(engine)
+        }
+        TranscriptionEngine::Off => return None,
+    };
     let wake = {
         let waker = waker.clone();
         move || waker.wake()
     };
-    Some(crate::transcribe_worker::Worker::spawn(
-        Box::new(engine),
-        store,
-        wake,
-    ))
+    Some(crate::transcribe_worker::Worker::spawn(engine, store, wake))
 }
 
 /// The tray item: Solmu's icon, and a menu to show or hide the window,
@@ -1423,8 +1446,13 @@ impl App {
         app.login_item.read(move || login_waker.wake());
         // Voice-note transcription only with a configured local service.
         app.transcriber = transcriber_worker(waker, &app.dirs, &app.settings);
+        app.transcriber_address = app.settings.transcription_worker_key();
+        app.refresh_local_whisper_presence();
+        let download_state = app.dirs.state.clone();
+        std::thread::spawn(move || {
+            crate::local_whisper::cleanup_abandoned_downloads(&download_state)
+        });
         app.refresh_transcript_archive();
-        app.transcriber_address = app.settings.transcription_wyoming.trim().to_string();
         let _ = app.roster.save_to(&app.files, &app.dirs.accounts_file());
         Ok(app)
     }
@@ -1650,6 +1678,10 @@ impl App {
             transcriber: None,
             transcript_archive: None,
             transcriber_address: String::new(),
+            local_whisper_download: None,
+            local_whisper_removal: None,
+            local_whisper_status: None,
+            local_whisper_presence: crate::model_presence::Presence::default(),
             video: crate::video::Player::new(waker.clone()),
             video_chat: None,
             video_wanted: None,
@@ -9261,7 +9293,56 @@ impl App {
         self.follow_outgoing();
     }
 
+    pub fn refresh_local_whisper_presence(&self) {
+        let waker = self.waker.clone();
+        self.local_whisper_presence.refresh(
+            crate::local_whisper::model_path(&self.dirs.state),
+            move || waker.wake(),
+        );
+    }
+
     fn tick(&mut self, ctx: &egui::Context) {
+        if let Some(result) = self
+            .local_whisper_removal
+            .as_ref()
+            .and_then(|(_, rx)| rx.try_recv().ok())
+        {
+            let (requested_engine, _) = self.local_whisper_removal.take().unwrap();
+            match result {
+                Ok(()) => {
+                    if self.settings.transcription_worker_key() == requested_engine {
+                        self.settings.transcription_engine =
+                            Some(crate::settings::TranscriptionEngine::Off);
+                        self.mark_settings_dirty();
+                    }
+                    self.local_whisper_status = None;
+                }
+                Err(error) => {
+                    self.local_whisper_status =
+                        Some(crate::local_whisper::DownloadState::Failed(error))
+                }
+            }
+            self.transcriber = transcriber_worker(&self.waker, &self.dirs, &self.settings);
+            self.transcriber_address = self.settings.transcription_worker_key();
+            self.refresh_transcript_archive();
+            self.refresh_local_whisper_presence();
+        }
+        if let Some(download) = &self.local_whisper_download {
+            let state = download.state();
+            if !matches!(
+                state,
+                crate::local_whisper::DownloadState::Downloading { .. }
+            ) {
+                self.local_whisper_download = None;
+                self.refresh_local_whisper_presence();
+                if matches!(state, crate::local_whisper::DownloadState::Ready(_)) {
+                    // Respect any engine choice made while downloading.
+                    self.transcriber = transcriber_worker(&self.waker, &self.dirs, &self.settings);
+                    self.refresh_transcript_archive();
+                }
+                self.local_whisper_status = Some(state);
+            }
+        }
         let now = Instant::now();
         if self.composing
             && let Some(last) = self.last_keystroke
@@ -11230,7 +11311,7 @@ impl App {
                 } else {
                     self.toast(crate::i18n::gettext(
                         self.locale,
-                        "Set the transcription service in Settings first",
+                        "Set up transcription in Settings first",
                     ));
                 }
             }
@@ -12719,11 +12800,51 @@ impl App {
                 self.search_hits.clear();
                 self.mark_settings_dirty();
             }
+            Action::DownloadLocalWhisper => {
+                if self.local_whisper_download.is_none()
+                    && self.local_whisper_removal.is_none()
+                    && crate::whisper_runtime::artifact().is_some()
+                {
+                    self.settings.transcription_engine =
+                        Some(crate::settings::TranscriptionEngine::Local);
+                    self.mark_settings_dirty();
+                    self.transcriber = None;
+                    self.refresh_transcript_archive();
+                    self.transcriber_address = self.settings.transcription_worker_key();
+                    self.local_whisper_status = None;
+                    let waker = self.waker.clone();
+                    self.local_whisper_download = Some(crate::local_whisper::Download::start(
+                        self.dirs.state.clone(),
+                        move || waker.wake(),
+                    ));
+                }
+            }
+            Action::CancelLocalWhisperDownload => {
+                if let Some(download) = &self.local_whisper_download {
+                    download.cancel();
+                }
+            }
+            Action::RemoveLocalWhisperModel => {
+                if self.local_whisper_download.is_none() && self.local_whisper_removal.is_none() {
+                    self.transcriber = None;
+                    self.refresh_transcript_archive();
+                    let state = self.dirs.state.clone();
+                    let waker = self.waker.clone();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.local_whisper_removal =
+                        Some((self.settings.transcription_worker_key(), rx));
+                    std::thread::spawn(move || {
+                        let _ = tx.send(crate::local_whisper::remove_installation(&state));
+                        waker.wake();
+                    });
+                }
+            }
             Action::SettingsChanged => {
                 self.sync_link_previews();
                 self.mark_settings_dirty();
-                let address = self.settings.transcription_wyoming.trim().to_string();
+                let address = self.settings.transcription_worker_key();
                 if address != self.transcriber_address {
+                    self.refresh_local_whisper_presence();
                     // A new address means a new worker: the old one's hot
                     // status belongs to a service that may no longer be the
                     // one configured. Its thread ends with the dropped
@@ -31758,13 +31879,76 @@ mod transcription_tests {
         assert!(
             app.toasts
                 .iter()
-                .any(|toast| toast.message.contains("Set the transcription service")),
+                .any(|toast| toast.message.contains("Set up transcription")),
             "the toast points at Settings: {:?}",
             app.toasts
                 .iter()
                 .map(|toast| &toast.message)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn local_missing_model_never_falls_back_to_a_configured_wyoming_server() {
+        let mut app = app();
+        app.settings.transcription_wyoming = "127.0.0.1:1".into();
+        app.settings.transcription_engine = Some(crate::settings::TranscriptionEngine::Local);
+        assert!(transcriber_worker(&app.waker, &app.dirs, &app.settings).is_none());
+        assert_eq!(app.settings.transcription_worker_key(), "local");
+        app.settings.transcription_engine = Some(crate::settings::TranscriptionEngine::Off);
+        assert!(transcriber_worker(&app.waker, &app.dirs, &app.settings).is_none());
+    }
+
+    #[test]
+    fn removal_completion_preserves_a_new_engine_choice() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.local_whisper_removal = Some(("local".into(), rx));
+        app.settings.transcription_engine = Some(crate::settings::TranscriptionEngine::Wyoming);
+        app.settings.transcription_wyoming = "127.0.0.1:1".into();
+        tx.send(Ok(())).unwrap();
+        app.tick(&ctx);
+        assert_eq!(
+            app.settings.transcription_engine(),
+            crate::settings::TranscriptionEngine::Wyoming
+        );
+        assert!(app.transcriber.is_some());
+    }
+
+    #[test]
+    fn local_removal_is_background_and_does_not_change_engine_until_success() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.settings.transcription_engine = Some(crate::settings::TranscriptionEngine::Wyoming);
+        app.settings.transcription_wyoming = "127.0.0.1:1".into();
+        app.apply(Action::RemoveLocalWhisperModel, &ctx);
+        assert!(app.local_whisper_removal.is_some());
+        assert_eq!(
+            app.settings.transcription_engine(),
+            crate::settings::TranscriptionEngine::Wyoming
+        );
+        let started = Instant::now();
+        while app.local_whisper_removal.is_some() {
+            app.tick(&ctx);
+            assert!(started.elapsed() < Duration::from_secs(5));
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            app.settings.transcription_engine(),
+            crate::settings::TranscriptionEngine::Off
+        );
+    }
+
+    #[test]
+    fn choosing_local_does_not_download_or_create_a_model() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.settings.transcription_engine = Some(crate::settings::TranscriptionEngine::Local);
+        app.apply(Action::SettingsChanged, &ctx);
+        assert!(app.local_whisper_download.is_none());
+        assert!(!crate::local_whisper::model_path(&app.dirs.state).exists());
+        assert!(app.transcriber.is_none());
     }
 
     #[test]

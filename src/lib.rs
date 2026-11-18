@@ -33,12 +33,14 @@ pub mod image_preview;
 pub mod link_policy;
 pub mod link_preview;
 mod linked_read;
+pub mod local_whisper;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod markup;
 pub mod media_pause;
 pub mod mentions;
 pub mod model;
+pub mod model_presence;
 pub mod motion;
 pub mod nav;
 pub mod new_group;
@@ -82,3 +84,5 @@ mod wrap;
 
 pub mod merged;
 pub mod suggest;
+
+pub mod whisper_runtime;

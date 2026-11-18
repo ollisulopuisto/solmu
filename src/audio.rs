@@ -592,12 +592,70 @@ pub fn decode_for_transcription(path: &Path) -> Result<Vec<f32>, String> {
     if is_video_file(path) {
         return extract_audio_with_ffmpeg(path);
     }
-    decode_file(path)
+    const MAX_ENCODED: u64 = 64 << 20;
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    if file.metadata().map_err(|error| error.to_string())?.len() > MAX_ENCODED {
+        return Err("Audio file is too large for transcription (maximum 64 MB)".into());
+    }
+    let mut header = [0; 4];
+    use std::io::Read;
+    (&file)
+        .read_exact(&mut header)
+        .map_err(|error| error.to_string())?;
+    if &header == b"OggS" {
+        let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+        match voice::decode_bounded(&bytes, TRANSCRIPTION_MAX_SAMPLES) {
+            Ok(samples) => return Ok(samples),
+            Err(voice::DecodeError::TooLong) => {
+                return Err("Audio is too long for transcription (maximum five minutes)".into());
+            }
+            Err(voice::DecodeError::Invalid(_)) => {} // Vorbis and unusual Ogg variants still reach rodio.
+        }
+    }
+    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let decoder = rodio::Decoder::new(std::io::BufReader::new(file))
+        .map_err(|error| format!("Could not decode the audio: {error}"))?;
+    transcription_samples(decoder)
 }
 
-/// Longest stretch of a video's audio sent for transcription, in seconds.
-/// Decoded samples are held in memory (48 kHz, four bytes each).
-const VIDEO_AUDIO_LIMIT_SECS: u32 = 900;
+fn transcription_samples(mut source: impl rodio::Source<Item = f32>) -> Result<Vec<f32>, String> {
+    let channels = usize::from(source.channels().get());
+    let source_rate = u64::from(source.sample_rate().get());
+    if channels > 32 || !(8_000..=384_000).contains(&source_rate) {
+        return Err("Unsupported audio rate or channel count for transcription".into());
+    }
+    let mut frame = || {
+        let mut sum = 0.0;
+        for _ in 0..channels {
+            sum += source.next()?;
+        }
+        Some(sum / channels as f32)
+    };
+    let Some(mut previous) = frame() else {
+        return Ok(Vec::new());
+    };
+    let mut samples = vec![previous];
+    let mut input_index = 0u64;
+    while let Some(current) = frame() {
+        input_index += 1;
+        // Integer positions avoid rounding accumulating over a long recording.
+        while samples.len() as u64 * source_rate <= input_index * u64::from(voice::RATE) {
+            if samples.len() == TRANSCRIPTION_MAX_SAMPLES {
+                return Err("Audio is too long for transcription (maximum five minutes)".into());
+            }
+            let position = samples.len() as u64 * source_rate;
+            let left = (input_index - 1) * u64::from(voice::RATE);
+            let fraction = (position - left) as f32 / voice::RATE as f32;
+            samples.push(previous + (current - previous) * fraction);
+        }
+        previous = current;
+    }
+    Ok(samples)
+}
+
+/// Five minutes bounds PCM retained for voice and video transcription.
+const VIDEO_AUDIO_LIMIT_SECS: u32 = 300;
+const TRANSCRIPTION_MAX_SAMPLES: usize = VIDEO_AUDIO_LIMIT_SECS as usize * voice::RATE as usize;
 
 /// Whether the file is a video container whose audio track needs ffmpeg.
 fn is_video_file(path: &Path) -> bool {
@@ -620,7 +678,7 @@ fn extract_audio_with_ffmpeg(path: &Path) -> Result<Vec<f32>, String> {
         .arg(path)
         .args(["-vn", "-ac", "1", "-ar"])
         .arg(crate::voice::RATE.to_string())
-        .args(["-t", &VIDEO_AUDIO_LIMIT_SECS.to_string()])
+        .args(["-t", &(VIDEO_AUDIO_LIMIT_SECS + 1).to_string()])
         .args(["-f", "f32le", "pipe:1"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -632,6 +690,9 @@ fn extract_audio_with_ffmpeg(path: &Path) -> Result<Vec<f32>, String> {
     let samples = samples_from_f32le(&output.stdout);
     if samples.is_empty() {
         return Err("This video has no audio to transcribe".to_owned());
+    }
+    if samples.len() > TRANSCRIPTION_MAX_SAMPLES {
+        return Err("Video audio is too long for transcription (maximum five minutes)".into());
     }
     Ok(samples)
 }
@@ -1034,6 +1095,130 @@ mod tests {
 
     /// A stepped recorder keeps recording, but its levels stop asking the
     /// window for frames of their own; unstepped, they ask again.
+    #[test]
+    fn non_opus_ogg_reaches_the_general_decoder() {
+        use base64::Engine;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("tone-vorbis.ogg");
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(include_str!("../tests/fixtures/audio/synthetic-tone-vorbis.b64").trim())
+            .unwrap();
+        assert!(matches!(
+            voice::decode_bounded(&bytes, TRANSCRIPTION_MAX_SAMPLES),
+            Err(voice::DecodeError::Invalid(_))
+        ));
+        std::fs::write(&path, bytes).unwrap();
+        let decoded = decode_for_transcription(&path)
+            .expect("Vorbis falls through Opus to the general decoder");
+        assert!(!decoded.is_empty());
+        assert!(decoded.len() < voice::RATE as usize);
+    }
+
+    #[test]
+    fn transcription_stereo_duration_is_limited_after_resampling() {
+        struct Exact {
+            left: usize,
+            rate: u32,
+        }
+        impl Iterator for Exact {
+            type Item = f32;
+            fn next(&mut self) -> Option<f32> {
+                if self.left == 0 {
+                    None
+                } else {
+                    self.left -= 1;
+                    Some(0.25)
+                }
+            }
+        }
+        impl rodio::Source for Exact {
+            fn current_span_len(&self) -> Option<usize> {
+                None
+            }
+            fn channels(&self) -> NonZero<u16> {
+                NonZero::new(2).unwrap()
+            }
+            fn sample_rate(&self) -> NonZero<u32> {
+                NonZero::new(self.rate).unwrap()
+            }
+            fn total_duration(&self) -> Option<Duration> {
+                None
+            }
+        }
+        for sample_rate in [44_100, 48_000] {
+            let decoded = transcription_samples(Exact {
+                left: sample_rate as usize * 2 * 240,
+                rate: sample_rate,
+            })
+            .unwrap();
+            assert!(
+                (decoded.len() as i64 - 240 * i64::from(voice::RATE)).abs() < 10,
+                "rate={sample_rate}, decoded={}",
+                decoded.len()
+            );
+            assert!(
+                decoded
+                    .iter()
+                    .all(|sample| (*sample - 0.25).abs() < f32::EPSILON)
+            );
+        }
+        assert!(
+            transcription_samples(Exact {
+                left: 48_000 * 2 * 301,
+                rate: 48_000
+            })
+            .unwrap_err()
+            .contains("five minutes")
+        );
+    }
+
+    #[test]
+    fn transcription_resampling_pins_linear_positions_and_stereo_downmix() {
+        for rate in [8_000, 44_100, 48_000, 96_000] {
+            // Left is a ramp; right adds 0.2. Their average is x + 0.1,
+            // so a wrong channel, frame shift or interpolation weight fails.
+            let frames = 1000;
+            let samples = (0..frames)
+                .flat_map(|i| {
+                    let x = i as f32 / frames as f32;
+                    [x, x + 0.2]
+                })
+                .collect::<Vec<_>>();
+            let decoded = transcription_samples(rodio::buffer::SamplesBuffer::new(
+                NonZero::new(2).unwrap(),
+                NonZero::new(rate).unwrap(),
+                samples,
+            ))
+            .unwrap();
+            for k in [0, 1, 2, 17, 53, 100] {
+                let expected = (k as f64 * f64::from(rate)
+                    / f64::from(voice::RATE)
+                    / f64::from(frames)) as f32
+                    + 0.1;
+                assert!(
+                    (decoded[k] - expected).abs() < 2e-6,
+                    "rate={rate}, k={k}, got={}, expected={expected}",
+                    decoded[k]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn transcription_rejects_oversized_encoded_input_before_decoding() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("large.wav");
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len((64 << 20) + 1)
+            .unwrap();
+        assert!(
+            decode_for_transcription(&path)
+                .unwrap_err()
+                .contains("64 MB")
+        );
+    }
+
     #[test]
     fn a_stepped_recorder_records_without_asking_for_frames() {
         let ctx = egui::Context::default();

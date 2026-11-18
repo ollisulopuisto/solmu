@@ -33,7 +33,7 @@ class WorkflowTests(unittest.TestCase):
         block = run_block(text, '        run: |\n')
         targets = ['aarch64-apple-darwin', 'x86_64-apple-darwin',
                    'x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc']
-        for target in targets + ['all', 'shots-only', 'whisper-helper', 'invalid']:
+        for target in targets + ['all', 'shots-only', 'whisper-helper', 'whisper-smoke', 'invalid']:
             with tempfile.NamedTemporaryFile() as out:
                 env = dict(os.environ, TARGET=target, GITHUB_OUTPUT=out.name)
                 result = subprocess.run(['bash', '-eu', '-c', block], env=env, capture_output=True)
@@ -42,7 +42,7 @@ class WorkflowTests(unittest.TestCase):
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     rows = json.loads(Path(out.name).read_text().split('=', 1)[1])['include']
-                    self.assertEqual([r['target'] for r in rows], targets if target == 'all' else [] if target in ['shots-only', 'whisper-helper'] else [target])
+                    self.assertEqual([r['target'] for r in rows], targets if target == 'all' else [] if target in ['shots-only', 'whisper-helper', 'whisper-smoke'] else [target])
         self.assertIn('fromJSON(needs.select.outputs.matrix)', text)
         self.assertIn('FAST_BEEPER_UPLOAD_ARTIFACTS', text)
 

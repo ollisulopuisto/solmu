@@ -183,6 +183,93 @@ The linked-person renderer did not apply the traffic-light clearance used by ord
 About build identity is tracked in a separate PR.
 
 
+## 2026-11-17 - Local Whisper setup (approved sketch C, in progress)
+
+Separate branch feat/local-whisper-setup based on main18416af. Explicit Build
+approval follows the first-run sketch; no automatic model downloads. Current
+work is a pinned, hash-verified, bounded atomic model installer using the
+existing HTTP/hash crates and tempfile already in the lockfile. Move tempfile
+from dev-only to regular dependency for private audio and atomic installation.
+
+Planned: engine selection preserving Wyoming, model controls and progress,
+signed bundled runtime from upstreamv1.9.5 commitd1be6fde11ac6e0407606b4e42fe72d34add8037,
+explicit-auto language, portable bounded process output, shared decoded audio,
+real-recording actual-app verification. Source policy/packaging, licensing
+notices and all native validation remain to be completed. Not a working feature
+yet; no PR or DMG claimed. #357/#358 stay on their separate release track.
+
+Installer checkpoint: production installer test passed in an isolated crate.
+Covers bad hash, truncation, oversize, cancellation, atomic success and cleanup.
+No network/model download performed. Full library/tests compile was killed for
+memory here; no whole-app compile pass claimed. Use serial jobs next time.
+Model revision and exact size verified against the live distributor API.
+
+Whisper source-independent checkpoint: explicit Off/Local/Wyoming selection
+with legacy Wyoming migration, opt-in settings controls, progress/cancel and
+remove actions, background download completion, shared decoded PCM to private
+WAV, CLI auto-language, portable bounded output and timeout kill/reap.
+Disk-space checks use existing libc on Unix and the OS API on Windows; no new
+locked dependencies. Switched download transport to existing ureq for bounded
+reads. Local cargo check/clippy --lib --features demo pass with one job.
+15 installer/engine production-module isolated tests pass. Full test compile
+is too large for this worker and was interrupted after 120 seconds. Native
+CI, visual evidence, runtime source decision/bundling and real audio in actual
+app remain open. No model download or bundled upstream code yet.
+
+Owner correction 2026-11-17 18:41: download platform-specific prebuilt runtime
+and model only on user action; no bundled runtime or Whisper build-time
+dependencies. Original phonemsg-01M7N65ZM205EJ3XQEZM659VCK recovered.
+Runtime path moved outside signed app bundle into app state. No executable
+provider selected yet: official b5454 has Apple dynamic-library XCFramework,
+not a macOS CLI. Archive inspected and published SHA256 matched. Linux/Windows
+archives exist. Main has reported choices; do not silently choose a third-party
+Mac CLI or add a helper distribution. No xattr bypass or weakened validation.
+
+Separate optional helper prep: manual-only workflow fetches pinned official
+source, builds standalone helper app, signs/notarizes/staples, checks quarantine
+without stripping it, and emits exact archive metadata. No Solmu build invokes
+it and no release asset is published automatically. Workflow and build script
+are only prepared, not run. Publishing helper plus pinning output URL/size/hash
+and implementing verified runtime installation still pending. Existing app
+engine controls remain disabled until that runtime exists.
+
+Helper arm64 run44130161632 passed build/sign/notarize/staple/Gatekeeper with
+quarantine present and --help execution. Intel still pending. Archive metadata
+/downloads/whisper-helper-arm64 captured; no release published. Runtime module
+now stages archive, checks exact hash/size, signature+team requirement and
+Gatekeeper, then atomically installs outside app bundle. Provider remains None
+until a real published URL is available. Download button intentionally disabled.
+Model worker now downloads/verifies runtime first, then model. No model fetched.
+Actual-app real-recording test still unrun. Public helper download needs a
+publish decision separately from unpublished DMG; parent notified.
+
+Adversarial review follow-up: restrict helper job AND caller to public default
+branch before signing secrets are used. No more branch dispatch signing.
+Arm64 artifact passed; Intel build succeeded but notary credential setup failed
+without exposing credentials; remains unverified. Runtime retry replaces invalid
+version directory only after fresh verified archive is staged. Runtime signature
+and hash rechecked for every transcription, model hash once per worker. A fully
+malicious same-user process can still race file paths; no stronger claim made.
+ProviderNone and actual-app/mac-specific installer tests remain merge blockers.
+
+
+## 2026-11-17 - Local Whisper settings presence review
+
+Moved the model-presence metadata probe out of settings drawing to a background
+cache with generation-checked results and a repaint notification. Refresh on
+startup, engine selection, completed/cancelled/failed install, and model removal.
+The view reads only cached state and shows checking while a probe is pending.
+A model can be removed even while the runtime provider is unavailable.
+
+Failing-first: the blocked-probe regression failed against synchronous refresh
+(refresh waited for a blocked filesystem probe), then passed after background
+execution. Three standalone Rust tests pass: blocked probe plus repeated cached
+reads, stale blocked result cannot overwrite newer removal, and real file
+create/remove refresh with wake. Native rendered-settings regression checks that
+file deletion cannot change a repaint until explicit background refresh. Local
+library/tests demo clippy and formatting pass. Native execution and new synthetic
+light/dark before/after captures are pending. This PR remains unmerged and is not
+part of the current DMG; no helper build or publication was resumed.
 ## 2026-11-17 - Readable sidebar, approved sketch A
 
 Recent replaces All, with no unread/age/mute restriction. Removed the seven-day
@@ -219,6 +306,24 @@ also checks popup state rather than only a previous-frame widget response.
 
 Separate Photos/Videos/Voice tabs, bounded metadata-only Beeper listing worker (the old command was ignored), explicit refresh, and audio download/play/jump rows. Per-kind caps cannot let photos crowd out video or audio. Download results update panel rows even outside the loaded transcript. No schema/settings migration. Local library clippy passes; native tests, before/after synthetic screenshots and actual Devin gate remain pending. No private screenshot reused, no release built.
 
+## 2026-11-18 - Optional runtime all-platform follow-up
+
+Merged current main without reverting its transcript, sidebar or workflow
+changes. Runtime remains unavailable until approved published URLs and measured
+hashes exist; no release publication is part of this checkpoint. Cross-platform
+installer now accepts the separately built bin/whisper-cli or bin/whisper-cli.exe
+layout, with pinned archive/executable hashes and staged repair. macOS keeps
+Developer ID and Gatekeeper checks. Runtime tree fingerprints protect subsequent
+jobs without rerunning OS assessment each time.
+
+Review follow-up: reuse valid models, disable unavailable Local selection, clean
+owned crash leftovers under an advisory lock, remove runtime and model off the UI
+thread, retain the selected engine on removal failure, and avoid creating install
+directories for users who never downloaded. Bounded transcription preserves Ogg
+fallback and downsamples incrementally before the five-minute PCM cap. Changelog
+states that this limit applies to Wyoming too. Local demo library/test Clippy
+passes; 27 production-module engine/installer tests and ten workflow tests pass.
+Native regressions and all-platform real application verification remain pending.
 ## 2026-11-18 - Group by section header switch
 
 Approved option A: removed mode explainer text and replaced the passive Grouped/Flat list label with the shared switch widget. Existing Cmd/Ctrl+G and the switch use ToggleListLayout and keep per-mode settings. Shortcut appears only on hover; + remains independent. Focus order and pointer/keyboard behaviour have regression coverage. Tests, synthetic before/after pixels and reviews pending. Incoming-message section sorting is separately coordinated.

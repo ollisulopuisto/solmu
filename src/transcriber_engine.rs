@@ -32,49 +32,164 @@ impl WhisperCpp {
 
 impl Engine for WhisperCpp {
     fn transcribe(&mut self, audio: &Path, language: &str) -> Result<String, String> {
+        // A regular private file cannot fill a pipe and deadlock the child.
+        // Limit both the live output and the final read; no transcripts in logs.
+        const MAX_OUTPUT: u64 = 1 << 20;
+        let mut output = tempfile::tempfile().map_err(|e| e.to_string())?;
         let mut cmd = Command::new(&self.binary);
         cmd.arg("-m")
             .arg(&self.model)
             .arg("-f")
             .arg(audio)
             .arg("--no-timestamps")
-            .arg("--output-txt")
-            .arg("-of")
-            .arg("/dev/stdout")
-            .stdout(Stdio::piped())
+            .arg("--no-prints")
+            .arg("-l")
+            .arg(if language.trim().is_empty() {
+                "auto"
+            } else {
+                language
+            })
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(output.try_clone().map_err(|e| e.to_string())?))
             .stderr(Stdio::null());
-        // Auto-detect when no language is pinned; whisper.cpp wants no
-        // -l flag at all for that.
-        if !language.is_empty() {
-            cmd.arg("-l").arg(language);
-        }
+        // Diagnostics are enabled only for the explicit synthetic helper smoke.
+        // Keep a bounded private file, never a pipe or production transcript log.
+        #[cfg(test)]
+        let mut diagnostic = if std::env::var_os("SOLMU_HELPER_FIXTURE").is_some() {
+            let file = tempfile::tempfile().map_err(|e| e.to_string())?;
+            cmd.stderr(Stdio::from(file.try_clone().map_err(|e| e.to_string())?));
+            Some(file)
+        } else {
+            None
+        };
         let started = Instant::now();
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("whisper.cpp not runnable at {}: {e}", self.binary.display()))?;
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) if status.success() => {
-                    let mut out = String::new();
-                    use std::io::Read;
-                    child.stdout.take().map(|mut s| s.read_to_string(&mut out));
-                    let text = out.trim().to_string();
-                    if text.is_empty() {
-                        return Err("whisper.cpp produced no transcript".into());
-                    }
-                    return Ok(text);
-                }
-                Ok(Some(status)) => return Err(format!("whisper.cpp exited {status}")),
-                Ok(None) => {
-                    if started.elapsed() > self.timeout {
-                        let _ = child.kill();
-                        return Err("whisper.cpp timed out".into());
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(e) => return Err(format!("whisper.cpp wait failed: {e}")),
+        let result = loop {
+            if started.elapsed() > self.timeout {
+                break Err("whisper.cpp timed out".to_string());
             }
+            #[cfg(test)]
+            if let Some(file) = diagnostic.as_ref()
+                && file.metadata().map_err(|e| e.to_string())?.len() > MAX_OUTPUT
+            {
+                break Err("whisper.cpp diagnostic output exceeded its size limit".into());
+            }
+            match output.metadata() {
+                Ok(meta) if meta.len() > MAX_OUTPUT => {
+                    break Err("whisper.cpp output exceeded its size limit".to_string());
+                }
+                Err(e) => break Err(format!("whisper.cpp output check failed: {e}")),
+                _ => {}
+            }
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => break Ok(()),
+                Ok(Some(status)) => break Err(format!("whisper.cpp exited {status}")),
+                Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+                Err(e) => break Err(format!("whisper.cpp wait failed: {e}")),
+            }
+        };
+        // Reap on every path, including timeouts and unexpected wait errors.
+        if result.is_err() {
+            let _ = child.kill();
         }
+        let _ = child.wait();
+        #[cfg(test)]
+        if let (Err(error), Some(file)) = (&result, diagnostic.as_mut()) {
+            use std::io::{Read, Seek};
+            file.rewind().map_err(|e| e.to_string())?;
+            let mut detail = String::new();
+            file.take(16 * 1024)
+                .read_to_string(&mut detail)
+                .map_err(|e| e.to_string())?;
+            return Err(format!("{error}; synthetic helper stderr: {detail}"));
+        }
+        result?;
+        use std::io::{Read, Seek};
+        output.rewind().map_err(|e| e.to_string())?;
+        let mut text = String::new();
+        output
+            .take(MAX_OUTPUT + 1)
+            .read_to_string(&mut text)
+            .map_err(|e| e.to_string())?;
+        if text.len() as u64 > MAX_OUTPUT {
+            return Err("whisper.cpp output exceeded its size limit".into());
+        }
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return Err("whisper.cpp produced no transcript".into());
+        }
+        Ok(text)
+    }
+}
+
+/// Decode once with the app's audio stack, then use a private standard WAV.
+/// The CLI never needs to know about Opus/M4A/video codecs or remote services.
+pub struct DecodedWhisper {
+    pub engine: WhisperCpp,
+    pub decode: PcmDecoder,
+    pub model_verified: bool,
+    pub runtime_verified: Option<[u8; 32]>,
+    pub artifact: crate::whisper_runtime::Artifact,
+}
+
+fn pcm_wav(pcm: &[u8]) -> Result<tempfile::TempPath, String> {
+    use std::io::Write;
+    if pcm.is_empty() || !pcm.len().is_multiple_of(2) {
+        return Err("Audio contains no valid samples".into());
+    }
+    let len = u32::try_from(pcm.len())
+        .ok()
+        .filter(|len| *len <= u32::MAX - 36)
+        .ok_or("Audio is too large")?;
+    let mut file = tempfile::Builder::new()
+        .prefix("solmu-transcribe-")
+        .suffix(".wav")
+        .tempfile()
+        .map_err(|e| e.to_string())?;
+    let writer = &mut file;
+    writer
+        .write_all(b"RIFF")
+        .and_then(|()| writer.write_all(&(36 + len).to_le_bytes()))
+        .and_then(|()| writer.write_all(b"WAVEfmt "))
+        .and_then(|()| writer.write_all(&16u32.to_le_bytes()))
+        .and_then(|()| writer.write_all(&1u16.to_le_bytes()))
+        .and_then(|()| writer.write_all(&1u16.to_le_bytes()))
+        .and_then(|()| writer.write_all(&16_000u32.to_le_bytes()))
+        .and_then(|()| writer.write_all(&32_000u32.to_le_bytes()))
+        .and_then(|()| writer.write_all(&2u16.to_le_bytes()))
+        .and_then(|()| writer.write_all(&16u16.to_le_bytes()))
+        .and_then(|()| writer.write_all(b"data"))
+        .and_then(|()| writer.write_all(&len.to_le_bytes()))
+        .and_then(|()| writer.write_all(pcm))
+        .and_then(|()| writer.flush())
+        .map_err(|e| e.to_string())?;
+    // Close the write handle before the CLI opens it. Windows readers that
+    // do not share delete access cannot open a live NamedTempFile handle.
+    Ok(file.into_temp_path())
+}
+
+impl Engine for DecodedWhisper {
+    fn transcribe(&mut self, audio: &Path, language: &str) -> Result<String, String> {
+        let spec = self.artifact;
+        if let Some(expected) = self.runtime_verified {
+            if crate::whisper_runtime::fingerprint(&self.engine.binary)? != expected {
+                return Err(
+                    "Whisper runtime changed. Verify or repair the engine in Settings.".into(),
+                );
+            }
+        } else {
+            crate::whisper_runtime::verify(&self.engine.binary, spec)?;
+            self.runtime_verified = Some(crate::whisper_runtime::fingerprint(&self.engine.binary)?);
+        }
+        if !self.model_verified {
+            crate::local_whisper::verify_model(&self.engine.model)?;
+            self.model_verified = true;
+        }
+        let pcm = (self.decode)(audio)?;
+        let wav = pcm_wav(&pcm)?;
+        self.engine.transcribe(&wav, language)
     }
 }
 
@@ -345,6 +460,56 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
+    #[test]
+    fn whisper_cpp_requests_auto_language_and_portable_stdout() {
+        let mut engine = WhisperCpp::new(fake_whisper("args.sh"), PathBuf::from("/tmp/model.bin"));
+        let text = engine.transcribe(Path::new("/tmp/a.wav"), "").unwrap();
+        assert!(text.ends_with("-l\nauto"));
+        assert!(text.contains("--no-prints"));
+        assert!(!text.contains("/dev/stdout"));
+        assert!(!text.contains("--output-txt"));
+    }
+
+    #[test]
+    fn whisper_cpp_rejects_excess_output_without_pipe_deadlock() {
+        let mut engine = WhisperCpp::new(fake_whisper("flood.sh"), PathBuf::from("/tmp/model.bin"));
+        engine.timeout = Duration::from_secs(3);
+        let started = Instant::now();
+        assert!(
+            engine
+                .transcribe(Path::new("/tmp/a.wav"), "")
+                .unwrap_err()
+                .contains("size limit")
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn wav_is_standard_mono_16khz_pcm_and_is_removed_on_drop() {
+        let pcm = [0, 0, 255, 127, 0, 128];
+        let file = pcm_wav(&pcm).unwrap();
+        let path = file.to_path_buf();
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // Mirrors a CLI reader that does not share access with an open writer.
+            std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&path)
+                .unwrap();
+        }
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[..4], b"RIFF");
+        assert_eq!(&bytes[8..16], b"WAVEfmt ");
+        assert_eq!(&bytes[24..28], &16_000u32.to_le_bytes());
+        assert_eq!(&bytes[44..], &pcm);
+        drop(file);
+        assert!(!path.exists());
+        assert!(pcm_wav(&[]).is_err());
+        assert!(pcm_wav(&[0]).is_err());
+    }
+
     use std::io::{BufRead, Read, Write};
     use std::net::TcpListener;
 
@@ -554,5 +719,154 @@ mod tests {
         engine.decode = Some(Box::new(|_| Ok(pcm_fixture(4))));
         let err = engine.transcribe(Path::new("/a.ogg"), "fi").unwrap_err();
         assert!(err.contains("invalid"), "got: {err}");
+    }
+}
+
+/// Explicit manual runtime validation. The normal suite never downloads a
+/// model or runs a downloaded helper. Inputs come from a selected CI artifact.
+#[cfg(all(test, feature = "demo"))]
+mod real_runtime_smoke {
+    use super::*;
+    #[test]
+    #[ignore = "explicit manual helper/model smoke test only"]
+    fn local_whisper_real_recording_installs_repairs_and_transcribes_opus() {
+        let directory =
+            PathBuf::from(std::env::var("SOLMU_HELPER_FIXTURE").expect("helper fixture"));
+        let metadata_path = std::env::var_os("SOLMU_HELPER_METADATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| directory.join("solmu-whisper-v1.9.5-arm64.json"));
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(metadata_path).unwrap()).unwrap();
+        if let Some(target) = metadata["target"].as_str() {
+            assert_eq!(target, crate::whisper_runtime::target());
+        }
+        let archive = directory.join(metadata["filename"].as_str().unwrap());
+        assert_eq!(
+            metadata["upstream_revision"],
+            "d1be6fde11ac6e0407606b4e42fe72d34add8037"
+        );
+        let executable_hash = metadata["executable_sha256"].as_str().unwrap_or_else(|| {
+            // The first signed arm64 trial predates the metadata field. Both
+            // hashes were independently recorded before this validation test.
+            assert_eq!(
+                metadata["sha256"],
+                "a36cf9a93cff6bc5f08c65f0de0dd42f66b996880b6098abaf1fdc66b84a367c"
+            );
+            "a2b9571b58e06eb808891e729b4561d5b212a942d37670c329c0aa2dbf33db42"
+        });
+        let spec = crate::whisper_runtime::Artifact {
+            url: "https://invalid.invalid/not-used-in-offline-install-smoke",
+            bytes: metadata["size"].as_u64().unwrap(),
+            sha256: Box::leak(
+                metadata["sha256"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+                    .into_boxed_str(),
+            ),
+            executable_sha256: Box::leak(executable_hash.to_owned().into_boxed_str()),
+        };
+        let state = tempfile::tempdir().unwrap();
+        // Set only by the explicit public-download validation dispatch after
+        // the reviewed runtime URL and hashes have been pinned.
+        if std::env::var_os("SOLMU_VALIDATE_PUBLIC_DOWNLOAD").is_some() {
+            let download = crate::local_whisper::Download::start(state.path().to_owned(), || {});
+            let started = Instant::now();
+            loop {
+                match download.state() {
+                    crate::local_whisper::DownloadState::Ready(model) => {
+                        crate::local_whisper::verify_model(&model).unwrap();
+                        let spec =
+                            crate::whisper_runtime::artifact().expect("pinned public runtime");
+                        crate::whisper_runtime::verify(
+                            &crate::whisper_runtime::executable(state.path()),
+                            spec,
+                        )
+                        .expect("public downloader installed verified runtime");
+                        break;
+                    }
+                    crate::local_whisper::DownloadState::Downloading { .. }
+                        if started.elapsed() < Duration::from_secs(20 * 60) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    status => panic!("public downloader did not become ready: {status:?}"),
+                }
+            }
+        }
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let binary = crate::whisper_runtime::install_archive(&archive, state.path(), spec, &cancel)
+            .expect("verified install");
+        crate::whisper_runtime::verify(&binary, spec).expect("post-install Gatekeeper/hash");
+        std::fs::write(&binary, b"bad install").unwrap();
+        assert!(crate::whisper_runtime::verify(&binary, spec).is_err());
+        let binary = crate::whisper_runtime::install_archive(&archive, state.path(), spec, &cancel)
+            .expect("repair damaged runtime");
+        let model = PathBuf::from(std::env::var("SOLMU_MODEL_FIXTURE").expect("model fixture"));
+        crate::local_whisper::verify_model(&model).expect("pinned model");
+        let recording =
+            PathBuf::from(std::env::var("SOLMU_RECORDING_FIXTURE").expect("recording fixture"));
+        let samples =
+            crate::audio::decode_for_transcription(&recording).expect("decode real speech");
+        let opus = crate::voice::encode(&samples).expect("encode voice-note Opus");
+        let note = state.path().join("recording.ogg");
+        std::fs::write(&note, opus).unwrap();
+        let engine = DecodedWhisper {
+            engine: WhisperCpp::new(binary, model),
+            decode: Box::new(|path| {
+                crate::audio::decode_for_transcription(path).map(|samples| {
+                    crate::transcriber::wyoming_pcm_from_mono(&samples, crate::voice::RATE)
+                })
+            }),
+            model_verified: false,
+            runtime_verified: None,
+            artifact: spec,
+        };
+        let (mut app, _) = crate::app::App::headless(
+            crate::paths::AppDirs::under(state.path()),
+            crate::settings::Settings::default(),
+        );
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let store =
+            crate::transcriber::Store::new(state.path().join("transcripts"), 32 << 20).unwrap();
+        app.transcriber = Some(crate::transcribe_worker::Worker::spawn(
+            Box::new(engine),
+            store,
+            || {},
+        ));
+        let account = app.account().id.0.clone();
+        app.apply(
+            crate::model::Action::TranscribeVoice {
+                chat: "synthetic-runtime-smoke".into(),
+                message: "voice-1".into(),
+                path: note,
+            },
+            &ctx,
+        );
+        let started = Instant::now();
+        loop {
+            match app.transcriber.as_ref().unwrap().get(
+                &account,
+                "synthetic-runtime-smoke",
+                "voice-1",
+            ) {
+                Some(crate::transcribe_worker::Status::Ready(text)) => {
+                    assert!(
+                        text.to_lowercase().contains("ask not"),
+                        "expected speech recognized"
+                    );
+                    break;
+                }
+                Some(crate::transcribe_worker::Status::Failed(error)) => {
+                    panic!("actual-app transcription failed: {error}")
+                }
+                _ if started.elapsed() < Duration::from_secs(180) => {
+                    std::thread::sleep(Duration::from_millis(50))
+                }
+                _ => panic!("actual-app transcription did not complete"),
+            }
+        }
+        // Never print transcripts or fixture contents to CI logs.
     }
 }

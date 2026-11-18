@@ -531,15 +531,59 @@ fn sections(app: &App) -> Vec<Section> {
     // can play a voice note must reach these controls, so the section is
     // always listed, unlike the Beeper-only one above.
     let mut transcription = Section::new(translated(locale, "Voice notes"));
-    transcription.block(vec!["Transcription".into(), "Voice notes".into(), "Wyoming".into(), "Whisper".into()], |ui, app| {
-        ui.heading("Voice-note transcription");
-        ui.label("A Wyoming Whisper service you already run, on this computer or your own network. The audio and the transcripts never leave for a cloud service; an unreachable address fails with a visible error, never a silent fallback. Empty disables transcription.");
-        let before = (app.settings.transcription_wyoming.clone(), app.settings.transcription_language.clone());
-        ui.label("Service address (host:port, no credentials in this field)");
-        ui.text_edit_singleline(&mut app.settings.transcription_wyoming);
-        ui.label("Language (\"fi\", \"en\", ...; empty = detect automatically)");
+    transcription.block(vec!["Transcription".into(), "Voice notes".into(), "Wyoming".into(), "Whisper".into()], move |ui, app| {
+        use crate::i18n::gettext;
+        use crate::settings::TranscriptionEngine;
+        ui.heading(gettext(locale, "Voice-note transcription"));
+        ui.label(gettext(locale, "Choose where speech is transcribed. There is no cloud service or automatic fallback."));
+        let before = (app.settings.transcription_engine(), app.settings.transcription_wyoming.clone(), app.settings.transcription_language.clone());
+        let mut choice = app.settings.transcription_engine();
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut choice, TranscriptionEngine::Off, gettext(locale, "Off"));
+            ui.add_enabled_ui(crate::whisper_runtime::artifact().is_some(), |ui| {
+                ui.selectable_value(&mut choice, TranscriptionEngine::Local, gettext(locale, "On this computer"));
+            });
+            ui.selectable_value(&mut choice, TranscriptionEngine::Wyoming, gettext(locale, "My Wyoming server"));
+        });
+        if choice != before.0 { app.settings.transcription_engine = Some(choice); }
+        if choice == TranscriptionEngine::Local {
+            ui.label(gettext(locale, "Whisper Base multilingual. Engine + model download: about 151 MB. Allow 260 MB of free disk space for installation. Audio stays on this computer."));
+            let runtime = crate::whisper_runtime::artifact().is_some();
+            let presence = app.local_whisper_presence.get();
+            let installed = presence == Some(true);
+            if presence.is_none() { ui.label(gettext(locale, "Checking downloaded model…")); }
+            if !runtime { ui.label(gettext(locale, "A verified runtime download is not available in this draft yet. No engine is bundled with Solmu.")); }
+            if app.local_whisper_removal.is_some() {
+                ui.label(gettext(locale, "Removing downloaded engine and model…"));
+            } else if let Some(download) = &app.local_whisper_download {
+                if let crate::local_whisper::DownloadState::Downloading { received, total } = download.state() {
+                    ui.add(egui::ProgressBar::new(received as f32 / total as f32).show_percentage());
+                }
+                if download.cancellation_requested() { ui.label(gettext(locale, "Cancelling download...")); }
+                if ui.add_enabled(!download.cancellation_requested(), egui::Button::new(gettext(locale, "Cancel download"))).clicked() { app.actions.push(Action::CancelLocalWhisperDownload); }
+            } else {
+                if installed {
+                    ui.label(gettext(locale, "Model installed. Verified before its first use."));
+                    if ui.add_enabled(runtime, egui::Button::new(gettext(locale, "Verify or repair engine"))).clicked() { app.actions.push(Action::DownloadLocalWhisper); }
+                    if ui.button(gettext(locale, "Remove downloaded engine and model")).clicked() { app.actions.push(Action::RemoveLocalWhisperModel); }
+                } else if ui.add_enabled(runtime, egui::Button::new(gettext(locale, "Download engine + model & enable"))).clicked() {
+                    app.actions.push(Action::DownloadLocalWhisper);
+                }
+                match &app.local_whisper_status {
+                    Some(crate::local_whisper::DownloadState::Failed(error)) => { ui.label(format!("{} {error}", gettext(locale, "Download failed:"))); }
+                    Some(crate::local_whisper::DownloadState::Cancelled) => { ui.label(gettext(locale, "Download cancelled. No partial model was kept.")); }
+                    _ => {}
+                }
+            }
+        }
+        if choice == TranscriptionEngine::Wyoming {
+            ui.label(gettext(locale, "A Wyoming Whisper service you run on this computer or your own network. Audio is sent only to this address, never as a fallback from the local engine."));
+            ui.label(gettext(locale, "Service address (host:port)"));
+            ui.text_edit_singleline(&mut app.settings.transcription_wyoming);
+        }
+        ui.label(gettext(locale, "Language (fi, en, ...; empty = detect automatically)"));
         ui.text_edit_singleline(&mut app.settings.transcription_language);
-        if before != (app.settings.transcription_wyoming.clone(), app.settings.transcription_language.clone()) { app.actions.push(Action::SettingsChanged); }
+        if before != (choice, app.settings.transcription_wyoming.clone(), app.settings.transcription_language.clone()) { app.actions.push(Action::SettingsChanged); }
         ui.label("Transcripts are stored on this computer, per account and chat, and follow a chat you delete or clear. Transcript text joins message search on this computer only.");
         if ui.add_enabled(app.transcript_reader().is_some(), egui::Button::new("Delete all transcripts on this computer")).clicked()
             && let Some(worker) = app.transcript_reader()
