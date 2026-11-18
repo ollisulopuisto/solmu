@@ -524,6 +524,22 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
         None => {}
     }
+    // Queue the keep that holds a chat in a filtered list. Recent's
+    // grouped sections keep a row only when its destination is unread now;
+    // a read row in a quiet section keeps nothing, so the section stays
+    // full. The Unread queue filter and the non-Recent modes list unread
+    // rows throughout, so every destination is kept, as before.
+    fn push_keep_unread(app: &App, id: &str, actions: &mut Vec<Action>) {
+        let keep = app.chat_filter == crate::model::ChatFilter::Unread
+            || app.list_mode != crate::model::ListMode::Recent
+            || app.chat(id).is_some_and(|chat| {
+                let preview = app.beeper_person_preview(chat);
+                preview.looks_unread() && !preview.muted(crate::util::now())
+            });
+        if keep {
+            actions.push(Action::KeepUnread(id.into()));
+        }
+    }
     if step != 0 || number.is_some() {
         // Switching chats from the keyboard is keyboard navigation, as Tab
         // is: a chat without a message field then hands its focus to the
@@ -535,9 +551,9 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
                 .map(|chat| chat.id.clone())
         {
             app.search_selected = None;
-            // Opening a chat must not shift the Unread list underfoot.
+            // Opening a chat must not shift a filtered list underfoot.
             if app.search.trim().is_empty() && !app.show_archived {
-                actions.push(Action::KeepUnread(next.clone()));
+                push_keep_unread(app, &next, &mut actions);
             }
             app.scroll_chat_into_view = Some(next.clone());
             actions.push(Action::OpenChat(next));
@@ -554,9 +570,9 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
                     None => 0,
                 };
                 if let Some(next) = visible.get(next).map(|chat| chat.id.clone()) {
-                    // Stepping through the Unread list must not shift it underfoot.
+                    // Stepping through a filtered list must not shift it underfoot.
                     if app.search.trim().is_empty() && !app.show_archived {
-                        actions.push(Action::KeepUnread(next.clone()));
+                        push_keep_unread(app, &next, &mut actions);
                     }
                     app.scroll_chat_into_view = Some(next.clone());
                     actions.push(Action::OpenChat(next));

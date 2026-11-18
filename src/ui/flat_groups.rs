@@ -14,6 +14,9 @@ pub struct State {
     pub assigning: Option<(Member, Vec<u64>)>,
     /// Headings folded shut this session: a group's id, or `None` for Other.
     pub collapsed: HashSet<Option<u64>>,
+    /// Recent sections opened past their unread filter this session: a
+    /// group's id, or `None` for Other.
+    pub show_all: HashSet<Option<u64>>,
     /// Demo/test instrumentation: actual alias widgets built in the last frame.
     #[cfg(any(test, feature = "demo"))]
     pub built_rows: usize,
@@ -101,10 +104,123 @@ fn membership_rows(app: &App, chats: &[&Chat]) -> Vec<Vec<usize>> {
 fn belongs(group: &crate::flat_groups::Group, keys: &[Member]) -> bool {
     keys.iter().any(|key| group.members.contains(key))
 }
-fn draw_row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
+
+/// What the row under a filtered Recent section offers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Expander {
+    /// The section shows only its unread and just-opened rows; open it to
+    /// every member.
+    ShowAll,
+    /// The section was opened to every member; fold it back to unread rows.
+    UnreadOnly,
+}
+
+/// One section of the grouped list in display order: its member rows, the
+/// rows on screen now, and the expander under them if any. Row numbers are
+/// indexes into the chats slice the plan was built from.
+struct Section {
+    /// The group's id; `None` for Other.
+    id: Option<u64>,
+    name: String,
+    /// Every member row, in list order.
+    all: Vec<usize>,
+    /// The rows drawn and walked by the keyboard right now.
+    shown: Vec<usize>,
+    /// `shown` holds the unread subset: just-opened rows in it stay dimmed.
+    filtering: bool,
+    expander: Option<Expander>,
+}
+
+/// Recent's unread filter for one section: quiet sections list every chat;
+/// a section with something unread - or just opened from it - lists only
+/// those rows, Other included. The unread test is the folded heading's:
+/// counted or marked, and never a muted chat.
+fn recent_filtered(app: &App, chats: &[&Chat], indices: &[usize]) -> Vec<usize> {
+    let now = crate::util::now();
+    indices
+        .iter()
+        .copied()
+        .filter(|index| {
+            let chat = chats[*index];
+            (chat.looks_unread() && !chat.muted(now)) || app.unread_kept_contains(&chat.id)
+        })
+        .collect()
+}
+
+/// Sections in display order. Other modes keep the saved drag order; Recent
+/// sorts sections by their freshest chat - a new message lifts its section
+/// to the top - and keeps Other last. `activity` aligns with `chats`.
+fn plan_sections(app: &App, chats: &[&Chat], activity: &[i64]) -> Vec<Section> {
+    let recent = app.list_mode == crate::model::ListMode::Recent;
+    let section = |id: Option<u64>, name: String, all: Vec<usize>| {
+        let filtered = if recent {
+            recent_filtered(app, chats, &all)
+        } else {
+            Vec::new()
+        };
+        let active = !filtered.is_empty();
+        let expanded = app.flat_group_ui.show_all.contains(&id);
+        let (shown, filtering, expander) = if !active {
+            (all.clone(), false, None)
+        } else if expanded {
+            (all.clone(), false, Some(Expander::UnreadOnly))
+        } else {
+            let expander = (filtered.len() < all.len()).then_some(Expander::ShowAll);
+            (filtered, true, expander)
+        };
+        Section {
+            id,
+            name,
+            all,
+            shown,
+            filtering,
+            expander,
+        }
+    };
+    let mut sections: Vec<Section> = app
+        .settings
+        .flat_groups
+        .items
+        .iter()
+        .zip(membership_rows(app, chats))
+        .map(|(group, all)| section(Some(group.id), group.name.clone(), all))
+        .collect();
+    let grouped: HashSet<usize> = sections
+        .iter()
+        .flat_map(|section| section.all.iter().copied())
+        .collect();
+    let other: Vec<usize> = (0..chats.len())
+        .filter(|index| !grouped.contains(index))
+        .collect();
+    if recent {
+        // Stable: a tie keeps the saved order. Empty sections sink.
+        sections.sort_by_key(|section| {
+            std::cmp::Reverse(
+                section
+                    .all
+                    .iter()
+                    .map(|index| activity[*index])
+                    .max()
+                    .unwrap_or(i64::MIN),
+            )
+        });
+    }
+    sections.push(section(
+        None,
+        crate::i18n::gettext(app.locale, "Other").into_owned(),
+        other,
+    ));
+    sections
+}
+fn draw_row(app: &mut App, ui: &mut egui::Ui, chat: &Chat, dim_kept: bool) {
     #[cfg(any(test, feature = "demo"))]
     {
         app.flat_group_ui.built_rows += 1;
+    }
+    // A chat opened from a filtered section stays dimmed until the view
+    // changes (Action::KeepUnread); it is no longer unread itself.
+    if dim_kept && !chat.looks_unread() && app.unread_kept_contains(&chat.id) {
+        ui.multiply_opacity(0.55);
     }
     let response = super::chats::row(app, ui, chat);
     ui.ctx().data_mut(|data| {
@@ -119,7 +235,15 @@ fn draw_row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
         app.scroll_chat_into_view = None;
     }
     if response.clicked() && !app.show_archived {
-        app.actions.push(Action::KeepUnread(chat.id.clone()));
+        // A keep from a quiet section would filter it to just this row:
+        // send only where the list is filtered - a Recent section showing
+        // its unread rows, or the modes that list unread chats throughout.
+        if dim_kept
+            || app.list_mode != crate::model::ListMode::Recent
+            || app.chat_filter == crate::model::ChatFilter::Unread
+        {
+            app.actions.push(Action::KeepUnread(chat.id.clone()));
+        }
     }
 }
 
@@ -246,22 +370,28 @@ pub fn navigation_chats(app: &App) -> Vec<&Chat> {
     {
         return chats;
     }
-    let groups = membership_rows(app, &chats);
+    // The order list() draws: sections by freshest chat in Recent, and only
+    // the rows each section actually shows. Plan on the same projected rows
+    // list() draws - a linked person is her freshest, summed preview - then
+    // map row indexes back to the borrowed chats, one to one and in order.
+    let display: Vec<Chat> = chats
+        .iter()
+        .map(|chat| app.beeper_person_preview(chat))
+        .collect();
+    let display_refs: Vec<&Chat> = display.iter().collect();
+    let activity: Vec<i64> = display.iter().map(|chat| chat.last_activity).collect();
+    let sections = plan_sections(app, &display_refs, &activity);
     let mut ordered = Vec::with_capacity(chats.len());
     let mut seen = HashSet::new();
     // A folded group's rows are not on screen, so the keyboard skips them.
-    for (group, indices) in app.settings.flat_groups.items.iter().zip(&groups) {
-        let folded = app.flat_group_ui.collapsed.contains(&Some(group.id));
-        for index in indices {
-            if seen.insert(&chats[*index].id) && !folded {
+    for section in &sections {
+        if app.flat_group_ui.collapsed.contains(&section.id) {
+            continue;
+        }
+        for index in &section.shown {
+            if seen.insert(&chats[*index].id) {
                 ordered.push(chats[*index]);
             }
-        }
-    }
-    let other_folded = app.flat_group_ui.collapsed.contains(&None);
-    for chat in &chats {
-        if seen.insert(&chat.id) && !other_folded {
-            ordered.push(*chat);
         }
     }
     ordered
@@ -279,7 +409,13 @@ fn visible_range(
     let end = ((clip.bottom() - top) / row_height).ceil().max(0.0) as usize;
     first.min(count)..end.min(count).max(first.min(count))
 }
-fn virtual_aliases(app: &mut App, ui: &mut egui::Ui, chats: &[&Chat], salt: (&str, u64)) {
+fn virtual_aliases(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    chats: &[&Chat],
+    salt: (&str, u64),
+    dim_kept: bool,
+) {
     let height = super::chats::chat_row_height(app.settings.beeper.compact_list);
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height * chats.len() as f32),
@@ -319,11 +455,80 @@ fn virtual_aliases(app: &mut App, ui: &mut egui::Ui, chats: &[&Chat], salt: (&st
             ui.spacing_mut().item_spacing.y = 0.0;
             for chat in &chats[range] {
                 ui.push_id(&chat.id, |ui| {
-                    draw_row(app, ui, chat);
+                    draw_row(app, ui, chat, dim_kept);
                 });
             }
         },
     );
+}
+
+/// Height of a section's Show-all row.
+const EXPANDER_H: f32 = 28.0;
+
+/// The row under a filtered Recent section: open it to every member, or
+/// fold it back to the unread rows.
+fn expander_row(app: &mut App, ui: &mut egui::Ui, section: &Section) {
+    let label = match section.expander {
+        Some(Expander::ShowAll) => crate::i18n::gettext(app.locale, "Show all {count} in {group}")
+            .replace("{count}", &section.all.len().to_string())
+            .replace("{group}", &section.name),
+        Some(Expander::UnreadOnly) => {
+            crate::i18n::gettext(app.locale, "Show unread only in {group}")
+                .replace("{group}", &section.name)
+        }
+        None => return,
+    };
+    let palette = app.palette;
+    // Stay inside the clip so a focused row is fully visible.
+    let width = ui
+        .available_width()
+        .min(ui.clip_rect().right() - ui.next_widget_position().x);
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, EXPANDER_H), egui::Sense::click());
+    crate::theme::reveal_focus(&response);
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label.clone())
+    });
+    if response.hovered() {
+        super::widgets::row_highlight(ui, &palette, rect, palette.surface_hover);
+    }
+    // A chevron matching the section headings: right to open, down to fold.
+    let center = egui::pos2(rect.left() + 30.0, rect.center().y);
+    let points = match section.expander {
+        Some(Expander::ShowAll) => vec![
+            center + egui::vec2(-2.0, -4.0),
+            center + egui::vec2(3.0, 0.0),
+            center + egui::vec2(-2.0, 4.0),
+        ],
+        _ => vec![
+            center + egui::vec2(-4.0, -2.0),
+            center + egui::vec2(4.0, -2.0),
+            center + egui::vec2(0.0, 3.0),
+        ],
+    };
+    ui.painter().add(egui::Shape::convex_polygon(
+        points,
+        palette.dim,
+        egui::Stroke::NONE,
+    ));
+    ui.painter().text(
+        egui::pos2(rect.left() + 44.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        &label,
+        crate::theme::regular(12.0),
+        palette.dim,
+    );
+    if response.clicked() {
+        match section.expander {
+            Some(Expander::ShowAll) => {
+                app.flat_group_ui.show_all.insert(section.id);
+            }
+            Some(Expander::UnreadOnly) => {
+                app.flat_group_ui.show_all.remove(&section.id);
+            }
+            None => {}
+        }
+    }
 }
 
 /// What a dragged group heading carries, so dropping it on another heading
@@ -625,8 +830,10 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
         .iter()
         .map(|c| identity_index.identities(app, c))
         .collect();
-    let rows = membership_rows(app, &chats.iter().collect::<Vec<_>>());
-    let grouped: HashSet<usize> = rows.iter().flatten().copied().collect();
+    let chat_refs: Vec<&Chat> = chats.iter().collect();
+    let activity: Vec<i64> = chats.iter().map(|chat| chat.last_activity).collect();
+    let recent = app.list_mode == crate::model::ListMode::Recent;
+    let mut sections = plan_sections(app, &chat_refs, &activity);
     let mut changed = false;
     ui.spacing_mut().item_spacing.y = 0.0;
     let mut area = egui::ScrollArea::vertical()
@@ -636,24 +843,27 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
     if to_top && super::chats::near_top(ui, "chat-list", row_height) {
         area = area.vertical_scroll_offset(0.0);
     }
-    // Revealing a chat unfolds the section holding it.
+    // Revealing a chat unfolds the section holding it, and lifts a Recent
+    // section's unread filter when the chat sits outside the filtered rows.
     if ui.is_enabled()
         && let Some(target) = app.scroll_chat_into_view.clone()
-    {
-        for (group, indices) in groups.iter().zip(&rows) {
-            if indices.iter().any(|index| chats[*index].id == target) {
-                app.flat_group_ui.collapsed.remove(&Some(group.id));
-            }
-        }
-        if chats
+        && let Some(index) = chat_refs.iter().position(|chat| chat.id == target)
+        && let Some(pos) = sections
             .iter()
-            .enumerate()
-            .any(|(index, chat)| !grouped.contains(&index) && chat.id == target)
+            .position(|section| section.all.contains(&index))
+    {
+        let id = sections[pos].id;
+        let mut recalc = app.flat_group_ui.collapsed.remove(&id);
+        if sections[pos].expander == Some(Expander::ShowAll)
+            && !sections[pos].shown.contains(&index)
         {
-            app.flat_group_ui.collapsed.remove(&None);
+            recalc |= app.flat_group_ui.show_all.insert(id);
+        }
+        if recalc {
+            sections = plan_sections(app, &chat_refs, &activity);
         }
     }
-    let other_empty = grouped.len() == chats.len();
+    let other_empty = sections.last().is_none_or(|section| section.all.is_empty());
     // While a chat is being dragged, Other stays on screen as a drop target
     // even when it holds nothing, so the chat can always be ungrouped.
     let dragging_chat = egui::DragAndDrop::has_payload_of_type::<Member>(ui.ctx());
@@ -663,34 +873,27 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
     {
         let mut top = 0.0;
         let mut target_top = None;
-        for (group, indices) in groups.iter().zip(&rows) {
-            if header_hidden(app, indices.is_empty()) {
+        for section in &sections {
+            let hidden = match section.id {
+                Some(_) => header_hidden(app, section.all.is_empty()),
+                None => other_hidden,
+            };
+            if hidden {
                 continue;
             }
             top += 16.0;
-            if app.flat_group_ui.collapsed.contains(&Some(group.id)) {
+            if app.flat_group_ui.collapsed.contains(&section.id) {
                 continue;
             }
-            for index in indices {
-                if &chats[*index].id == target {
+            for index in &section.shown {
+                if &chat_refs[*index].id == target {
                     target_top = Some(top);
                 }
                 top += row_height;
             }
-        }
-        if !other_hidden {
-            top += 16.0;
-        }
-        let other_folded = app.flat_group_ui.collapsed.contains(&None);
-        for (_, chat) in chats
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !grouped.contains(i) && !other_folded)
-        {
-            if &chat.id == target {
-                target_top = Some(top);
+            if section.expander.is_some() {
+                top += EXPANDER_H;
             }
-            top += row_height;
         }
         if let Some(top) = target_top {
             let id = ui.make_persistent_id(egui::IdSalt::new("chat-list"));
@@ -730,57 +933,65 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
                 egui::style::ScrollAnimation::none(),
             );
         }
-        for (group, indices) in groups.iter().zip(&rows) {
-            let included: Vec<_> = indices.iter().map(|index| &chats[*index]).collect();
-            if header_hidden(app, included.is_empty()) {
+        // The plan always ends with Other; every earlier section is a group.
+        let (other, sections) = sections.split_last().expect("Other is always planned");
+        for section in sections {
+            if header_hidden(app, section.all.is_empty()) {
                 continue;
             }
-            let heading = &group.name;
-            let folded = app.flat_group_ui.collapsed.contains(&Some(group.id));
+            let id = section.id.expect("sections before Other are groups");
+            let heading = section.name.as_str();
+            let folded = app.flat_group_ui.collapsed.contains(&Some(id));
+            let members: Vec<&Chat> = section.all.iter().map(|index| chat_refs[*index]).collect();
+            // Recent's sections order themselves by activity: drag-reordering
+            // headings stays for the modes that keep the saved order.
             let response = section_header(
                 ui,
                 heading,
                 &app.palette,
                 folded,
-                unread_count(&included),
-                true,
+                unread_count(&members),
+                !recent,
             );
-            response.dnd_set_drag_payload(GroupDrag(group.id));
-            if let Some(moving) = response.dnd_hover_payload::<GroupDrag>()
-                && moving.0 != group.id
-            {
-                let items = &app.settings.flat_groups.items;
-                let moving_from = items.iter().position(|g| g.id == moving.0);
-                let here = items.iter().position(|g| g.id == group.id);
-                let y = if moving_from < here {
-                    response.rect.bottom()
-                } else {
-                    response.rect.top()
-                };
-                ui.painter().hline(
-                    response.rect.x_range(),
-                    y,
-                    egui::Stroke::new(2.0, app.palette.accent),
-                );
-            }
-            if let Some(moving) = response.dnd_release_payload::<GroupDrag>()
-                && app.settings.flat_groups.move_to(moving.0, group.id)
-            {
-                changed = true;
+            if !recent {
+                response.dnd_set_drag_payload(GroupDrag(id));
+                if let Some(moving) = response.dnd_hover_payload::<GroupDrag>()
+                    && moving.0 != id
+                {
+                    let items = &app.settings.flat_groups.items;
+                    let moving_from = items.iter().position(|g| g.id == moving.0);
+                    let here = items.iter().position(|g| g.id == id);
+                    let y = if moving_from < here {
+                        response.rect.bottom()
+                    } else {
+                        response.rect.top()
+                    };
+                    ui.painter().hline(
+                        response.rect.x_range(),
+                        y,
+                        egui::Stroke::new(2.0, app.palette.accent),
+                    );
+                }
+                if let Some(moving) = response.dnd_release_payload::<GroupDrag>()
+                    && app.settings.flat_groups.move_to(moving.0, id)
+                {
+                    changed = true;
+                }
             }
             if response.clicked() {
                 if ui.input(|input| input.modifiers.shift) {
                     fold_all(app, &groups, !folded);
                 } else if folded {
-                    app.flat_group_ui.collapsed.remove(&Some(group.id));
+                    app.flat_group_ui.collapsed.remove(&Some(id));
                 } else {
-                    app.flat_group_ui.collapsed.insert(Some(group.id));
+                    app.flat_group_ui.collapsed.insert(Some(id));
                 }
             }
             if let Some(target) = response.dnd_release_payload::<Member>() {
                 // A stale drag from another account must not mutate the current view.
                 if keys.iter().any(|row| row.contains(target.as_ref()))
-                    && !indices
+                    && !section
+                        .all
                         .iter()
                         .any(|index| keys[*index].contains(target.as_ref()))
                 {
@@ -791,7 +1002,7 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
                         .unwrap_or_default();
                     app.settings
                         .flat_groups
-                        .assign_linked(target.as_ref(), &sources, &[group.id]);
+                        .assign_linked(target.as_ref(), &sources, &[id]);
                     changed = true;
                 }
             }
@@ -804,32 +1015,35 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
                     .button(crate::i18n::gettext(app.locale, "Delete group"))
                     .clicked()
                 {
-                    app.settings.flat_groups.delete(group.id);
+                    app.settings.flat_groups.delete(id);
                     changed = true;
                     ui.close();
                 }
                 fold_menu(app, ui, &groups);
             });
             if !folded {
-                ui.push_id(("flat-group", group.id), |ui| {
-                    virtual_aliases(app, ui, &included, ("flat-group", group.id));
+                let shown: Vec<&Chat> = section
+                    .shown
+                    .iter()
+                    .map(|index| chat_refs[*index])
+                    .collect();
+                ui.push_id(("flat-group", id), |ui| {
+                    virtual_aliases(app, ui, &shown, ("flat-group", id), section.filtering);
                 });
+                if section.expander.is_some() {
+                    expander_row(app, ui, section);
+                }
             }
         }
-        let ungrouped: Vec<_> = chats
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !grouped.contains(index))
-            .map(|(_, chat)| chat)
-            .collect();
         if !other_hidden {
             let folded = app.flat_group_ui.collapsed.contains(&None);
+            let members: Vec<&Chat> = other.all.iter().map(|index| chat_refs[*index]).collect();
             let response = section_header(
                 ui,
-                &crate::i18n::gettext(app.locale, "Other"),
+                &other.name,
                 &app.palette,
                 folded,
-                unread_count(&ungrouped),
+                unread_count(&members),
                 false,
             );
             if response.clicked() {
@@ -850,7 +1064,11 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
             }
             response.context_menu(|ui| fold_menu(app, ui, &groups));
             if !folded {
-                virtual_aliases(app, ui, &ungrouped, ("other", 0));
+                let shown: Vec<&Chat> = other.shown.iter().map(|index| chat_refs[*index]).collect();
+                virtual_aliases(app, ui, &shown, ("other", 0), other.filtering);
+                if other.expander.is_some() {
+                    expander_row(app, ui, other);
+                }
             }
         }
     });
@@ -946,15 +1164,17 @@ mod tests {
     /// app to save the settings; the pointer path covers the real gesture.
     #[test]
     fn dragging_a_heading_onto_another_reorders_groups_and_saves() {
-        let root = tempfile::tempdir().unwrap();
-        let (mut app, _) = App::headless(
-            crate::paths::AppDirs::under(root.path()),
-            Default::default(),
-        );
-        app.list_mode = crate::model::ListMode::Recent;
+        let (mut app, _root) =
+            recent_app(vec![recent_chat("u1", 100, 1), recent_chat("u2", 90, 1)]);
+        // Recent computes its section order, so headings drag in the modes
+        // that keep the saved order; empty groups show only in Recent, so
+        // the dragged headings hold a member each.
+        app.list_mode = crate::model::ListMode::Unread;
         let a = app.settings.flat_groups.create("Alpha").unwrap();
         let b = app.settings.flat_groups.create("Beta").unwrap();
         let c = app.settings.flat_groups.create("Gamma").unwrap();
+        app.settings.flat_groups.add(a, member(&app, &app.chats[0]));
+        app.settings.flat_groups.add(c, member(&app, &app.chats[1]));
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
         let frame = |app: &mut App, events: Vec<egui::Event>| {
@@ -1355,5 +1575,377 @@ mod tests {
         let public_key = member(&app, &b);
         assert_eq!(identities(&app, &a), vec![private_key]);
         assert_eq!(identities(&app, &b), vec![public_key]);
+    }
+
+    fn recent_app(chats: Vec<Chat>) -> (App, tempfile::TempDir) {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        app.chats = chats;
+        (app, root)
+    }
+
+    fn recent_chat(id: &str, activity: i64, unread: u32) -> Chat {
+        let mut chat = Chat::new(id.into(), id.into());
+        chat.last_activity = activity;
+        chat.unread = unread;
+        chat
+    }
+
+    fn recent_plan(app: &App) -> Vec<Section> {
+        let refs: Vec<&Chat> = app.chats.iter().collect();
+        let activity: Vec<i64> = refs.iter().map(|chat| chat.last_activity).collect();
+        plan_sections(app, &refs, &activity)
+    }
+
+    #[test]
+    fn recent_sections_sort_by_freshest_chat_with_other_last() {
+        let (mut app, _root) = recent_app(vec![
+            recent_chat("old-work", 100, 0),
+            recent_chat("fresh-play", 300, 0),
+            recent_chat("other", 200, 0),
+        ]);
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        let play = app.settings.flat_groups.create("Play").unwrap();
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[0]));
+        app.settings
+            .flat_groups
+            .add(play, member(&app, &app.chats[1]));
+        let sections = recent_plan(&app);
+        let names: Vec<&str> = sections
+            .iter()
+            .map(|section| section.name.as_str())
+            .collect();
+        // A fresher chat lifts its whole section; Other stays last even
+        // though its chat is newer than Work's.
+        assert_eq!(names, vec!["Play", "Work", "Other"]);
+    }
+
+    #[test]
+    fn other_modes_keep_the_saved_section_order() {
+        let (mut app, _root) = recent_app(vec![
+            recent_chat("old-work", 100, 0),
+            recent_chat("fresh-play", 300, 0),
+        ]);
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        let play = app.settings.flat_groups.create("Play").unwrap();
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[0]));
+        app.settings
+            .flat_groups
+            .add(play, member(&app, &app.chats[1]));
+        app.apply(
+            Action::SetListMode(crate::model::ListMode::Unread),
+            &egui::Context::default(),
+        );
+        let sections = recent_plan(&app);
+        let names: Vec<&str> = sections
+            .iter()
+            .map(|section| section.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["Work", "Play", "Other"]);
+    }
+
+    #[test]
+    fn recent_sections_filter_to_unread_and_expand_on_demand() {
+        let (mut app, _root) = recent_app(vec![
+            recent_chat("read-a", 100, 0),
+            recent_chat("unread-b", 200, 2),
+            recent_chat("quiet-c", 300, 0),
+        ]);
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[0]));
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[1]));
+        let play = app.settings.flat_groups.create("Play").unwrap();
+        app.settings
+            .flat_groups
+            .add(play, member(&app, &app.chats[2]));
+        let sections = recent_plan(&app);
+        // Play is quiet: every member listed, and it is the freshest section.
+        assert_eq!(sections[0].name, "Play");
+        assert_eq!(sections[0].shown, vec![2]);
+        assert!(!sections[0].filtering);
+        assert_eq!(sections[0].expander, None);
+        // Work filters to its unread row, with a Show-all row under it.
+        assert_eq!(sections[1].name, "Work");
+        assert_eq!(sections[1].shown, vec![1]);
+        assert!(sections[1].filtering);
+        assert_eq!(sections[1].expander, Some(Expander::ShowAll));
+        drop(sections);
+        // Show-all opens the section to every member and offers the way back.
+        app.flat_group_ui.show_all.insert(Some(work));
+        let sections = recent_plan(&app);
+        assert_eq!(sections[1].shown, vec![0, 1]);
+        assert!(!sections[1].filtering);
+        assert_eq!(sections[1].expander, Some(Expander::UnreadOnly));
+    }
+
+    #[test]
+    fn recent_opened_chat_stays_dimmed_until_the_view_changes() {
+        let (mut app, _root) = recent_app(vec![
+            recent_chat("read-a", 100, 0),
+            recent_chat("unread-b", 200, 2),
+        ]);
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[0]));
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[1]));
+        let ctx = egui::Context::default();
+        // Reading "unread-b" from the list keeps its row (KeepUnread).
+        app.apply(Action::KeepUnread("unread-b".into()), &ctx);
+        assert!(app.unread_kept_contains(&"unread-b".into()));
+        app.chats[1].unread = 0;
+        let sections = recent_plan(&app);
+        // No unread left, but the kept row holds the filtered list open.
+        assert_eq!(sections[0].name, "Work");
+        assert_eq!(sections[0].shown, vec![1]);
+        assert!(sections[0].filtering);
+        drop(sections);
+        // Leaving Recent clears the keep: the section lists every member again.
+        app.apply(Action::SetListMode(crate::model::ListMode::Unread), &ctx);
+        app.apply(Action::SetListMode(crate::model::ListMode::Recent), &ctx);
+        assert!(!app.unread_kept_contains(&"unread-b".into()));
+        let sections = recent_plan(&app);
+        assert_eq!(sections[0].shown, vec![0, 1]);
+        assert!(!sections[0].filtering);
+        assert_eq!(sections[0].expander, None);
+    }
+
+    #[test]
+    fn recent_flat_list_keeps_nothing() {
+        let (mut app, _root) = recent_app(vec![recent_chat("a", 100, 1)]);
+        let ctx = egui::Context::default();
+        app.apply(Action::ToggleListLayout, &ctx);
+        assert!(app.list_is_flat());
+        app.apply(Action::KeepUnread("a".into()), &ctx);
+        assert!(!app.unread_kept_contains(&"a".into()));
+    }
+
+    #[test]
+    fn keyboard_walks_only_shown_rows_in_plan_order() {
+        let (mut app, _root) = recent_app(vec![
+            recent_chat("read-a", 100, 0),
+            recent_chat("unread-b", 200, 2),
+            recent_chat("quiet-c", 300, 0),
+            recent_chat("other", 50, 0),
+        ]);
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[0]));
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[1]));
+        let play = app.settings.flat_groups.create("Play").unwrap();
+        app.settings
+            .flat_groups
+            .add(play, member(&app, &app.chats[2]));
+        let order = |app: &App| {
+            navigation_chats(app)
+                .iter()
+                .map(|c| c.id.as_str().to_owned())
+                .collect::<Vec<_>>()
+        };
+        // Sections by freshest chat; the filtered section lists only unread.
+        assert_eq!(order(&app), ["quiet-c", "unread-b", "other"]);
+        // A folded section is skipped, as before.
+        app.flat_group_ui.collapsed.insert(Some(play));
+        assert_eq!(order(&app), ["unread-b", "other"]);
+    }
+
+    #[test]
+    fn reveal_lifts_a_sections_unread_filter() {
+        let (mut app, _root) = recent_app(vec![
+            recent_chat("read-a", 100, 0),
+            recent_chat("unread-b", 200, 2),
+        ]);
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[0]));
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[1]));
+        app.settings.flat_groups.grouped_view = true;
+        // Revealing a read chat opens its filtered section to every member,
+        // and the reveal request is consumed.
+        app.scroll_chat_into_view = Some("read-a".into());
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| list(&mut app, ui, false));
+        output.textures_delta.clear();
+        assert!(app.scroll_chat_into_view.is_none());
+        assert!(app.flat_group_ui.show_all.contains(&Some(work)));
+        let sections = recent_plan(&app);
+        assert_eq!(sections[0].shown, vec![0, 1]);
+        assert_eq!(sections[0].expander, Some(Expander::UnreadOnly));
+    }
+
+    #[test]
+    fn clicking_a_quiet_sections_read_chat_keeps_nothing() {
+        let (mut app, _root) = recent_app(vec![
+            recent_chat("read-a", 100, 0),
+            recent_chat("read-b", 200, 0),
+            recent_chat("unread-c", 300, 2),
+        ]);
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[0]));
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[1]));
+        let play = app.settings.flat_groups.create("Play").unwrap();
+        app.settings
+            .flat_groups
+            .add(play, member(&app, &app.chats[2]));
+        app.settings.flat_groups.grouped_view = true;
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| list(app, ui, false),
+            );
+            out.textures_delta.clear();
+        };
+        let center = |id: &str| {
+            ctx.data(|d| d.get_temp::<egui::Rect>(crate::ui::chats::chat_row_id(id)))
+                .expect("row was laid out")
+                .center()
+        };
+        let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let click = |app: &mut App, at: egui::Pos2| {
+            frame(app, vec![egui::Event::PointerMoved(at)]);
+            frame(app, vec![button(at, true)]);
+            frame(app, vec![button(at, false)]);
+        };
+        frame(&mut app, Vec::new());
+        frame(&mut app, Vec::new());
+        // A read chat in a quiet section: no keep, the section stays full.
+        let at = center("read-a");
+        click(&mut app, at);
+        assert!(
+            !app.actions
+                .iter()
+                .any(|action| matches!(action, Action::KeepUnread(_)))
+        );
+        let sections = recent_plan(&app);
+        assert_eq!(sections[1].name, "Work");
+        assert_eq!(sections[1].shown, vec![0, 1]);
+        assert!(!sections[1].filtering);
+        drop(sections);
+        // An unread chat in a filtered section is kept, exactly as before.
+        app.actions.clear();
+        let at = center("unread-c");
+        click(&mut app, at);
+        assert!(
+            app.actions
+                .iter()
+                .any(|action| matches!(action, Action::KeepUnread(id) if id == "unread-c"))
+        );
+    }
+
+    #[test]
+    fn keyboard_order_matches_drawn_rows_for_a_linked_person() {
+        let (mut app, _root) = recent_app(Vec::new());
+        // The representative sorts first on the id tie-break and is read;
+        // her linked member carries the unread message.
+        let mut ada = recent_chat("ada", 400, 0);
+        ada.backend_origin = Some("server".into());
+        ada.backend_account = Some("signal".into());
+        let mut ada_alt = recent_chat("ada-alt", 300, 1);
+        ada_alt.backend_origin = Some("server".into());
+        ada_alt.backend_account = Some("whatsapp".into());
+        let ben = recent_chat("ben", 200, 1);
+        app.settings.beeper.people.push(crate::merged::Person {
+            name: "Ada".into(),
+            members: vec![
+                crate::merged::Member::of(&ada).unwrap(),
+                crate::merged::Member::of(&ada_alt).unwrap(),
+            ],
+            primary: None,
+        });
+        app.chats = vec![ada, ada_alt, ben];
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[0]));
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[2]));
+        app.settings.flat_groups.grouped_view = true;
+        // The drawn plan: the linked person shows as her summed preview.
+        let display = app.beeper_display_chats();
+        let refs: Vec<&Chat> = display.iter().collect();
+        let activity: Vec<i64> = refs.iter().map(|chat| chat.last_activity).collect();
+        let plan = plan_sections(&app, &refs, &activity);
+        let drawn: Vec<&str> = plan
+            .iter()
+            .flat_map(|section| section.shown.iter().map(|index| refs[*index].id.as_str()))
+            .collect();
+        let keyboard: Vec<&str> = navigation_chats(&app)
+            .iter()
+            .map(|chat| chat.id.as_str())
+            .collect();
+        // Regression: the raw representative reads as quiet, and the
+        // keyboard used to skip her while the drawn list kept her.
+        assert_eq!(drawn, vec!["ada", "ben"]);
+        assert_eq!(keyboard, drawn);
+    }
+
+    #[test]
+    fn other_filters_like_any_section() {
+        let (app, _root) = recent_app(vec![
+            recent_chat("read-a", 100, 0),
+            recent_chat("unread-b", 200, 2),
+        ]);
+        let sections = recent_plan(&app);
+        let other = sections.last().expect("Other is always planned");
+        assert_eq!(other.name, "Other");
+        assert_eq!(other.shown, vec![1]);
+        assert!(other.filtering);
+        assert_eq!(other.expander, Some(Expander::ShowAll));
+    }
+
+    #[test]
+    fn a_chat_claimed_by_two_groups_appears_in_the_first() {
+        // One key of a linked pair in each group: both groups claim the
+        // pair's chats, and the first group in the saved order wins.
+        let (mut app, _root, _a, _b) = linked_pair();
+        let one = app.settings.flat_groups.create("One").unwrap();
+        let two = app.settings.flat_groups.create("Two").unwrap();
+        app.settings
+            .flat_groups
+            .add(one, member(&app, &app.chats[0]));
+        app.settings
+            .flat_groups
+            .add(two, member(&app, &app.chats[1]));
+        let refs: Vec<&Chat> = app.chats.iter().collect();
+        assert_eq!(membership_rows(&app, &refs), vec![vec![0, 1], vec![]]);
     }
 }
