@@ -315,18 +315,6 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             ui.ctx()
                 .data_mut(|data| data.insert_temp(header_row_id(), row.response.rect));
             ui.add_space(6.0);
-            let description = match app.list_mode {
-                crate::model::ListMode::Recent => {
-                    crate::i18n::gettext(app.locale, "All chats · newest activity first")
-                }
-                crate::model::ListMode::Unread => {
-                    crate::i18n::gettext(app.locale, "Unread chats · including muted")
-                }
-                crate::model::ListMode::NeedsMe => {
-                    crate::i18n::gettext(app.locale, "Unread or marked for later · muted excluded")
-                }
-            };
-            ui.label(egui::RichText::new(description).small());
             if app.search.trim().is_empty() {
                 super::flat_groups::controls(app, ui);
             }

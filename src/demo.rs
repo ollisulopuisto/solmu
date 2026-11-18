@@ -22116,6 +22116,7 @@ mod tests {
                 Stop::Recent,
                 Stop::UnreadMode,
                 Stop::NeedsMe,
+                Stop::ListLayout,
                 Stop::NewLocalGroup,
                 Stop::NewChat,
             ];
@@ -24439,7 +24440,7 @@ mod rail_tests {
                 .flat_list
                 .insert("recent".into(), flat);
             let painted = frame_at(&mut app, &ctx, egui::vec2(1180.0, 780.0), Vec::new());
-            for label in ["Recent", "Unread", "Needs me", "Groups"] {
+            for label in ["Recent", "Unread", "Needs me", "Group by section"] {
                 assert!(
                     painted.iter().any(|text| text == label),
                     "missing {label}: {painted:?}"
@@ -24497,6 +24498,47 @@ mod rail_tests {
                 ctx.read_response(egui::Id::new("new-local-group-name"))
                     .is_none()
             );
+        }
+    }
+
+    #[test]
+    fn section_switch_and_shortcut_share_layout_state_without_header_key_text() {
+        for macos in [false, true] {
+            for light in [false, true] {
+                let (mut app, ctx) = open(if light { "chat,light" } else { "chat" }, macos);
+                for mode in crate::model::ListMode::EVERY {
+                    app.apply(crate::model::Action::SetListMode(mode), &ctx);
+                    frame(&mut app, &ctx, 1180.0, Vec::new());
+                    assert!(!app.list_is_flat());
+                    let switch = stop_rect(&ctx, Stop::ListLayout).unwrap();
+                    let plus = stop_rect(&ctx, Stop::NewLocalGroup).unwrap();
+                    assert!(switch.right() <= plus.left());
+                    click(&mut app, &ctx, 1180.0, switch.center());
+                    assert!(app.list_is_flat());
+                    super::tests::press_key(&mut app, &ctx, egui::Key::G, egui::Modifiers::COMMAND);
+                    assert!(!app.list_is_flat());
+                    let painted = frame_at(
+                        &mut app,
+                        &ctx,
+                        egui::vec2(1180.0, 780.0),
+                        vec![egui::Event::PointerMoved(egui::pos2(1000.0, 700.0))],
+                    );
+                    for retired in [
+                        "All chats · newest activity first",
+                        "Unread chats · including muted",
+                        "Unread or marked for later · muted excluded",
+                        "Grouped",
+                        "Flat list",
+                        "Ctrl+G",
+                        "⌘G",
+                    ] {
+                        assert!(
+                            !painted.iter().any(|text| text == retired),
+                            "unexpected header text {retired}"
+                        );
+                    }
+                }
+            }
         }
     }
 

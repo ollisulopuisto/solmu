@@ -477,7 +477,13 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     ui.separator();
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::gettext(app.locale, "Groups")).strong());
+        let label = crate::i18n::gettext(app.locale, "Group by section");
+        let tooltip = format!(
+            "{} ({})",
+            label,
+            super::keys::hint("list-layout").unwrap_or_default()
+        );
+        ui.label(label.as_ref()).on_hover_text(&tooltip);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let response = ui
                 .push_id("new-local-group", |ui| {
@@ -553,11 +559,22 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
                         ui.close();
                     }
                 });
-            ui.label(if app.list_is_flat() {
-                crate::i18n::gettext(app.locale, "Flat list")
-            } else {
-                crate::i18n::gettext(app.locale, "Grouped")
+            let mut grouped = !app.list_is_flat();
+            let response = super::widgets::switch(ui, &app.palette, &mut grouped)
+                .tab_stop(Stop::ListLayout)
+                .on_hover_text(&tooltip);
+            crate::theme::reveal_focus(&response);
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::WidgetType::Checkbox,
+                    ui.is_enabled(),
+                    grouped,
+                    &label,
+                )
             });
+            if response.changed() {
+                app.actions.push(crate::model::Action::ToggleListLayout);
+            }
         });
     });
 }
