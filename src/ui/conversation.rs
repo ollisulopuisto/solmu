@@ -9815,7 +9815,9 @@ fn rich_body(
     );
     let total = laid.galley.rows.len();
     if total <= 25 {
-        return rich_body_full(ui, view, message, text, width, reserve, span, actions, laid);
+        return rich_body_full(
+            ui, view, message, text, width, reserve, span, actions, laid, None,
+        );
     }
     // Scoped to this local account, exact source and message revision. An edit
     // starts collapsed; no expansion preference or shortened text is persisted.
@@ -9864,7 +9866,16 @@ fn rich_body(
     // Keep the complete galley and transcript registration. Clipping, not a
     // substring, preserves markup, bidi, emoji and full-message copy/actions.
     rich_body_full(
-        &mut child, view, message, text, width, None, span, actions, laid,
+        &mut child,
+        view,
+        message,
+        text,
+        width,
+        None,
+        span,
+        actions,
+        laid,
+        (!expanded).then_some(height),
     );
     ui.allocate_space(body.size());
     let label = if expanded {
@@ -9874,7 +9885,10 @@ fn rich_body(
             .replace("{count}", &(total - shown).to_string())
     };
     let response = ui
-        .add(egui::Button::new(egui::RichText::new(&label).color(view.palette.link)).frame(false));
+        .add(egui::Button::new(egui::RichText::new(&label).color(view.palette.link)).frame(false))
+        .tab_stop(Stop::BodyToggle(id.value()));
+    theme::reveal_focus(&response);
+    theme::focus_outline(ui, response.id, response.rect, 4.0);
     #[cfg(test)]
     ui.ctx().data_mut(|data| {
         data.insert_temp(
@@ -9905,6 +9919,7 @@ fn rich_body_full(
     span: Option<f32>,
     actions: &mut Vec<Action>,
     laid: markup::Text,
+    displayed_height: Option<f32>,
 ) -> Option<Rect> {
     let palette = view.palette;
     let rtl = crate::bidi::message_rtl(text);
@@ -10044,7 +10059,15 @@ fn rich_body_full(
         rect.min
     };
     if visible || selection_alive {
-        markup::paint_selectable(ui, &laid, &response, origin, palette.text, visible);
+        markup::paint_selectable_height(
+            ui,
+            &laid,
+            &response,
+            origin,
+            palette.text,
+            visible,
+            displayed_height,
+        );
     }
     let web_links: Vec<(Rect, String)> = laid
         .links
@@ -10082,6 +10105,9 @@ fn rich_body_full(
         let number = phone.strip_prefix('+').unwrap_or(phone);
         let copy_text = laid.link_copy_text(link_index);
         for (row, bounds) in crate::bidi::char_bounds_by_row(&laid.galley, range.start, range.end) {
+            if displayed_height.is_some_and(|height| bounds.top() >= height) {
+                continue;
+            }
             let link = ui
                 .interact(
                     bounds.translate(origin.to_vec2()).expand(2.0),
@@ -13614,6 +13640,185 @@ mod tests {
             (own - incoming - 19.0).abs() < 0.5,
             "our own messages add the delivery ticks, {own} vs {incoming}"
         );
+    }
+
+    #[test]
+    fn long_bubble_collapse_keyboard_and_hidden_phone_focus_in_full_chat() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            crate::settings::Settings::default(),
+        );
+        crate::demo::populate(&mut app);
+        crate::demo::apply_flags(&mut app, Some("collapse"));
+        let chat = app.open_chat.clone().unwrap();
+        let text = (1..=34)
+            .map(|row| match row {
+                1 => "+358 50 123 4567".to_owned(),
+                30 => "+358 40 987 6543".to_owned(),
+                _ => format!("Line {row}"),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.conversations.get_mut(&chat).unwrap().messages[0].content = Content::text(text);
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let frame = |app: &mut App, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1180.0, 1200.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.background_frame(ui.ctx());
+                    app.frame_ui(ui);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        for _ in 0..4 {
+            frame(&mut app, vec![]);
+        }
+        let key = |key| {
+            vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }]
+        };
+        let phones = || {
+            focus::stops(&ctx)
+                .iter()
+                .filter(|(stop, _)| matches!(stop, Stop::PhoneLink(_)))
+                .count()
+        };
+        assert_eq!(phones(), 1, "collapsed hidden number is not a focus target");
+        for _ in 0..100 {
+            if focus::stops(&ctx).iter().any(|(stop, id)| {
+                matches!(stop, Stop::BodyToggle(_)) && ctx.memory(|memory| memory.has_focus(*id))
+            }) {
+                break;
+            }
+            frame(&mut app, key(Key::Tab));
+        }
+        assert!(
+            focus::stops(&ctx)
+                .iter()
+                .any(|(stop, id)| matches!(stop, Stop::BodyToggle(_))
+                    && ctx.memory(|memory| memory.has_focus(*id))),
+            "Tab reaches Show more"
+        );
+        frame(&mut app, key(Key::Space));
+        frame(&mut app, vec![]);
+        assert_eq!(phones(), 2, "expansion exposes the hidden number");
+        frame(&mut app, key(Key::Space));
+        frame(&mut app, vec![]);
+        assert_eq!(
+            phones(),
+            1,
+            "Show less works by keyboard and hides the link again"
+        );
+    }
+
+    #[test]
+    fn long_bubble_collapse_pointer_copy_keeps_successor_transcript_boundary() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let text = (1..=34)
+                .map(|row| format!("Line {row} plain words"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mut first =
+                crate::archive::tests::message("1@s.whatsapp.net", "first-copy", 0, false);
+            first.content = Content::text(&text);
+            let mut next =
+                crate::archive::tests::message("1@s.whatsapp.net", "next-copy", 60, false);
+            next.content = Content::text("Successor text");
+            let draw = |events| {
+                view.copy_rows.unwrap().lock().unwrap().clear();
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(900.0, 1800.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        rich_body(
+                            ui,
+                            view,
+                            &first,
+                            &text,
+                            600.0,
+                            None,
+                            Some(600.0),
+                            &mut Vec::new(),
+                            true,
+                        );
+                        rich_body(
+                            ui,
+                            view,
+                            &next,
+                            "Successor text",
+                            600.0,
+                            None,
+                            Some(600.0),
+                            &mut Vec::new(),
+                            true,
+                        );
+                    },
+                )
+            };
+            for _ in 0..3 {
+                let mut out = draw(vec![]);
+                out.textures_delta.clear();
+            }
+            let rect = |id| {
+                ctx.data(|data| data.get_temp::<Rect>(bubble_id(&first.chat, id).with("body")))
+                    .unwrap()
+            };
+            let from = rect("first-copy").left_top() + vec2(1.0, 6.0);
+            let to = rect("next-copy").right_bottom() - vec2(1.0, 2.0);
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            for events in [
+                vec![egui::Event::PointerMoved(from), button(from, true)],
+                vec![egui::Event::PointerMoved(to)],
+                vec![button(to, false)],
+            ] {
+                let mut out = draw(events);
+                out.textures_delta.clear();
+            }
+            let mut out = draw(vec![egui::Event::Copy]);
+            let copied = out
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .expect("pointer selection produces clipboard text");
+            out.textures_delta.clear();
+            let rows = view.copy_rows.unwrap().lock().unwrap();
+            let refined = crate::transcript::refine(&copied, &rows)
+                .expect("cross-message copy retains transcript boundaries");
+            assert!(refined.contains("Successor text"));
+            assert!(
+                refined.contains("Line 34 plain words"),
+                "whole collapsed middle/tail content stays available"
+            );
+        });
     }
 
     #[test]

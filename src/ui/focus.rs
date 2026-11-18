@@ -14,6 +14,8 @@ pub enum Stop {
     Attach,
     Emoji,
     PhoneLink(u32),
+    /// Stable session key for a message's Show more/Show less control.
+    BodyToggle(u64),
     /// The chat header's Search, then the search pane's controls in reading
     /// order. The arrows walk its results from the field.
     ChatSearch,

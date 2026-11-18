@@ -624,6 +624,21 @@ pub fn paint_selectable(
     fallback: Color32,
     visible: bool,
 ) {
+    paint_selectable_height(ui, text, response, pos, fallback, visible, None);
+}
+
+/// Keep complete copy contents but use the displayed body's height for label
+/// assembly. Hidden body rows must not overlap the following message's label.
+#[allow(clippy::too_many_arguments)]
+pub fn paint_selectable_height(
+    ui: &egui::Ui,
+    text: &Text,
+    response: &egui::Response,
+    pos: Pos2,
+    fallback: Color32,
+    visible: bool,
+    displayed_height: Option<f32>,
+) {
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
             egui::WidgetType::Label,
@@ -645,6 +660,9 @@ pub fn paint_selectable(
     let offset = pos.x - snap_to_pixels(column.min, ppp);
     for row in &mut galley.rows {
         row.pos.x += offset;
+    }
+    if let Some(height) = displayed_height {
+        galley.rect.max.y = galley.rect.min.y + height;
     }
     galley.rect.min.x = 0.0;
     galley.rect.max.x = column.span();
