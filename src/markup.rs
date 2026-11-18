@@ -566,8 +566,16 @@ struct PreparedCache {
 /// misses. An over-cap chat keeps a stable cached subset instead.
 const PREPARED_CAP: usize = 1024;
 
-static PREPARED: std::sync::OnceLock<std::sync::Mutex<PreparedCache>> =
-    std::sync::OnceLock::new();
+// Prepared jobs depend on this context's font definitions and measurements.
+// Separate contexts must not share entries or compete for admission slots.
+fn prepared_cache(ctx: &egui::Context) -> Arc<std::sync::Mutex<PreparedCache>> {
+    ctx.data_mut(|data| {
+        data.get_temp_mut_or_default::<Arc<std::sync::Mutex<PreparedCache>>>(egui::Id::new(
+            "solmu-prepared-body-cache",
+        ))
+        .clone()
+    })
+}
 
 /// Lays text out like [`layout`], but with line breaks from the wrap
 /// balancer (`crate::wrap`, private, so no doc link) instead of greedy first-fit: raggedness is
@@ -590,7 +598,7 @@ pub fn layout_balanced(
     grow_emoji: bool,
 ) -> Arc<Text> {
     let key = PreparedKey::new(text, mentions, style, max_width, grow_emoji);
-    let cache = PREPARED.get_or_init(|| std::sync::Mutex::new(PreparedCache::default()));
+    let cache = prepared_cache(ui.ctx());
     {
         let mut cache = cache.lock().unwrap_or_else(|p| p.into_inner());
         if cache.generation != key.font_generation {
@@ -2305,17 +2313,16 @@ mod tests {
         }
     }
 
-    /// The prepared-body cache is process-global; these tests serialise and
-    /// reset it. Other suites reinstall fonts, so a generation change
-    /// mid-attempt discards the attempt rather than failing it.
-    fn prepared_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    /// Each fixture owns its fonts and cache. Other suites can still bump
+    /// the legacy global font generation, so retries below reject those runs.
+    fn prepared_test_context() -> egui::Context {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        ctx
     }
 
-    fn clear_prepared_cache() {
-        PREPARED
-            .get_or_init(|| std::sync::Mutex::new(PreparedCache::default()))
+    fn clear_prepared_cache(ctx: &egui::Context) {
+        prepared_cache(ctx)
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .entries
@@ -2326,10 +2333,9 @@ mod tests {
     /// markup and re-inserting the balancer's breaks every frame.
     #[test]
     fn a_balanced_layout_is_prepared_once_per_input_set() {
-        let _guard = prepared_test_lock();
-        let ctx = egui::Context::default();
+        let ctx = prepared_test_context();
         for _ in 0..3 {
-            clear_prepared_cache();
+            clear_prepared_cache(&ctx);
             let generation = crate::theme::font_generation();
             let mut laid = None;
             let mut output = ctx.run_ui(Default::default(), |ui| {
@@ -2377,10 +2383,9 @@ mod tests {
     /// renamed mention never reuses it.
     #[test]
     fn a_prepared_layout_matches_fresh_and_tracks_edits() {
-        let _guard = prepared_test_lock();
-        let ctx = egui::Context::default();
+        let ctx = prepared_test_context();
         for _ in 0..3 {
-            clear_prepared_cache();
+            clear_prepared_cache(&ctx);
             let generation = crate::theme::font_generation();
             let mut laid = None;
             let mut output = ctx.run_ui(Default::default(), |ui| {
@@ -2438,12 +2443,11 @@ mod tests {
     /// cache, which tracks the live atlas.
     #[test]
     fn a_font_reload_rebuilds_a_cached_body() {
-        let _guard = prepared_test_lock();
-        let ctx = egui::Context::default();
+        let ctx = prepared_test_context();
         let (first, again) = {
             let mut pair = None;
             for _ in 0..3 {
-                clear_prepared_cache();
+                clear_prepared_cache(&ctx);
                 let generation = crate::theme::font_generation();
                 let mut laid = None;
                 let mut output = ctx.run_ui(Default::default(), |ui| {
@@ -2515,16 +2519,29 @@ mod tests {
         assert_eq!(relaid.galley.rows.len(), fresh.galley.rows.len());
     }
 
+    #[test]
+    fn prepared_caches_belong_to_their_font_context() {
+        let first = prepared_test_context();
+        let second = prepared_test_context();
+        assert!(!Arc::ptr_eq(
+            &prepared_cache(&first),
+            &prepared_cache(&second)
+        ));
+        assert!(Arc::ptr_eq(
+            &prepared_cache(&first),
+            &prepared_cache(&first)
+        ));
+    }
+
     /// More bodies than the old small cap: an active text selection lays
     /// out every loaded row each frame, and evicting under that scan
     /// thrashes the cache into permanent misses. The cache instead keeps a
     /// stable subset, and later passes reuse it.
     #[test]
     fn a_full_timeline_scan_keeps_its_cached_subset() {
-        let _guard = prepared_test_lock();
-        let ctx = egui::Context::default();
+        let ctx = prepared_test_context();
         for _ in 0..3 {
-            clear_prepared_cache();
+            clear_prepared_cache(&ctx);
             let generation = crate::theme::font_generation();
             let mut hits = 0;
             let mut output = ctx.run_ui(Default::default(), |ui| {
