@@ -15545,7 +15545,10 @@ mod tests {
         let boxes: Vec<_> = tree
             .nodes
             .iter()
-            .filter(|(_, node)| node.role() == egui::accesskit::Role::CheckBox)
+            .filter(|(_, node)| {
+                node.role() == egui::accesskit::Role::CheckBox
+                    && node.label() != Some("Group by section")
+            })
             .map(|(_, node)| node)
             .collect();
         assert_eq!(boxes.len(), 3);
@@ -22116,6 +22119,7 @@ mod tests {
                 Stop::Recent,
                 Stop::UnreadMode,
                 Stop::NeedsMe,
+                Stop::ListLayout,
                 Stop::NewLocalGroup,
                 Stop::NewChat,
             ];
@@ -24439,7 +24443,7 @@ mod rail_tests {
                 .flat_list
                 .insert("recent".into(), flat);
             let painted = frame_at(&mut app, &ctx, egui::vec2(1180.0, 780.0), Vec::new());
-            for label in ["Recent", "Unread", "Needs me", "Groups"] {
+            for label in ["Recent", "Unread", "Needs me", "Group by section"] {
                 assert!(
                     painted.iter().any(|text| text == label),
                     "missing {label}: {painted:?}"
@@ -24497,6 +24501,123 @@ mod rail_tests {
                 ctx.read_response(egui::Id::new("new-local-group-name"))
                     .is_none()
             );
+        }
+    }
+
+    #[test]
+    fn section_switch_and_shortcut_share_layout_state_without_header_key_text() {
+        for macos in [false, true] {
+            for light in [false, true] {
+                let (mut app, ctx) = open(if light { "chat,light" } else { "chat" }, macos);
+                for mode in crate::model::ListMode::EVERY {
+                    app.apply(crate::model::Action::SetListMode(mode), &ctx);
+                    frame(&mut app, &ctx, 1180.0, Vec::new());
+                    assert!(!app.list_is_flat());
+                    let switch = stop_rect(&ctx, Stop::ListLayout).unwrap();
+                    let plus = stop_rect(&ctx, Stop::NewLocalGroup).unwrap();
+                    assert!(switch.right() <= plus.left());
+                    click(&mut app, &ctx, 1180.0, switch.center());
+                    assert!(app.list_is_flat());
+                    super::tests::press_key(&mut app, &ctx, egui::Key::G, egui::Modifiers::COMMAND);
+                    assert!(!app.list_is_flat());
+                    let painted = frame_at(
+                        &mut app,
+                        &ctx,
+                        egui::vec2(1180.0, 780.0),
+                        vec![egui::Event::PointerMoved(egui::pos2(1000.0, 700.0))],
+                    );
+                    for retired in [
+                        "All chats · newest activity first",
+                        "Unread chats · including muted",
+                        "Unread or marked for later · muted excluded",
+                        "Grouped",
+                        "Flat list",
+                        "Ctrl+G",
+                        "⌘G",
+                    ] {
+                        assert!(
+                            !painted.iter().any(|text| text == retired),
+                            "unexpected header text {retired}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn section_label_clicks_and_both_targets_show_the_key_only_on_hover() {
+        // Each target gets a fresh context: egui allows one tooltip per layer,
+        // and a previous label tooltip can mask the switch's tooltip next frame.
+        for hover_label in [true, false] {
+            let (mut app, ctx) = open("chat", false);
+            let label = recorded(&ctx, egui::Id::new("list-layout-label")).unwrap();
+            let switch = stop_rect(&ctx, Stop::ListLayout).unwrap();
+            let target = if hover_label {
+                label.center()
+            } else {
+                switch.center()
+            };
+            // Disable animation/timing gates in this fixture. We are checking
+            // tooltip contents and targets, not egui's hover-delay policy.
+            ctx.all_styles_mut(|style| {
+                style.interaction.tooltip_delay = 0.0;
+                style.interaction.show_tooltips_only_when_still = false;
+                style.animation_time = 0.0;
+            });
+            frame(
+                &mut app,
+                &ctx,
+                1180.0,
+                vec![egui::Event::PointerMoved(target)],
+            );
+            // The first pass creates the tooltip area; the next lays it out.
+            let painted = frame_at(&mut app, &ctx, egui::vec2(1180.0, 780.0), Vec::new());
+            let expected = format!(
+                "Group by section ({})",
+                crate::ui::keys::hint("list-layout").unwrap()
+            );
+            assert!(
+                painted.contains(&expected),
+                "tooltip missing at {target:?}: {painted:?}"
+            );
+            // Verify label activation only after hover, since clicks suppress tooltips.
+            click(&mut app, &ctx, 1180.0, label.center());
+            assert!(app.list_is_flat());
+        }
+    }
+
+    #[test]
+    fn section_header_controls_fit_narrow_sidebar_at_large_scale() {
+        for zoom in [1.0, 1.5, 2.0] {
+            for locale in crate::i18n::Locale::ALL {
+                let mut app = app();
+                app.settings.sidebar_width = 260.0;
+                app.settings.zoom = zoom;
+                app.locale = locale;
+                let ctx = egui::Context::default();
+                app.attach(&ctx);
+                for _ in 0..5 {
+                    frame(&mut app, &ctx, 1180.0, Vec::new());
+                }
+                let label = recorded(&ctx, egui::Id::new("list-layout-label")).unwrap();
+                let switch = stop_rect(&ctx, Stop::ListLayout).unwrap();
+                let plus = stop_rect(&ctx, Stop::NewLocalGroup).unwrap();
+                let header = list_header(&ctx).unwrap();
+                assert!(
+                    label.height() <= 23.0,
+                    "single line at zoom {zoom}: {label:?}"
+                );
+                assert!(label.right() <= switch.left() && switch.right() <= plus.left());
+                assert!(
+                    (label.left() - header.left()).abs() < 2.0,
+                    "label starts at header left, not centered: {label:?}, {header:?}"
+                );
+                assert!(
+                    label.left() >= header.left() && plus.right() <= header.right() + 1.0,
+                    "header bounds {header:?}, label {label:?}, plus {plus:?}, zoom {zoom}"
+                );
+            }
         }
     }
 
