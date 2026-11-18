@@ -407,12 +407,115 @@ fn measure_job(
     Measured { items, hyphen }
 }
 
+/// What a prepared balanced layout depends on: the text and resolved
+/// mention names (hashed, then verified against the stored inputs before a
+/// hit is served), body size, wrap width, colours, the emoji sizing switch
+/// and the font generation, which [`crate::theme::set_font`] bumps on a
+/// typeface change.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct PreparedKey {
+    text_hash: u64,
+    mentions_hash: u64,
+    size: u32,
+    max_width: u32,
+    colors: [u32; 4],
+    grow_emoji: bool,
+    font_generation: u32,
+}
+
+impl PreparedKey {
+    fn new(
+        text: &str,
+        mentions: &[Mention],
+        style: &Style,
+        max_width: f32,
+        grow_emoji: bool,
+    ) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut hasher);
+        let text_hash = hasher.finish();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for mention in mentions {
+            mention.user.hash(&mut hasher);
+            mention.name.hash(&mut hasher);
+        }
+        let mentions_hash = hasher.finish();
+        let color = |color: Color32| u32::from_ne_bytes(color.to_srgba_unmultiplied());
+        Self {
+            text_hash,
+            mentions_hash,
+            size: style.size.to_bits(),
+            max_width: max_width.to_bits(),
+            colors: [
+                color(style.color),
+                color(style.secondary),
+                color(style.link),
+                color(style.mention),
+            ],
+            grow_emoji,
+            font_generation: crate::theme::font_generation(),
+        }
+    }
+}
+
+/// A prepared layout with the inputs it was built from, kept so a hash
+/// collision in [`PreparedKey`] can never serve another body's layout.
+struct PreparedEntry {
+    text: Box<str>,
+    mentions: Box<[Mention]>,
+    prepared: Arc<Text>,
+}
+
 /// Lays text out like [`layout`], but with line breaks from the wrap
 /// balancer (`crate::wrap`, private, so no doc link) instead of greedy first-fit: raggedness is
 /// minimised, Finnish words may hyphenate, and URLs stay whole when they
 /// fit the cap. The inserted hyphens and newlines are layout-time only;
 /// [`Text::unbroken_text`] carries the text without them for copying.
+///
+/// A body is laid out once per input set and then served from a cache: the
+/// conversation view calls this every frame for every visible bubble while
+/// texts, widths and fonts rarely change. An edit, a renamed mention, a new
+/// width or a new typeface misses and is laid out again.
 pub fn layout_balanced(
+    ui: &egui::Ui,
+    text: &str,
+    mentions: &[Mention],
+    style: &Style,
+    max_width: f32,
+    grow_emoji: bool,
+) -> Arc<Text> {
+    let key = PreparedKey::new(text, mentions, style, max_width, grow_emoji);
+    type Cache = std::sync::Mutex<std::collections::HashMap<PreparedKey, PreparedEntry>>;
+    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Some(entry) = cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key)
+        && entry.text.as_ref() == text
+        && entry.mentions.as_ref() == mentions
+    {
+        return entry.prepared.clone();
+    }
+    let prepared = Arc::new(layout_balanced_now(
+        ui, text, mentions, style, max_width, grow_emoji,
+    ));
+    let mut cache = cache.lock().unwrap_or_else(|p| p.into_inner());
+    // Entries hold full texts and galleys, so the cap is far below the
+    // breaks cache's: a long chat keeps roughly a screenful warm.
+    if cache.len() >= 128 {
+        cache.clear();
+    }
+    cache.insert(
+        key,
+        PreparedEntry {
+            text: text.into(),
+            mentions: mentions.into(),
+            prepared: prepared.clone(),
+        },
+    );
+    prepared
+}
+
+fn layout_balanced_now(
     ui: &egui::Ui,
     text: &str,
     mentions: &[Mention],
@@ -2130,6 +2233,96 @@ mod tests {
                 .all(|span| !span.mention)
         );
         assert_eq!(plain("ping @all", &everyone), "ping @all");
+    }
+
+    fn body_style() -> Style {
+        Style {
+            size: 16.0,
+            color: Color32::WHITE,
+            secondary: Color32::GRAY,
+            link: Color32::LIGHT_BLUE,
+            mention: Color32::WHITE,
+        }
+    }
+
+    /// Unchanged inputs reuse the prepared layout instead of rebuilding the
+    /// markup and re-inserting the balancer's breaks every frame.
+    #[test]
+    fn a_balanced_layout_is_prepared_once_per_input_set() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let text = "words that wrap and balance over several lines ".repeat(20);
+            let first = layout_balanced(ui, &text, &[], &body_style(), 300.0, true);
+            let second = layout_balanced(ui, &text, &[], &body_style(), 300.0, true);
+            assert!(
+                std::sync::Arc::ptr_eq(&first, &second),
+                "unchanged inputs reuse the prepared layout"
+            );
+            let narrower = layout_balanced(ui, &text, &[], &body_style(), 200.0, true);
+            assert!(
+                !std::sync::Arc::ptr_eq(&first, &narrower),
+                "a new wrap width lays out again"
+            );
+            assert_eq!(first.unbroken_text(), narrower.unbroken_text());
+            let larger = layout_balanced(
+                ui,
+                &text,
+                &[],
+                &Style {
+                    size: 18.0,
+                    ..body_style()
+                },
+                300.0,
+                true,
+            );
+            assert!(
+                !std::sync::Arc::ptr_eq(&first, &larger),
+                "a new body size lays out again"
+            );
+        });
+        output.textures_delta.clear();
+    }
+
+    /// The cached copy is the layout a fresh build produces, and an edited
+    /// body or a renamed mention never reuses it.
+    #[test]
+    fn a_prepared_layout_matches_fresh_and_tracks_edits() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let text = "hey @35850123, lunch tomorrow? ".repeat(8);
+            let mentions = [Mention {
+                user: "35850123".into(),
+                name: "Ada".into(),
+            }];
+            let fresh = layout_balanced_now(ui, &text, &mentions, &body_style(), 300.0, true);
+            let cached = layout_balanced(ui, &text, &mentions, &body_style(), 300.0, true);
+            let again = layout_balanced(ui, &text, &mentions, &body_style(), 300.0, true);
+            assert!(std::sync::Arc::ptr_eq(&cached, &again));
+            assert_eq!(fresh.galley.text(), again.galley.text());
+            assert_eq!(fresh.galley.rows.len(), again.galley.rows.len());
+            assert_eq!(fresh.unbroken_text(), again.unbroken_text());
+            assert_eq!(fresh.inserted(), again.inserted());
+
+            let edited = format!("{text}!");
+            let relaid = layout_balanced(ui, &edited, &mentions, &body_style(), 300.0, true);
+            assert!(
+                !std::sync::Arc::ptr_eq(&cached, &relaid),
+                "an edited body lays out again"
+            );
+            assert_eq!(relaid.unbroken_text(), edited);
+
+            let renamed = [Mention {
+                user: "35850123".into(),
+                name: "Ada Lovelace".into(),
+            }];
+            let renamed_layout = layout_balanced(ui, &text, &renamed, &body_style(), 300.0, true);
+            assert!(
+                !std::sync::Arc::ptr_eq(&cached, &renamed_layout),
+                "a renamed mention lays out again"
+            );
+            assert_ne!(cached.galley.text(), renamed_layout.galley.text());
+        });
+        output.textures_delta.clear();
     }
 }
 

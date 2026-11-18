@@ -43,13 +43,23 @@ impl Transition {
     }
 }
 
+/// The inputs a natural width was measured from. `fresh` compares them
+/// field by field, so a frame over an unchanged chat costs one body
+/// byte-compare per message instead of re-hashing every body.
+#[derive(Clone)]
+struct Snapshot {
+    body: Option<Box<str>>,
+    flags: u64,
+    mentions: u64,
+}
+
 /// One timeline's natural-size cache and current width plan. Only appended
 /// messages animate existing, visible rows. History loads and cap/font changes
 /// snap. State is pruned to the current message set on every plan.
 #[derive(Clone, Default)]
 pub struct WidthBook {
     natural: HashMap<String, f32>,
-    signatures: HashMap<String, u64>,
+    snapshots: HashMap<String, Snapshot>,
     targets: HashMap<String, f32>,
     motion: HashMap<String, Transition>,
     order: Vec<String>,
@@ -67,21 +77,44 @@ impl WidthBook {
     pub fn get(&self, id: &str) -> Option<f32> {
         self.natural.get(id).copied()
     }
-    pub fn remember(&mut self, id: &str, width: f32) {
+    /// Whether the remembered width for `id` was measured from these exact
+    /// inputs: the cheap flags and mention names hashed, the body compared
+    /// byte for byte.
+    pub fn fresh(&self, id: &str, body: Option<&str>, flags: u64, mentions: u64) -> bool {
+        self.snapshots.get(id).is_some_and(|snapshot| {
+            snapshot.flags == flags
+                && snapshot.mentions == mentions
+                && snapshot.body.as_deref() == body
+        })
+    }
+    pub fn remember(
+        &mut self,
+        id: &str,
+        width: f32,
+        body: Option<&str>,
+        flags: u64,
+        mentions: u64,
+    ) {
         self.natural.insert(id.into(), width);
+        self.snapshots.insert(
+            id.into(),
+            Snapshot {
+                body: body.map(Into::into),
+                flags,
+                mentions,
+            },
+        );
     }
     pub fn invalidate(&mut self, id: &str) {
         if id.contains('\0') {
             self.natural.remove(id);
+            self.snapshots.remove(id);
         } else {
             let suffix = format!("\0{id}");
             self.natural
                 .retain(|key, _| key != id && !key.ends_with(&suffix));
-        }
-    }
-    pub fn check_signature(&mut self, id: &str, signature: u64) {
-        if self.signatures.insert(id.into(), signature) != Some(signature) {
-            self.natural.remove(id);
+            self.snapshots
+                .retain(|key, _| key != id && !key.ends_with(&suffix));
         }
     }
 
@@ -113,7 +146,7 @@ impl WidthBook {
         if !same_order {
             let ids: HashSet<&str> = entries.iter().map(|(id, _, _)| id.as_str()).collect();
             self.natural.retain(|id, _| ids.contains(id.as_str()));
-            self.signatures.retain(|id, _| ids.contains(id.as_str()));
+            self.snapshots.retain(|id, _| ids.contains(id.as_str()));
             self.motion.retain(|id, transition| {
                 ids.contains(id.as_str()) && now < transition.start + RESIZE
             });
@@ -265,11 +298,26 @@ mod tests {
     #[test]
     fn deletion_prunes_and_edit_invalidates_measurements() {
         let mut b = WidthBook::default();
-        b.remember("a", 123.);
-        b.remember("b", 456.);
+        b.remember("a", 123., Some("hello"), 1, 0);
+        b.remember("b", 456., Some("world"), 1, 0);
         b.plan(&rows(&[("a", 123.)]), 0., true);
         assert!(b.get("b").is_none());
+        assert!(b.fresh("a", Some("hello"), 1, 0));
         b.invalidate("a");
         assert!(b.get("a").is_none());
+        assert!(!b.fresh("a", Some("hello"), 1, 0));
+    }
+    #[test]
+    fn an_edit_makes_the_remembered_width_stale() {
+        let mut b = WidthBook::default();
+        b.remember("a", 123., Some("hello world"), 1, 0);
+        assert!(b.fresh("a", Some("hello world"), 1, 0));
+        // Same length, one byte different: a hash-only key could collide,
+        // the byte-compare cannot.
+        assert!(!b.fresh("a", Some("hello_world"), 1, 0));
+        assert!(!b.fresh("a", Some("hello world!"), 1, 0));
+        assert!(!b.fresh("a", Some("hello world"), 2, 0));
+        assert!(!b.fresh("a", Some("hello world"), 1, 7));
+        assert!(!b.fresh("a", None, 1, 0));
     }
 }
