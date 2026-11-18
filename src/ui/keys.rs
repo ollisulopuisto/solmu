@@ -1800,7 +1800,7 @@ pub const MENU_COMMANDS: &[&str] = &[
 /// Re-inject the matching chord while a popup is open so the popup, not the
 /// background chat, owns the target. Kept platform-independent for regression
 /// coverage of the exact native-action route.
-#[cfg(any(target_os = "macos", all(test, feature = "demo")))]
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn route_native_actions(ctx: &egui::Context, actions: Vec<Action>) -> Vec<Action> {
     if !egui::Popup::is_any_open(ctx) {
         return actions;
