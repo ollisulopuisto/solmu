@@ -5033,6 +5033,23 @@ mod tests {
     }
 
     #[test]
+    fn unconfigured_local_runtime_is_explained_in_settings() {
+        if crate::whisper_runtime::artifact().is_some() {
+            return;
+        }
+        let mut app = app();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("whisper-setup"));
+        render(&mut app, &ctx);
+        let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
+        assert!(nodes.iter().any(|(label, _, _)| label.contains(
+            "A verified runtime download is not available in this draft yet. No engine is bundled with Solmu."
+        )), "unavailable runtime must not fail silently: {nodes:?}");
+    }
+
+    #[test]
     fn whisper_settings_read_cached_presence_until_explicit_refresh() {
         let mut app = app();
         let ctx = egui::Context::default();

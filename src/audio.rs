@@ -1173,6 +1173,38 @@ mod tests {
     }
 
     #[test]
+    fn transcription_resampling_pins_linear_positions_and_stereo_downmix() {
+        for rate in [8_000, 44_100, 48_000, 96_000] {
+            // Left is a ramp; right adds 0.2. Their average is x + 0.1,
+            // so a wrong channel, frame shift or interpolation weight fails.
+            let frames = 1000;
+            let samples = (0..frames)
+                .flat_map(|i| {
+                    let x = i as f32 / frames as f32;
+                    [x, x + 0.2]
+                })
+                .collect::<Vec<_>>();
+            let decoded = transcription_samples(rodio::buffer::SamplesBuffer::new(
+                NonZero::new(2).unwrap(),
+                NonZero::new(rate).unwrap(),
+                samples,
+            ))
+            .unwrap();
+            for k in [0, 1, 2, 17, 53, 100] {
+                let expected = (k as f64 * f64::from(rate)
+                    / f64::from(voice::RATE)
+                    / f64::from(frames)) as f32
+                    + 0.1;
+                assert!(
+                    (decoded[k] - expected).abs() < 2e-6,
+                    "rate={rate}, k={k}, got={}, expected={expected}",
+                    decoded[k]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn transcription_rejects_oversized_encoded_input_before_decoding() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("large.wav");
