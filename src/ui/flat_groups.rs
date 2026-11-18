@@ -580,6 +580,7 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
                 .add_sized(
                     [ui.available_width(), 22.0],
                     egui::Label::new(label.as_ref())
+                        .halign(egui::Align::LEFT)
                         .truncate()
                         .sense(egui::Sense::click()),
                 )
