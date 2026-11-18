@@ -4509,7 +4509,15 @@ impl App {
         if self.linked_avatar_ids(id).is_some() {
             return self.avatar_full(id);
         }
-        self.account_mut().avatar(id)
+        // A missing thumbnail falls back to an already downloaded full-size
+        // picture, the way Contact info shows it: a failed thumbnail fetch
+        // caches its miss, so without this the sidebar shows bare initials
+        // for a contact whose picture has in fact arrived. Only the cache
+        // is consulted here; a fresh full-size request for every sidebar
+        // row would double the pressure on the avatar worker's small queue.
+        self.account_mut()
+            .avatar(id)
+            .or_else(|| self.avatars_full.get(id).cloned().flatten())
     }
 
     /// A linked person shows the largest full-size picture any member has
@@ -31004,6 +31012,31 @@ mod person_tests {
             None,
             "initials only when none has a picture"
         );
+    }
+
+    /// A non-linked chat whose thumbnail fetch missed keeps its full-size
+    /// picture in the sidebar instead of dropping to bare initials.
+    #[test]
+    fn a_non_linked_row_falls_back_to_the_full_size_picture() {
+        let mut app = app();
+        let root = app.account().dirs.media_cache_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        let full = root.join("synthetic-full-fallback.png");
+        std::fs::write(&full, b"synthetic fixture").unwrap();
+        // The thumbnail fetch came back empty and cached its miss; the
+        // full-size fetch Contact info made has the picture.
+        app.avatars.insert("ada".into(), None);
+        app.avatars_full.insert("ada".into(), Some(full.clone()));
+        assert_eq!(
+            app.avatar("ada"),
+            Some(full),
+            "full-size fills in for a missing thumbnail"
+        );
+        // A real thumbnail still wins over the full-size fallback.
+        let thumb = root.join("synthetic-thumb-preferred.png");
+        std::fs::write(&thumb, b"synthetic fixture").unwrap();
+        app.adopt_avatar("ada", thumb.clone());
+        assert_eq!(app.avatar("ada"), Some(thumb));
     }
 
     #[test]
