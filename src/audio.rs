@@ -604,21 +604,25 @@ pub fn decode_for_transcription(path: &Path) -> Result<Vec<f32>, String> {
         .map_err(|error| error.to_string())?;
     if &header == b"OggS" {
         let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
-        return voice::decode_bounded(&bytes, TRANSCRIPTION_MAX_SAMPLES);
+        match voice::decode_bounded(&bytes, TRANSCRIPTION_MAX_SAMPLES) {
+            Ok(samples) => return Ok(samples),
+            Err(error) if error.contains("too long for transcription") => return Err(error),
+            Err(_) => {} // Vorbis and unusual Ogg variants still reach rodio.
+        }
     }
     let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
     let decoder = rodio::Decoder::new(std::io::BufReader::new(file))
         .map_err(|error| format!("Could not decode the audio: {error}"))?;
-    let channels = decoder.channels().get();
-    let rate = decoder.sample_rate().get();
-    let duration_bound = u64::from(rate) * u64::from(channels) * u64::from(VIDEO_AUDIO_LIMIT_SECS);
-    // Bound source PCM too, even for unusual rates or channel counts.
-    let limit = duration_bound.min(16_000_000) as usize;
-    let interleaved: Vec<f32> = decoder.take(limit + 1).collect();
-    if interleaved.len() > limit {
-        return Err("Audio exceeds the five-minute transcription or decoded-size limit".into());
+    transcription_samples(decoder)
+}
+
+fn transcription_samples(source: impl rodio::Source<Item = f32>) -> Result<Vec<f32>, String> {
+    let mono = rodio::source::UniformSourceIterator::new(source, mono(), rate());
+    let samples: Vec<f32> = mono.take(TRANSCRIPTION_MAX_SAMPLES + 1).collect();
+    if samples.len() > TRANSCRIPTION_MAX_SAMPLES {
+        return Err("Audio is too long for transcription (maximum five minutes)".into());
     }
-    Ok(voice::mono_at_rate(&interleaved, channels, rate))
+    Ok(samples)
 }
 
 /// Five minutes bounds PCM retained for voice and video transcription.
@@ -1063,6 +1067,54 @@ mod tests {
 
     /// A stepped recorder keeps recording, but its levels stop asking the
     /// window for frames of their own; unstepped, they ask again.
+    #[test]
+    fn non_opus_ogg_reaches_the_general_decoder() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("not-opus.ogg");
+        std::fs::write(&path, b"OggSnot-an-opus-stream").unwrap();
+        assert!(
+            decode_for_transcription(&path)
+                .unwrap_err()
+                .contains("Could not decode the audio")
+        );
+    }
+
+    #[test]
+    fn transcription_stereo_duration_is_limited_after_resampling() {
+        for sample_rate in [44_100, 48_000] {
+            let stereo =
+                rodio::source::SineWave::new(440.0).take_duration(Duration::from_secs(240));
+            let stereo = rodio::source::UniformSourceIterator::new(
+                stereo,
+                NonZero::new(2).unwrap(),
+                NonZero::new(sample_rate).unwrap(),
+            );
+            let decoded = transcription_samples(stereo).unwrap();
+            assert!((decoded.len() as i64 - 240 * i64::from(voice::RATE)).abs() < 10);
+        }
+        let long = rodio::source::SineWave::new(440.0).take_duration(Duration::from_secs(301));
+        assert!(
+            transcription_samples(long)
+                .unwrap_err()
+                .contains("five minutes")
+        );
+    }
+
+    #[test]
+    fn transcription_rejects_oversized_encoded_input_before_decoding() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("large.wav");
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len((64 << 20) + 1)
+            .unwrap();
+        assert!(
+            decode_for_transcription(&path)
+                .unwrap_err()
+                .contains("64 MB")
+        );
+    }
+
     #[test]
     fn a_stepped_recorder_records_without_asking_for_frames() {
         let ctx = egui::Context::default();

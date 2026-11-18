@@ -62,7 +62,6 @@ Sources checked 2026-11-17:
 - https://support.apple.com/en-us/102445
 
 Transcription accepts up to five minutes of audio. Encoded audio is limited to
-64 MB and non-Opus decoded input has a separate memory bound; oversized input
+64 MB and all source channels are downmixed/resampled incrementally before the PCM cap; oversized input
 fails with a message, never silently transcribes only the beginning. Runtime
-signature/Gatekeeper assessment runs on first use per worker, with the executable
-hash checked again on later jobs. Long audio may need splitting first.
+signature/Gatekeeper assessment runs on first use per worker, with a fingerprint of every runtime file checked again on later jobs. Long audio may need splitting first.

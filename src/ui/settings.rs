@@ -553,7 +553,9 @@ fn sections(app: &App) -> Vec<Section> {
             let installed = presence == Some(true);
             if presence.is_none() { ui.label(gettext(locale, "Checking downloaded model…")); }
             if !runtime { ui.label(gettext(locale, "A verified runtime download is not available in this draft yet. No engine is bundled with Solmu.")); }
-            if let Some(download) = &app.local_whisper_download {
+            if app.local_whisper_removal.is_some() {
+                ui.label(gettext(locale, "Removing downloaded engine and model…"));
+            } else if let Some(download) = &app.local_whisper_download {
                 if let crate::local_whisper::DownloadState::Downloading { received, total } = download.state() {
                     ui.add(egui::ProgressBar::new(received as f32 / total as f32).show_percentage());
                 }

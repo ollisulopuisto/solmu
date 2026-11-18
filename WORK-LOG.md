@@ -305,3 +305,22 @@ also checks popup state rather than only a previous-frame widget response.
 ## 2026-11-17 - Voice and video shared-item sections
 
 Separate Photos/Videos/Voice tabs, bounded metadata-only Beeper listing worker (the old command was ignored), explicit refresh, and audio download/play/jump rows. Per-kind caps cannot let photos crowd out video or audio. Download results update panel rows even outside the loaded transcript. No schema/settings migration. Local library clippy passes; native tests, before/after synthetic screenshots and actual Devin gate remain pending. No private screenshot reused, no release built.
+
+## 2026-11-18 - Optional runtime all-platform follow-up
+
+Merged current main without reverting its transcript, sidebar or workflow
+changes. Runtime remains unavailable until approved published URLs and measured
+hashes exist; no release publication is part of this checkpoint. Cross-platform
+installer now accepts the separately built bin/whisper-cli or bin/whisper-cli.exe
+layout, with pinned archive/executable hashes and staged repair. macOS keeps
+Developer ID and Gatekeeper checks. Runtime tree fingerprints protect subsequent
+jobs without rerunning OS assessment each time.
+
+Review follow-up: reuse valid models, disable unavailable Local selection, clean
+owned crash leftovers under an advisory lock, remove runtime and model off the UI
+thread, retain the selected engine on removal failure, and avoid creating install
+directories for users who never downloaded. Bounded transcription preserves Ogg
+fallback and downsamples incrementally before the five-minute PCM cap. Changelog
+states that this limit applies to Wyoming too. Local demo library/test Clippy
+passes; 27 production-module engine/installer tests and ten workflow tests pass.
+Native regressions and all-platform real application verification remain pending.

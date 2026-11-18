@@ -660,6 +660,7 @@ pub struct App {
     /// respawns the worker only when this differs.
     transcriber_address: String,
     pub local_whisper_download: Option<crate::local_whisper::Download>,
+    pub local_whisper_removal: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     pub local_whisper_status: Option<crate::local_whisper::DownloadState>,
     pub local_whisper_presence: crate::model_presence::Presence,
     /// In-chat video player.
@@ -1271,7 +1272,7 @@ fn transcriber_worker(
                 engine: crate::transcriber_engine::WhisperCpp::new(binary, model),
                 decode,
                 model_verified: false,
-                runtime_verified: false,
+                runtime_verified: None,
             })
         }
         TranscriptionEngine::Wyoming => {
@@ -1677,6 +1678,7 @@ impl App {
             transcript_archive: None,
             transcriber_address: String::new(),
             local_whisper_download: None,
+            local_whisper_removal: None,
             local_whisper_status: None,
             local_whisper_presence: crate::model_presence::Presence::default(),
             video: crate::video::Player::new(waker.clone()),
@@ -9299,6 +9301,29 @@ impl App {
     }
 
     fn tick(&mut self, ctx: &egui::Context) {
+        if let Some(result) = self
+            .local_whisper_removal
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
+            self.local_whisper_removal = None;
+            match result {
+                Ok(()) => {
+                    self.settings.transcription_engine =
+                        Some(crate::settings::TranscriptionEngine::Off);
+                    self.mark_settings_dirty();
+                    self.local_whisper_status = None;
+                }
+                Err(error) => {
+                    self.local_whisper_status =
+                        Some(crate::local_whisper::DownloadState::Failed(error))
+                }
+            }
+            self.transcriber = transcriber_worker(&self.waker, &self.dirs, &self.settings);
+            self.transcriber_address = self.settings.transcription_worker_key();
+            self.refresh_transcript_archive();
+            self.refresh_local_whisper_presence();
+        }
         if let Some(download) = &self.local_whisper_download {
             let state = download.state();
             if !matches!(
@@ -12774,6 +12799,7 @@ impl App {
             }
             Action::DownloadLocalWhisper => {
                 if self.local_whisper_download.is_none()
+                    && self.local_whisper_removal.is_none()
                     && crate::whisper_runtime::artifact().is_some()
                 {
                     self.settings.transcription_engine =
@@ -12796,18 +12822,17 @@ impl App {
                 }
             }
             Action::RemoveLocalWhisperModel => {
-                if self.local_whisper_download.is_none() {
+                if self.local_whisper_download.is_none() && self.local_whisper_removal.is_none() {
                     self.transcriber = None;
                     self.refresh_transcript_archive();
-                    self.settings.transcription_engine =
-                        Some(crate::settings::TranscriptionEngine::Off);
-                    self.transcriber_address = self.settings.transcription_worker_key();
-                    self.mark_settings_dirty();
-                    self.local_whisper_status =
-                        crate::local_whisper::remove_installation(&self.dirs.state)
-                            .err()
-                            .map(crate::local_whisper::DownloadState::Failed);
-                    self.refresh_local_whisper_presence();
+                    let state = self.dirs.state.clone();
+                    let waker = self.waker.clone();
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.local_whisper_removal = Some(rx);
+                    std::thread::spawn(move || {
+                        let _ = tx.send(crate::local_whisper::remove_installation(&state));
+                        waker.wake();
+                    });
                 }
             }
             Action::SettingsChanged => {
@@ -31868,6 +31893,30 @@ mod transcription_tests {
         assert_eq!(app.settings.transcription_worker_key(), "local");
         app.settings.transcription_engine = Some(crate::settings::TranscriptionEngine::Off);
         assert!(transcriber_worker(&app.waker, &app.dirs, &app.settings).is_none());
+    }
+
+    #[test]
+    fn local_removal_is_background_and_does_not_change_engine_until_success() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.settings.transcription_engine = Some(crate::settings::TranscriptionEngine::Wyoming);
+        app.settings.transcription_wyoming = "127.0.0.1:1".into();
+        app.apply(Action::RemoveLocalWhisperModel, &ctx);
+        assert!(app.local_whisper_removal.is_some());
+        assert_eq!(
+            app.settings.transcription_engine(),
+            crate::settings::TranscriptionEngine::Wyoming
+        );
+        let started = Instant::now();
+        while app.local_whisper_removal.is_some() {
+            app.tick(&ctx);
+            assert!(started.elapsed() < Duration::from_secs(5));
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            app.settings.transcription_engine(),
+            crate::settings::TranscriptionEngine::Off
+        );
     }
 
     #[test]

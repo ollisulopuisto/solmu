@@ -77,6 +77,9 @@ pub fn remove_installation(state: &Path) -> Result<(), String> {
 }
 
 pub fn cleanup_abandoned_downloads(state: &Path) {
+    if !model_path(state).parent().unwrap().is_dir() {
+        return;
+    }
     if let Ok(_lock) = download_lock(state) {
         clean_download_temps(state);
     }
@@ -365,6 +368,13 @@ fn install(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cleanup_does_not_create_an_installation_for_users_who_never_downloaded() {
+        let root = tempfile::tempdir().unwrap();
+        cleanup_abandoned_downloads(root.path());
+        assert!(!root.path().join("models").exists());
+    }
+
     #[test]
     fn cleanup_respects_live_download_and_remove_clears_runtime() {
         let root = tempfile::tempdir().unwrap();

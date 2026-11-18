@@ -104,7 +104,7 @@ pub struct DecodedWhisper {
     pub engine: WhisperCpp,
     pub decode: PcmDecoder,
     pub model_verified: bool,
-    pub runtime_verified: bool,
+    pub runtime_verified: Option<[u8; 32]>,
 }
 
 fn pcm_wav(pcm: &[u8]) -> Result<tempfile::NamedTempFile, String> {
@@ -145,11 +145,15 @@ impl Engine for DecodedWhisper {
     fn transcribe(&mut self, audio: &Path, language: &str) -> Result<String, String> {
         let spec = crate::whisper_runtime::artifact()
             .ok_or("Whisper runtime is not configured for this platform")?;
-        if self.runtime_verified {
-            crate::whisper_runtime::verify_hash(&self.engine.binary, spec)?;
+        if let Some(expected) = self.runtime_verified {
+            if crate::whisper_runtime::fingerprint(&self.engine.binary)? != expected {
+                return Err(
+                    "Whisper runtime changed. Verify or repair the engine in Settings.".into(),
+                );
+            }
         } else {
             crate::whisper_runtime::verify(&self.engine.binary, spec)?;
-            self.runtime_verified = true;
+            self.runtime_verified = Some(crate::whisper_runtime::fingerprint(&self.engine.binary)?);
         }
         if !self.model_verified {
             crate::local_whisper::verify_model(&self.engine.model)?;
