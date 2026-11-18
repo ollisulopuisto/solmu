@@ -83,6 +83,7 @@ jobs:
                           executable='SolmuWhisper.app/Contents/MacOS/whisper-cli',
                           executable_sha256=hashlib.sha256(pathlib.Path(os.environ['RUNNER_TEMP'], 'helper/SolmuWhisper.app/Contents/MacOS/whisper-cli').read_bytes()).hexdigest())
           archive.with_suffix('.json').write_text(json.dumps(metadata, indent=2)+'\n')
+          print(json.dumps(metadata, indent=2))
           PY
       - uses: actions/upload-artifact@v7
         if: vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true'
