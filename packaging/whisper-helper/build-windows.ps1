@@ -13,16 +13,23 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $pins = . (Join-Path $here 'read-pins.ps1') -Path (Join-Path $here 'pins.env')
 $vsArch = if ($Arch -eq 'x64') { 'x64' } else { 'ARM64' }
 # GGML_NATIVE=OFF alone still enables AVX2/FMA/BMI2 in pinned GGML on x64.
-# Use a portable baseline so the helper runs on any x64 machine. Pinned GGML
-# refuses GGML_NATIVE=OFF with MSVC on ARM; MSVC ARM64 targets the ARMv8.0
-# baseline by itself, so the helper stays portable there too.
+# Use a portable baseline so the helper runs on any x64 machine.
+# On ARM64, pinned GGML requires GGML_NATIVE=ON with MSVC proper and then
+# forwards host feature probes (dotprod, i8mm, sve) as __ARM_FEATURE_* defines,
+# so the archive would demand the build host's optional instructions. Build
+# ARM64 with clang-cl instead (upstream's prescribed route) pinned to the
+# plain armv8-a baseline.
 $cpuFlags = @()
+$toolsetArgs = @()
 if ($Arch -eq 'x64') {
   $cpuFlags += @('-DGGML_NATIVE=OFF', '-DGGML_SSE42=OFF', '-DGGML_AVX=OFF',
     '-DGGML_AVX2=OFF', '-DGGML_FMA=OFF', '-DGGML_F16C=OFF', '-DGGML_BMI2=OFF')
+} else {
+  $cpuFlags += @('-DGGML_NATIVE=OFF', '-DGGML_CPU_ARM_ARCH=armv8-a')
+  $toolsetArgs = @('-T', 'clangcl')
 }
 $build = Join-Path $OutDir 'build'
-cmake -S $SourceDir -B $build -A $vsArch `
+cmake -S $SourceDir -B $build -A $vsArch @toolsetArgs `
   -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF `
   -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
   -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF `

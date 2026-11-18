@@ -27,9 +27,13 @@ Linux builds and their inference smoke test run inside a `debian:12` container
 so the binaries only need what a minimal Debian 12 ships; `build-linux.sh`
 fails if `ldd` reports anything else. Windows links the MSVC runtime statically. All builds use a portable CPU
 baseline (`GGML_NATIVE=OFF`, no AVX/AVX2/FMA/F16C/BMI2 on x86-64) so the helper
-runs on any machine Solmu supports; pinned GGML refuses `GGML_NATIVE=OFF` with
-MSVC on ARM, and MSVC ARM64 targets the ARMv8.0 baseline by itself, so the
-Windows ARM64 helper stays portable without the flag.
+runs on any machine Solmu supports. The Windows ARM64 build uses clang-cl with
+`GGML_CPU_ARM_ARCH=armv8-a`: MSVC proper cannot express an ARM baseline (pinned
+GGML requires `GGML_NATIVE=ON` there and forwards the build host's dotprod/i8mm
+probes as `__ARM_FEATURE_*` defines), so clang-cl is upstream's prescribed
+route to a portable ARM64 binary. CI can only smoke-test on feature-complete
+hosts, so the armv8-a floor is asserted by the pinned configure flags rather
+than by a runtime check.
 
 ## Files
 
