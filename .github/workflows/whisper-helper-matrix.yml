@@ -3,9 +3,10 @@ name: Optional Whisper helper matrix
 # Unsigned validation builds of the optional Whisper helper for every
 # supported platform. Solmu builds never invoke this workflow or link Whisper.
 # macOS signing and notarization stay in whisper-helper.yml on the default
-# branch; this workflow never requests signing secrets. Nothing is uploaded,
-# cached or published: archives are verified in-job and their metadata JSON is
-# reported in the log.
+# branch; this workflow never requests signing secrets. Unsigned Linux and
+# Windows archives are verified in-job and uploaded as short-retention
+# artifacts so a reviewed release can be assembled from exact, hash-pinned
+# bytes; the artifacts themselves are never a release.
 on:
   workflow_dispatch:
   pull_request:
@@ -111,6 +112,15 @@ jobs:
             "$RUNNER_TEMP/helper/package/bin/whisper-cli" \
             'bin/whisper-cli' '${{ matrix.target }}' false false
           echo "HELPER_METADATA=$archive.json" >> "$GITHUB_ENV"
+      - name: Upload unsigned helper archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: optional-whisper-linux-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/helper/dist/solmu-whisper-v*-linux-${{ matrix.arch }}.tar.gz
+            ${{ runner.temp }}/helper/dist/solmu-whisper-v*-linux-${{ matrix.arch }}.tar.gz.json
+          if-no-files-found: error
+          retention-days: 5
       - name: Native dependencies for the installer test build
         run: |
           sudo apt-get update
@@ -174,6 +184,15 @@ jobs:
             -ExecutableFile "$env:RUNNER_TEMP/helper/package/bin/whisper-cli.exe" `
             -ExecutablePath 'bin/whisper-cli.exe' -Target '${{ matrix.target }}'
           Add-Content $env:GITHUB_ENV "HELPER_METADATA=$archive.json"
+      - name: Upload unsigned helper archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: optional-whisper-windows-${{ matrix.arch_name }}
+          path: |
+            ${{ runner.temp }}/helper/dist/solmu-whisper-v*-windows-${{ matrix.arch_name }}.tar.gz
+            ${{ runner.temp }}/helper/dist/solmu-whisper-v*-windows-${{ matrix.arch_name }}.tar.gz.json
+          if-no-files-found: error
+          retention-days: 5
       - name: Ensure rustup is available
         shell: pwsh
         run: |
