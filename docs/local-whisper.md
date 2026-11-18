@@ -32,16 +32,14 @@ Accuracy varies, especially for short clips and uncommon languages.
 
 ## Implementation status
 
-Runtime selection is pinned for all six shipped targets, but the helper
-release is not published yet: the download URLs in
-`whisper_runtime::artifact()` are placeholders and every size/hash must be
-recomputed from the published assets once the owner publishes the release.
-Until then downloads fail by design. The macOS pins come from the signed and
-notarized main-branch helper run; Linux and Windows pins come from the
-unsigned matrix build and are verified against hashes only, not an OS code
-signature. Public-URL download/install/repair validation, whole-app native
-tests and final screenshots are still required before merge. Do not treat
-the isolated engine tests as end-to-end proof.
+Runtime selection is pinned for all six shipped targets to the published
+`whisper-helper-v1.9.5` release; every URL, size and hash was recomputed
+from the published assets. The macOS archives come from the signed and
+notarized default-branch helper run; Linux and Windows assets are unsigned
+CI builds and are verified against pinned hashes only, not an OS code
+signature. Actual public-URL download/install/repair validation runs through
+the `SOLMU_VALIDATE_PUBLIC_DOWNLOAD` smoke route. Do not treat the isolated
+engine tests as end-to-end proof.
 
 ## macOS runtime research
 

@@ -11,51 +11,49 @@ pub struct Artifact {
     pub executable_sha256: &'static str,
 }
 
-// Populated only from the successfully signed/notarized helper artifact.
+// Populated only from the owner-published, reviewed helper release.
 // A missing platform is unavailable, never silently substituted from PATH.
-//
-// PENDING PUBLICATION: the owner has not published the helper release yet,
-// so the download URLs below are placeholders and MUST be replaced with the
-// final public asset URLs, with every size/hash recomputed from the
-// published assets, before this can merge. Until then downloads fail by
-// design, exactly as an unavailable runtime does.
+// Every URL, size and hash below was recomputed from the published
+// whisper-helper-v1.9.5 assets after anonymous re-download: macOS archives
+// from the signed and notarized default-branch run 44301781725, Linux and
+// Windows from the unsigned matrix run 44320859629 (hash-pinned only).
 pub fn artifact() -> Option<Artifact> {
     let spec = match target() {
         "aarch64-apple-darwin" => Artifact {
-            url: "https://invalid.invalid/pending-helper-publication/solmu-whisper-v1.9.5-arm64.zip",
+            url: "https://github.com/ollisulopuisto/solmu/releases/download/whisper-helper-v1.9.5/solmu-whisper-v1.9.5-arm64.zip",
             bytes: 2_106_898,
             sha256: "2266754f8e10f79ce7627a82e7878872390db2a38d4e1846bc9881b0bd0be215",
             executable_sha256: "3ecb9965b5406d3c7ff72c4103379f02b312b9df5ca16a740437c15a71f2473b",
         },
         "x86_64-apple-darwin" => Artifact {
-            url: "https://invalid.invalid/pending-helper-publication/solmu-whisper-v1.9.5-x86_64.zip",
+            url: "https://github.com/ollisulopuisto/solmu/releases/download/whisper-helper-v1.9.5/solmu-whisper-v1.9.5-x86_64.zip",
             bytes: 2_206_873,
             sha256: "a25410c3234683beb0de3045778b42eb149ee8b8b4dea6d184ae28406c632302",
             executable_sha256: "790bdab490e6a533023eec9cc6c2fa603316002d55fecf6541426e772911dee1",
         },
         "x86_64-unknown-linux-gnu" => Artifact {
-            url: "https://invalid.invalid/pending-helper-publication/solmu-whisper-v1.9.5-linux-x86_64.tar.gz",
-            bytes: 1_719_153,
-            sha256: "3f7ffc6a33a948d0eb09c32f84629930ac0b8e165e295b2de286d1f82eece1a3",
+            url: "https://github.com/ollisulopuisto/solmu/releases/download/whisper-helper-v1.9.5/solmu-whisper-v1.9.5-linux-x86_64.tar.gz",
+            bytes: 1_719_171,
+            sha256: "42746c9ecdcef5b6ac14e974a020924666d75fd0eddef3e34240677f40ef63fa",
             executable_sha256: "ab7529edbe1cb1d15410f3ac8cc5dc102f57383fe7e08e945e56660da890c7ea",
         },
         "aarch64-unknown-linux-gnu" => Artifact {
-            url: "https://invalid.invalid/pending-helper-publication/solmu-whisper-v1.9.5-linux-aarch64.tar.gz",
-            bytes: 1_660_319,
-            sha256: "1ae42fef87c5085a8fb5982e1acefd339c5a3f7d8dc2cd47faef1ea5091b6e0b",
+            url: "https://github.com/ollisulopuisto/solmu/releases/download/whisper-helper-v1.9.5/solmu-whisper-v1.9.5-linux-aarch64.tar.gz",
+            bytes: 1_660_320,
+            sha256: "4e3ea6e96c482f6dbab6bc0514f10d434318fabde019714720c5627b71100753",
             executable_sha256: "abf71b67dc6c9d90f3c87ae7371c2a3acd5f30756da8a9ed5c99a32891ab986b",
         },
         "x86_64-pc-windows-msvc" => Artifact {
-            url: "https://invalid.invalid/pending-helper-publication/solmu-whisper-v1.9.5-windows-x86_64.tar.gz",
-            bytes: 827_961,
-            sha256: "74077941de44bdb39c873d47b360f40da31e88e3c0d6ebf2c014bd5da41584a2",
-            executable_sha256: "2d63abb10f59099fad01ed432a6e636762aeac395e78d9ab1c04cfbf509b74d5",
+            url: "https://github.com/ollisulopuisto/solmu/releases/download/whisper-helper-v1.9.5/solmu-whisper-v1.9.5-windows-x86_64.tar.gz",
+            bytes: 827_962,
+            sha256: "a625992f7abcde6fee4fc32d0df8c0497ccdf30de116ad28390d14b4c9f7c835",
+            executable_sha256: "623329cf7e66e9c7fb4fca9dfc3c4f99464571ad1ce30795a6bfb97ae075a968",
         },
         "aarch64-pc-windows-msvc" => Artifact {
-            url: "https://invalid.invalid/pending-helper-publication/solmu-whisper-v1.9.5-windows-arm64.tar.gz",
-            bytes: 840_145,
-            sha256: "e3dd71aa08a3cac073ea7af4fe557dd61bb57d20990a28b08ccb9eeb490a5580",
-            executable_sha256: "77d73d58d6503da212f8265505bbae702a5d4f5342ab6f1e11b0dee8b325ac65",
+            url: "https://github.com/ollisulopuisto/solmu/releases/download/whisper-helper-v1.9.5/solmu-whisper-v1.9.5-windows-arm64.tar.gz",
+            bytes: 840_152,
+            sha256: "64c60848f07d3d23d452091773ca20355cbdd0a1461afa1a26d70936d83a7c3f",
+            executable_sha256: "f7165f6886e97897a1f26fd42bf6b77afa5bfa87def240074902300f217270f1",
         },
         _ => return None,
     };

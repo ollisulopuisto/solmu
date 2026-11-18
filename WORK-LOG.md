@@ -1,5 +1,17 @@
 # Work log
 
+## 2026-11-18: Final helper pins from the published whisper-helper-v1.9.5 release
+
+Olli approved publication 14:49. #375 merged (matrix now uploads unsigned
+Linux/Windows archives after installer verification). Release
+whisper-helper-v1.9.5 published with six assets + metadata JSONs, marked
+not-latest: macOS from signed run 44301781725, Linux/Windows from matrix run
+44320859629. Every asset anonymously re-downloaded; size and SHA-256 match
+the in-job metadata exactly, executable hashes re-verified. artifact() now
+carries the real release URLs and recomputed pins; Linux executables are
+byte-reproducible across runs, Windows ones are not (pins taken from the
+published bytes). Docs updated. Not run locally: no Rust toolchain here.
+
 ## 2026-11-18: Pin the six prebuilt Whisper runtimes (publication pending)
 
 Branch feat/local-whisper-pins off main 40ea68e (after #359 and #370 merged).
