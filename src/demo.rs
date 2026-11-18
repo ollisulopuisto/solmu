@@ -24542,6 +24542,93 @@ mod rail_tests {
         }
     }
 
+    #[test]
+    fn section_label_clicks_and_both_targets_show_the_key_only_on_hover() {
+        let (mut app, ctx) = open("chat", false);
+        let label = recorded(&ctx, egui::Id::new("list-layout-label")).unwrap();
+        click(&mut app, &ctx, 1180.0, label.center());
+        assert!(app.list_is_flat());
+        let switch = stop_rect(&ctx, Stop::ListLayout).unwrap();
+        for target in [label.center(), switch.center()] {
+            let start = ctx.input(|input| input.time) + 1.0;
+            let mut painted = Vec::new();
+            for step in 0..8 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1180.0, 780.0),
+                        )),
+                        time: Some(start + f64::from(step) * 0.3),
+                        events: if step == 0 {
+                            vec![egui::Event::PointerMoved(target)]
+                        } else {
+                            Vec::new()
+                        },
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let ctx = ui.ctx().clone();
+                        app.background_frame(&ctx);
+                        app.frame_ui(ui);
+                    },
+                );
+                output.textures_delta.clear();
+                fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
+                    match shape {
+                        egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+                        egui::Shape::Vec(shapes) => {
+                            shapes.iter().for_each(|shape| texts(shape, out))
+                        }
+                        _ => {}
+                    }
+                }
+                painted.clear();
+                for clipped in &output.shapes {
+                    texts(&clipped.shape, &mut painted);
+                }
+            }
+            let expected = format!(
+                "Group by section ({})",
+                crate::ui::keys::hint("list-layout").unwrap()
+            );
+            assert!(
+                painted.contains(&expected),
+                "tooltip missing at {target:?}: {painted:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn section_header_controls_fit_narrow_sidebar_at_large_scale() {
+        for zoom in [1.0, 1.5, 2.0] {
+            for locale in crate::i18n::Locale::ALL {
+                let mut app = app();
+                app.settings.sidebar_width = 260.0;
+                app.settings.zoom = zoom;
+                app.locale = locale;
+                let ctx = egui::Context::default();
+                app.attach(&ctx);
+                for _ in 0..5 {
+                    frame(&mut app, &ctx, 1180.0, Vec::new());
+                }
+                let label = recorded(&ctx, egui::Id::new("list-layout-label")).unwrap();
+                let switch = stop_rect(&ctx, Stop::ListLayout).unwrap();
+                let plus = stop_rect(&ctx, Stop::NewLocalGroup).unwrap();
+                let header = list_header(&ctx).unwrap();
+                assert!(
+                    label.height() <= 23.0,
+                    "single line at zoom {zoom}: {label:?}"
+                );
+                assert!(label.right() <= switch.left() && switch.right() <= plus.left());
+                assert!(
+                    label.left() >= header.left() && plus.right() <= header.right() + 1.0,
+                    "header bounds {header:?}, label {label:?}, plus {plus:?}, zoom {zoom}"
+                );
+            }
+        }
+    }
+
     /// The list header keeps only New chat and Hide the chat list beside its
     /// title; the starred messages' header has only Back and its title, and
     /// the Calls tab's only New call.

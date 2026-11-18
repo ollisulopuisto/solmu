@@ -483,7 +483,6 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
             label,
             super::keys::hint("list-layout").unwrap_or_default()
         );
-        ui.label(label.as_ref()).on_hover_text(&tooltip);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let response = ui
                 .push_id("new-local-group", |ui| {
@@ -573,6 +572,23 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
                 )
             });
             if response.changed() {
+                app.actions.push(crate::model::Action::ToggleListLayout);
+            }
+            // Reserve both controls before sizing the label. A longer translation
+            // truncates on one line rather than pushing + outside the sidebar.
+            let label_response = ui
+                .add_sized(
+                    [ui.available_width(), 22.0],
+                    egui::Label::new(label.as_ref())
+                        .truncate()
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text(&tooltip);
+            #[cfg(test)]
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(egui::Id::new("list-layout-label"), label_response.rect)
+            });
+            if label_response.clicked() {
                 app.actions.push(crate::model::Action::ToggleListLayout);
             }
         });
