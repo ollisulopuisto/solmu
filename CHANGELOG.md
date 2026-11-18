@@ -15,6 +15,8 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- Long message bodies stop after 25 rendered lines. Show more gives the hidden-line count, Show less folds them again; copy, reply and forward keep the full message.
+
 - Local and Wyoming transcription now reject audio longer than five minutes instead of retaining unbounded audio or silently truncating video at fifteen minutes. Encoded audio is limited to 64 MB.
 
 - Local transcription setup: explicitly select this computer or your Wyoming server. Download the multilingual Whisper Base model only on request, with progress, cancellation, verification and removal. Existing Wyoming settings are preserved; there is no silent server fallback. Prebuilt runtimes are pinned for all six platforms to the published whisper-helper-v1.9.5 release (macOS signed and notarized; Linux and Windows hash-pinned); actual-app public-download verification runs in CI.

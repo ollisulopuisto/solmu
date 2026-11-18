@@ -385,3 +385,14 @@ CI round 1 fixes: PowerShell pin parsing now strips pins.env's bash single quote
 ## 2026-11-18 - Group by section header switch
 
 Approved option A: removed mode explainer text and replaced the passive Grouped/Flat list label with the shared switch widget. Existing Cmd/Ctrl+G and the switch use ToggleListLayout and keep per-mode settings. Shortcut appears only on hover; + remains independent. Focus order and pointer/keyboard behaviour have regression coverage. Tests, synthetic before/after pixels and reviews pending. Incoming-message section sorting is separately coordinated.
+
+## 2026-11-18 - Long bubble collapse, approved label A
+
+Separate feature branch. Bodies over 25 rendered rows are clipped after row 25,
+including blank lines, with Show more (+N lines) and Show less. Expansion is
+session-only and scoped to local account, source and text revision. The complete
+message/markup/transcript stays intact for copy, reply and forward; link targets
+are clipped with the body. Hidden count is recomputed at the actual wrap width.
+Failing-first row-limit test observed, then fixed. Native pointer toggle, resize,
+blank-line and full-transcript coverage plus real dark/light collapsed/expanded
+capture scenes added; native results pending. No avatar, menus, #359 or DMG work.

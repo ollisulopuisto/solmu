@@ -3,6 +3,12 @@
 pub mod stock;
 pub mod tour;
 
+static SHOT_LONG_BODY_EXPANDED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+pub fn long_body_expanded() -> bool {
+    SHOT_LONG_BODY_EXPANDED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 static SHOT_SEND_LATER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn send_later_menu() -> bool {
@@ -2387,6 +2393,34 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
     };
     for part in page.split(',').map(str::trim) {
         match part {
+            "collapse" | "collapse-expanded" => {
+                SHOT_LONG_BODY_EXPANDED.store(
+                    part == "collapse-expanded",
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                let chat = SAMPLES[0].id;
+                let text = (1..=34)
+                    .map(|row| {
+                        if row == 12 {
+                            String::new()
+                        } else {
+                            format!("Line {row}: the design review notes are ready.")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let row = message(
+                    chat,
+                    "demo-long-body",
+                    false,
+                    crate::util::now(),
+                    Content::text(&text),
+                );
+                let history = app.conversations.get_mut(chat).unwrap();
+                history.messages = vec![row];
+                app.open_chat = Some(chat.into());
+                app.scroll_to_bottom = false;
+            }
             "whisper-setup" => {
                 app.page = crate::model::Page::Settings;
                 app.settings_search = "Voice notes".into();

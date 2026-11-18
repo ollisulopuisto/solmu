@@ -9798,16 +9798,130 @@ fn rich_body(
     actions: &mut Vec<Action>,
     grow_emoji: bool,
 ) -> Option<Rect> {
-    let palette = view.palette;
-    let mentions = mentions_of(view, message);
     let style = markup::Style {
         size: BODY_SIZE,
-        color: palette.text,
-        secondary: palette.secondary,
-        link: palette.link,
-        mention: palette.accent,
+        color: view.palette.text,
+        secondary: view.palette.secondary,
+        link: view.palette.link,
+        mention: view.palette.accent,
     };
-    let laid = markup::layout_balanced(ui, text, &mentions, &style, width, grow_emoji);
+    let laid = markup::layout_balanced(
+        ui,
+        text,
+        &mentions_of(view, message),
+        &style,
+        width,
+        grow_emoji,
+    );
+    let total = laid.galley.rows.len();
+    if total <= 25 {
+        return rich_body_full(
+            ui, view, message, text, width, reserve, span, actions, laid, None,
+        );
+    }
+    // Scoped to this local account, exact source and message revision. An edit
+    // starts collapsed; no expansion preference or shortened text is persisted.
+    use std::hash::{Hash, Hasher};
+    let mut revision = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut revision);
+    let id = egui::Id::new((
+        "long-body",
+        view.transcription_account,
+        &message.chat,
+        &message.id,
+        &view.chat.backend_origin,
+        &view.chat.backend_account,
+        revision.finish(),
+    ));
+    #[cfg(feature = "demo")]
+    if message.id == "demo-long-body" && crate::demo::long_body_expanded() {
+        ui.ctx().data_mut(|data| {
+            if data.get_temp::<bool>(id).is_none() {
+                data.insert_temp(id, true);
+            }
+        });
+    }
+    let expanded = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(id))
+        .unwrap_or(false);
+    let shown = if expanded { total } else { 25 };
+    let height = if expanded {
+        laid.galley.size().y
+    } else {
+        let row = &laid.galley.rows[shown - 1];
+        row.pos.y + row.row.size.y
+    };
+    let at = ui.cursor().min;
+    let body = Rect::from_min_size(
+        at,
+        vec2(span.unwrap_or(width).max(laid.galley.size().x), height),
+    );
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(body)
+            .layout(Layout::top_down(Align::LEFT)),
+    );
+    child.set_clip_rect(ui.clip_rect().intersect(body));
+    // Keep the complete galley and transcript registration. Clipping, not a
+    // substring, preserves markup, bidi, emoji and full-message copy/actions.
+    rich_body_full(
+        &mut child,
+        view,
+        message,
+        text,
+        width,
+        None,
+        span,
+        actions,
+        laid,
+        (!expanded).then_some(height),
+    );
+    ui.allocate_space(body.size());
+    let label = if expanded {
+        crate::i18n::gettext(view.locale, "Show less").into_owned()
+    } else {
+        crate::i18n::gettext(view.locale, "Show more (+{count} lines)")
+            .replace("{count}", &(total - shown).to_string())
+    };
+    let response = ui
+        .add(egui::Button::new(egui::RichText::new(&label).color(view.palette.link)).frame(false))
+        .tab_stop(Stop::BodyToggle(id.value()));
+    theme::reveal_focus(&response);
+    theme::focus_outline(ui, response.id, response.rect, 4.0);
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            bubble_id(&message.chat, &message.id).with("collapse-toggle"),
+            response.rect,
+        );
+        data.insert_temp(
+            bubble_id(&message.chat, &message.id).with("collapse-rows"),
+            (shown, total),
+        );
+    });
+    if response.clicked() {
+        ui.ctx().data_mut(|data| data.insert_temp(id, !expanded));
+        ui.ctx().request_discard("message body expansion changed");
+    }
+    // The footer belongs below the toggle, never beside a hidden final row.
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rich_body_full(
+    ui: &mut egui::Ui,
+    view: &View<'_>,
+    message: &Message,
+    text: &str,
+    width: f32,
+    reserve: Option<f32>,
+    span: Option<f32>,
+    actions: &mut Vec<Action>,
+    laid: markup::Text,
+    displayed_height: Option<f32>,
+) -> Option<Rect> {
+    let palette = view.palette;
     let rtl = crate::bidi::message_rtl(text);
     let last_row = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
     // Right-aligned text ends at the block's edge. Like official WhatsApp,
@@ -9945,7 +10059,15 @@ fn rich_body(
         rect.min
     };
     if visible || selection_alive {
-        markup::paint_selectable(ui, &laid, &response, origin, palette.text, visible);
+        markup::paint_selectable_height(
+            ui,
+            &laid,
+            &response,
+            origin,
+            palette.text,
+            visible,
+            displayed_height,
+        );
     }
     let web_links: Vec<(Rect, String)> = laid
         .links
@@ -9983,6 +10105,9 @@ fn rich_body(
         let number = phone.strip_prefix('+').unwrap_or(phone);
         let copy_text = laid.link_copy_text(link_index);
         for (row, bounds) in crate::bidi::char_bounds_by_row(&laid.galley, range.start, range.end) {
+            if displayed_height.is_some_and(|height| bounds.top() >= height) {
+                continue;
+            }
             let link = ui
                 .interact(
                     bounds.translate(origin.to_vec2()).expand(2.0),
@@ -13515,6 +13640,322 @@ mod tests {
             (own - incoming - 19.0).abs() < 0.5,
             "our own messages add the delivery ticks, {own} vs {incoming}"
         );
+    }
+
+    #[test]
+    fn long_bubble_collapse_keyboard_and_hidden_phone_focus_in_full_chat() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            crate::settings::Settings::default(),
+        );
+        crate::demo::populate(&mut app);
+        crate::demo::apply_flags(&mut app, Some("collapse"));
+        let chat = app.open_chat.clone().unwrap();
+        let text = (1..=34)
+            .map(|row| match row {
+                1 => "+358 50 123 4567".to_owned(),
+                30 => "+358 40 987 6543".to_owned(),
+                _ => format!("Line {row}"),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.conversations.get_mut(&chat).unwrap().messages[0].content = Content::text(text);
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let frame = |app: &mut App, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1180.0, 1200.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    app.background_frame(ui.ctx());
+                    app.frame_ui(ui);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        for _ in 0..4 {
+            frame(&mut app, vec![]);
+        }
+        let key = |key| {
+            vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }]
+        };
+        let phones = || {
+            focus::stops(&ctx)
+                .iter()
+                .filter(|(stop, _)| matches!(stop, Stop::PhoneLink(_)))
+                .count()
+        };
+        assert_eq!(phones(), 1, "collapsed hidden number is not a focus target");
+        for _ in 0..100 {
+            if focus::stops(&ctx).iter().any(|(stop, id)| {
+                matches!(stop, Stop::BodyToggle(_)) && ctx.memory(|memory| memory.has_focus(*id))
+            }) {
+                break;
+            }
+            frame(&mut app, key(Key::Tab));
+        }
+        assert!(
+            focus::stops(&ctx)
+                .iter()
+                .any(|(stop, id)| matches!(stop, Stop::BodyToggle(_))
+                    && ctx.memory(|memory| memory.has_focus(*id))),
+            "Tab reaches Show more"
+        );
+        frame(&mut app, key(Key::Space));
+        frame(&mut app, vec![]);
+        assert_eq!(phones(), 2, "expansion exposes the hidden number");
+        frame(&mut app, key(Key::Space));
+        frame(&mut app, vec![]);
+        assert_eq!(
+            phones(),
+            1,
+            "Show less works by keyboard and hides the link again"
+        );
+    }
+
+    #[test]
+    fn long_bubble_collapse_pointer_copy_keeps_successor_transcript_boundary() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let text = (1..=34)
+                .map(|row| format!("Line {row} plain words"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let mut first =
+                crate::archive::tests::message("1@s.whatsapp.net", "first-copy", 0, false);
+            first.content = Content::text(&text);
+            let mut next =
+                crate::archive::tests::message("1@s.whatsapp.net", "next-copy", 60, false);
+            next.content = Content::text("Successor text");
+            let draw = |events| {
+                view.copy_rows.unwrap().lock().unwrap().clear();
+                ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(900.0, 1800.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        rich_body(
+                            ui,
+                            view,
+                            &first,
+                            &text,
+                            600.0,
+                            None,
+                            Some(600.0),
+                            &mut Vec::new(),
+                            true,
+                        );
+                        rich_body(
+                            ui,
+                            view,
+                            &next,
+                            "Successor text",
+                            600.0,
+                            None,
+                            Some(600.0),
+                            &mut Vec::new(),
+                            true,
+                        );
+                    },
+                )
+            };
+            for _ in 0..3 {
+                let mut out = draw(vec![]);
+                out.textures_delta.clear();
+            }
+            let rect = |id| {
+                ctx.data(|data| data.get_temp::<Rect>(bubble_id(&first.chat, id).with("body")))
+                    .unwrap()
+            };
+            let from = rect("first-copy").left_top() + vec2(1.0, 6.0);
+            let to = rect("next-copy").right_bottom() - vec2(1.0, 2.0);
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            for events in [
+                vec![egui::Event::PointerMoved(from), button(from, true)],
+                vec![egui::Event::PointerMoved(to)],
+                vec![button(to, false)],
+            ] {
+                let mut out = draw(events);
+                out.textures_delta.clear();
+            }
+            let mut out = draw(vec![egui::Event::Copy]);
+            let copied = out
+                .platform_output
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .expect("pointer selection produces clipboard text");
+            out.textures_delta.clear();
+            let rows = view.copy_rows.unwrap().lock().unwrap();
+            let refined = crate::transcript::refine(&copied, &rows)
+                .expect("cross-message copy retains transcript boundaries");
+            assert!(refined.contains("Successor text"));
+            assert!(
+                refined.contains("Line 34 plain words"),
+                "whole collapsed middle/tail content stays available"
+            );
+        });
+    }
+
+    #[test]
+    fn long_bubble_collapse_boundary_uses_actual_rendered_rows() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            for (total, folds) in [(24, false), (25, false), (26, true)] {
+                let text = (0..total).map(|_| "One row").collect::<Vec<_>>().join("\n");
+                let mut message = crate::archive::tests::message(
+                    "1@s.whatsapp.net",
+                    &format!("boundary-{total}"),
+                    0,
+                    false,
+                );
+                message.content = Content::text(&text);
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    rich_body(
+                        ui,
+                        view,
+                        &message,
+                        &text,
+                        600.0,
+                        None,
+                        Some(600.0),
+                        &mut Vec::new(),
+                        true,
+                    );
+                });
+                output.textures_delta.clear();
+                let rows = ctx.data(|data| {
+                    data.get_temp::<(usize, usize)>(
+                        bubble_id(&message.chat, &message.id).with("collapse-rows"),
+                    )
+                });
+                assert_eq!(rows, folds.then_some((25, total)), "{total} laid-out rows");
+            }
+        });
+    }
+
+    #[test]
+    fn long_bubble_collapse_toggles_resizes_and_keeps_the_full_transcript() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let mut message =
+                crate::archive::tests::message("1@s.whatsapp.net", "long-body", 0, false);
+            let text = (1..=34)
+                .map(|row| {
+                    if row == 12 {
+                        String::new()
+                    } else {
+                        format!("Line {row}: a readable message with several words.")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            message.content = Content::text(&text);
+            let draw = |width: f32, events: Vec<egui::Event>| {
+                if let Some(rows) = view.copy_rows {
+                    rows.lock().unwrap().clear();
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(900.0, 2400.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let mut actions = Vec::new();
+                        rich_body(
+                            ui,
+                            view,
+                            &message,
+                            &text,
+                            width,
+                            Some(40.0),
+                            Some(width),
+                            &mut actions,
+                            true,
+                        );
+                        assert!(
+                            actions.is_empty(),
+                            "a collapse control cannot send or open anything"
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                ctx.data(|data| {
+                    data.get_temp::<(usize, usize)>(
+                        bubble_id(&message.chat, &message.id).with("collapse-rows"),
+                    )
+                })
+                .unwrap()
+            };
+            assert_eq!(draw(600.0, vec![]), (25, 34));
+            assert_eq!(view.copy_rows.unwrap().lock().unwrap()[0].body, text);
+            let click = |at: egui::Pos2, pressed| {
+                vec![
+                    egui::Event::PointerMoved(at),
+                    egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            };
+            let toggle = || {
+                ctx.data(|data| {
+                    data.get_temp::<Rect>(
+                        bubble_id(&message.chat, &message.id).with("collapse-toggle"),
+                    )
+                })
+                .unwrap()
+                .center()
+            };
+            let at = toggle();
+            draw(600.0, click(at, true));
+            draw(600.0, click(at, false));
+            assert_eq!(draw(600.0, vec![]), (34, 34));
+            let at = toggle();
+            draw(600.0, click(at, true));
+            draw(600.0, click(at, false));
+            assert_eq!(draw(600.0, vec![]), (25, 34));
+            let narrow = draw(180.0, vec![]);
+            assert_eq!(narrow.0, 25);
+            assert!(
+                narrow.1 > 34,
+                "hidden count follows rendered rows after resize"
+            );
+            assert_eq!(view.copy_rows.unwrap().lock().unwrap()[0].body, text);
+            assert_eq!(message.content, Content::text(&text));
+        });
     }
 
     /// Runs `check` with a still view of one plain chat, as a footer test
