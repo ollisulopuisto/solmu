@@ -157,6 +157,7 @@ fn cell(rows: usize, long: bool, select: bool) {
                     egui::Event::PointerMoved(egui::pos2(700.0, 350.0)),
                     egui::Event::MouseWheel {
                         unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
                         delta: egui::vec2(0.0, 90.0),
                         modifiers: egui::Modifiers::NONE,
                     },
