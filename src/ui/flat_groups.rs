@@ -235,7 +235,15 @@ fn draw_row(app: &mut App, ui: &mut egui::Ui, chat: &Chat, dim_kept: bool) {
         app.scroll_chat_into_view = None;
     }
     if response.clicked() && !app.show_archived {
-        app.actions.push(Action::KeepUnread(chat.id.clone()));
+        // A keep from a quiet section would filter it to just this row:
+        // send only where the list is filtered - a Recent section showing
+        // its unread rows, or the modes that list unread chats throughout.
+        if dim_kept
+            || app.list_mode != crate::model::ListMode::Recent
+            || app.chat_filter == crate::model::ChatFilter::Unread
+        {
+            app.actions.push(Action::KeepUnread(chat.id.clone()));
+        }
     }
 }
 
@@ -363,25 +371,16 @@ pub fn navigation_chats(app: &App) -> Vec<&Chat> {
         return chats;
     }
     // The order list() draws: sections by freshest chat in Recent, and only
-    // the rows each section actually shows. Linked people sort by their
-    // freshest member, as the drawn rows do.
-    let activity: Vec<i64> = chats
+    // the rows each section actually shows. Plan on the same projected rows
+    // list() draws - a linked person is her freshest, summed preview - then
+    // map row indexes back to the borrowed chats, one to one and in order.
+    let display: Vec<Chat> = chats
         .iter()
-        .map(|chat| {
-            if app
-                .settings
-                .beeper
-                .people
-                .iter()
-                .any(|p| p.members.iter().any(|m| m.matches(chat)))
-            {
-                app.beeper_person_preview(chat).last_activity
-            } else {
-                chat.last_activity
-            }
-        })
+        .map(|chat| app.beeper_person_preview(chat))
         .collect();
-    let sections = plan_sections(app, &chats, &activity);
+    let display_refs: Vec<&Chat> = display.iter().collect();
+    let activity: Vec<i64> = display.iter().map(|chat| chat.last_activity).collect();
+    let sections = plan_sections(app, &display_refs, &activity);
     let mut ordered = Vec::with_capacity(chats.len());
     let mut seen = HashSet::new();
     // A folded group's rows are not on screen, so the keyboard skips them.
@@ -1788,5 +1787,122 @@ mod tests {
         let sections = recent_plan(&app);
         assert_eq!(sections[0].shown, vec![0, 1]);
         assert_eq!(sections[0].expander, Some(Expander::UnreadOnly));
+    }
+
+    #[test]
+    fn clicking_a_quiet_sections_read_chat_keeps_nothing() {
+        let (mut app, _root) = recent_app(vec![
+            recent_chat("read-a", 100, 0),
+            recent_chat("read-b", 200, 0),
+            recent_chat("unread-c", 300, 2),
+        ]);
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[0]));
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[1]));
+        let play = app.settings.flat_groups.create("Play").unwrap();
+        app.settings
+            .flat_groups
+            .add(play, member(&app, &app.chats[2]));
+        app.settings.flat_groups.grouped_view = true;
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let frame = |app: &mut App, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| list(app, ui, false),
+            );
+            out.textures_delta.clear();
+        };
+        let center = |id: &str| {
+            ctx.data(|d| d.get_temp::<egui::Rect>(super::chats::chat_row_id(&id.into())))
+                .expect("row was laid out")
+                .center()
+        };
+        let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let click = |app: &mut App, at: egui::Pos2| {
+            frame(app, vec![egui::Event::PointerMoved(at)]);
+            frame(app, vec![button(at, true)]);
+            frame(app, vec![button(at, false)]);
+            app.apply_queued_for_test(&ctx);
+        };
+        frame(&mut app, Vec::new());
+        frame(&mut app, Vec::new());
+        // A read chat in a quiet section: no keep, the section stays full.
+        let at = center("read-a");
+        click(&mut app, at);
+        assert!(!app.unread_kept_contains(&"read-a".into()));
+        let sections = recent_plan(&app);
+        assert_eq!(sections[1].name, "Work");
+        assert_eq!(sections[1].shown, vec![0, 1]);
+        assert!(!sections[1].filtering);
+        drop(sections);
+        // An unread chat is kept, exactly as before.
+        let at = center("unread-c");
+        click(&mut app, at);
+        assert!(app.unread_kept_contains(&"unread-c".into()));
+    }
+
+    #[test]
+    fn keyboard_order_matches_drawn_rows_for_a_linked_person() {
+        let (mut app, _root) = recent_app(Vec::new());
+        // The representative sorts first on the id tie-break and is read;
+        // her linked member carries the unread message.
+        let mut ada = recent_chat("ada", 400, 0);
+        ada.backend_origin = Some("server".into());
+        ada.backend_account = Some("signal".into());
+        let mut ada_alt = recent_chat("ada-alt", 300, 1);
+        ada_alt.backend_origin = Some("server".into());
+        ada_alt.backend_account = Some("whatsapp".into());
+        let ben = recent_chat("ben", 200, 1);
+        app.settings.beeper.people.push(crate::merged::Person {
+            name: "Ada".into(),
+            members: vec![
+                crate::merged::Member::of(&ada).unwrap(),
+                crate::merged::Member::of(&ada_alt).unwrap(),
+            ],
+            primary: None,
+        });
+        app.chats = vec![ada, ada_alt, ben];
+        let work = app.settings.flat_groups.create("Work").unwrap();
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[0]));
+        app.settings
+            .flat_groups
+            .add(work, member(&app, &app.chats[2]));
+        app.settings.flat_groups.grouped_view = true;
+        // The drawn plan: the linked person shows as her summed preview.
+        let display = app.beeper_display_chats();
+        let refs: Vec<&Chat> = display.iter().collect();
+        let activity: Vec<i64> = refs.iter().map(|chat| chat.last_activity).collect();
+        let plan = plan_sections(&app, &refs, &activity);
+        let drawn: Vec<&str> = plan
+            .iter()
+            .flat_map(|section| section.shown.iter().map(|index| refs[*index].id.as_str()))
+            .collect();
+        let keyboard: Vec<&str> = navigation_chats(&app)
+            .iter()
+            .map(|chat| chat.id.as_str())
+            .collect();
+        // Regression: the raw representative reads as quiet, and the
+        // keyboard used to skip her while the drawn list kept her.
+        assert_eq!(drawn, vec!["ada", "ben"]);
+        assert_eq!(keyboard, drawn);
     }
 }

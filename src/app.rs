@@ -12435,7 +12435,9 @@ impl App {
             Action::KeepUnread(id) => {
                 // Recent's grouped sections filter to unread rows too, so an
                 // opened chat stays - dimmed - until the view changes. Its
-                // flat list is unfiltered and keeps nothing.
+                // flat list is unfiltered and keeps nothing. Senders gate
+                // grouped Recent on the destination being unread now, so a
+                // quiet section never starts filtering on an ordinary open.
                 if self.chat_filter == ChatFilter::Unread
                     || self.list_mode != crate::model::ListMode::Recent
                     || !self.list_is_flat()
