@@ -22,8 +22,9 @@ back to the full-size picture. A failed thumbnail fetch caches its miss
 (Event::Avatar full:false path None, src/app.rs:5711) and only the Beeper
 account path rechecks after 15 minutes (src/account.rs:397-408), so the
 sidebar could keep showing bare initials for a contact whose full-size
-picture had in fact arrived. Fix: avatar() now falls back to
-source_avatar_full (cached hit or one fetch), mirroring the info panel.
+picture had in fact arrived. Fix: avatar() now falls back to the
+cached full-size picture, the way the info panel shows it; it never starts a
+new fetch, so the avatar worker's small queue sees no extra pressure.
 Failing-first test covers miss-then-fallback and a real thumbnail winning.
 Verified by rustc parse-check only; fmt/clippy/tests run in CI (this Ubuntu
 box cannot build the crate: PipeWire headers too old).
