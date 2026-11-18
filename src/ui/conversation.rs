@@ -12357,13 +12357,13 @@ mod tests {
         let mut row = message(Content::text("hello world"));
         let key = width_key(&row);
         let mut book = crate::run_widths::WidthBook::default();
-        let snapshot = |row: &Message| {
+        fn snapshot(row: &Message) -> (Option<&str>, u64, u64) {
             (
                 body_for_measurement(&row.content).map(|(text, _)| text),
                 width_flags(row),
                 mention_flags(row, |_| "Ada".into()),
             )
-        };
+        }
         let (body, flags, mentions) = snapshot(&row);
         book.remember(&key, 123., body, flags, mentions);
         assert!(book.fresh(&key, body, flags, mentions));
