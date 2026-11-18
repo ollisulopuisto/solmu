@@ -577,13 +577,18 @@ pub fn controls(app: &mut App, ui: &mut egui::Ui) {
             // Reserve both controls before sizing the label. A longer translation
             // truncates on one line rather than pushing + outside the sidebar.
             let label_response = ui
-                .add_sized(
-                    [ui.available_width(), 22.0],
-                    egui::Label::new(label.as_ref())
-                        .halign(egui::Align::LEFT)
-                        .truncate()
-                        .sense(egui::Sense::click()),
+                .allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), 22.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add(
+                            egui::Label::new(label.as_ref())
+                                .truncate()
+                                .sense(egui::Sense::click()),
+                        )
+                    },
                 )
+                .inner
                 .on_hover_text(&tooltip);
             #[cfg(test)]
             ui.ctx().data_mut(|data| {

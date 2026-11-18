@@ -24610,6 +24610,10 @@ mod rail_tests {
                 );
                 assert!(label.right() <= switch.left() && switch.right() <= plus.left());
                 assert!(
+                    (label.left() - header.left()).abs() < 2.0,
+                    "label starts at header left, not centered: {label:?}, {header:?}"
+                );
+                assert!(
                     label.left() >= header.left() && plus.right() <= header.right() + 1.0,
                     "header bounds {header:?}, label {label:?}, plus {plus:?}, zoom {zoom}"
                 );
