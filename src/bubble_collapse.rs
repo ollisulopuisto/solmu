@@ -1,8 +1,11 @@
 //! Session-only presentation of long message bodies. Message content stays whole.
 pub const ROW_LIMIT: usize = 25;
 pub fn visible_rows(total: usize, expanded: bool) -> usize {
-    let _ = expanded;
-    total
+    if expanded {
+        total
+    } else {
+        total.min(ROW_LIMIT)
+    }
 }
 #[cfg(test)]
 mod tests {

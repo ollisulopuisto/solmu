@@ -9798,16 +9798,115 @@ fn rich_body(
     actions: &mut Vec<Action>,
     grow_emoji: bool,
 ) -> Option<Rect> {
-    let palette = view.palette;
-    let mentions = mentions_of(view, message);
     let style = markup::Style {
         size: BODY_SIZE,
-        color: palette.text,
-        secondary: palette.secondary,
-        link: palette.link,
-        mention: palette.accent,
+        color: view.palette.text,
+        secondary: view.palette.secondary,
+        link: view.palette.link,
+        mention: view.palette.accent,
     };
-    let laid = markup::layout_balanced(ui, text, &mentions, &style, width, grow_emoji);
+    let laid = markup::layout_balanced(
+        ui,
+        text,
+        &mentions_of(view, message),
+        &style,
+        width,
+        grow_emoji,
+    );
+    let total = laid.galley.rows.len();
+    if total <= crate::bubble_collapse::ROW_LIMIT {
+        return rich_body_full(ui, view, message, text, width, reserve, span, actions, laid);
+    }
+    // Scoped to this local account, exact source and message revision. An edit
+    // starts collapsed; no expansion preference or shortened text is persisted.
+    use std::hash::{Hash, Hasher};
+    let mut revision = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut revision);
+    let id = egui::Id::new((
+        "long-body",
+        view.transcription_account,
+        &message.chat,
+        &message.id,
+        &view.chat.backend_origin,
+        &view.chat.backend_account,
+        revision.finish(),
+    ));
+    #[cfg(feature = "demo")]
+    if message.id == "demo-long-body" && crate::demo::long_body_expanded() {
+        ui.ctx().data_mut(|data| {
+            if data.get_temp::<bool>(id).is_none() {
+                data.insert_temp(id, true);
+            }
+        });
+    }
+    let expanded = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(id))
+        .unwrap_or(false);
+    let shown = crate::bubble_collapse::visible_rows(total, expanded);
+    let height = if expanded {
+        laid.galley.size().y
+    } else {
+        let row = &laid.galley.rows[shown - 1];
+        row.pos.y + row.row.size.y
+    };
+    let at = ui.cursor().min;
+    let body = Rect::from_min_size(
+        at,
+        vec2(span.unwrap_or(width).max(laid.galley.size().x), height),
+    );
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(body)
+            .layout(Layout::top_down(Align::LEFT)),
+    );
+    child.set_clip_rect(ui.clip_rect().intersect(body));
+    // Keep the complete galley and transcript registration. Clipping, not a
+    // substring, preserves markup, bidi, emoji and full-message copy/actions.
+    rich_body_full(
+        &mut child, view, message, text, width, None, span, actions, laid,
+    );
+    ui.allocate_space(body.size());
+    let label = if expanded {
+        crate::i18n::gettext(view.locale, "Show less").into_owned()
+    } else {
+        crate::i18n::gettext(view.locale, "Show more (+{count} lines)")
+            .replace("{count}", &(total - shown).to_string())
+    };
+    let response = ui
+        .add(egui::Button::new(egui::RichText::new(&label).color(view.palette.link)).frame(false));
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            bubble_id(&message.chat, &message.id).with("collapse-toggle"),
+            response.rect,
+        );
+        data.insert_temp(
+            bubble_id(&message.chat, &message.id).with("collapse-rows"),
+            (shown, total),
+        );
+    });
+    if response.clicked() {
+        ui.ctx().data_mut(|data| data.insert_temp(id, !expanded));
+        ui.ctx().request_discard("message body expansion changed");
+    }
+    // The footer belongs below the toggle, never beside a hidden final row.
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rich_body_full(
+    ui: &mut egui::Ui,
+    view: &View<'_>,
+    message: &Message,
+    text: &str,
+    width: f32,
+    reserve: Option<f32>,
+    span: Option<f32>,
+    actions: &mut Vec<Action>,
+    laid: markup::Text,
+) -> Option<Rect> {
+    let palette = view.palette;
     let rtl = crate::bidi::message_rtl(text);
     let last_row = laid.galley.rows.last().map_or(0.0, |row| row.row.size.x);
     // Right-aligned text ends at the block's edge. Like official WhatsApp,
@@ -13515,6 +13614,105 @@ mod tests {
             (own - incoming - 19.0).abs() < 0.5,
             "our own messages add the delivery ticks, {own} vs {incoming}"
         );
+    }
+
+    #[test]
+    fn long_bubble_collapse_toggles_resizes_and_keeps_the_full_transcript() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let mut message =
+                crate::archive::tests::message("1@s.whatsapp.net", "long-body", 0, false);
+            let text = (1..=34)
+                .map(|row| {
+                    if row == 12 {
+                        String::new()
+                    } else {
+                        format!("Line {row}: a readable message with several words.")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            message.content = Content::text(&text);
+            let draw = |width: f32, events: Vec<egui::Event>| {
+                if let Some(rows) = view.copy_rows {
+                    rows.lock().unwrap().clear();
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(900.0, 2400.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let mut actions = Vec::new();
+                        rich_body(
+                            ui,
+                            view,
+                            &message,
+                            &text,
+                            width,
+                            Some(40.0),
+                            Some(width),
+                            &mut actions,
+                            true,
+                        );
+                        assert!(
+                            actions.is_empty(),
+                            "a collapse control cannot send or open anything"
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                ctx.data(|data| {
+                    data.get_temp::<(usize, usize)>(
+                        bubble_id(&message.chat, &message.id).with("collapse-rows"),
+                    )
+                })
+                .unwrap()
+            };
+            assert_eq!(draw(600.0, vec![]), (25, 34));
+            assert_eq!(view.copy_rows.unwrap().lock().unwrap()[0].body, text);
+            let click = |at: egui::Pos2, pressed| {
+                vec![
+                    egui::Event::PointerMoved(at),
+                    egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            };
+            let toggle = || {
+                ctx.data(|data| {
+                    data.get_temp::<Rect>(
+                        bubble_id(&message.chat, &message.id).with("collapse-toggle"),
+                    )
+                })
+                .unwrap()
+                .center()
+            };
+            let at = toggle();
+            draw(600.0, click(at, true));
+            draw(600.0, click(at, false));
+            assert_eq!(draw(600.0, vec![]), (34, 34));
+            let at = toggle();
+            draw(600.0, click(at, true));
+            draw(600.0, click(at, false));
+            assert_eq!(draw(600.0, vec![]), (25, 34));
+            let narrow = draw(180.0, vec![]);
+            assert_eq!(narrow.0, 25);
+            assert!(
+                narrow.1 > 34,
+                "hidden count follows rendered rows after resize"
+            );
+            assert_eq!(view.copy_rows.unwrap().lock().unwrap()[0].body, text);
+            assert_eq!(message.content, Content::text(&text));
+        });
     }
 
     /// Runs `check` with a still view of one plain chat, as a footer test

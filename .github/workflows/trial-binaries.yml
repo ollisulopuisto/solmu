@@ -220,8 +220,26 @@ jobs:
       - uses: jdx/mr-boxington-action@v1
         with:
           cache-generation: test-v1
+      - name: Long bubble behavior regressions
+        run: |
+          mbx test --locked --lib --features demo bubble_collapse:: -- --test-threads=1
+          mbx test --locked --lib --features demo long_bubble_collapse -- --test-threads=1
       - name: Build the demo
         run: mbx build --locked --features demo
+      - name: Capture long bubble review evidence
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/long-bubble-shots"
+          mkdir -p "$out"
+          for page in collapse,light collapse,dark collapse-expanded,light collapse-expanded,dark; do
+            ./target/debug/solmu --demo-shot "$out/$page.png" --demo-size 1180x1200 --demo-page "$page" --demo-shot-delay 6000
+          done
+          ./target/debug/solmu --demo-shot "$out/collapse-narrow.png" --demo-size 760x1200 --demo-page collapse,light --demo-shot-delay 6000
+      - uses: actions/upload-artifact@v7
+        with:
+          name: long-bubble-shots
+          path: ${{ runner.temp }}/long-bubble-shots/*.png
+          retention-days: 7
       - name: Failing-first settings repaint regression
         run: |
           set -euo pipefail
