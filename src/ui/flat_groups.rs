@@ -1613,7 +1613,8 @@ mod tests {
         app.settings
             .flat_groups
             .add(play, member(&app, &app.chats[1]));
-        let names: Vec<&str> = recent_plan(&app)
+        let sections = recent_plan(&app);
+        let names: Vec<&str> = sections
             .iter()
             .map(|section| section.name.as_str())
             .collect();
@@ -1640,7 +1641,8 @@ mod tests {
             Action::SetListMode(crate::model::ListMode::Unread),
             &egui::Context::default(),
         );
-        let names: Vec<&str> = recent_plan(&app)
+        let sections = recent_plan(&app);
+        let names: Vec<&str> = sections
             .iter()
             .map(|section| section.name.as_str())
             .collect();
@@ -1825,7 +1827,7 @@ mod tests {
             out.textures_delta.clear();
         };
         let center = |id: &str| {
-            ctx.data(|d| d.get_temp::<egui::Rect>(super::chats::chat_row_id(&id.into())))
+            ctx.data(|d| d.get_temp::<egui::Rect>(crate::ui::chats::chat_row_id(&id.into())))
                 .expect("row was laid out")
                 .center()
         };
@@ -1839,23 +1841,31 @@ mod tests {
             frame(app, vec![egui::Event::PointerMoved(at)]);
             frame(app, vec![button(at, true)]);
             frame(app, vec![button(at, false)]);
-            app.apply_queued_for_test(&ctx);
         };
         frame(&mut app, Vec::new());
         frame(&mut app, Vec::new());
         // A read chat in a quiet section: no keep, the section stays full.
         let at = center("read-a");
         click(&mut app, at);
-        assert!(!app.unread_kept_contains(&"read-a".into()));
+        assert!(
+            !app.actions
+                .iter()
+                .any(|action| matches!(action, Action::KeepUnread(_)))
+        );
         let sections = recent_plan(&app);
         assert_eq!(sections[1].name, "Work");
         assert_eq!(sections[1].shown, vec![0, 1]);
         assert!(!sections[1].filtering);
         drop(sections);
-        // An unread chat is kept, exactly as before.
+        // An unread chat in a filtered section is kept, exactly as before.
+        app.actions.clear();
         let at = center("unread-c");
         click(&mut app, at);
-        assert!(app.unread_kept_contains(&"unread-c".into()));
+        assert!(
+            app.actions
+                .iter()
+                .any(|action| matches!(action, Action::KeepUnread(id) if id == "unread-c"))
+        );
     }
 
     #[test]
