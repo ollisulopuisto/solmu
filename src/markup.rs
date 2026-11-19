@@ -231,8 +231,14 @@ fn finish(
 /// Per galley row: which rows belong to a fenced code block or a quote, so
 /// the painter can give them an inset panel. The ranges are
 /// character-indexed in the galley's text; each glyph's `cluster` is the
-/// byte offset of its source character, so convert with that text. A blank
-/// row carries no glyphs and stays inside the surrounding panel.
+/// byte offset of its source character, so convert with that text.
+///
+/// Fence markers paint no row of their own: parse drops the ``` lines, so
+/// each leaves a blank row behind. A blank row carries no glyphs and
+/// cannot be hit-tested by cluster, so it is placed by the character
+/// position of its newline against the block's content bounds: the blank
+/// lines between a fence's content lines fall inside, the dropped markers'
+/// rows fall outside and stay Normal.
 fn row_kinds(
     galley: &Galley,
     blocks: &[(usize, Range<usize>)],
@@ -245,16 +251,45 @@ fn row_kinds(
         .chain([text.len()])
         .collect();
     let to_byte = |char: usize| char_bytes[char.min(char_bytes.len() - 1)];
-    let mut kinds: Vec<RowKind> = galley
+    let byte_to_char = |byte: usize| char_bytes.partition_point(|b| *b < byte);
+    // Content bounds per block, character-indexed. The end is inclusive
+    // for the blank-row check: an empty content line is exactly its span's
+    // empty range, and its terminating newline sits at that end.
+    let mut bounds: Vec<(usize, usize, usize)> = Vec::new();
+    for (id, range) in blocks {
+        match bounds.iter_mut().find(|(b, _, _)| b == id) {
+            Some((_, start, end)) => {
+                *start = (*start).min(range.start);
+                *end = (*end).max(range.end);
+            }
+            None => bounds.push((*id, range.start, range.end)),
+        }
+    }
+    // Rows partition the galley text in order; track the character
+    // position each row starts at so blank rows can be placed.
+    let mut cursor = 0usize;
+    galley
         .rows
         .iter()
         .map(|row| {
-            let hit = |start: usize, end: usize| {
-                row.row.glyphs.iter().any(|glyph| {
-                    let offset = glyph.cluster as usize;
-                    start <= offset && offset < end
-                })
-            };
+            if row.row.glyphs.is_empty() {
+                // A blank line is exactly its terminating newline.
+                let at = cursor;
+                cursor += 1;
+                return bounds
+                    .iter()
+                    .find(|(_, start, end)| *start <= at && at <= *end)
+                    .map_or(RowKind::Normal, |(id, _, _)| RowKind::Code(*id));
+            }
+            let mut lo = usize::MAX;
+            let mut hi = 0usize;
+            for glyph in &row.row.glyphs {
+                let offset = glyph.cluster as usize;
+                lo = lo.min(offset);
+                hi = hi.max(offset + glyph.chr.len_utf8());
+            }
+            cursor = byte_to_char(hi) + usize::from(row.ends_with_newline);
+            let hit = |start: usize, end: usize| lo < end && start < hi;
             if let Some((index, _)) = blocks
                 .iter()
                 .find(|(_, range)| hit(to_byte(range.start), to_byte(range.end)))
@@ -269,13 +304,7 @@ fn row_kinds(
                 RowKind::Normal
             }
         })
-        .collect();
-    for index in 1..kinds.len() {
-        if kinds[index] == RowKind::Normal && galley.rows[index].row.glyphs.is_empty() {
-            kinds[index] = kinds[index - 1];
-        }
-    }
-    kinds
+        .collect()
 }
 
 fn build(
@@ -487,7 +516,12 @@ fn measure_job(
         let token_chars = next - pos;
         let token_width: f32 = pieces.iter().map(|p| p.3).sum();
         let is_url = urls.iter().any(|(s, e)| *s <= start && end <= *e);
+        // Code never hyphenates: an inserted "-" would paint as code that
+        // is not in the text (and at the code font's width, which the
+        // planner's regular-font hyphen width would undercount).
+        let mono = font_at(start).family == egui::FontFamily::Monospace;
         let hyphenated = !is_url
+            && !mono
             && !first.is_whitespace()
             && token_chars > crate::wrap::MIN_HYPHENATED_CHARS
             && !text[start..end].contains(emoji::PLACEHOLDER)
@@ -513,8 +547,8 @@ fn measure_job(
         }
         pos = next;
     }
-    let items = crate::wrap::tokenize(text, &widths, &urls, &|word| {
-        if word.contains(emoji::PLACEHOLDER) {
+    let items = crate::wrap::tokenize(text, &widths, &urls, &|at, word| {
+        if word.contains(emoji::PLACEHOLDER) || font_at(at).family == egui::FontFamily::Monospace {
             Vec::new()
         } else {
             crate::hyphenate::hyphenate(word)
@@ -1232,6 +1266,108 @@ fn fenced_line(line: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// Runs of equal row kinds: (kind, first row, one past the last row).
+fn row_kind_spans(laid: &Text) -> Vec<(RowKind, usize, usize)> {
+    let rows = &laid.galley.rows;
+    let kinds = laid.row_kinds();
+    let mut spans = Vec::new();
+    let mut start = 0;
+    while start < rows.len() {
+        let kind = kinds[start];
+        let mut end = start + 1;
+        while end < rows.len() && kinds[end] == kind {
+            end += 1;
+        }
+        spans.push((kind, start, end));
+        start = end;
+    }
+    spans
+}
+
+/// The inset panel behind one span of rows, or None when the span starts
+/// past the clip.
+fn panel_rect(
+    body: Rect,
+    origin: Pos2,
+    laid: &Text,
+    start: usize,
+    end: usize,
+    clip_height: Option<f32>,
+) -> Option<Rect> {
+    const PAD: f32 = 3.0;
+    let rows = &laid.galley.rows;
+    let top = rows[start].pos.y;
+    let bottom = rows[end - 1].pos.y + rows[end - 1].row.size.y;
+    if clip_height.is_some_and(|clip| top >= clip) {
+        return None;
+    }
+    let bottom = clip_height.map_or(bottom, |clip| bottom.min(clip));
+    Some(Rect::from_min_max(
+        Pos2::new(body.min.x, origin.y + top - PAD),
+        Pos2::new(body.max.x, origin.y + bottom + PAD),
+    ))
+}
+
+/// Geometry of each code panel (block index, rect), before painting.
+pub fn code_panel_rects(
+    body: Rect,
+    origin: Pos2,
+    laid: &Text,
+    clip_height: Option<f32>,
+) -> Vec<(usize, Rect)> {
+    row_kind_spans(laid)
+        .into_iter()
+        .filter_map(|(kind, start, end)| {
+            if let RowKind::Code(index) = kind {
+                panel_rect(body, origin, laid, start, end, clip_height).map(|panel| (index, panel))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// The Copy code button hangs off the panel's top right: the opening
+/// fence's dropped marker leaves a blank row above the block, so the
+/// button sits in empty space and can never cover code, however narrow
+/// the panel. Top placement keeps it visible when a collapse clip cuts
+/// the block mid-panel: the clamped panel bottom lands at or below the
+/// clip, but the top stays on screen.
+pub fn copy_button_rect(panel: Rect) -> Rect {
+    Rect::from_min_max(
+        Pos2::new(panel.max.x - 68.0, panel.min.y - 16.0),
+        Pos2::new(panel.max.x - 4.0, panel.min.y - 2.0),
+    )
+}
+
+/// Renders one panel's Copy code label and returns its response. The
+/// response rect must stay inside the 14pt band [`copy_button_rect`]
+/// reserves: a button that outgrows the band reaches into the first
+/// code row and intercepts selection drags there.
+pub fn put_copy_button(
+    ui: &mut egui::Ui,
+    panel: Rect,
+    label: &str,
+    color: Color32,
+) -> egui::Response {
+    // A real Button in a style-overridden child UI: a plain Ui::put
+    // expands the button to the theme's 28pt minimum interact height and
+    // the overflow reaches into the first code row, where it intercepts
+    // selection drags; a bare allocate_rect plus painted text keeps the
+    // geometry but has no accessible label. The child UI caps the
+    // interact height at the 14pt band, and the Button supplies its own
+    // accessibility label.
+    let rect = copy_button_rect(panel);
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+    );
+    child.spacing_mut().interact_size.y = 14.0;
+    child.spacing_mut().button_padding = egui::vec2(4.0, 0.0);
+    child.add(egui::Button::new(egui::RichText::new(label).small().color(color)).frame(false))
+}
+
 /// Paints the quiet inset panels behind each run of [`RowKind::Code`] or
 /// [`RowKind::Quote`] rows: a low-alpha fill across the body width plus a
 /// pale accent bar on the leading edge. Returns each code panel with its
@@ -1247,39 +1383,24 @@ pub fn paint_row_panels(
     fill: Color32,
     bar: Color32,
 ) -> Vec<(usize, Rect)> {
-    const PAD: f32 = 3.0;
     const BAR: f32 = 2.5;
-    let rows = &laid.galley.rows;
-    let kinds = laid.row_kinds();
     let mut panels = Vec::new();
-    let mut start = 0;
-    while start < rows.len() {
-        let kind = kinds[start];
-        let mut end = start + 1;
-        while end < rows.len() && kinds[end] == kind {
-            end += 1;
+    for (kind, start, end) in row_kind_spans(laid) {
+        if kind == RowKind::Normal {
+            continue;
         }
-        if kind != RowKind::Normal {
-            let top = rows[start].pos.y;
-            let bottom = rows[end - 1].pos.y + rows[end - 1].row.size.y;
-            if !clip_height.is_some_and(|clip| top >= clip) {
-                let bottom = clip_height.map_or(bottom, |clip| bottom.min(clip));
-                let panel = Rect::from_min_max(
-                    Pos2::new(body.min.x, origin.y + top - PAD),
-                    Pos2::new(body.max.x, origin.y + bottom + PAD),
-                );
-                painter.rect_filled(panel, 4.0, fill);
-                painter.rect_filled(
-                    Rect::from_min_max(panel.min, Pos2::new(panel.min.x + BAR, panel.max.y)),
-                    1.0,
-                    bar,
-                );
-                if let RowKind::Code(index) = kind {
-                    panels.push((index, panel));
-                }
-            }
+        let Some(panel) = panel_rect(body, origin, laid, start, end, clip_height) else {
+            continue;
+        };
+        painter.rect_filled(panel, 4.0, fill);
+        painter.rect_filled(
+            Rect::from_min_max(panel.min, Pos2::new(panel.min.x + BAR, panel.max.y)),
+            1.0,
+            bar,
+        );
+        if let RowKind::Code(index) = kind {
+            panels.push((index, panel));
         }
-        start = end;
     }
     panels
 }
@@ -3056,8 +3177,10 @@ mod monospace_tests {
             code_blocks("```\nfirst\n```\nmiddle\n```\nsecond\n```"),
             vec!["first", "second"]
         );
-        // A backslashed content fence is content, not a fence.
-        assert_eq!(code_blocks("```\na\\```b\n```"), vec!["a```b"]);
+        // A backslashed line is content, and unless it is the bridge's
+        // exact fence escape it keeps its bytes, backslash included.
+        assert_eq!(code_blocks("```\na\\```b\n```"), vec!["a\\```b"]);
+        assert_eq!(code_blocks("```\n\\```\n```"), vec!["```"]);
         // Indentation and inner blank lines survive byte for byte.
         assert_eq!(
             code_blocks("```\n  indented\n\n  more\n```"),
@@ -3118,6 +3241,9 @@ mod monospace_tests {
             let text = format!("```\ncmd {long} end\n```");
             let laid = layout_balanced(ui, &text, &[], &style, 200.0, false);
             for (index, row) in laid.galley.rows.iter().enumerate() {
+                // The planner sums advances while the galley snaps glyph
+                // positions to pixels, so a shaped row can exceed the
+                // planned width by a fraction of a pixel, never more.
                 assert!(
                     row.row.size.x <= 200.5,
                     "row {index} is {} wide in a 200-wide room",
@@ -3128,9 +3254,186 @@ mod monospace_tests {
         output.textures_delta.clear();
     }
 
+    /// A long code line soft-wraps character by character: a hyphenation
+    /// "-" inside a fenced block would paint as code that was never typed.
+    #[test]
+    fn a_long_code_line_wraps_without_a_hyphen_glyph() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let long = "x".repeat(300);
+            let text = format!("```\ncmd {long} end\n```");
+            let laid = layout_balanced(ui, &text, &[], &style, 200.0, false);
+            let hyphens = laid
+                .galley
+                .rows
+                .iter()
+                .flat_map(|row| row.row.glyphs.iter())
+                .filter(|glyph| glyph.chr == '-')
+                .count();
+            assert_eq!(hyphens, 0, "code rows paint no inserted hyphen");
+        });
+        output.textures_delta.clear();
+    }
+
+    /// The Copy code button floats off the panel's bottom right, in the
+    /// blank row the closing fence leaves, so it never covers code text
+    /// even when the panel is exactly as wide as its widest row.
+    #[test]
+    fn the_copy_button_never_covers_code_text() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            // Short lines: the widest code row reaches the panel's right
+            // edge, where the button used to paint over the text.
+            let text = "```\ncd ~/koodi/solmu\ncargo build\n```";
+            let laid = layout_balanced(ui, text, &[], &style, 200.0, false);
+            let body = Rect::from_min_size(Pos2::ZERO, laid.galley.size());
+            for (_, panel) in code_panel_rects(body, Pos2::ZERO, &laid, None) {
+                let button = copy_button_rect(panel);
+                for (row, kind) in laid.galley.rows.iter().zip(laid.row_kinds().iter()) {
+                    if !matches!(kind, RowKind::Code(_)) || row.row.glyphs.is_empty() {
+                        continue;
+                    }
+                    let text_rect = Rect::from_min_size(row.pos, row.row.size);
+                    assert!(
+                        !button.intersects(text_rect),
+                        "copy button {button:?} covers code row {text_rect:?}"
+                    );
+                }
+            }
+        });
+        output.textures_delta.clear();
+    }
+
+    /// The Copy code button's actual response rect, not just its
+    /// layout target: a themed Button expands to the theme's minimum
+    /// interact height under Ui::put and leaks from the reserved band
+    /// into the first code row, where it intercepts selection drags.
+    /// The response must stay inside the 14pt band above the panel.
+    #[test]
+    fn the_copy_button_response_stays_in_its_band() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "```\ncd ~/koodi/solmu\ncargo build\n```";
+            let laid = layout_balanced(ui, text, &[], &style, 200.0, false);
+            let body = Rect::from_min_size(Pos2::ZERO, laid.galley.size());
+            for (_, panel) in code_panel_rects(body, Pos2::ZERO, &laid, None) {
+                let response = put_copy_button(ui, panel, "Copy code", Color32::WHITE);
+                let band = copy_button_rect(panel);
+                assert!(
+                    band.contains_rect(response.rect) && response.rect.height() <= 14.0,
+                    "copy button response {:?} outgrew its band {band:?}",
+                    response.rect
+                );
+                for (row, kind) in laid.galley.rows.iter().zip(laid.row_kinds().iter()) {
+                    if !matches!(kind, RowKind::Code(_)) || row.row.glyphs.is_empty() {
+                        continue;
+                    }
+                    let text_rect = Rect::from_min_size(row.pos, row.row.size);
+                    assert!(
+                        !response.rect.intersects(text_rect),
+                        "copy button response {:?} reaches code row {text_rect:?}",
+                        response.rect
+                    );
+                }
+            }
+        });
+        output.textures_delta.clear();
+    }
+
+    /// The Copy code control must be a real labelled widget: a bare
+    /// allocate_rect plus painted text keeps the geometry but gives a
+    /// screen reader an unnamed hit region (Devin finding on db154ed).
+    #[test]
+    fn the_copy_button_has_an_accessible_label() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut id = None;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "```\ncd ~/koodi/solmu\ncargo build\n```";
+            let laid = layout_balanced(ui, text, &[], &style, 200.0, false);
+            let body = Rect::from_min_size(Pos2::ZERO, laid.galley.size());
+            for (_, panel) in code_panel_rects(body, Pos2::ZERO, &laid, None) {
+                id = Some(put_copy_button(ui, panel, "Copy code", Color32::WHITE).id);
+            }
+        });
+        let update = output
+            .platform_output
+            .accesskit_update
+            .expect("an accesskit tree update");
+        let labelled = update
+            .nodes
+            .iter()
+            .any(|(_, node)| node.label().is_some_and(|l| l == "Copy code"));
+        assert!(labelled, "copy button exposes no accessible label");
+        output.textures_delta.clear();
+    }
+
+    /// A collapse clip can cut a code block mid-panel: the clamped
+    /// panel's bottom sits at the clip, so a button hanging below the
+    /// panel lands outside the visible body and Copy code is
+    /// unreachable. The button must hang off the panel's top, which
+    /// stays visible whenever any of the block is.
+    #[test]
+    fn the_copy_button_stays_visible_on_a_clipped_block() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "intro\n```\nline one\nline two\nline three\nline four\nline five\n```";
+            let laid = layout_balanced(ui, text, &[], &style, 200.0, false);
+            // Cut the block mid-panel: rows past the clip are invisible.
+            let clip = laid.galley.rows[4].pos.y + 1.0;
+            let body = Rect::from_min_size(Pos2::ZERO, laid.galley.size());
+            let panels = code_panel_rects(body, Pos2::ZERO, &laid, Some(clip));
+            assert_eq!(panels.len(), 1, "expected one clipped code panel");
+            for (_, panel) in panels {
+                let button = copy_button_rect(panel);
+                assert!(
+                    button.max.y <= clip,
+                    "copy button {button:?} falls below the clip {clip}"
+                );
+            }
+        });
+        output.textures_delta.clear();
+    }
+
     /// A blank line inside a fenced block keeps the block's rows together:
-    /// every row up to the closing fence stays code, so the panel and the
-    /// Copy code button cover the block as one piece.
+    /// the content rows and the blank between them stay code, so the panel
+    /// and the Copy code button cover the block as one piece. The dropped
+    /// fence markers' own blank rows stay plain.
     #[test]
     fn a_blank_line_inside_a_fence_stays_code() {
         let ctx = egui::Context::default();
@@ -3145,13 +3448,18 @@ mod monospace_tests {
             let text = "```\nfirst\n\nthird\n```\nafter";
             let laid = layout_balanced(ui, text, &[], &style, 220.0, false);
             let kinds = laid.row_kinds();
-            assert!(
-                kinds[..kinds.len() - 1]
-                    .iter()
-                    .all(|kind| matches!(kind, RowKind::Code(_))),
-                "blank line inside the fence: {kinds:?}"
+            assert_eq!(
+                kinds,
+                [
+                    RowKind::Normal,
+                    RowKind::Code(0),
+                    RowKind::Code(0),
+                    RowKind::Code(0),
+                    RowKind::Normal,
+                    RowKind::Normal,
+                ],
+                "content and the in-fence blank are code, markers are not: {kinds:?}"
             );
-            assert_eq!(kinds.last(), Some(&RowKind::Normal));
         });
         output.textures_delta.clear();
     }
