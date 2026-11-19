@@ -3188,10 +3188,12 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         && (endpoint_owners.is_none()
             || ui.input(|input| {
                 input.pointer.primary_down()
-                    || input
-                        .events
-                        .iter()
-                        .any(|event| matches!(event, egui::Event::Copy | egui::Event::Key { .. }))
+                    || input.events.iter().any(|event| {
+                        matches!(
+                            event,
+                            egui::Event::Copy | egui::Event::Cut | egui::Event::Key { .. }
+                        )
+                    })
             }));
     let lay_out_all = view.anchor.is_some()
         || divider.as_ref().is_some_and(|(.., placed)| !placed)

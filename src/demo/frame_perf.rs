@@ -86,7 +86,11 @@ fn frame_output(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) ->
 }
 
 fn copy_selection(app: &mut App, ctx: &egui::Context) -> String {
-    let output = frame_output(app, ctx, vec![egui::Event::Copy]);
+    clipboard_selection(app, ctx, egui::Event::Copy)
+}
+
+fn clipboard_selection(app: &mut App, ctx: &egui::Context, event: egui::Event) -> String {
+    let output = frame_output(app, ctx, vec![event]);
     output
         .platform_output
         .commands
@@ -301,5 +305,11 @@ fn selected_history_does_not_lay_out_every_body() {
         copy_selection(&mut app, &ctx),
         before,
         "off-screen endpoints copy the same text"
+    );
+    frame(&mut app, &ctx, Vec::new());
+    assert_eq!(
+        clipboard_selection(&mut app, &ctx, egui::Event::Cut),
+        before,
+        "native-menu Cut copies the same selection"
     );
 }
