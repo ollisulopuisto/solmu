@@ -4308,48 +4308,70 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         // Scrolling up releases stick-to-bottom.
         app.scroll_to_bottom = false;
     }
-    // Show a return-to-bottom button while reading older messages.
+    // Show a jump-to-latest pill while reading older messages.
     if !at_bottom {
         let rect = output.inner_rect;
-        let center = pos2(rect.right() - 34.0, rect.bottom() - 34.0);
-        let button = Rect::from_center_size(center, Vec2::splat(40.0));
-        let mut child = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(button)
-                .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
-        );
         let unread = app.chat(&chat.id).map_or(0, |chat| chat.unread);
+        let label = crate::i18n::gettext(app.locale, "\u{2193} Jump to latest").to_string();
+        let galley =
+            ui.painter()
+                .layout_no_wrap(label.clone(), theme::semibold(13.0), palette.accent);
+        // The unread count rides inside the pill's right end.
+        let badge_w = if unread > 0 { 26.0 } else { 0.0 };
+        let size = galley.size() + egui::vec2(36.0 + badge_w, 16.0);
+        let center = pos2(
+            (rect.left() + rect.right()) / 2.0,
+            rect.bottom() - 14.0 - size.y / 2.0,
+        );
+        let pill = Rect::from_center_size(center, size);
+        let response = ui.allocate_rect(pill, egui::Sense::click());
+        crate::theme::reveal_focus(&response);
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label.clone())
+        });
         // It floats over the messages: a soft shadow lifts it off them.
-        child.painter().add(
+        ui.painter().add(
             egui::epaint::Shadow {
                 offset: [0, 3],
                 blur: 10,
                 spread: 0,
                 color: palette.lift_shadow(),
             }
-            .as_shape(button, CornerRadius::same(20)),
+            .as_shape(pill, CornerRadius::same((pill.height() / 2.0) as u8)),
         );
-        if theme::circle_button(
-            &mut child,
-            Icon::ArrowDown,
-            40.0,
-            palette.overlay,
-            palette.surface_hover,
-            palette.text,
-            "Newest message",
-        )
-        .clicked()
-        {
-            app.actions.push(Action::ScrollToBottom);
-        }
+        let fill = if response.hovered() {
+            palette.surface_hover
+        } else {
+            palette.overlay
+        };
+        ui.painter().rect_filled(pill, pill.height() / 2.0, fill);
+        ui.painter().rect_stroke(
+            pill,
+            pill.height() / 2.0,
+            egui::Stroke::new(1.5, palette.accent),
+            egui::StrokeKind::Inside,
+        );
+        let text_center = pos2(pill.center().x - badge_w / 2.0, pill.center().y);
+        ui.painter()
+            .galley(text_center - galley.size() / 2.0, galley, palette.accent);
         if unread > 0 {
             widgets::badge(
                 ui,
                 &palette,
-                pos2(center.x + 14.0, center.y - 16.0),
+                pos2(pill.right() - 21.0, pill.center().y),
                 unread,
                 false,
             );
+        }
+        let shortcut = super::keys::label("Ctrl+\u{2193}");
+        if response
+            .on_hover_text(
+                crate::i18n::gettext(app.locale, "Jump to the newest message ({shortcut})")
+                    .replace("{shortcut}", &shortcut),
+            )
+            .clicked()
+        {
+            app.actions.push(Action::ScrollToBottom);
         }
     }
 }

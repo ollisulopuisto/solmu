@@ -256,8 +256,13 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         let (modifiers, key_code) = SHORTCUTS_DIALOG.keys[1];
         key(modifiers, key_code, Action::ShowDialog(Dialog::Shortcuts));
         if jump_allowed {
-            let (modifiers, key_code) = SCROLL_BOTTOM.keys[0];
-            key(modifiers, key_code, Action::ScrollToBottom);
+            // Cmd+Down and the Cmd+End alias both reach the newest message;
+            // Cmd+Up mirrors Home to the oldest loaded one.
+            for &(modifiers, key_code) in SCROLL_BOTTOM.keys {
+                key(modifiers, key_code, Action::ScrollToBottom);
+            }
+            let (modifiers, key_code) = SCROLL_TOP.keys[0];
+            key(modifiers, key_code, Action::ScrollPage(Scroll::Top));
         }
         // The message list keeps Control+2 on macOS, where Command+1 to 9
         // open favorites and Option with a digit types characters some
@@ -1381,10 +1386,28 @@ const FORWARD: Shortcut = Shortcut {
 };
 const SCROLL_BOTTOM: Shortcut = Shortcut {
     id: "scroll-bottom",
-    keys: &[(Modifiers::COMMAND, Key::End)],
-    label: Some("Ctrl+End"),
+    keys: &[
+        (Modifiers::COMMAND, Key::ArrowDown),
+        (Modifiers::COMMAND, Key::End),
+    ],
+    label: Some("Ctrl+\u{2193}"),
     description: Some("Jump to the newest message"),
-    menu: None,
+    menu: Some(MenuItem {
+        id: "chat-newest",
+        text: "Jump to Newest",
+        accelerator: "Super+ArrowDown",
+    }),
+};
+const SCROLL_TOP: Shortcut = Shortcut {
+    id: "scroll-top",
+    keys: &[(Modifiers::COMMAND, Key::ArrowUp)],
+    label: Some("Ctrl+\u{2191}"),
+    description: Some("Jump to the oldest loaded message"),
+    menu: Some(MenuItem {
+        id: "chat-oldest",
+        text: "Jump to Oldest Loaded",
+        accelerator: "Super+ArrowUp",
+    }),
 };
 const RAIL_CHATS: Shortcut = Shortcut {
     id: "rail-chats",
@@ -1676,6 +1699,7 @@ pub static REGISTRY: &[Row] = &[
         "Jump to the oldest loaded / newest message (with the input empty)",
     ),
     Row::Binding(&SCROLL_BOTTOM),
+    Row::Binding(&SCROLL_TOP),
     Row::Help("Alt+\u{2191} / Alt+\u{2193}", "Previous / next chat"),
     Row::Help("Ctrl+Shift+[ / ]", "Previous / next chat, as in WhatsApp"),
     Row::Help(TAB_STEP_KEYS, "Next / previous chat, as in Safari's tabs"),
@@ -1801,6 +1825,9 @@ pub const MENU_COMMANDS: &[&str] = &[
     "chat-quote-reply",
     "chat-forward",
     "chat-newest",
+    "chat-oldest",
+    "view-page-up",
+    "view-page-down",
     "chat-clear",
     "chat-leave",
 ];
@@ -1892,6 +1919,9 @@ pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
         }
         "chat-forward" => forward_action(app),
         "chat-newest" => chat.map(|_| Action::ScrollToBottom),
+        "chat-oldest" => chat.map(|_| Action::ScrollPage(Scroll::Top)),
+        "view-page-up" => chat.map(|_| Action::ScrollPage(Scroll::PageUp)),
+        "view-page-down" => chat.map(|_| Action::ScrollPage(Scroll::PageDown)),
         "chat-clear" => chat
             .filter(|_| app.is_connected())
             .map(|chat| Action::ShowDialog(Dialog::ConfirmClearChat(chat.id.clone()))),
@@ -1941,6 +1971,14 @@ pub fn menu_accelerator(modifiers: Modifiers, key: Key) -> Option<String> {
         Key::Equals => "Equal",
         Key::Minus => "Minus",
         Key::Slash => "Slash",
+        Key::ArrowUp => "ArrowUp",
+        Key::ArrowDown => "ArrowDown",
+        Key::ArrowLeft => "ArrowLeft",
+        Key::ArrowRight => "ArrowRight",
+        Key::Home => "Home",
+        Key::End => "End",
+        Key::PageUp => "PageUp",
+        Key::PageDown => "PageDown",
         Key::Num0 => "Digit0",
         _ => return None,
     };
@@ -2141,7 +2179,8 @@ mod tests {
                 "Home / End",
                 "Jump to the oldest loaded / newest message (with the input empty)",
             ),
-            ("Ctrl+End", "Jump to the newest message"),
+            ("Ctrl+\u{2193}", "Jump to the newest message"),
+            ("Ctrl+\u{2191}", "Jump to the oldest loaded message"),
             ("Alt+\u{2191} / Alt+\u{2193}", "Previous / next chat"),
             ("Ctrl+Shift+[ / ]", "Previous / next chat, as in WhatsApp"),
             (TAB_STEP_KEYS, "Next / previous chat, as in Safari's tabs"),
@@ -2343,7 +2382,6 @@ mod tests {
     const KEYLESS_MENU: &[(&str, Option<&str>)] = &[
         ("rail-chats", Some("go-chats")),
         ("next-account", Some("go-next-number")),
-        ("scroll-bottom", Some("chat-newest")),
         ("forward-message", Some("chat-forward")),
         ("focus-messages", None),
         ("close-chat", None),
@@ -3772,6 +3810,20 @@ mod tests {
         let survived = press(&mut app, &ctx, Key::End, Modifiers::COMMAND);
         assert!(!survived);
         assert_eq!(app.actions, [Action::ScrollToBottom]);
+    }
+
+    #[test]
+    fn command_arrows_jump_to_the_end_and_the_oldest_loaded() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        let survived = press(&mut app, &ctx, Key::ArrowDown, Modifiers::COMMAND);
+        assert!(!survived);
+        assert_eq!(app.actions, [Action::ScrollToBottom]);
+        app.actions.clear();
+        let survived = press(&mut app, &ctx, Key::ArrowUp, Modifiers::COMMAND);
+        assert!(!survived);
+        assert_eq!(app.actions, [Action::ScrollPage(Scroll::Top)]);
     }
 
     #[test]

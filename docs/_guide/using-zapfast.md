@@ -655,8 +655,12 @@ Click a message result to jump to it, or a contact to start a chat. Use
 `Alt+↑/↓`, or `Ctrl+Shift+[` and `Ctrl+Shift+]` as in WhatsApp, to switch chats
 without leaving the composer (Command instead of Ctrl on macOS), and
 `Ctrl+1` through `Ctrl+0` to open the favorite at that position in the sidebar. Within an open
-chat, `PgUp`/`PgDn` scroll by about a page, and `Home`/`End` (or `Ctrl+End`)
-jump to the top or the newest message when the input is empty. With text in
+chat, `PgUp`/`PgDn` scroll by about a page, and `Home`/`End` (or `Ctrl+End`,
+or `Ctrl+↓`/`Ctrl+↑`) jump to the top or the newest message when the input
+is empty. Scrolled away from the end, a **Jump to latest** pill floats over
+the list's lower edge with the unread count; click it to return. The jumps
+live in the Chat menu (Jump to Newest, Jump to Oldest Loaded) and the page
+scrolls in the View menu. With text in
 the input, they move the text cursor as in any editor.
 
 With a mouse that has them, the **Back** and **Forward** side buttons step
