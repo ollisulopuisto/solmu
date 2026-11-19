@@ -14480,6 +14480,7 @@ mod tests {
             };
             let mut actions = Vec::new();
             let mut draw = |events| {
+                let mut row = Rect::NOTHING;
                 let mut output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(
@@ -14500,7 +14501,7 @@ mod tests {
                         }
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             ui.add_space(800.0);
-                            bubble_frame(
+                            row = bubble_frame(
                                 ui,
                                 &view,
                                 &message,
@@ -14509,18 +14510,20 @@ mod tests {
                                 false,
                                 400.0,
                                 &mut actions,
-                            );
+                            )
+                            .rect;
                             ui.add_space(100.0);
                         });
                         focus::finish(ui.ctx(), true);
                     },
                 );
                 output.textures_delta.clear();
+                row
             };
-            draw(vec![]);
+            let initial = draw(vec![]);
             let stop = Stop::Unhide(bubble_id(&view.chat.id, &message.id).value());
             let id = focus::control(&ctx, stop).expect("registered hidden-message control");
-            assert!(ctx.read_response(id).unwrap().rect.top() > 240.0);
+            assert!(initial.top() > 240.0);
             draw(vec![egui::Event::Key {
                 key: Key::Tab,
                 physical_key: None,
@@ -14528,11 +14531,12 @@ mod tests {
                 repeat: false,
                 modifiers: Modifiers::NONE,
             }]);
-            draw(vec![]);
+            let revealed = draw(vec![]);
             assert_eq!(ctx.memory(|memory| memory.focused()), Some(id));
-            let response = ctx.read_response(id).unwrap();
-            assert!(response.rect.top() >= 0.0);
-            assert!(response.rect.bottom() <= 240.0);
+            // read_response exposes the previous pass here. Inspect the
+            // rectangle returned by this frame's actual placeholder layout.
+            assert!(revealed.top() >= 0.0, "{revealed:?}");
+            assert!(revealed.bottom() <= 240.0, "{revealed:?}");
             assert!(view.keyboard_navigation.get());
         });
     }
