@@ -90,7 +90,8 @@ fn copy_selection(app: &mut App, ctx: &egui::Context) -> String {
 }
 
 fn clipboard_selection(app: &mut App, ctx: &egui::Context, event: egui::Event) -> String {
-    let output = frame_output(app, ctx, vec![event]);
+    let mut output = frame_output(app, ctx, vec![event]);
+    output.textures_delta.clear();
     output
         .platform_output
         .commands
