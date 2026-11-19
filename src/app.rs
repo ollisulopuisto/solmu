@@ -12296,6 +12296,33 @@ impl App {
             }
             Action::ToggleFlatGroups => {}
             Action::MenuCommand(id) => {
+                // The scroll jumps' menu accelerators bypass the key handler
+                // (AppKit turns the chord into a menu event first), so the
+                // key handler's text-field rule is re-applied here: with text
+                // in the composer or another field focused, the chord belongs
+                // to the field and the key is handed to egui instead of
+                // jumping the chat. A menu click is indistinguishable from
+                // the accelerator, so clicking the item also yields to the
+                // field; the pill and the key remain the always-on routes.
+                if matches!(id.as_str(), "chat-newest" | "chat-oldest")
+                    && !crate::ui::keys::menu_scroll_reaches_chat(self, ctx)
+                {
+                    let key = if id == "chat-newest" {
+                        egui::Key::ArrowDown
+                    } else {
+                        egui::Key::ArrowUp
+                    };
+                    ctx.input_mut(|input| {
+                        input.events.push(egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::COMMAND,
+                        });
+                    });
+                    return;
+                }
                 let actions = crate::ui::keys::menu_actions(self, &id);
                 if id == "chat-quote-reply" && crate::ui::keys::linked_view(self) {
                     let message =
@@ -15444,6 +15471,52 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::COMMAND,
         }
+    }
+
+    /// The scroll jumps' menu accelerators bypass the key handler, so the
+    /// menu route re-applies its text-field rule: a non-empty composer keeps
+    /// the chord and gets the key, and only then the same command jumps.
+    #[test]
+    fn menu_scroll_jump_yields_to_a_non_empty_composer() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let chat = "491700000000@s.whatsapp.net".to_owned();
+        app.chats.push(Chat::new(chat.clone(), "Chat".into()));
+        app.open_chat = Some(chat);
+        app.composer = "draft".into();
+        let ctx = egui::Context::default();
+        // Focus the production composer and let it paint twice, so egui
+        // registers the text edit holding focus.
+        composer_undo_boundary_frame(&mut app, &ctx, 0.0, Vec::new());
+        composer_undo_boundary_frame(&mut app, &ctx, 0.01, Vec::new());
+        assert!(ctx.text_edit_focused(), "the composer holds text focus");
+        app.apply(Action::MenuCommand("chat-newest".into()), &ctx);
+        assert!(
+            !app.actions
+                .iter()
+                .any(|action| matches!(action, Action::ScrollToBottom)),
+            "the menu jump yields to the composer"
+        );
+        // The chord is handed back to the focused field for its caret use.
+        assert!(ctx.input(|input| input.events.iter().any(|event| matches!(
+            event,
+            egui::Event::Key {
+                key: egui::Key::ArrowDown,
+                pressed: true,
+                modifiers,
+                ..
+            } if *modifiers == egui::Modifiers::COMMAND
+        ))));
+        // Emptied, the composer has no caret need and the command jumps.
+        app.composer.clear();
+        app.actions.clear();
+        app.apply(Action::MenuCommand("chat-newest".into()), &ctx);
+        assert!(
+            app.actions
+                .iter()
+                .any(|action| matches!(action, Action::ScrollToBottom)),
+            "the menu jump reaches an empty composer"
+        );
     }
 
     /// Real keyboard undo cannot restore a previous chat/account's text
