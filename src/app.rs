@@ -8746,7 +8746,8 @@ impl App {
         };
         let messages = &conversation.messages;
         // The newest row, which may be an album of several messages.
-        let starts = crate::ui::conversation::row_starts(messages, self.individual_message_rows(chat));
+        let starts =
+            crate::ui::conversation::row_starts(messages, self.individual_message_rows(chat));
         let Some(&newest) = starts.last() else {
             return false;
         };
@@ -33277,7 +33278,12 @@ mod linked_attachment_tests {
                 caption: None,
                 media: crate::model::Media {
                     album: Some("album".into()),
-                    ..Default::default()
+                    mime: "image/png".into(),
+                    size: 0,
+                    width: None,
+                    height: None,
+                    path: None,
+                    state: Default::default(),
                 },
                 motion: None,
             };
