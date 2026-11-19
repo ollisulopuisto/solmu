@@ -4324,7 +4324,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             rect.bottom() - 14.0 - size.y / 2.0,
         );
         let pill = Rect::from_center_size(center, size);
-        let (pill, response) = ui.allocate_rect(pill, egui::Sense::click());
+        let response = ui.allocate_rect(pill, egui::Sense::click());
         crate::theme::reveal_focus(&response);
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label.clone())
