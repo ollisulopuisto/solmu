@@ -64,6 +64,18 @@ fenced_code_rows_fit_the_layout_width (wrap.rs already force-breaks overlong
 tokens); verified only by rustc parse-check locally, since this Ubuntu box
 cannot build the crate (PipeWire headers too old) - fmt/clippy/tests and any
 visual check run in CI.
+## 2026-11-18: Failed link previews stay quiet (fix/preview-fail-quiet)
+
+local_link_previews (src/ui/conversation.rs) painted a prominent "Preview
+unavailable" + "Retry preview" row when a fetch failed. Now a Failed status
+is skipped before any card space is reserved: no row, no button, no 5pt gap.
+The match arm stays as a documented no-op. preview_worker.rs gains a
+test/demo seed_failure next to seed_fixture. Failing-first test
+a_failed_local_preview_paints_no_row drives local_link_previews with a
+seeded Failed worker through the shared still-view fixture (generalized to
+with_still_view_and) and asserts drawn == false and no actions. Verified by
+rustc parse-check only; fmt/clippy/tests run in CI (this Ubuntu box cannot
+build the crate: PipeWire headers too old).
 
 
 

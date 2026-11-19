@@ -110,6 +110,19 @@ impl Worker {
         );
         Self::trim(&mut shared);
     }
+    #[cfg(any(test, feature = "demo"))]
+    pub fn seed_failure(&self, account: &str, url: &str) {
+        let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        shared.entries.insert(
+            Self::key(account, url),
+            Entry {
+                status: Status::Failed,
+                at: Instant::now(),
+                used: Instant::now(),
+            },
+        );
+        Self::trim(&mut shared);
+    }
     fn key(account: &str, url: &str) -> Key {
         // Fragments are not HTTP request data. Queries must stay distinct.
         Key {
