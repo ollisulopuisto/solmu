@@ -586,11 +586,10 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
     }
     // Arrow Up in an empty, focused composer edits the user's most recent
-    // message, as WhatsApp does. The key keeps its normal meaning everywhere
-    // else: it navigates open overlays and moves the cursor in a non-empty
-    // field.
-    let edit_previous = composer_focused
-        && app.chat_view()
+    // message, as WhatsApp does; Ctrl+E does the same wherever the focus
+    // is. The key keeps its normal meaning everywhere else: it navigates
+    // open overlays and moves the cursor in a non-empty field.
+    let can_edit_latest = app.chat_view()
         && app.open_chat.is_some()
         && app
             .open_chat
@@ -605,8 +604,10 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         && app.dialog.is_none()
         && !app.show_update
         && app.recording.is_none()
-        && !menu_open
-        && ctx.input_mut(|input| take_plain(input, Key::ArrowUp));
+        && !menu_open;
+    let edit_previous = can_edit_latest
+        && ((composer_focused && ctx.input_mut(|input| take_plain(input, Key::ArrowUp)))
+            || take_exact(ctx, Modifiers::COMMAND, Key::E));
     if let Some(id) = edit_previous.then(|| app.previous_own_editable()).flatten() {
         actions.push(Action::Edit(id));
     }
@@ -1172,8 +1173,8 @@ fn find_action(app: &App) -> Action {
     }
 }
 
-/// Ctrl+E archives the open chat, or unarchives an archived one, as in
-/// WhatsApp. Archiving closes the chat, as the chat menus do.
+/// Ctrl+Shift+E archives the open chat, or unarchives an archived one, as
+/// in WhatsApp. Archiving closes the chat, as the chat menus do.
 fn archive_action(app: &App) -> Option<Action> {
     if !app.chat_view()
         || app.dialog.is_some()
@@ -1405,14 +1406,21 @@ const NEW_CHAT: Shortcut = Shortcut {
 };
 const ARCHIVE: Shortcut = Shortcut {
     id: "archive",
-    keys: &[(Modifiers::COMMAND, Key::E)],
-    label: Some("Ctrl+E"),
+    keys: &[(COMMAND_SHIFT, Key::E)],
+    label: Some("Ctrl+Shift+E"),
     description: Some("Archive or unarchive the open chat"),
     menu: Some(MenuItem {
         id: "chat-archive",
         text: "Archive Chat",
-        accelerator: "Super+KeyE",
+        accelerator: "Super+Shift+KeyE",
     }),
+};
+const MESSAGE_EDIT: Shortcut = Shortcut {
+    id: "message-edit",
+    keys: &[(Modifiers::COMMAND, Key::E)],
+    label: Some("Ctrl+E"),
+    description: Some("Edit the context-menu message, or the latest own message"),
+    menu: None,
 };
 const NEXT_ACCOUNT: Shortcut = Shortcut {
     id: "next-account",
@@ -1689,6 +1697,7 @@ pub static REGISTRY: &[Row] = &[
         "\u{2191}",
         "Edit the previous message (when the input is empty)",
     ),
+    Row::Binding(&MESSAGE_EDIT),
     Row::Help("Enter", "Send (Shift+Enter for a new line)"),
     Row::Help(
         "Escape",
@@ -2154,13 +2163,17 @@ mod tests {
                 "\u{2191}",
                 "Edit the previous message (when the input is empty)",
             ),
+            (
+                "Ctrl+E",
+                "Edit the context-menu message, or the latest own message",
+            ),
             ("Enter", "Send (Shift+Enter for a new line)"),
             (
                 "Escape",
                 "Dismiss the current action, return from search or Starred, or close the chat",
             ),
             ("Ctrl+N", "New chat or message yourself"),
-            ("Ctrl+E", "Archive or unarchive the open chat"),
+            ("Ctrl+Shift+E", "Archive or unarchive the open chat"),
             ("Ctrl+U", "Mark the open chat to deal with later"),
             ("Ctrl+I", "Mark the open chat to deal with later"),
             (
@@ -2213,7 +2226,8 @@ mod tests {
 
     #[test]
     fn menu_hints_come_from_the_registry_and_skip_unlabelled_bindings() {
-        assert_eq!(hint("archive"), Some(label("Ctrl+E")));
+        assert_eq!(hint("archive"), Some(label("Ctrl+Shift+E")));
+        assert_eq!(hint("message-edit"), Some(label("Ctrl+E")));
         assert_eq!(hint("info-sidebar"), Some(label("Ctrl+Alt+I")));
         assert_eq!(hint("close-chat"), None);
     }
@@ -2334,6 +2348,7 @@ mod tests {
         ("focus-messages", None),
         ("close-chat", None),
         ("incoming-bridge", None),
+        ("message-edit", None),
         ("message-star", None),
         ("message-pin", None),
         ("message-save", None),
@@ -3471,14 +3486,11 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_e_archives_and_unarchives_the_open_chat() {
+    fn ctrl_shift_e_archives_and_unarchives_the_open_chat() {
         let (_root, mut app, ids) = app_with_chats(2);
         app.open_chat = Some(ids[1].clone());
         let ctx = egui::Context::default();
-        for modifiers in ctrl_shift().map(|modifiers| Modifiers {
-            shift: false,
-            ..modifiers
-        }) {
+        for modifiers in ctrl_shift() {
             app.chats[1].archived = false;
             app.actions.clear();
             assert!(!press(&mut app, &ctx, Key::E, modifiers));
@@ -3488,6 +3500,72 @@ mod tests {
             assert!(!press(&mut app, &ctx, Key::E, modifiers));
             assert_eq!(app.actions, [Action::SetArchived(ids[1].clone(), false)]);
         }
+    }
+
+    #[test]
+    fn ctrl_e_edits_the_latest_own_editable_message() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        let now = crate::util::now();
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![
+                    shortcut_message(&chat, "incoming", true, now),
+                    shortcut_message(&chat, "own-older", false, now - 60),
+                    shortcut_message(&chat, "own-latest", false, now - 10),
+                ],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        assert!(!press(&mut app, &ctx, Key::E, Modifiers::COMMAND));
+        assert_eq!(app.actions, [Action::Edit("own-latest".into())]);
+    }
+
+    #[test]
+    fn ctrl_e_skips_messages_outside_the_edit_window() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        let now = crate::util::now();
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![shortcut_message(
+                    &chat,
+                    "own-stale",
+                    false,
+                    now - crate::app::EDIT_WINDOW.as_secs() as i64 - 1,
+                )],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        assert!(!press(&mut app, &ctx, Key::E, Modifiers::COMMAND));
+        assert!(app.actions.is_empty(), "nothing editable: no edit action");
+    }
+
+    #[test]
+    fn ctrl_e_leaves_a_nonempty_composer_alone() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![shortcut_message(&chat, "own", false, crate::util::now())],
+                ..Default::default()
+            },
+        );
+        app.composer = "draft".into();
+        let ctx = egui::Context::default();
+        assert!(press(&mut app, &ctx, Key::E, Modifiers::COMMAND));
+        assert!(
+            app.actions.is_empty(),
+            "a draft must survive: no edit starts"
+        );
     }
 
     #[test]
