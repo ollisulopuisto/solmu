@@ -15473,6 +15473,52 @@ mod tests {
         }
     }
 
+    /// The scroll jumps' menu accelerators bypass the key handler, so the
+    /// menu route re-applies its text-field rule: a non-empty composer keeps
+    /// the chord and gets the key, and only then the same command jumps.
+    #[test]
+    fn menu_scroll_jump_yields_to_a_non_empty_composer() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let chat = "491700000000@s.whatsapp.net".to_owned();
+        app.chats.push(Chat::new(chat.clone(), "Chat".into()));
+        app.open_chat = Some(chat);
+        app.composer = "draft".into();
+        let ctx = egui::Context::default();
+        // Focus the production composer and let it paint twice, so egui
+        // registers the text edit holding focus.
+        composer_undo_boundary_frame(&mut app, &ctx, 0.0, Vec::new());
+        composer_undo_boundary_frame(&mut app, &ctx, 0.01, Vec::new());
+        assert!(ctx.text_edit_focused(), "the composer holds text focus");
+        app.apply(Action::MenuCommand("chat-newest".into()), &ctx);
+        assert!(
+            !app.actions
+                .iter()
+                .any(|action| matches!(action, Action::ScrollToBottom)),
+            "the menu jump yields to the composer"
+        );
+        // The chord is handed back to the focused field for its caret use.
+        assert!(ctx.input(|input| input.events.iter().any(|event| matches!(
+            event,
+            egui::Event::Key {
+                key: egui::Key::ArrowDown,
+                pressed: true,
+                modifiers,
+                ..
+            } if *modifiers == egui::Modifiers::COMMAND
+        ))));
+        // Emptied, the composer has no caret need and the command jumps.
+        app.composer.clear();
+        app.actions.clear();
+        app.apply(Action::MenuCommand("chat-newest".into()), &ctx);
+        assert!(
+            app.actions
+                .iter()
+                .any(|action| matches!(action, Action::ScrollToBottom)),
+            "the menu jump reaches an empty composer"
+        );
+    }
+
     /// Real keyboard undo cannot restore a previous chat/account's text
     /// through the production composer, even with a stored checkpoint.
     #[test]
