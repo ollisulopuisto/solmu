@@ -1,0 +1,62 @@
+name: Long body alignment evidence
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          cache-generation: test-v1
+      - name: Check formatting and fixed regression
+        run: |
+          cargo fmt --all --check
+          mbx test --locked --lib --features demo collapsed_body_stays_inside_its_allocated_column -- --nocapture
+          mbx build --locked --features demo
+      - name: Capture fixed layout
+        run: |
+          mkdir -p "$RUNNER_TEMP/long-body-evidence"
+          for theme in light dark; do
+            target/debug/solmu --demo-shot "$RUNNER_TEMP/long-body-evidence/after-$theme.png" --demo-size 1180x1200 --demo-page "collapse-own,$theme" --demo-shot-delay 6000
+          done
+      - name: Restore old geometry and prove regression
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          p = Path('src/ui/conversation.rs')
+          text = p.read_text()
+          baseline = subprocess.check_output(['git', 'show', '40e876a:src/ui/conversation.rs'], text=True)
+          start = '    // Allocate first: outgoing rows align to the right'
+          end = '    let mut child = ui.new_child('
+          old_start = baseline.index('    let at = ui.cursor().min;', baseline.index('fn rich_body('))
+          old_end = baseline.index(end, old_start)
+          a = text.index(start)
+          b = text.index(end, a)
+          text = text[:a] + baseline[old_start:old_end] + text[b:]
+          text = text.replace('    let label = if expanded {', '    ui.allocate_space(body.size());\n    let label = if expanded {', 1)
+          p.write_text(text)
+          PY
+          if mbx test --locked --lib --features demo collapsed_body_stays_inside_its_allocated_column -- --nocapture > "$RUNNER_TEMP/long-body-evidence/before-test.log" 2>&1; then
+            cat "$RUNNER_TEMP/long-body-evidence/before-test.log"
+            echo 'Regression did not catch old geometry'; exit 1
+          fi
+          cat "$RUNNER_TEMP/long-body-evidence/before-test.log"
+          grep -q 'escapes column' "$RUNNER_TEMP/long-body-evidence/before-test.log"
+          mbx build --locked --features demo
+      - name: Capture old layout
+        run: |
+          for theme in light dark; do
+            target/debug/solmu --demo-shot "$RUNNER_TEMP/long-body-evidence/before-$theme.png" --demo-size 1180x1200 --demo-page "collapse-own,$theme" --demo-shot-delay 6000
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: long-body-alignment
+          path: ${{ runner.temp }}/long-body-evidence
+          retention-days: 7
