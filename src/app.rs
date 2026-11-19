@@ -8746,7 +8746,7 @@ impl App {
         };
         let messages = &conversation.messages;
         // The newest row, which may be an album of several messages.
-        let starts = crate::ui::conversation::row_starts(messages, self.selecting_in(chat));
+        let starts = crate::ui::conversation::row_starts(messages, self.individual_message_rows(chat));
         let Some(&newest) = starts.last() else {
             return false;
         };
@@ -8760,6 +8760,20 @@ impl App {
 
     /// Whether messages are being selected in `chat`, which draws an album's
     /// items each in a row of its own.
+    pub(crate) fn has_hidden_messages(&self, chat: &str) -> bool {
+        self.chat(chat).is_some_and(|known| {
+            !crate::hidden_messages::ids_in(
+                &self.settings.beeper.hidden_messages,
+                &self.later_key(known),
+            )
+            .is_empty()
+        })
+    }
+
+    pub(crate) fn individual_message_rows(&self, chat: &str) -> bool {
+        self.selecting_in(chat) || self.has_hidden_messages(chat)
+    }
+
     pub fn selecting_in(&self, chat: &str) -> bool {
         self.selection
             .as_ref()
@@ -12615,7 +12629,7 @@ impl App {
                 // one, as the list resolves it: a cursor naming no loaded
                 // message stands on the newest.
                 let starts =
-                    crate::ui::conversation::row_starts(messages, self.selecting_in(&chat));
+                    crate::ui::conversation::row_starts(messages, self.individual_message_rows(&chat));
                 let current = self
                     .message_cursor
                     .get(&chat)
@@ -33251,6 +33265,39 @@ mod linked_attachment_tests {
         });
         app.open_chat = Some("visible".into());
         (root, app, egui::Context::default(), commands)
+    }
+
+    #[test]
+    fn hidden_messages_use_individual_rows_for_cursor_navigation() {
+        let (_root, mut app, ctx, _commands) = fixture();
+        let mut messages = Vec::new();
+        for id in ["a", "b", "c"] {
+            let mut message = crate::archive::tests::message("visible", id, 100, false);
+            message.content = Content::Image {
+                caption: None,
+                media: crate::model::Media {
+                    album: Some("album".into()),
+                    ..Default::default()
+                },
+                motion: None,
+            };
+            messages.push(message);
+        }
+        app.conversations.entry("visible".into()).or_default().messages = messages;
+        app.apply(
+            Action::SetMessageHidden {
+                chat: "visible".into(),
+                message: "b".into(),
+                hidden: true,
+            },
+            &ctx,
+        );
+        app.message_cursor.insert("visible".into(), "c".into());
+        app.apply(Action::MessageCursor(crate::ui::list_nav::Step::Previous), &ctx);
+        assert_eq!(app.message_cursor["visible"], "b");
+        assert!(!app.cursor_on_newest());
+        app.apply(Action::MessageCursor(crate::ui::list_nav::Step::Previous), &ctx);
+        assert_eq!(app.message_cursor["visible"], "a");
     }
 
     #[test]

@@ -2995,12 +2995,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     let streak_hues = chat
         .is_group()
         .then(|| sender_streak_hues(&conversation.messages));
-    let has_hidden = !crate::hidden_messages::ids_in(
-        &app.settings.beeper.hidden_messages,
-        &app.later_key(chat),
-    )
-    .is_empty();
-    let starts = row_starts(&conversation.messages, app.selecting_in(&chat.id) || has_hidden);
+    let has_hidden = app.has_hidden_messages(&chat.id);
+    let starts = row_starts(&conversation.messages, app.individual_message_rows(&chat.id));
     let total = starts.len();
     // The current message: the one the cursor names, or the newest when it
     // names none, or a message that is gone. An album's item stands for its
@@ -4051,6 +4047,11 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                     attachment: attachment.as_deref(),
                                 },
                             );
+                            let label = if view.hidden.is_some_and(|ids| ids.contains(&message.id)) {
+                                crate::i18n::gettext(view.locale, "Message hidden in Solmu").into_owned()
+                            } else {
+                                label
+                            };
                             super::list_nav::mark_row(
                                 ui.ctx(),
                                 row.inner,
@@ -5636,6 +5637,7 @@ fn bubble_frame(
                 ui.label(crate::i18n::gettext(view.locale, "Message hidden in Solmu"));
                 if ui
                     .button(crate::i18n::gettext(view.locale, "Unhide"))
+                    .tab_stop(Stop::Unhide(bubble_id(&view.chat.id, &message.id).value()))
                     .clicked()
                 {
                     actions.push(Action::SetMessageHidden {
@@ -14396,6 +14398,49 @@ mod tests {
                     "network {network:?}: edit offered only inside its window"
                 );
             }
+        });
+    }
+
+    #[test]
+    fn hidden_message_unhide_joins_the_custom_tab_cycle() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let message = crate::archive::tests::message("1@s.whatsapp.net", "hidden", 0, false);
+            let hidden = HashSet::from([message.id.clone()]);
+            let view = View { hidden: Some(&hidden), ..*view };
+            let mut actions = Vec::new();
+            let mut draw = |events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput { events, ..Default::default() },
+                    |ui| {
+                        focus::begin(ui.ctx(), true);
+                        let start = ui.button("Start").tab_stop(Stop::Composer);
+                        if ui.ctx().memory(|memory| memory.focused()).is_none() {
+                            start.request_focus();
+                        }
+                        bubble_frame(ui, &view, &message, None, false, false, 400.0, &mut actions);
+                        focus::finish(ui.ctx(), true);
+                    },
+                );
+                output.textures_delta.clear();
+            };
+            draw(vec![]);
+            let key = |key, pressed| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            draw(vec![key(Key::Tab, true)]);
+            draw(vec![key(Key::Tab, false), key(Key::Enter, true)]);
+            draw(vec![key(Key::Enter, false)]);
+            assert!(actions.contains(&Action::SetMessageHidden {
+                chat: message.chat.clone(),
+                message: message.id.clone(),
+                hidden: false,
+            }));
         });
     }
 
