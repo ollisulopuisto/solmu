@@ -14067,6 +14067,37 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_body_stays_inside_its_allocated_column() {
+        for align in [Align::Min, Align::Max] {
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            with_still_view(|view| {
+                let mut message = crate::archive::tests::message(
+                    "1@s.whatsapp.net", "long-alignment", 0, align == Align::Max,
+                );
+                let text = (0..34).map(|_| "A line of text").collect::<Vec<_>>().join("\n");
+                message.content = Content::text(&text);
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(900.0, 2400.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.with_layout(Layout::top_down(align), |ui| {
+                            rich_body(ui, view, &message, &text, 400.0, None, Some(400.0), &mut Vec::new(), true);
+                            let body = ctx.data(|data| data.get_temp::<Rect>(bubble_id(&view.chat.id, &message.id).with("body"))).unwrap();
+                            let column = ui.min_rect();
+                            assert!(body.left() >= column.left() - 0.5, "body {body:?} escapes column {column:?}");
+                            assert!(body.right() <= column.right() + 0.5, "body {body:?} escapes column {column:?}");
+                        });
+                    },
+                );
+                output.textures_delta.clear();
+            });
+        }
+    }
+
+    #[test]
     fn long_bubble_collapse_boundary_uses_actual_rendered_rows() {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
