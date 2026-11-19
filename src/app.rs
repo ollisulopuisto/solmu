@@ -11164,7 +11164,11 @@ impl App {
                 }
                 self.backend.send(Command::Revoke { chat, id });
             }
-            Action::SetMessageHidden { chat, message, hidden } => {
+            Action::SetMessageHidden {
+                chat,
+                message,
+                hidden,
+            } => {
                 let Some(known) = self.chat(&chat) else {
                     return;
                 };
@@ -12629,8 +12633,10 @@ impl App {
                 // The cursor steps through the list's rows, an album being
                 // one, as the list resolves it: a cursor naming no loaded
                 // message stands on the newest.
-                let starts =
-                    crate::ui::conversation::row_starts(messages, self.individual_message_rows(&chat));
+                let starts = crate::ui::conversation::row_starts(
+                    messages,
+                    self.individual_message_rows(&chat),
+                );
                 let current = self
                     .message_cursor
                     .get(&chat)
@@ -33289,7 +33295,10 @@ mod linked_attachment_tests {
             };
             messages.push(message);
         }
-        app.conversations.entry("visible".into()).or_default().messages = messages;
+        app.conversations
+            .entry("visible".into())
+            .or_default()
+            .messages = messages;
         app.apply(
             Action::SetMessageHidden {
                 chat: "visible".into(),
@@ -33299,10 +33308,16 @@ mod linked_attachment_tests {
             &ctx,
         );
         app.message_cursor.insert("visible".into(), "c".into());
-        app.apply(Action::MessageCursor(crate::ui::list_nav::Step::Previous), &ctx);
+        app.apply(
+            Action::MessageCursor(crate::ui::list_nav::Step::Previous),
+            &ctx,
+        );
         assert_eq!(app.message_cursor["visible"], "b");
         assert!(!app.cursor_on_newest());
-        app.apply(Action::MessageCursor(crate::ui::list_nav::Step::Previous), &ctx);
+        app.apply(
+            Action::MessageCursor(crate::ui::list_nav::Step::Previous),
+            &ctx,
+        );
         assert_eq!(app.message_cursor["visible"], "a");
     }
 
@@ -33324,10 +33339,17 @@ mod linked_attachment_tests {
                     .contains("one-message"),
                 hidden,
             );
-            assert!(commands.try_recv().is_err(), "hiding never contacts the bridge");
+            assert!(
+                commands.try_recv().is_err(),
+                "hiding never contacts the bridge"
+            );
             let encoded = serde_json::to_string(&app.settings.beeper).unwrap();
-            let restored: crate::settings::BeeperPreferences = serde_json::from_str(&encoded).unwrap();
-            assert_eq!(restored.hidden_messages, app.settings.beeper.hidden_messages);
+            let restored: crate::settings::BeeperPreferences =
+                serde_json::from_str(&encoded).unwrap();
+            assert_eq!(
+                restored.hidden_messages,
+                app.settings.beeper.hidden_messages
+            );
         }
     }
 

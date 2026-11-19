@@ -2996,7 +2996,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         .is_group()
         .then(|| sender_streak_hues(&conversation.messages));
     let has_hidden = app.has_hidden_messages(&chat.id);
-    let starts = row_starts(&conversation.messages, app.individual_message_rows(&chat.id));
+    let starts = row_starts(
+        &conversation.messages,
+        app.individual_message_rows(&chat.id),
+    );
     let total = starts.len();
     // The current message: the one the cursor names, or the newest when it
     // names none, or a message that is gone. An album's item stands for its
@@ -4047,8 +4050,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                     attachment: attachment.as_deref(),
                                 },
                             );
-                            let label = if view.hidden.is_some_and(|ids| ids.contains(&message.id)) {
-                                crate::i18n::gettext(view.locale, "Message hidden in Solmu").into_owned()
+                            let label = if view.hidden.is_some_and(|ids| ids.contains(&message.id))
+                            {
+                                crate::i18n::gettext(view.locale, "Message hidden in Solmu")
+                                    .into_owned()
                             } else {
                                 label
                             };
@@ -7426,6 +7431,7 @@ fn message_menu_labels(locale: crate::i18n::Locale) -> Vec<String> {
         gettext(locale, "Edit"),
         gettext(locale, "Delete for everyone"),
         gettext(locale, "Delete for me"),
+        gettext(locale, "Hide in Solmu"),
         gettext(locale, "Add to favorites"),
         gettext(locale, "Open in system player"),
         gettext(locale, "Open file"),
@@ -14408,11 +14414,17 @@ mod tests {
         with_still_view(|view| {
             let message = crate::archive::tests::message("1@s.whatsapp.net", "hidden", 0, false);
             let hidden = HashSet::from([message.id.clone()]);
-            let view = View { hidden: Some(&hidden), ..*view };
+            let view = View {
+                hidden: Some(&hidden),
+                ..*view
+            };
             let mut actions = Vec::new();
             let mut draw = |events| {
                 let mut output = ctx.run_ui(
-                    egui::RawInput { events, ..Default::default() },
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
                     |ui| {
                         focus::begin(ui.ctx(), true);
                         let start = ui.button("Start").tab_stop(Stop::Composer);
@@ -15362,7 +15374,7 @@ mod reaction_tests {
                 // "Save for later" awaits catalog extraction: until the
                 // maintainer regenerates them, every locale draws it in
                 // English, so it cannot count as untranslated here.
-                if english == "Save for later" {
+                if matches!(english.as_str(), "Save for later" | "Hide in Solmu") {
                     continue;
                 }
                 assert!(!spanish.contains(&english), "{english} in {spanish:?}");
@@ -15397,6 +15409,7 @@ mod reaction_tests {
                 || text == "Copy URL to clipboard"
                 || text == "Save for later"
                 || text == "Remove from Saved"
+                || text == "Hide in Solmu"
         };
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("photo.jpg");

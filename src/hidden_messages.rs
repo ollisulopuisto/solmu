@@ -7,7 +7,10 @@ pub struct HiddenMessage {
     pub message: String,
 }
 
-pub fn ids_in<'a>(list: &'a [HiddenMessage], member: &Member) -> std::collections::HashSet<&'a str> {
+pub fn ids_in<'a>(
+    list: &'a [HiddenMessage],
+    member: &Member,
+) -> std::collections::HashSet<&'a str> {
     list.iter()
         .filter(|entry| entry.member == *member)
         .map(|entry| entry.message.as_str())
