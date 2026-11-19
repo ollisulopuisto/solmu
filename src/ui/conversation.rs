@@ -5640,8 +5640,19 @@ fn bubble_frame(
         return ui
             .horizontal(|ui| {
                 ui.label(crate::i18n::gettext(view.locale, "Message hidden in Solmu"));
-                if ui
-                    .button(crate::i18n::gettext(view.locale, "Unhide"))
+                let unhide = ui.button(crate::i18n::gettext(view.locale, "Unhide"));
+                // Reveal while the conversation scroll area is still open,
+                // before Tab registration requests its re-layout pass.
+                theme::reveal_focus(&unhide);
+                if unhide.has_focus()
+                    && ui.ctx().data(|data| {
+                        data.get_temp::<bool>(theme::keyboard_focus_id())
+                            .unwrap_or(false)
+                    })
+                {
+                    view.keyboard_navigation.set(true);
+                }
+                if unhide
                     .tab_stop(Stop::Unhide(bubble_id(&view.chat.id, &message.id).value()))
                     .clicked()
                 {
@@ -14453,6 +14464,64 @@ mod tests {
                 message: message.id.clone(),
                 hidden: false,
             }));
+        });
+    }
+
+    #[test]
+    fn offscreen_unhide_focus_reveals_the_placeholder() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let message = crate::archive::tests::message("1@s.whatsapp.net", "hidden", 0, false);
+            let hidden = HashSet::from([message.id.clone()]);
+            let view = View {
+                hidden: Some(&hidden),
+                ..*view
+            };
+            let mut actions = Vec::new();
+            let mut draw = |events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(600.0, 240.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        focus::begin(ui.ctx(), true);
+                        let start = ui.button("Start").tab_stop(Stop::Composer);
+                        if ui.ctx().memory(|memory| memory.focused()).is_none() {
+                            start.request_focus();
+                        }
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            ui.add_space(800.0);
+                            bubble_frame(ui, &view, &message, None, false, false, 400.0, &mut actions);
+                            ui.add_space(100.0);
+                        });
+                        focus::finish(ui.ctx(), true);
+                    },
+                );
+                output.textures_delta.clear();
+            };
+            draw(vec![]);
+            let stop = Stop::Unhide(bubble_id(&view.chat.id, &message.id).value());
+            let id = focus::control(&ctx, stop).expect("registered hidden-message control");
+            assert!(ctx.read_response(id).unwrap().rect.top() > 240.0);
+            draw(vec![egui::Event::Key {
+                key: Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }]);
+            draw(vec![]);
+            assert_eq!(ctx.memory(|memory| memory.focused()), Some(id));
+            let response = ctx.read_response(id).unwrap();
+            assert!(response.rect.top() >= 0.0);
+            assert!(response.rect.bottom() <= 240.0);
+            assert!(view.keyboard_navigation.get());
         });
     }
 
