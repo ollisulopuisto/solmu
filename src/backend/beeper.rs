@@ -10689,7 +10689,7 @@ mod tests {
             matches!(
                 e,
                 Event::MutationResult {
-                    request: 1,
+                    request: Some(1),
                     result: Ok(()),
                     ..
                 }
@@ -10703,7 +10703,7 @@ mod tests {
                         request: r,
                         result: Ok(()),
                         ..
-                    } if *r == done
+                    } if *r == Some(done)
                 )),
                 "delete request {done} reports success, not a false failure from the tombstone"
             );
