@@ -38,7 +38,7 @@ mod imp {
     use super::Face;
     use objc2::Encode;
     use objc2::msg_send;
-    use objc2::rc::{Allocated, Retained};
+    use objc2::rc::{Allocated, Retained, autoreleasepool};
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use std::ffi::c_void;
     use std::ptr;
@@ -79,7 +79,9 @@ mod imp {
         // object returns are used only while their owner (`data`, `request`)
         // is alive and are never released here; `alloc`/`new`/`init` returns
         // are held in Retained and released on drop.
-        unsafe {
+        // The picker thread has no autorelease pool; +0 returns from
+        // dataWithBytes/arrayWithObject/results would leak without one.
+        autoreleasepool(|_| unsafe {
             let data: *mut AnyObject = msg_send![
                 data_class,
                 dataWithBytes: png.as_ptr() as *const c_void,
@@ -144,7 +146,7 @@ mod imp {
                 }
             }
             best
-        }
+        })
     }
 }
 
