@@ -9967,14 +9967,8 @@ fn copy_code_buttons(
         } else {
             crate::i18n::gettext(view.locale, "Copy code")
         };
-        let button = egui::Button::new(
-            egui::RichText::new(label.as_ref())
-                .small()
-                .color(palette.accent),
-        )
-        .frame(false);
-        let rect = markup::copy_button_rect(panel);
-        if ui.put(rect, button).clicked() {
+        let response = markup::put_copy_button(ui, panel, label.as_ref(), palette.accent);
+        if response.clicked() {
             ui.ctx().copy_text(block.clone());
             ui.ctx()
                 .data_mut(|data| data.insert_temp(copied_id, std::time::Instant::now()));

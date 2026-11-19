@@ -526,5 +526,9 @@ which left the button outside the visible body and unreachable (Devin
 finding on d0034ec). Top placement stays visible whenever any of the
 block is. The panel geometry is shared (code_panel_rects/
 copy_button_rect); one test asserts the button rect intersects no code
-row, another that it stays above a mid-block clip. No release, #359 or
-DMG work.
+row, another that it stays above a mid-block clip. A third pins the
+button's actual response rect: Ui::put expands a themed Button to the
+28pt minimum interact height, which leaked nine points into the first
+code row and intercepted selection drags (Devin finding on e4286bc), so
+the label is now painted by hand over an exact allocation in the
+reserved band. No release, #359 or DMG work.

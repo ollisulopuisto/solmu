@@ -1340,6 +1340,39 @@ pub fn copy_button_rect(panel: Rect) -> Rect {
     )
 }
 
+/// Renders one panel's Copy code label and returns its response. The
+/// response rect must stay inside the 14pt band [`copy_button_rect`]
+/// reserves: a button that outgrows the band reaches into the first
+/// code row and intercepts selection drags there.
+pub fn put_copy_button(
+    ui: &mut egui::Ui,
+    panel: Rect,
+    label: &str,
+    color: Color32,
+) -> egui::Response {
+    // Allocate the exact band and paint the label by hand: Ui::put with
+    // a themed Button expands to the theme's minimum interact height
+    // (28pt against the 14pt band) and the overflow reaches into the
+    // first code row, where it intercepts selection drags.
+    let rect = copy_button_rect(panel);
+    let response = ui
+        .allocate_rect(rect, egui::Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    let color = if response.hovered() {
+        color
+    } else {
+        color.gamma_multiply(0.75)
+    };
+    ui.painter().text(
+        rect.right_center(),
+        egui::Align2::RIGHT_CENTER,
+        label,
+        egui::TextStyle::Small.resolve(ui.style()),
+        color,
+    );
+    response
+}
+
 /// Paints the quiet inset panels behind each run of [`RowKind::Code`] or
 /// [`RowKind::Quote`] rows: a low-alpha fill across the body width plus a
 /// pale accent bar on the leading edge. Returns each code panel with its
@@ -3283,6 +3316,48 @@ mod monospace_tests {
                     assert!(
                         !button.intersects(text_rect),
                         "copy button {button:?} covers code row {text_rect:?}"
+                    );
+                }
+            }
+        });
+        output.textures_delta.clear();
+    }
+
+    /// The Copy code button's actual response rect, not just its
+    /// layout target: a themed Button expands to the theme's minimum
+    /// interact height under Ui::put and leaks from the reserved band
+    /// into the first code row, where it intercepts selection drags.
+    /// The response must stay inside the 14pt band above the panel.
+    #[test]
+    fn the_copy_button_response_stays_in_its_band() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "```\ncd ~/koodi/solmu\ncargo build\n```";
+            let laid = layout_balanced(ui, text, &[], &style, 200.0, false);
+            let body = Rect::from_min_size(Pos2::ZERO, laid.galley.size());
+            for (_, panel) in code_panel_rects(body, Pos2::ZERO, &laid, None) {
+                let response = put_copy_button(ui, panel, "Copy code", Color32::WHITE);
+                assert_eq!(
+                    response.rect,
+                    copy_button_rect(panel),
+                    "copy button response outgrew its band"
+                );
+                for (row, kind) in laid.galley.rows.iter().zip(laid.row_kinds().iter()) {
+                    if !matches!(kind, RowKind::Code(_)) || row.row.glyphs.is_empty() {
+                        continue;
+                    }
+                    let text_rect = Rect::from_min_size(row.pos, row.row.size);
+                    assert!(
+                        !response.rect.intersects(text_rect),
+                        "copy button response {:?} reaches code row {text_rect:?}",
+                        response.rect
                     );
                 }
             }
