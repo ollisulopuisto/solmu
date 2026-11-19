@@ -682,7 +682,7 @@ pub enum Fold {
 /// folded already — then expand.
 fn toggle_target(
     collapsed: &HashSet<Option<u64>>,
-    ids: impl Iterator<Item = Option<u64>>,
+    mut ids: impl Iterator<Item = Option<u64>>,
 ) -> bool {
     !ids.all(|id| collapsed.contains(&id))
 }
