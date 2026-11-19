@@ -2420,7 +2420,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
     };
     for part in page.split(',').map(str::trim) {
         match part {
-            "collapse" | "collapse-expanded" => {
+            "collapse" | "collapse-expanded" | "collapse-own" => {
                 SHOT_LONG_BODY_EXPANDED.store(
                     part == "collapse-expanded",
                     std::sync::atomic::Ordering::Relaxed,
@@ -2439,7 +2439,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 let row = message(
                     chat,
                     "demo-long-body",
-                    false,
+                    part == "collapse-own",
                     crate::util::now(),
                     Content::text(&text),
                 );
