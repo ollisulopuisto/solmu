@@ -653,7 +653,10 @@ messages stored on this computer; and finds contacts without an existing chat.
 Use `↑`/`↓` to select a matching chat and Enter to open it ready for typing.
 Click a message result to jump to it, or a contact to start a chat. Use
 `Alt+↑/↓`, or `Ctrl+Shift+[` and `Ctrl+Shift+]` as in WhatsApp, to switch chats
-without leaving the composer (Command instead of Ctrl on macOS), and
+without leaving the composer (Command instead of Ctrl on macOS). With the
+sidebar grouped into sections, `Alt+Tab` jumps to the next group heading
+(`Alt+Shift+Tab` to the previous), unfolding the group it lands on and
+wrapping around after the last. Use
 `Ctrl+1` through `Ctrl+0` to open the favorite at that position in the sidebar. Within an open
 chat, `PgUp`/`PgDn` scroll by about a page, and `Home`/`End` (or `Ctrl+End`,
 or `Ctrl+↓`/`Ctrl+↑`) jump to the top or the newest message when the input

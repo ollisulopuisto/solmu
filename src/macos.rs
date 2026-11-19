@@ -140,6 +140,11 @@ fn build_menu() -> tray_icon::menu::Result<Menu> {
         &Native::separator(),
         &item("view-page-up", "Scroll Up a Page", Some("PageUp")),
         &item("view-page-down", "Scroll Down a Page", Some("PageDown")),
+        // No accelerators here on purpose: AppKit would turn them into menu
+        // events before egui sees the key, bypassing the key handler's
+        // text-field rules. The chords are in the shortcuts dialog.
+        &item("view-next-group", "Jump to Next Group", None),
+        &item("view-previous-group", "Jump to Previous Group", None),
         &Native::separator(),
         &Native::fullscreen(None),
     ])?;

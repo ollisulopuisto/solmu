@@ -366,6 +366,32 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     {
         actions.push(Action::MessageCursor(step));
     }
+    // Option+Tab (and Shift) cycles the sidebar's group headings; the list
+    // pass owns the section order. On macOS the combination has no system
+    // meaning, unlike Command+Tab. A focused text field keeps it: the jump
+    // focuses a heading, which would steal the field's typing focus. The
+    // grouped list must be on screen: queued in a heading-free view (search
+    // results, starred, saved, locked, archived), the jump would sit pending
+    // and fire when the grouped list returns.
+    if app.grouped_list_showing()
+        && !editing_text
+        && app.dialog.is_none()
+        && !app.show_update
+        && app.picker.is_none()
+        && app.reaction_target.is_none()
+        && !menu_open
+    {
+        ctx.input_mut(|input| {
+            // Shift with Alt is consumed first: consume_key also matches an
+            // event carrying extra modifiers, so plain Alt would take it.
+            if input.consume_key(ALT_SHIFT, Key::Tab) {
+                app.flat_group_ui.jump = Some(false);
+            }
+            if input.consume_key(Modifiers::ALT, Key::Tab) {
+                app.flat_group_ui.jump = Some(true);
+            }
+        });
+    }
     // PgUp/PgDn/Home/End scroll the open chat. PgUp/PgDn also work while the
     // composer has focus, since egui's TextEdit does not handle them itself;
     // Home/End keep moving the text cursor in a non-empty field, as ↑ keeps
@@ -1286,6 +1312,13 @@ const COMMAND_ALT: Modifiers = Modifiers {
     ..Modifiers::NONE
 };
 
+/// Alt with Shift held, for the table.
+const ALT_SHIFT: Modifiers = Modifiers {
+    alt: true,
+    shift: true,
+    ..Modifiers::NONE
+};
+
 /// One keyboard shortcut, defined once: the handler's binding, the help
 /// dialog's row and the macOS menu's accelerator all come from this entry,
 /// so the three surfaces cannot drift.
@@ -1420,6 +1453,13 @@ const SCROLL_TOP: Shortcut = Shortcut {
         text: "Jump to Oldest Loaded",
         accelerator: "Super+ArrowUp",
     }),
+};
+const GROUP_CYCLE: Shortcut = Shortcut {
+    id: "group-cycle",
+    keys: &[(Modifiers::ALT, Key::Tab), (ALT_SHIFT, Key::Tab)],
+    label: Some("Alt+Tab / Alt+Shift+Tab"),
+    description: Some("Jump to the next group in the sidebar (Shift: previous)"),
+    menu: None,
 };
 const RAIL_CHATS: Shortcut = Shortcut {
     id: "rail-chats",
@@ -1712,6 +1752,7 @@ pub static REGISTRY: &[Row] = &[
     ),
     Row::Binding(&SCROLL_BOTTOM),
     Row::Binding(&SCROLL_TOP),
+    Row::Binding(&GROUP_CYCLE),
     Row::Help("Alt+\u{2191} / Alt+\u{2193}", "Previous / next chat"),
     Row::Help("Ctrl+Shift+[ / ]", "Previous / next chat, as in WhatsApp"),
     Row::Help(TAB_STEP_KEYS, "Next / previous chat, as in Safari's tabs"),
@@ -1840,6 +1881,8 @@ pub const MENU_COMMANDS: &[&str] = &[
     "chat-oldest",
     "view-page-up",
     "view-page-down",
+    "view-next-group",
+    "view-previous-group",
     "chat-clear",
     "chat-leave",
 ];
@@ -1934,6 +1977,12 @@ pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
         "chat-oldest" => chat.map(|_| Action::ScrollPage(Scroll::Top)),
         "view-page-up" => chat.map(|_| Action::ScrollPage(Scroll::PageUp)),
         "view-page-down" => chat.map(|_| Action::ScrollPage(Scroll::PageDown)),
+        "view-next-group" => app
+            .grouped_list_showing()
+            .then_some(Action::JumpGroup(true)),
+        "view-previous-group" => app
+            .grouped_list_showing()
+            .then_some(Action::JumpGroup(false)),
         "chat-clear" => chat
             .filter(|_| app.is_connected())
             .map(|chat| Action::ShowDialog(Dialog::ConfirmClearChat(chat.id.clone()))),
@@ -2193,6 +2242,10 @@ mod tests {
             ),
             ("Ctrl+\u{2193}", "Jump to the newest message"),
             ("Ctrl+\u{2191}", "Jump to the oldest loaded message"),
+            (
+                "Alt+Tab / Alt+Shift+Tab",
+                "Jump to the next group in the sidebar (Shift: previous)",
+            ),
             ("Alt+\u{2191} / Alt+\u{2193}", "Previous / next chat"),
             ("Ctrl+Shift+[ / ]", "Previous / next chat, as in WhatsApp"),
             (TAB_STEP_KEYS, "Next / previous chat, as in Safari's tabs"),
@@ -2394,6 +2447,7 @@ mod tests {
     const KEYLESS_MENU: &[(&str, Option<&str>)] = &[
         ("rail-chats", Some("go-chats")),
         ("next-account", Some("go-next-number")),
+        ("group-cycle", Some("view-next-group")),
         ("forward-message", Some("chat-forward")),
         ("focus-messages", None),
         ("close-chat", None),
@@ -3822,6 +3876,80 @@ mod tests {
         let survived = press(&mut app, &ctx, Key::End, Modifiers::COMMAND);
         assert!(!survived);
         assert_eq!(app.actions, [Action::ScrollToBottom]);
+    }
+
+    #[test]
+    fn option_tab_stays_with_a_focused_text_field() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        let field = egui::Id::new("composer-text");
+        egui::widgets::text_edit::TextEditState::default().store(&ctx, field);
+        ctx.memory_mut(|memory| memory.request_focus(field));
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
+        assert!(survived, "a text field keeps Option+Tab");
+        assert_eq!(app.flat_group_ui.jump, None);
+    }
+
+    #[test]
+    fn menu_group_jump_routes_like_the_key() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        assert_eq!(
+            menu_actions(&app, "view-next-group"),
+            [Action::JumpGroup(true)]
+        );
+        assert_eq!(
+            menu_actions(&app, "view-previous-group"),
+            [Action::JumpGroup(false)]
+        );
+        // The flat list has no groups to jump between.
+        let ctx = egui::Context::default();
+        app.apply(Action::ToggleListLayout, &ctx);
+        assert!(app.list_is_flat());
+        assert!(menu_actions(&app, "view-next-group").is_empty());
+        assert!(menu_actions(&app, "view-previous-group").is_empty());
+    }
+
+    #[test]
+    fn group_jump_waits_for_the_grouped_list() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        // Search results replace the headings: no jump queues, by key or menu.
+        app.search = "Alice".into();
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
+        assert!(survived, "search results own the sidebar");
+        assert_eq!(app.flat_group_ui.jump, None);
+        assert!(menu_actions(&app, "view-next-group").is_empty());
+        // Back on the grouped list, both routes queue again.
+        app.search.clear();
+        assert_eq!(
+            menu_actions(&app, "view-next-group"),
+            [Action::JumpGroup(true)]
+        );
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
+        assert!(!survived);
+        assert_eq!(app.flat_group_ui.jump, Some(true));
+    }
+
+    #[test]
+    fn option_tab_queues_a_group_jump() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
+        assert!(!survived);
+        assert_eq!(app.flat_group_ui.jump, Some(true));
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT | Modifiers::SHIFT);
+        assert!(!survived);
+        assert_eq!(app.flat_group_ui.jump, Some(false));
+        // Plain and Ctrl+Tab never queue a jump: focus traversal and chat
+        // switching own them.
+        app.flat_group_ui.jump = None;
+        press(&mut app, &ctx, Key::Tab, Modifiers::NONE);
+        press(&mut app, &ctx, Key::Tab, Modifiers::COMMAND);
+        assert_eq!(app.flat_group_ui.jump, None);
     }
 
     #[test]
