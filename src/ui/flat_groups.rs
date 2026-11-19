@@ -678,6 +678,20 @@ pub enum Fold {
     Toggle,
 }
 
+/// The headings on screen: the jump cycles these, and the fold toggle
+/// judges its direction by them. Empty headings stay out, as the view hides
+/// them outside Recent, Other included unless a dragged chat needs it.
+fn visible_headings(app: &App, sections: &[Section], other_hidden: bool) -> Vec<Option<u64>> {
+    sections
+        .iter()
+        .filter(|section| match section.id {
+            Some(_) => !header_hidden(app, section.all.is_empty()),
+            None => !other_hidden,
+        })
+        .map(|section| section.id)
+        .collect()
+}
+
 /// The toggle's direction: collapse everything, unless every heading is
 /// folded already — then expand.
 fn toggle_target(
@@ -924,18 +938,12 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
     let other_hidden = other_header_hidden(app, other_empty, dragging_chat);
     // Option+Tab queues a group jump; the section order lives here. Landing
     // unfolds the group: the jump exists to look at a group, so arriving
-    // folded would show nothing new.
+    // folded would show nothing new. The fold toggle below judges its
+    // direction by the same on-screen headings.
+    let visible = visible_headings(app, &sections, other_hidden);
     if ui.is_enabled()
         && let Some(forward) = app.flat_group_ui.jump.take()
     {
-        let visible: Vec<Option<u64>> = sections
-            .iter()
-            .filter(|section| match section.id {
-                Some(_) => !header_hidden(app, section.all.is_empty()),
-                None => !other_hidden,
-            })
-            .map(|section| section.id)
-            .collect();
         if let Some(target) = jump_target(app.flat_group_ui.jumped, &visible, forward) {
             app.flat_group_ui.jumped = Some(target);
             app.flat_group_ui.collapsed.remove(&target);
@@ -950,9 +958,7 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
         let fold = match fold {
             Fold::Collapse => true,
             Fold::Expand => false,
-            Fold::Toggle => {
-                toggle_target(&app.flat_group_ui.collapsed, sections.iter().map(|s| s.id))
-            }
+            Fold::Toggle => toggle_target(&app.flat_group_ui.collapsed, visible.iter().copied()),
         };
         fold_all(app, &groups, fold);
     }
@@ -1351,6 +1357,38 @@ mod tests {
         assert!(toggle_target(&collapsed, [Some(1), None].into_iter()));
         collapsed.insert(None);
         assert!(!toggle_target(&collapsed, [Some(1), None].into_iter()));
+    }
+
+    #[test]
+    fn the_fold_toggle_judges_only_visible_headings() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        app.list_mode = crate::model::ListMode::Unread;
+        let section = |id: Option<u64>, empty: bool| Section {
+            id,
+            name: "s".into(),
+            all: if empty { Vec::new() } else { vec![0] },
+            shown: Vec::new(),
+            filtering: false,
+            expander: None,
+        };
+        // One group with chats, an empty group and an empty Other: outside
+        // Recent only the first heading is on screen.
+        let sections = [
+            section(Some(1), false),
+            section(Some(2), true),
+            section(None, true),
+        ];
+        let visible = visible_headings(&app, &sections, true);
+        assert_eq!(visible, [Some(1)]);
+        // The visible heading is collapsed; the hidden ones stay
+        // uncollapsed. Their state must not hold the toggle at collapse.
+        let mut collapsed = HashSet::new();
+        collapsed.insert(Some(1));
+        assert!(!toggle_target(&collapsed, visible.into_iter()));
     }
 
     #[test]
