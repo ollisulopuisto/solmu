@@ -3562,7 +3562,10 @@ mod tests {
         app.composer = "draft".into();
         let ctx = egui::Context::default();
         assert!(press(&mut app, &ctx, Key::E, Modifiers::COMMAND));
-        assert!(app.actions.is_empty(), "a draft must survive: no edit starts");
+        assert!(
+            app.actions.is_empty(),
+            "a draft must survive: no edit starts"
+        );
     }
 
     #[test]
