@@ -11,6 +11,18 @@ fn jump_keys_reach_chat(editing_text: bool, composer_focused: bool, composer_emp
     !editing_text || (composer_focused && composer_empty)
 }
 
+/// The macOS menu accelerators for the scroll jumps bypass the key handler:
+/// AppKit turns Command-Up/Down into a menu event before egui sees the key.
+/// This re-applies the text-field rule to the menu route so the chord keeps
+/// its caret meaning while the composer or another field holds text.
+pub(crate) fn menu_scroll_reaches_chat(app: &App, ctx: &egui::Context) -> bool {
+    jump_keys_reach_chat(
+        ctx.text_edit_focused(),
+        ctx.memory(|memory| memory.has_focus(egui::Id::new("composer-text"))),
+        app.composer.is_empty(),
+    )
+}
+
 /// Routes keyboard commands to actions, respecting overlays and text focus.
 pub fn handle(app: &mut App, ctx: &egui::Context) {
     if super::send_later::keyboard(ctx) {

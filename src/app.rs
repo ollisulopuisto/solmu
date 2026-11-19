@@ -12296,6 +12296,33 @@ impl App {
             }
             Action::ToggleFlatGroups => {}
             Action::MenuCommand(id) => {
+                // The scroll jumps' menu accelerators bypass the key handler
+                // (AppKit turns the chord into a menu event first), so the
+                // key handler's text-field rule is re-applied here: with text
+                // in the composer or another field focused, the chord belongs
+                // to the field and the key is handed to egui instead of
+                // jumping the chat. A menu click is indistinguishable from
+                // the accelerator, so clicking the item also yields to the
+                // field; the pill and the key remain the always-on routes.
+                if matches!(id.as_str(), "chat-newest" | "chat-oldest")
+                    && !crate::ui::keys::menu_scroll_reaches_chat(self, ctx)
+                {
+                    let key = if id == "chat-newest" {
+                        egui::Key::ArrowDown
+                    } else {
+                        egui::Key::ArrowUp
+                    };
+                    ctx.input_mut(|input| {
+                        input.events.push(egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::COMMAND,
+                        });
+                    });
+                    return;
+                }
                 let actions = crate::ui::keys::menu_actions(self, &id);
                 if id == "chat-quote-reply" && crate::ui::keys::linked_view(self) {
                     let message =
