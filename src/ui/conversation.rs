@@ -8026,13 +8026,12 @@ fn context_menu(
         actions.push(Action::TranslateLocally(text.clone()));
     }
     let age = view.now - message.timestamp;
-    let can_edit = crate::app::edit_window(view.chat.backend_network.as_deref()).is_some_and(
-        |window| {
+    let can_edit =
+        crate::app::edit_window(view.chat.backend_network.as_deref()).is_some_and(|window| {
             message.from_me
                 && matches!(message.content, Content::Text { .. })
                 && age <= window.as_secs() as i64
-        },
-    );
+        });
     let can_revoke = if view.chat.backend_account.is_some() {
         view.chat
             .mutation_capabilities
@@ -14092,17 +14091,11 @@ mod tests {
             let mut message =
                 crate::archive::tests::message("1@s.whatsapp.net", "own-menu-target", 0, true);
             message.timestamp = now - 10;
-            let view = View {
-                now,
-                ..*view
-            };
+            let view = View { now, ..*view };
             let mut actions = Vec::new();
             let mut output = ctx.run_ui(
                 egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        vec2(600.0, 1400.0),
-                    )),
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(600.0, 1400.0))),
                     events: vec![egui::Event::Key {
                         key: Key::E,
                         physical_key: None,
@@ -14177,10 +14170,7 @@ mod tests {
         with_still_view(|view| {
             let message = crate::archive::tests::message("1@s.whatsapp.net", "own-edit", 0, true);
             for (editing, expected) in [(Some("own-edit"), true), (None, false)] {
-                let view = View {
-                    editing,
-                    ..*view
-                };
+                let view = View { editing, ..*view };
                 let mut actions = Vec::new();
                 let mut output = ctx.run_ui(
                     egui::RawInput {
@@ -14196,13 +14186,11 @@ mod tests {
                 );
                 output.textures_delta.clear();
                 let marked = ctx.data(|data| {
-                    data.get_temp::<bool>(bubble_id(&view.chat.id, &message.id).with("being-edited"))
+                    data.get_temp::<bool>(
+                        bubble_id(&view.chat.id, &message.id).with("being-edited"),
+                    )
                 });
-                assert_eq!(
-                    marked,
-                    Some(expected),
-                    "editing {editing:?}: outline flag"
-                );
+                assert_eq!(marked, Some(expected), "editing {editing:?}: outline flag");
             }
         });
     }
