@@ -6,17 +6,35 @@ use std::sync::mpsc::{self, Receiver};
 use egui::{Color32, Frame, Id, Margin, Vec2};
 
 use crate::app::App;
-use crate::local_avatars::{self, Appearance, Identity};
+use crate::local_avatars::{self, Appearance, Crop, Identity};
 use crate::theme;
 
-type PickResult = Result<Option<(String, Vec<u8>)>, String>;
+type PickResult = Result<Option<PickedImage>, String>;
 type Registry = HashMap<String, (Appearance, std::path::PathBuf)>;
+
+/// Crop canvas side in points.
+const CANVAS: f32 = 240.0;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Tab {
+    Photo,
+    Initials,
+}
+
+struct PickedImage {
+    file: String,
+    bytes: Vec<u8>,
+    source_aspect: f32,
+    face: Option<crate::face_detect::Face>,
+    crop: Crop,
+}
 
 pub struct Editor {
     pub identities: Vec<Identity>,
     pub name: String,
     pub appearance: Appearance,
-    image: Option<(String, Vec<u8>)>,
+    tab: Tab,
+    image: Option<PickedImage>,
     pending: Option<Receiver<PickResult>>,
     error: Option<String>,
     saving: Option<Receiver<Result<(), String>>>,
@@ -64,11 +82,16 @@ pub fn open(app: &mut App, id: &str, name: &str) {
             text: local_avatars::initials(&crate::util::initials(name)),
             colour: [115, 89, 165],
         });
+    let tab = match &appearance {
+        Appearance::Image { .. } => Tab::Photo,
+        Appearance::Initials { .. } => Tab::Initials,
+    };
     app.dialog = Some(crate::model::Dialog::CustomizeAvatar);
     app.local_avatar_editor = Some(Editor {
         identities,
         name: name.to_owned(),
         appearance,
+        tab,
         image: None,
         pending: None,
         error: None,
@@ -101,6 +124,11 @@ pub fn install(app: &App, ctx: &egui::Context) {
 }
 fn registry_id() -> Id {
     Id::new("local-avatar-overrides")
+}
+
+fn uv_rect(aspect: f32, crop: Crop) -> egui::Rect {
+    let uv = local_avatars::crop_uv(aspect, crop);
+    egui::Rect::from_min_max(egui::pos2(uv[0], uv[1]), egui::pos2(uv[2], uv[3]))
 }
 
 /// Returns true when an override was painted. The source is still the fallback.
@@ -142,11 +170,16 @@ fn paint_appearance(
                 .galley(rect.center() - galley.size() / 2.0, galley, ink);
             true
         }
-        Appearance::Image { file } => {
+        Appearance::Image {
+            file,
+            crop,
+            source_aspect,
+        } => {
             let Some(path) = local_avatars::image_path(state, file) else {
                 return false;
             };
             let image = super::widgets::file_image(ui, &path)
+                .uv(uv_rect(*source_aspect, *crop))
                 .fit_to_exact_size(rect.size())
                 .corner_radius(rect.width() / 2.0);
             if let Ok(egui::load::TexturePoll::Ready { .. }) =
@@ -172,6 +205,73 @@ fn initials_galley(ui: &egui::Ui, diameter: f32, text: &str, ink: Color32) -> Ar
         galley = ui.painter().layout_no_wrap(text.to_owned(), font, ink);
     }
     galley
+}
+
+/// Decode and bound a picked file, then look for a face to centre on. Runs
+/// off the UI thread; detection is macOS-only and never fails the pick.
+fn prepare(path: &std::path::Path) -> Result<PickedImage, String> {
+    let (file, bytes, width, height) = local_avatars::import(path)?;
+    let face = crate::face_detect::detect(&bytes, width, height);
+    let source_aspect = width as f32 / height.max(1) as f32;
+    let crop = face
+        .map(|face| local_avatars::face_crop(source_aspect, face))
+        .unwrap_or_default();
+    Ok(PickedImage {
+        file,
+        bytes,
+        source_aspect,
+        face,
+        crop,
+    })
+}
+
+/// The crop canvas and previews show the picked bytes when they are the
+/// draft, otherwise the stored file.
+fn source_image(
+    ui: &egui::Ui,
+    state: &std::path::Path,
+    picked: &Option<PickedImage>,
+    file: &str,
+) -> egui::Image<'static> {
+    if let Some(picked) = picked.as_ref().filter(|picked| picked.file == file) {
+        let uri = format!("bytes://local-avatar-{file}");
+        crate::image_cache::include(ui.ctx(), &uri, &picked.bytes);
+        egui::Image::new(uri)
+    } else {
+        let path = local_avatars::image_path(state, file)
+            .unwrap_or_else(|| state.join("custom-avatars").join(file));
+        super::widgets::file_image(ui, &path)
+    }
+}
+
+fn chip(ui: &mut egui::Ui, palette: &crate::theme::Palette, text: &str) {
+    Frame::new()
+        .fill(palette.accent.linear_multiply(0.15))
+        .corner_radius(9.0)
+        .inner_margin(Margin::symmetric(8, 3))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(text)
+                    .small()
+                    .strong()
+                    .color(palette.accent),
+            );
+        });
+}
+
+fn spawn_picker(editor: &mut Editor, ctx: &egui::Context) {
+    let (send, receive) = mpsc::channel();
+    let context = ctx.clone();
+    editor.pending = Some(receive);
+    std::thread::spawn(move || {
+        let result = rfd::FileDialog::new()
+            .add_filter("Images", &["png", "jpg", "jpeg", "webp", "gif"])
+            .pick_file()
+            .map(|path| prepare(&path))
+            .transpose();
+        let _ = send.send(result);
+        context.request_repaint();
+    });
 }
 
 fn apply(app: &mut App, editor: Editor, reset: bool) {
@@ -208,10 +308,15 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             Ok(result) => {
                 editor.pending = None;
                 match result {
-                    Ok(Some((file, bytes))) => {
+                    Ok(Some(picked)) => {
                         crate::image_cache::forget_prefix(ctx, "bytes://local-avatar-");
-                        editor.appearance = Appearance::Image { file: file.clone() };
-                        editor.image = Some((file, bytes));
+                        editor.appearance = Appearance::Image {
+                            file: picked.file.clone(),
+                            crop: picked.crop,
+                            source_aspect: picked.source_aspect,
+                        };
+                        editor.tab = Tab::Photo;
+                        editor.image = Some(picked);
                         editor.error = None;
                     }
                     Ok(None) => {}
@@ -262,86 +367,315 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         .inner_margin(Margin::same(22))
         .corner_radius(12)
         .shadow(palette.modal_shadow());
-    let response = egui::Modal::new(Id::new("local-avatar-editor")).frame(frame).show(ctx, |ui| {
-        ui.set_width(420.0_f32.min((ctx.content_rect().width() - 64.0).max(180.0)));
-        ui.heading(crate::i18n::gettext(locale, "Customize avatar"));
-        ui.label(&editor.name);
-        ui.label(crate::i18n::gettext(locale, "Only in Solmu. Not sent to contacts or Beeper."));
-        ui.add_space(12.0);
-        if editor.saving.is_some() || editor.pending.is_some() {
-            ui.spinner();
-            ui.label(if editor.saving.is_some() { crate::i18n::gettext(locale, "Saving avatar…") } else { crate::i18n::gettext(locale, "Preparing image…") });
-            let button = ui.button(crate::i18n::gettext(locale, "Cancel"));
-            #[cfg(test)] record(ctx, "local-avatar-cancel", &button);
-            cancel = button.clicked();
-            return;
-        }
-        ui.horizontal(|ui| {
-            let (_, rect) = ui.allocate_space(Vec2::splat(110.0));
-            let mut painted = false;
-            if let (Appearance::Image { file }, Some((picked, bytes))) = (&editor.appearance, &editor.image)
-                && file == picked
-            {
-                let uri = format!("bytes://local-avatar-{file}");
-                crate::image_cache::include(ui.ctx(), &uri, bytes);
-                egui::Image::new(uri).fit_to_exact_size(rect.size()).corner_radius(55.0).paint_at(ui, rect);
-                painted = true;
+    let response = egui::Modal::new(Id::new("local-avatar-editor"))
+        .frame(frame)
+        .show(ctx, |ui| {
+            ui.set_width(520.0_f32.min((ctx.content_rect().width() - 64.0).max(240.0)));
+            ui.heading(crate::i18n::gettext(locale, "Customize avatar"));
+            ui.label(&editor.name);
+            ui.label(crate::i18n::gettext(
+                locale,
+                "Only in Solmu. Not sent to contacts or Beeper.",
+            ));
+            ui.add_space(12.0);
+            if editor.saving.is_some() || editor.pending.is_some() {
+                ui.spinner();
+                ui.label(if editor.saving.is_some() {
+                    crate::i18n::gettext(locale, "Saving avatar…")
+                } else {
+                    crate::i18n::gettext(locale, "Preparing image…")
+                });
+                let button = ui.button(crate::i18n::gettext(locale, "Cancel"));
+                #[cfg(test)]
+                record(ctx, "local-avatar-cancel", &button);
+                cancel = button.clicked();
+                return;
             }
-            if !painted { paint_appearance(ui, rect, &editor.appearance, &app.dirs.state); }
-            ui.vertical(|ui| {
-                if ui.add_enabled(editor.pending.is_none(), egui::Button::new(crate::i18n::gettext(locale, "Choose image…"))).clicked() {
-                    let (send, receive) = mpsc::channel();
-                    let context = ctx.clone();
-                    editor.pending = Some(receive);
-                    std::thread::spawn(move || {
-                        let result = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp", "gif"]).pick_file().map(|path| local_avatars::import(&path)).transpose();
-                        let _ = send.send(result);
-                        context.request_repaint();
-                    });
+            ui.horizontal(|ui| {
+                let photo = ui.selectable_label(
+                    matches!(editor.tab, Tab::Photo),
+                    crate::i18n::gettext(locale, "Photo"),
+                );
+                #[cfg(test)]
+                record(ctx, "local-avatar-photo-tab", &photo);
+                if photo.clicked() {
+                    editor.tab = Tab::Photo;
+                    if !matches!(editor.appearance, Appearance::Image { .. })
+                        && let Some(picked) = &editor.image
+                    {
+                        editor.appearance = Appearance::Image {
+                            file: picked.file.clone(),
+                            crop: picked.crop,
+                            source_aspect: picked.source_aspect,
+                        };
+                    }
                 }
-                ui.label(crate::i18n::gettext(locale, "PNG, JPEG, WebP or GIF. Up to 10 MB."));
-                ui.label(crate::i18n::gettext(locale, "Square centre crop. GIF uses its first frame."));
-                if editor.pending.is_some() { ui.spinner(); }
-            });
-        });
-        ui.add_space(12.0);
-        if ui.selectable_label(matches!(editor.appearance, Appearance::Initials { .. }), crate::i18n::gettext(locale, "Use initials and colour")).clicked() && !matches!(editor.appearance, Appearance::Initials { .. }) {
-            editor.appearance = Appearance::Initials { text: local_avatars::initials(&crate::util::initials(&editor.name)), colour: [115, 89, 165] };
-        }
-        if let Appearance::Initials { text, colour } = &mut editor.appearance {
-            ui.horizontal(|ui| {
-                ui.label(crate::i18n::gettext(locale, "Initials"));
-                ui.add(egui::TextEdit::singleline(text).char_limit(12).desired_width(80.0));
-                *text = local_avatars::initials(text);
-            });
-            ui.horizontal(|ui| {
-                ui.label(crate::i18n::gettext(locale, "Colour"));
-                for value in [[115, 89, 165], [61, 108, 118], [138, 84, 56], [95, 116, 55], [85, 91, 104]] {
-                    let (rect, response) = ui.allocate_exact_size(Vec2::splat(32.0), egui::Sense::click());
-                    ui.painter().circle_filled(rect.center(), 12.0, Color32::from_rgb(value[0], value[1], value[2]));
-                    if *colour == value { ui.painter().circle_stroke(rect.center(), 15.0, egui::Stroke::new(2.0, palette.text)); }
-                    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, *colour == value, format!("{}: #{:02x}{:02x}{:02x}", crate::i18n::gettext(locale, "Colour"), value[0], value[1], value[2])));
-                    if response.clicked() || (response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Space) || input.key_pressed(egui::Key::Enter))) { *colour = value; }
+                let initials_tab = ui.selectable_label(
+                    matches!(editor.tab, Tab::Initials),
+                    crate::i18n::gettext(locale, "Initials"),
+                );
+                #[cfg(test)]
+                record(ctx, "local-avatar-initials-tab", &initials_tab);
+                if initials_tab.clicked() {
+                    editor.tab = Tab::Initials;
+                    if !matches!(editor.appearance, Appearance::Initials { .. }) {
+                        editor.appearance = Appearance::Initials {
+                            text: local_avatars::initials(&crate::util::initials(&editor.name)),
+                            colour: [115, 89, 165],
+                        };
+                    }
                 }
             });
-        }
-        if let Some(error) = &editor.error { ui.colored_label(palette.danger, error); }
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            let idle = editor.pending.is_none() && editor.saving.is_none();
-            let reset_button = ui.add_enabled(idle, egui::Button::new(crate::i18n::gettext(locale, "Reset to default")));
-            #[cfg(test)] record(ctx, "local-avatar-reset", &reset_button);
-            reset = reset_button.clicked();
-            let cancel_button = ui.button(crate::i18n::gettext(locale, "Cancel"));
-            #[cfg(test)] record(ctx, "local-avatar-cancel", &cancel_button);
-            cancel = cancel_button.clicked();
-            let valid = !matches!(&editor.appearance, Appearance::Initials { text, .. } if local_avatars::initials(text).is_empty());
-            let save_button = ui.add_enabled(valid && idle, egui::Button::new(egui::RichText::new(crate::i18n::gettext(locale, "Save")).color(palette.on_accent)).fill(palette.accent));
-            #[cfg(test)] record(ctx, "local-avatar-save", &save_button);
-            save = save_button.clicked();
-            if editor.saving.is_some() { ui.spinner(); }
+            ui.add_space(12.0);
+            match editor.tab {
+                Tab::Photo => {
+                    let draft = match &editor.appearance {
+                        Appearance::Image {
+                            file,
+                            crop,
+                            source_aspect,
+                        } => Some((file.clone(), *crop, *source_aspect)),
+                        Appearance::Initials { .. } => None,
+                    };
+                    match draft {
+                        Some((file, mut crop, aspect)) => {
+                            ui.horizontal(|ui| {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    Vec2::splat(CANVAS),
+                                    egui::Sense::click_and_drag(),
+                                );
+                                #[cfg(test)]
+                                record(ctx, "local-avatar-crop", &response);
+                                if response.dragged() {
+                                    // Per-frame movement; drag_delta() is
+                                    // cumulative and would run the crop away.
+                                    let delta = ui.input(|input| input.pointer.delta());
+                                    let (window_w, window_h) =
+                                        local_avatars::crop_window(aspect, crop.zoom);
+                                    // The content follows the pointer.
+                                    crop.x -= delta.x / CANVAS * window_w;
+                                    crop.y -= delta.y / CANVAS * window_h;
+                                }
+                                let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+                                if response.hovered() && scroll != 0.0 {
+                                    crop.zoom *= 1.0 + scroll * 0.002;
+                                }
+                                crop = local_avatars::clamp_crop(aspect, crop);
+                                let uv = uv_rect(aspect, crop);
+                                source_image(ui, &app.dirs.state, &editor.image, &file)
+                                    .uv(uv)
+                                    .fit_to_exact_size(Vec2::splat(CANVAS))
+                                    .paint_at(ui, rect);
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    8.0,
+                                    egui::Stroke::new(1.0, palette.outline),
+                                    egui::StrokeKind::Inside,
+                                );
+                                ui.painter().circle_stroke(
+                                    rect.center(),
+                                    CANVAS / 2.0,
+                                    egui::Stroke::new(2.0, palette.text),
+                                );
+                                ui.vertical(|ui| {
+                                    let choose = ui.add_enabled(
+                                        editor.pending.is_none(),
+                                        egui::Button::new(crate::i18n::gettext(
+                                            locale,
+                                            "Choose image…",
+                                        )),
+                                    );
+                                    if choose.clicked() {
+                                        spawn_picker(&mut editor, ctx);
+                                    }
+                                    ui.label(crate::i18n::gettext(
+                                        locale,
+                                        "Drag to position, scroll to zoom.",
+                                    ));
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::gettext(locale, "Zoom"));
+                                        let mut zoom = crop.zoom;
+                                        let slider = ui.add(
+                                            egui::Slider::new(
+                                                &mut zoom,
+                                                local_avatars::MIN_ZOOM..=local_avatars::MAX_ZOOM,
+                                            )
+                                            .show_value(false),
+                                        );
+                                        #[cfg(test)]
+                                        record(ctx, "local-avatar-zoom", &slider);
+                                        if slider.changed() {
+                                            crop.zoom = zoom;
+                                        }
+                                    });
+                                    let face = editor
+                                        .image
+                                        .as_ref()
+                                        .filter(|picked| picked.file == file)
+                                        .and_then(|picked| picked.face);
+                                    if let Some(face) = face {
+                                        ui.horizontal(|ui| {
+                                            chip(
+                                                ui,
+                                                &palette,
+                                                crate::i18n::gettext(locale, "Auto: face"),
+                                            );
+                                            let reface = ui.button(crate::i18n::gettext(
+                                                locale,
+                                                "Re-centre on face",
+                                            ));
+                                            #[cfg(test)]
+                                            record(ctx, "local-avatar-reface", &reface);
+                                            if reface.clicked() {
+                                                crop = local_avatars::face_crop(aspect, face);
+                                            }
+                                        });
+                                    }
+                                    ui.add_space(8.0);
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::gettext(locale, "Preview"));
+                                        let uv = uv_rect(aspect, crop);
+                                        for size in [48.0_f32, 32.0, 24.0] {
+                                            let (rect, _) = ui.allocate_exact_size(
+                                                Vec2::splat(size),
+                                                egui::Sense::hover(),
+                                            );
+                                            source_image(ui, &app.dirs.state, &editor.image, &file)
+                                                .uv(uv)
+                                                .fit_to_exact_size(Vec2::splat(size))
+                                                .corner_radius(size / 2.0)
+                                                .paint_at(ui, rect);
+                                        }
+                                    });
+                                });
+                            });
+                            if let Appearance::Image { crop: slot, .. } = &mut editor.appearance {
+                                *slot = crop;
+                            }
+                            if let Some(picked) = &mut editor.image
+                                && picked.file == file
+                            {
+                                picked.crop = crop;
+                            }
+                        }
+                        None => {
+                            let choose = ui.add_enabled(
+                                editor.pending.is_none(),
+                                egui::Button::new(crate::i18n::gettext(locale, "Choose image…")),
+                            );
+                            if choose.clicked() {
+                                spawn_picker(&mut editor, ctx);
+                            }
+                            ui.label(crate::i18n::gettext(
+                                locale,
+                                "PNG, JPEG, WebP or GIF. Up to 10 MB. GIF uses its first frame.",
+                            ));
+                        }
+                    }
+                }
+                Tab::Initials => {
+                    let (_, rect) = ui.allocate_space(Vec2::splat(64.0));
+                    paint_appearance(ui, rect, &editor.appearance, &app.dirs.state);
+                    if let Appearance::Initials { text, colour } = &mut editor.appearance {
+                        ui.horizontal(|ui| {
+                            ui.label(crate::i18n::gettext(locale, "Initials"));
+                            ui.add(
+                                egui::TextEdit::singleline(text)
+                                    .char_limit(12)
+                                    .desired_width(80.0),
+                            );
+                            *text = local_avatars::initials(text);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(crate::i18n::gettext(locale, "Colour"));
+                            for value in [
+                                [115, 89, 165],
+                                [61, 108, 118],
+                                [138, 84, 56],
+                                [95, 116, 55],
+                                [85, 91, 104],
+                            ] {
+                                let (rect, response) =
+                                    ui.allocate_exact_size(Vec2::splat(32.0), egui::Sense::click());
+                                ui.painter().circle_filled(
+                                    rect.center(),
+                                    12.0,
+                                    Color32::from_rgb(value[0], value[1], value[2]),
+                                );
+                                if *colour == value {
+                                    ui.painter().circle_stroke(
+                                        rect.center(),
+                                        15.0,
+                                        egui::Stroke::new(2.0, palette.text),
+                                    );
+                                }
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::WidgetType::RadioButton,
+                                        true,
+                                        *colour == value,
+                                        format!(
+                                            "{}: #{:02x}{:02x}{:02x}",
+                                            crate::i18n::gettext(locale, "Colour"),
+                                            value[0],
+                                            value[1],
+                                            value[2]
+                                        ),
+                                    )
+                                });
+                                if response.clicked()
+                                    || (response.has_focus()
+                                        && ui.input(|input| {
+                                            input.key_pressed(egui::Key::Space)
+                                                || input.key_pressed(egui::Key::Enter)
+                                        }))
+                                {
+                                    *colour = value;
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+            if let Some(error) = &editor.error {
+                ui.colored_label(palette.danger, error);
+            }
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let idle = editor.pending.is_none() && editor.saving.is_none();
+                let reset_button = ui.add_enabled(
+                    idle,
+                    egui::Button::new(crate::i18n::gettext(locale, "Reset to default")),
+                );
+                #[cfg(test)]
+                record(ctx, "local-avatar-reset", &reset_button);
+                reset = reset_button.clicked();
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let valid = match (&editor.tab, &editor.appearance) {
+                        (Tab::Photo, Appearance::Image { .. }) => true,
+                        (Tab::Initials, Appearance::Initials { text, .. }) => {
+                            !local_avatars::initials(text).is_empty()
+                        }
+                        _ => false,
+                    };
+                    let save_button = ui.add_enabled(
+                        valid && idle,
+                        egui::Button::new(
+                            egui::RichText::new(crate::i18n::gettext(locale, "Save"))
+                                .color(palette.on_accent),
+                        )
+                        .fill(palette.accent),
+                    );
+                    #[cfg(test)]
+                    record(ctx, "local-avatar-save", &save_button);
+                    save = save_button.clicked();
+                    let cancel_button = ui.button(crate::i18n::gettext(locale, "Cancel"));
+                    #[cfg(test)]
+                    record(ctx, "local-avatar-cancel", &cancel_button);
+                    cancel = cancel_button.clicked();
+                });
+            });
         });
-    });
     if cancel || response.should_close() {
         crate::image_cache::forget_prefix(ctx, "bytes://local-avatar-");
         app.dialog = None;
@@ -358,13 +692,16 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             return;
         }
         if save
-            && let Some((file, bytes)) = &editor.image
-            && editor.appearance == (Appearance::Image { file: file.clone() })
+            && let Some(picked) = &editor.image
+            && matches!(
+                &editor.appearance,
+                Appearance::Image { file, .. } if *file == picked.file
+            )
         {
-            let Some(path) = local_avatars::image_path(&app.dirs.state, file) else {
+            let Some(path) = local_avatars::image_path(&app.dirs.state, &picked.file) else {
                 return;
             };
-            let bytes = bytes.clone();
+            let bytes = picked.bytes.clone();
             let (send, receive) = mpsc::channel();
             let context = ctx.clone();
             editor.saving = Some(receive);
@@ -445,6 +782,26 @@ mod tests {
         }
         settle(app, ctx);
     }
+    fn pick_image(app: &mut App, file: &str, crop: Crop) -> f32 {
+        let (bytes, width, height) =
+            crate::local_avatars::normalize_source(&crate::demo::sample_thumbnail(1)).unwrap();
+        let source_aspect = width as f32 / height as f32;
+        let editor = app.local_avatar_editor.as_mut().unwrap();
+        editor.appearance = Appearance::Image {
+            file: file.to_owned(),
+            crop,
+            source_aspect,
+        };
+        editor.tab = Tab::Photo;
+        editor.image = Some(PickedImage {
+            file: file.to_owned(),
+            bytes,
+            source_aspect,
+            face: None,
+            crop,
+        });
+        source_aspect
+    }
     #[test]
     fn contact_info_entry_cancel_save_and_reset_drive_the_real_editor() {
         let (_root, mut app, ctx) = app();
@@ -510,11 +867,17 @@ mod tests {
         let (_root, mut app, ctx) = app();
         let chat = app.open_chat.clone().unwrap();
         open(&mut app, &chat, "Alex Korpi");
-        let bytes = crate::local_avatars::normalize(&crate::demo::sample_thumbnail(1)).unwrap();
         let file = format!("{}.png", "a".repeat(64));
-        let editor = app.local_avatar_editor.as_mut().unwrap();
-        editor.appearance = Appearance::Image { file: file.clone() };
-        editor.image = Some((file.clone(), bytes.clone()));
+        pick_image(&mut app, &file, Crop::default());
+        let bytes = app
+            .local_avatar_editor
+            .as_ref()
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap()
+            .bytes
+            .clone();
         click(&mut app, &ctx, "local-avatar-save");
         for _ in 0..100 {
             if app.local_avatar_editor.is_none() {
@@ -535,10 +898,120 @@ mod tests {
         app.local_avatar_editor.as_mut().unwrap().pending = Some(receive);
         click(&mut app, &ctx, "local-avatar-cancel");
         assert!(
-            send.send(Ok(Some((file, Vec::new())))).is_err(),
+            send.send(Ok(Some(PickedImage {
+                file: file.clone(),
+                bytes: Vec::new(),
+                source_aspect: 1.0,
+                face: None,
+                crop: Crop::default(),
+            })))
+            .is_err(),
             "cancel drops the pending picker route"
         );
         assert_eq!(app.settings.local_avatars.len(), 1);
+    }
+    #[test]
+    fn saving_a_cropped_image_persists_the_crop_window() {
+        let (_root, mut app, ctx) = app();
+        let chat = app.open_chat.clone().unwrap();
+        open(&mut app, &chat, "Alex Korpi");
+        let file = format!("{}.png", "b".repeat(64));
+        let crop = Crop {
+            x: 0.4,
+            y: 0.35,
+            zoom: 2.0,
+        };
+        let aspect = pick_image(&mut app, &file, crop);
+        let crop = local_avatars::clamp_crop(aspect, crop);
+        if let Appearance::Image { crop: slot, .. } =
+            &mut app.local_avatar_editor.as_mut().unwrap().appearance
+        {
+            *slot = crop;
+        }
+        app.local_avatar_editor
+            .as_mut()
+            .unwrap()
+            .image
+            .as_mut()
+            .unwrap()
+            .crop = crop;
+        click(&mut app, &ctx, "local-avatar-save");
+        for _ in 0..100 {
+            if app.local_avatar_editor.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            settle(&mut app, &ctx);
+        }
+        assert!(app.local_avatar_editor.is_none());
+        match local_avatars::resolve(&app.settings.local_avatars, &identities(&app, &chat)) {
+            Some(Appearance::Image {
+                file: saved_file,
+                crop: saved_crop,
+                source_aspect,
+            }) => {
+                assert_eq!(*saved_file, file);
+                assert_eq!(*saved_crop, crop);
+                assert!((*source_aspect - aspect).abs() < f32::EPSILON);
+            }
+            other => panic!("expected a saved image override, got {other:?}"),
+        }
+    }
+    #[test]
+    fn photo_tab_shows_the_crop_canvas_and_face_tools_follow_detection() {
+        let (_root, mut app, ctx) = app();
+        let chat = app.open_chat.clone().unwrap();
+        open(&mut app, &chat, "Alex Korpi");
+        // No image yet: the photo tab is an empty state without a canvas.
+        click(&mut app, &ctx, "local-avatar-photo-tab");
+        assert!(
+            ctx.data(|data| data.get_temp::<egui::Rect>(Id::new("local-avatar-crop")))
+                .is_none(),
+            "no canvas without an image"
+        );
+        let file = format!("{}.png", "d".repeat(64));
+        pick_image(&mut app, &file, Crop::default());
+        click(&mut app, &ctx, "local-avatar-photo-tab");
+        assert!(
+            ctx.data(|data| data.get_temp::<egui::Rect>(Id::new("local-avatar-crop")))
+                .is_some(),
+            "a picked image shows the crop canvas"
+        );
+        assert!(
+            ctx.data(|data| data.get_temp::<egui::Rect>(Id::new("local-avatar-zoom")))
+                .is_some(),
+            "a picked image shows the zoom slider"
+        );
+        assert!(
+            ctx.data(|data| data.get_temp::<egui::Rect>(Id::new("local-avatar-reface")))
+                .is_none(),
+            "no face tools without a detected face"
+        );
+        app.local_avatar_editor
+            .as_mut()
+            .unwrap()
+            .image
+            .as_mut()
+            .unwrap()
+            .face = Some(crate::face_detect::Face {
+            x: 0.5,
+            y: 0.4,
+            side: 0.3,
+        });
+        settle(&mut app, &ctx);
+        assert!(
+            ctx.data(|data| data.get_temp::<egui::Rect>(Id::new("local-avatar-reface")))
+                .is_some(),
+            "a detected face offers re-centring"
+        );
+        // The initials tab keeps working after a pick.
+        click(&mut app, &ctx, "local-avatar-initials-tab");
+        click(&mut app, &ctx, "local-avatar-save");
+        assert_eq!(app.settings.local_avatars.len(), 1);
+        assert!(matches!(
+            app.settings.local_avatars[0].appearance,
+            Appearance::Initials { .. }
+        ));
     }
     #[test]
     fn linked_avatar_is_shared_across_views_and_stale_source_replacements_are_excluded() {

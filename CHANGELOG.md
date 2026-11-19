@@ -15,6 +15,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- Customize avatar: the Photo tab has a draggable, zoomable circular crop with live sidebar-size previews; on macOS the crop auto-centres on the detected face (native Vision, on-device) and can re-centre on demand, other platforms keep the centre crop. Existing avatars keep their look.
 - Sent text bubbles share a run's width only when they are near-equal to its widest text (within 16 points and 15%); media, cards, quotes and forwards keep their own width and no longer inflate short replies around them.
 - The chat list shows a contact's full-size picture when their thumbnail fetch missed, instead of bare initials while Contact info already has the photo.
 - Fenced code blocks and quotes sit on quiet inset panels with a pale accent bar, inline code gets a small inset, and each code panel has a Copy code button that copies the exact block contents.

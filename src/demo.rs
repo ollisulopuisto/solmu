@@ -2437,11 +2437,16 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     let appearance = if part == "avatar-image" {
                         let source = app.dirs.cache.join("avatar-import-fixture.png");
                         std::fs::write(&source, sample_thumbnail(7)).unwrap();
-                        let (file, png) = crate::local_avatars::import(&source).unwrap();
+                        let (file, png, width, height) =
+                            crate::local_avatars::import(&source).unwrap();
                         let path =
                             crate::local_avatars::image_path(&app.dirs.state, &file).unwrap();
                         fastframe_file::write_private(&path, &png).unwrap();
-                        crate::local_avatars::Appearance::Image { file }
+                        crate::local_avatars::Appearance::Image {
+                            file,
+                            crop: crate::local_avatars::Crop::default(),
+                            source_aspect: width as f32 / height.max(1) as f32,
+                        }
                     } else {
                         crate::local_avatars::Appearance::Initials {
                             text: crate::local_avatars::initials(&crate::util::initials(&name)),

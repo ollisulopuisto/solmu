@@ -1,5 +1,29 @@
 # Work log
 
+## 2026-11-19: Avatar crop editor with macOS face centring (feat/avatar-crop-reframe)
+
+Branch feat/avatar-crop-reframe off main 7d4b87a, version 26.11.2. The
+customize-avatar modal is now Photo | Initials tabs (sketch D, approved
+2026-11-19): the Photo tab has a 240pt crop canvas (drag to move, scroll or
+slider to zoom, circular outline), an "Auto: face" chip and "Re-centre on
+face" button when detection found a face, live previews at 48/32/24 pt, and
+Reset left / Cancel+Save right in the footer. Appearance::Image gains
+crop {x, y, zoom} and source_aspect, both serde-defaulted so entries saved
+before cropping keep their exact old look (old files are the pre-cropped
+512x512 squares; default crop renders them identically). The picker now
+stores the bounded full source (max side 1024) instead of a centre-cropped
+square; the square window is a texture UV rect at paint time, so the #377
+thin-image blowup stays impossible (no upscale-to-square anywhere; tests
+cover 8192x1 both ways). Face detection (src/face_detect.rs) is macOS-only
+via native Vision (VNDetectFaceRectanglesRequest through the objc2 runtime,
+no new crates, Vision framework linked); every other platform returns None
+and keeps the centre crop. Detection runs in the picker thread. Not compiled
+locally (no full Rust toolchain deps on this box: PipeWire); the pure crop
+math and serde tests were verified in a scratch crate against the real
+image/serde versions, fmt via rustfmt; clippy and the full suite run in CI.
+macOS detection itself is unverified (Linux box): the macOS CI leg compiles
+it, runtime behaviour needs a Mac. No merge by the author.
+
 ## 2026-11-19: Code panels mark content rows only (fix/code-panel-row-kinds)
 
 #382 merged with five failing monospace tests (its CI was still queued when it
