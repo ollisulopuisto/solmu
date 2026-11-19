@@ -14490,6 +14490,9 @@ mod tests {
                         ..Default::default()
                     },
                     |ui| {
+                        // Mirror the app's keyboard-focus tracking before
+                        // the custom Tab handler consumes the key event.
+                        super::super::track_keyboard_focus(ui.ctx());
                         focus::begin(ui.ctx(), true);
                         let start = ui.button("Start").tab_stop(Stop::Composer);
                         if ui.ctx().memory(|memory| memory.focused()).is_none() {
