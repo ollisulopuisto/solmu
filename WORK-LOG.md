@@ -513,3 +513,13 @@ by a failing-first planner test at the exact CI metrics. The width test is
 back to a 0.5 px bound, and a new test fails on any hyphen glyph in a
 laid-out code block. No release, #359
 or DMG work.
+
+## 2026-11-19 - Copy code button floats below the panel (overlap repair)
+
+The Copy code button painted at the panel's top right inside it, over the
+code text whenever a row reached the right edge (visible on narrow panels
+like two short shell commands). It now hangs off the panel's bottom right,
+in the blank row the closing fence leaves, so it can never cover code. The
+panel geometry is shared (code_panel_rects/copy_button_rect) and a test
+asserts the button rect intersects no code row. No release, #359 or DMG
+work.

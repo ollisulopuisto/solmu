@@ -1266,6 +1266,77 @@ fn fenced_line(line: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// Runs of equal row kinds: (kind, first row, one past the last row).
+fn row_kind_spans(laid: &Text) -> Vec<(RowKind, usize, usize)> {
+    let rows = &laid.galley.rows;
+    let kinds = laid.row_kinds();
+    let mut spans = Vec::new();
+    let mut start = 0;
+    while start < rows.len() {
+        let kind = kinds[start];
+        let mut end = start + 1;
+        while end < rows.len() && kinds[end] == kind {
+            end += 1;
+        }
+        spans.push((kind, start, end));
+        start = end;
+    }
+    spans
+}
+
+/// The inset panel behind one span of rows, or None when the span starts
+/// past the clip.
+fn panel_rect(
+    body: Rect,
+    origin: Pos2,
+    laid: &Text,
+    start: usize,
+    end: usize,
+    clip_height: Option<f32>,
+) -> Option<Rect> {
+    const PAD: f32 = 3.0;
+    let rows = &laid.galley.rows;
+    let top = rows[start].pos.y;
+    let bottom = rows[end - 1].pos.y + rows[end - 1].row.size.y;
+    if clip_height.is_some_and(|clip| top >= clip) {
+        return None;
+    }
+    let bottom = clip_height.map_or(bottom, |clip| bottom.min(clip));
+    Some(Rect::from_min_max(
+        Pos2::new(body.min.x, origin.y + top - PAD),
+        Pos2::new(body.max.x, origin.y + bottom + PAD),
+    ))
+}
+
+/// Geometry of each code panel (block index, rect), before painting.
+pub fn code_panel_rects(
+    body: Rect,
+    origin: Pos2,
+    laid: &Text,
+    clip_height: Option<f32>,
+) -> Vec<(usize, Rect)> {
+    row_kind_spans(laid)
+        .into_iter()
+        .filter_map(|(kind, start, end)| {
+            if let RowKind::Code(index) = kind {
+                panel_rect(body, origin, laid, start, end, clip_height).map(|panel| (index, panel))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// The Copy code button hangs off the panel's bottom right: a closed fence
+/// leaves a blank row under its block, so the button sits in empty space
+/// and can never cover code, however narrow the panel.
+pub fn copy_button_rect(panel: Rect) -> Rect {
+    Rect::from_min_max(
+        Pos2::new(panel.max.x - 68.0, panel.max.y - 2.0),
+        Pos2::new(panel.max.x - 4.0, panel.max.y + 14.0),
+    )
+}
+
 /// Paints the quiet inset panels behind each run of [`RowKind::Code`] or
 /// [`RowKind::Quote`] rows: a low-alpha fill across the body width plus a
 /// pale accent bar on the leading edge. Returns each code panel with its
@@ -1281,39 +1352,24 @@ pub fn paint_row_panels(
     fill: Color32,
     bar: Color32,
 ) -> Vec<(usize, Rect)> {
-    const PAD: f32 = 3.0;
     const BAR: f32 = 2.5;
-    let rows = &laid.galley.rows;
-    let kinds = laid.row_kinds();
     let mut panels = Vec::new();
-    let mut start = 0;
-    while start < rows.len() {
-        let kind = kinds[start];
-        let mut end = start + 1;
-        while end < rows.len() && kinds[end] == kind {
-            end += 1;
+    for (kind, start, end) in row_kind_spans(laid) {
+        if kind == RowKind::Normal {
+            continue;
         }
-        if kind != RowKind::Normal {
-            let top = rows[start].pos.y;
-            let bottom = rows[end - 1].pos.y + rows[end - 1].row.size.y;
-            if !clip_height.is_some_and(|clip| top >= clip) {
-                let bottom = clip_height.map_or(bottom, |clip| bottom.min(clip));
-                let panel = Rect::from_min_max(
-                    Pos2::new(body.min.x, origin.y + top - PAD),
-                    Pos2::new(body.max.x, origin.y + bottom + PAD),
-                );
-                painter.rect_filled(panel, 4.0, fill);
-                painter.rect_filled(
-                    Rect::from_min_max(panel.min, Pos2::new(panel.min.x + BAR, panel.max.y)),
-                    1.0,
-                    bar,
-                );
-                if let RowKind::Code(index) = kind {
-                    panels.push((index, panel));
-                }
-            }
+        let Some(panel) = panel_rect(body, origin, laid, start, end, clip_height) else {
+            continue;
+        };
+        painter.rect_filled(panel, 4.0, fill);
+        painter.rect_filled(
+            Rect::from_min_max(panel.min, Pos2::new(panel.min.x + BAR, panel.max.y)),
+            1.0,
+            bar,
+        );
+        if let RowKind::Code(index) = kind {
+            panels.push((index, panel));
         }
-        start = end;
     }
     panels
 }
@@ -3191,6 +3247,42 @@ mod monospace_tests {
                 .filter(|glyph| glyph.chr == '-')
                 .count();
             assert_eq!(hyphens, 0, "code rows paint no inserted hyphen");
+        });
+        output.textures_delta.clear();
+    }
+
+    /// The Copy code button floats off the panel's bottom right, in the
+    /// blank row the closing fence leaves, so it never covers code text
+    /// even when the panel is exactly as wide as its widest row.
+    #[test]
+    fn the_copy_button_never_covers_code_text() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            // Short lines: the widest code row reaches the panel's right
+            // edge, where the button used to paint over the text.
+            let text = "```\ncd ~/koodi/solmu\ncargo build\n```";
+            let laid = layout_balanced(ui, text, &[], &style, 200.0, false);
+            let body = Rect::from_min_size(Pos2::ZERO, laid.galley.size());
+            for (_, panel) in code_panel_rects(body, Pos2::ZERO, &laid, None) {
+                let button = copy_button_rect(panel);
+                for (row, kind) in laid.galley.rows.iter().zip(laid.row_kinds().iter()) {
+                    if !matches!(kind, RowKind::Code(_)) || row.row.glyphs.is_empty() {
+                        continue;
+                    }
+                    let text_rect = Rect::from_min_size(row.pos, row.row.size);
+                    assert!(
+                        !button.intersects(text_rect),
+                        "copy button {button:?} covers code row {text_rect:?}"
+                    );
+                }
+            }
         });
         output.textures_delta.clear();
     }

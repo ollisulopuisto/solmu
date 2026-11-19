@@ -9973,10 +9973,7 @@ fn copy_code_buttons(
                 .color(palette.accent),
         )
         .frame(false);
-        let rect = Rect::from_min_size(
-            pos2(panel.max.x - 68.0, panel.min.y + 2.0),
-            vec2(64.0, 16.0),
-        );
+        let rect = markup::copy_button_rect(panel);
         if ui.put(rect, button).clicked() {
             ui.ctx().copy_text(block.clone());
             ui.ctx()
