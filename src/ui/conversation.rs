@@ -14497,7 +14497,16 @@ mod tests {
                         }
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             ui.add_space(800.0);
-                            bubble_frame(ui, &view, &message, None, false, false, 400.0, &mut actions);
+                            bubble_frame(
+                                ui,
+                                &view,
+                                &message,
+                                None,
+                                false,
+                                false,
+                                400.0,
+                                &mut actions,
+                            );
                             ui.add_space(100.0);
                         });
                         focus::finish(ui.ctx(), true);
