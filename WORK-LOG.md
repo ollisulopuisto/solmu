@@ -667,3 +667,12 @@ Local Rust execution unavailable; CI must validate this regression.
   fixture's case, and real chats whose page is not loaded) stayed in the
   viewer. The handler now also collects matching ids from `viewer_media`
   before forgetting them.
+
+## 2026-11-19: Keep the selected attachment across forward retries (Devin security finding)
+
+Devin's re-review found that a failed plan dropped the attachment selection:
+`plan_forwards` canonicalized the source id and only then fetched the message,
+so a fetch failure left the retried item with neither its suffix nor
+`item.attachment`, and the retry expanded to every attachment. The selection
+is now recorded on the item before the fallible fetch, and a regression test
+drives a failed plan followed by a retry through the mock server.

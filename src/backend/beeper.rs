@@ -1723,6 +1723,12 @@ impl Api {
             let selected = item
                 .attachment
                 .or_else(|| (named_part > 0).then_some(named_part));
+            // Record the chosen part before any fallible step: a failed plan
+            // is retryable, and a retry must never widen one selected
+            // attachment into the message's whole set.
+            if item.attachment.is_none() {
+                item.attachment = selected;
+            }
             match self.get_message(&item.source_chat, &item.source_message) {
                 Ok(message) if !message.attachments.is_empty() => {
                     if let Some(selected) = selected {
@@ -7386,6 +7392,49 @@ mod tests {
             serde_json::json!({"text":planned[0].text,"attachment":{"uploadID":"uploaded-third","fileName":"third.txt"}})
         );
         let _ = std::fs::remove_dir_all(forward_test_dirs().cache);
+    }
+
+    #[test]
+    fn a_retry_after_a_failed_plan_keeps_the_selected_attachment() {
+        let message = r#"{"id":"album-1","chatID":"source","accountID":"telegram","attachments":[{"id":"mxc://first","fileName":"first.txt","mimeType":"text/plain"},{"id":"mxc://second","fileName":"second.txt","mimeType":"text/plain"},{"id":"mxc://third","fileName":"third.txt","mimeType":"text/plain"}]}"#;
+        let responses = vec![
+            // The first planning attempt cannot fetch the source message.
+            ("GET /v1/chats/source/messages/album-1 ", 500, "{}".into()),
+            (
+                "GET /v1/chats/source/messages/album-1 ",
+                200,
+                message.into(),
+            ),
+        ];
+        let (api, server) = forward_fixture(responses);
+        let mut item = forward_fixture_item(&api.base_url);
+        // The conversation list shows the third attachment under this id.
+        item.source_message = "album-1#att2".into();
+        item.planned = false;
+        let failed = api.plan_forwards(vec![item]);
+        assert_eq!(failed.len(), 1);
+        assert!(matches!(
+            failed[0].state,
+            crate::composed_forward::State::FailedBeforeSend(_)
+        ));
+        assert!(!failed[0].planned);
+        assert_eq!(failed[0].source_message, "album-1");
+        assert_eq!(
+            failed[0].attachment,
+            Some(2),
+            "a failed plan keeps the chosen part for its retry"
+        );
+        let mut items = failed;
+        crate::composed_forward::retry_failed(&mut items);
+        let planned = api.plan_forwards(items);
+        assert_eq!(
+            planned.len(),
+            1,
+            "a retry never widens one selected part into the whole set"
+        );
+        assert!(planned[0].planned);
+        assert_eq!(planned[0].attachment, Some(2));
+        server.join().unwrap();
     }
 
     #[test]
