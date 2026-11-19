@@ -12357,6 +12357,15 @@ impl App {
             }
             Action::JumpGroup(forward) => {
                 self.flat_group_ui.jump = Some(forward);
+            Action::FoldAllGroups(fold) => {
+                self.flat_group_ui.fold = Some(if fold {
+                    crate::ui::flat_groups::Fold::Collapse
+                } else {
+                    crate::ui::flat_groups::Fold::Expand
+                });
+            }
+            Action::ToggleFoldAllGroups => {
+                self.flat_group_ui.fold = Some(crate::ui::flat_groups::Fold::Toggle);
             }
             Action::JoinGroup => {
                 use crate::model::InviteState;
