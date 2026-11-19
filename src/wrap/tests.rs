@@ -10,13 +10,15 @@ fn widths_of(text: &str) -> Vec<f32> {
     text.chars().map(|_| PX).collect()
 }
 
-fn no_hyphens(_: &str) -> Vec<Hyphen> {
+fn no_hyphens(_: usize, _: &str) -> Vec<Hyphen> {
     Vec::new()
 }
 
 /// A hyphenator scripted per word: (word, [(char index, joint)]).
-fn scripted(points: Vec<(&'static str, Vec<(usize, bool)>)>) -> impl Fn(&str) -> Vec<Hyphen> {
-    move |word| {
+fn scripted(
+    points: Vec<(&'static str, Vec<(usize, bool)>)>,
+) -> impl Fn(usize, &str) -> Vec<Hyphen> {
+    move |_, word| {
         points
             .iter()
             .find(|(w, _)| *w == word)
@@ -30,7 +32,12 @@ fn scripted(points: Vec<(&'static str, Vec<(usize, bool)>)>) -> impl Fn(&str) ->
     }
 }
 
-fn plan(text: &str, urls: &[(usize, usize)], hyph: &dyn Fn(&str) -> Vec<Hyphen>, cap: f32) -> Plan {
+fn plan(
+    text: &str,
+    urls: &[(usize, usize)],
+    hyph: &dyn Fn(usize, &str) -> Vec<Hyphen>,
+    cap: f32,
+) -> Plan {
     let items = tokenize(text, &widths_of(text), urls, hyph);
     balance(&items, cap, PX)
 }
@@ -107,7 +114,7 @@ fn unpunctuated_over_wide_url_char_splits_hyphenless() {
     // The greedy fallback: no punctuation, no hyphenation, split at
     // characters without a hyphen.
     let url = "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let panic_on_url = |word: &str| -> Vec<Hyphen> {
+    let panic_on_url = |_: usize, word: &str| -> Vec<Hyphen> {
         panic!("URLs are never hyphenated: {word}");
     };
     let text = url.to_owned();
@@ -247,4 +254,26 @@ fn unbreakable_word_overflows_instead_of_vanishing() {
     let plan = plan("aaa", &[], &no_hyphens, 20.0);
     assert_eq!(plan.lines, 1);
     assert_eq!(plan.width, 30.0);
+}
+
+#[test]
+fn over_wide_word_packs_within_the_cap() {
+    // A single 300-char word with no hyphenation points, at the code
+    // font's 9.15625pt advance in a 200pt panel, must pack within the
+    // cap. 21 chars fit (192.1875pt); 22 do not (201.4375pt). Every
+    // forced split used to pay FORCED_SPLIT_PENALTY, so packing one more
+    // line cost 1M while a 1.4375pt overflow per row cost ~2000: the
+    // planner saved lines and overran the cap. Only a word's first
+    // forced split carries the penalty now.
+    let text = "x".repeat(300);
+    let widths = vec![9.15625_f32; text.len()];
+    let items = tokenize(&text, &widths, &[], &no_hyphens);
+    let plan = balance(&items, 200.0, PX);
+    assert!(
+        plan.width <= 200.0,
+        "plan overflows the cap: width {}, breaks {:?}",
+        plan.width,
+        plan.breaks
+    );
+    assert_eq!(plan.lines, 15, "expected 15 packed lines of 21 chars");
 }

@@ -1,5 +1,25 @@
 # Work log
 
+## 2026-11-19: Code panels mark content rows only (fix/code-panel-row-kinds)
+
+#382 merged with five failing monospace tests (its CI was still queued when it
+landed). row_kinds hit-tested glyph clusters against per-span content ranges
+correctly, but then marked EVERY glyph-less row with the previous row's kind.
+Parse drops fence marker lines, so each marker leaves a blank row; those blank
+rows inherited Code, stretching panels past their blocks and merging adjacent
+fences' marks (a_blank_line_inside_a_fence_stays_code,
+adjacent_fences_stay_two_code_runs, multiline_fences_keep_one_block_index_each).
+Now blank rows are placed by the character position of their newline against
+per-block content bounds (end inclusive, since an empty content line is its
+span's empty range): in-fence blanks stay code, dropped-marker rows stay
+plain. Two test expectations were wrong, not the code: the bridge escapes only
+an exact fence line, so a native backslashed line keeps its bytes in the copy
+text; and the width test now tolerates the pixel or two the galley's
+pixel-snapped glyphs add over the planner's summed advances while still
+rejecting an unwrapped line. Verified by rustc parse-check only; fmt/clippy/
+tests run in CI (this Ubuntu box cannot build the crate: PipeWire headers too
+old).
+
 ## 2026-11-18: Repair #379 fallout that left main red
 
 Branch fix/context-menu-shortcut-fallout off main 2192fd3. #379 (context-menu
@@ -470,3 +490,48 @@ against its chat, not the open background chat. Global shortcuts defer while a
 popup is open. Hints use the shared shortcut registry/platform notation. No
 avatar right-click entry. Native target/collision tests and dark/light capture
 scenes added; results pending. No release, #359 or DMG work.
+
+## 2026-11-19 - Code panel row kinds repair (#388), hyphen-in-code root fix
+
+PR #388 fixes the five code-panel test failures #382 merged with. Row kinds
+now place blank rows by their newline's character position inside a block's
+content bounds instead of inheriting the previous row's kind, so the dropped
+fence markers' blank rows stay plain while a blank line inside a fence stays
+code. Code tokens no longer hyphenate, since a hyphen in code shows a
+character that was never typed. That did not fix the width failure: CI on
+4ea9c98 still measured 22-char rows at 201.3125pt in the 200pt panel. The
+real cause sits in the balancing planner. Every mid-word split charged
+FORCED_SPLIT_PENALTY (1M), so packing an unbreakable string into more lines
+cost millions per extra line, while overflowing the cap by 1.4375pt cost
+slack^2 x OVERFLOW_PENALTY, about 2000, per row. The planner saved lines
+and overran the cap on every row. Now only a word's first forced split
+pays the penalty; splits of an already-split word are free, so a fitting
+plan always beats an overflowing one. A short word wider than the cap
+still overflows in one piece rather than splitting. Reproduced against the
+real fonts and egui layout in a local lab (rows now 192.1875pt) and pinned
+by a failing-first planner test at the exact CI metrics. The width test is
+back to a 0.5 px bound, and a new test fails on any hyphen glyph in a
+laid-out code block. No release, #359
+or DMG work.
+
+## 2026-11-19 - Copy code button floats above the panel (overlap repair)
+
+The Copy code button painted at the panel's top right inside it, over the
+code text whenever a row reached the right edge (visible on narrow panels
+like two short shell commands). It now hangs off the panel's top right, in
+the blank row the opening fence's dropped marker leaves, so it can never
+cover code. A first version hung it below the panel, but a collapse clip
+cuts a long block mid-panel and the clamped panel bottom sits at the clip,
+which left the button outside the visible body and unreachable (Devin
+finding on d0034ec). Top placement stays visible whenever any of the
+block is. The panel geometry is shared (code_panel_rects/
+copy_button_rect); one test asserts the button rect intersects no code
+row, another that it stays above a mid-block clip. A third pins the
+button's actual response rect: Ui::put expands a themed Button to the
+28pt minimum interact height, which leaked nine points into the first
+code row and intercepted selection drags (Devin finding on e4286bc), so
+the label was first painted by hand over an exact allocation in the
+reserved band, but that control had no accessible label (Devin finding):
+it is now a real Button in a child UI whose interact height is capped at
+the band, pinned by an accesskit tree test. No release, #359 or DMG
+work.
