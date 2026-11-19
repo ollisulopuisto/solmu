@@ -37,6 +37,12 @@ def flagged(found):
 
 
 class DependencySourcesTest(unittest.TestCase):
+    def test_owner_egui_fork_exception_is_exact(self):
+        for url in ["https://github.com/ollisulopuisto/egui", "https://github.com/ollisulopuisto/egui.git"]:
+            self.assertTrue(sources.allowed_git_source(url))
+        for url in ["https://github.com/ollisulopuisto/other", "https://github.com/other/egui", "http://github.com/ollisulopuisto/egui", "https://github.com/ollisulopuisto/egui/extra"]:
+            self.assertFalse(sources.allowed_git_source(url))
+
     def test_crates_io_and_crmne_repositories_pass(self):
         manifest = """
 [dependencies]

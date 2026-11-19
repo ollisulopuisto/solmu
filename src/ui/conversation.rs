@@ -3162,9 +3162,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     // Rows far from the viewport are skipped rather than laid out, keeping the
     // height they last took (or an estimate), so a long history costs the rows
     // near the screen instead of every loaded one. A jump to a message, the
-    // unread divider's first placement, and a text selection lay out every
-    // row: a jump needs exact positions, and egui drops a selection whose
-    // ends it does not see in a frame. Rows near the viewport are measured
+    // unread divider's first placement, and active selection gestures lay out
+    // every row. A stationary selection keeps its endpoint rows registered:
+    // egui drops a selection whose ends it does not see. Nearby rows are measured
     // again each frame, so a width change or an image that loads corrects
     // them before they come into view.
     let layout_width = ui.available_width();
@@ -3172,8 +3172,36 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         .ctx()
         .plugin_opt::<egui::text_selection::LabelSelectionState>()
         .is_some_and(|plugin| plugin.lock().has_selection());
-    let lay_out_all =
-        view.anchor.is_some() || divider.as_ref().is_some_and(|(.., placed)| !placed) || selecting;
+    // Endpoint widgets must stay registered, but unrelated off-screen bodies
+    // need no markup, galleys, links or copy metadata on a stationary selection.
+    let endpoint_owners = ui
+        .ctx()
+        .plugin_opt::<egui::text_selection::LabelSelectionState>()
+        .and_then(|plugin| plugin.lock().selection_widget_ids(ui.ctx().viewport_id()))
+        .and_then(|ids| {
+            ui.ctx().data(|data| {
+                Some([
+                    data.get_temp::<egui::Id>(ids[0].with("selection-row-owner"))?,
+                    data.get_temp::<egui::Id>(ids[1].with("selection-row-owner"))?,
+                ])
+            })
+        });
+    // Dragging and keyboard extension may move an endpoint into an omitted
+    // row. Copy requires every selected label for egui's transcript assembly.
+    let selection_needs_all = selecting
+        && (endpoint_owners.is_none()
+            || ui.input(|input| {
+                input.pointer.primary_down()
+                    || input.events.iter().any(|event| {
+                        matches!(
+                            event,
+                            egui::Event::Copy | egui::Event::Cut | egui::Event::Key { .. }
+                        )
+                    })
+            }));
+    let lay_out_all = view.anchor.is_some()
+        || divider.as_ref().is_some_and(|(.., placed)| !placed)
+        || selection_needs_all;
     let pass = ui.ctx().cumulative_pass_nr();
     let redo = ui.ctx().current_pass_index() > 0;
     let mut rows = std::mem::take(&mut conversation.rows);
@@ -3445,7 +3473,13 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                         };
                         let near = before + height >= viewport.top() - reach
                             && before <= viewport.bottom() + reach;
-                        if !lay_out_all && !near {
+                        let selection_endpoint = endpoint_owners.is_some_and(|owners| {
+                            let owns = |message: &Message| {
+                                owners.contains(&bubble_id(&chat.id, &message.id))
+                            };
+                            owns(message) || album.is_some_and(|items| items.iter().any(owns))
+                        });
+                        if !lay_out_all && !near && !selection_endpoint {
                             // The body rect of a row that just left the
                             // layout marks where it last was, not where it is.
                             if known
@@ -10156,6 +10190,12 @@ fn rich_body_full(
             }
         }
     }
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            id.with("body-text").with("selection-row-owner"),
+            view.link_menu_owner.unwrap_or(id),
+        );
+    });
     // Store the body rect for selection tests.
     ui.ctx().data_mut(|data| {
         data.insert_temp(id.with("body"), rect);

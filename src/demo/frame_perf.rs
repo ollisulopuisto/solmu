@@ -8,7 +8,7 @@
 //!
 //! Every cell prints the first (cold) frame and the median warm frame of a
 //! synthetic chat: 10, 100 or 1000 messages, short bodies or some very long
-//! ones, with and without a held text selection (which lays out every row).
+//! ones, with and without a held text selection.
 //! The numbers are evidence for conversation-layout caching work, not a CI
 //! gate: nothing here asserts on wall time, so the harness never flakes.
 
@@ -62,7 +62,13 @@ fn perf_chat(
 
 fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -> Duration {
     let start = Instant::now();
-    let mut output = ctx.run_ui(
+    let mut output = frame_output(app, ctx, events);
+    output.textures_delta.clear();
+    start.elapsed()
+}
+
+fn frame_output(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
+    ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -76,9 +82,28 @@ fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -> Durati
             app.background_frame(&ctx);
             app.frame_ui(ui);
         },
-    );
+    )
+}
+
+fn copy_selection(app: &mut App, ctx: &egui::Context) -> String {
+    clipboard_selection(app, ctx, egui::Event::Copy)
+}
+
+fn clipboard_selection(app: &mut App, ctx: &egui::Context, event: egui::Event) -> String {
+    let mut output = frame_output(app, ctx, vec![event]);
     output.textures_delta.clear();
-    start.elapsed()
+    output
+        .platform_output
+        .commands
+        .into_iter()
+        .find_map(|command| {
+            if let egui::OutputCommand::CopyText(text) = command {
+                Some(text)
+            } else {
+                None
+            }
+        })
+        .expect("selection copies text")
 }
 
 /// Selects text inside a visible message body and releases the button.
@@ -218,4 +243,74 @@ fn frame_perf_matrix() {
 fn frame_perf_exercises_selection_and_scroll() {
     cell(10, false, false);
     cell(10, false, true);
+}
+
+/// A stationary selection keeps only its endpoints and the viewport margin
+/// registered, not the entire history. Wheel scrolling must retain selection.
+#[test]
+fn selected_history_does_not_lay_out_every_body() {
+    let (mut app, ctx, chat, _clock) = perf_chat(200, false);
+    for _ in 0..3 {
+        frame(&mut app, &ctx, Vec::new());
+    }
+    assert!(hold_selection(&mut app, &ctx, &chat, 200));
+    let before = copy_selection(&mut app, &ctx);
+    assert!(!before.trim().is_empty());
+    let offset_before = ctx
+        .data(|data| data.get_temp::<(f32, f32)>(crate::ui::conversation::scroll_metrics_id(&chat)))
+        .unwrap()
+        .0;
+    for _ in 0..8 {
+        frame(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(egui::pos2(700.0, 200.0)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    phase: egui::TouchPhase::Move,
+                    delta: egui::vec2(0.0, 250.0),
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+    }
+    frame(&mut app, &ctx, Vec::new());
+    assert!(
+        ctx.plugin_opt::<egui::text_selection::LabelSelectionState>()
+            .is_some_and(|plugin| plugin.lock().has_selection())
+    );
+    let bodies = ctx.data(|data| {
+        (0..200)
+            .filter(|n| {
+                data.get_temp::<egui::Rect>(
+                    crate::ui::conversation::bubble_id(&chat, &format!("perf-{n}")).with("body"),
+                )
+                .is_some()
+            })
+            .count()
+    });
+    assert!(
+        bodies < 100,
+        "only viewport margin and endpoints remain: {bodies}"
+    );
+    let offset_after = ctx
+        .data(|data| data.get_temp::<(f32, f32)>(crate::ui::conversation::scroll_metrics_id(&chat)))
+        .unwrap()
+        .0;
+    assert!(
+        (offset_after - offset_before).abs() > 100.0,
+        "scroll actually moved"
+    );
+    assert_eq!(
+        copy_selection(&mut app, &ctx),
+        before,
+        "off-screen endpoints copy the same text"
+    );
+    frame(&mut app, &ctx, Vec::new());
+    assert_eq!(
+        clipboard_selection(&mut app, &ctx, egui::Event::Cut),
+        before,
+        "native-menu Cut copies the same selection"
+    );
 }

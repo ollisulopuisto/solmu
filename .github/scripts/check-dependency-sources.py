@@ -30,7 +30,7 @@ def allowed_git_source(url):
         parts.scheme == "https"
         and parts.netloc == "github.com"
         and len(segments) == 2
-        and (segments[0] == "crmne" or segments == ["oxidezap", "whatsapp-rust"])
+        and (segments[0] == "crmne" or segments in (["oxidezap", "whatsapp-rust"], ["ollisulopuisto", "egui"]))
         and segments[1] not in ("", ".", "..")
         and "%" not in parts.path
     )
@@ -94,7 +94,7 @@ def main():
     if found:
         print(
             "Dependencies come from crates.io, repositories under https://github.com/crmne/, "
-            "or the approved upstream https://github.com/oxidezap/whatsapp-rust. "
+            "or approved https://github.com/oxidezap/whatsapp-rust and https://github.com/ollisulopuisto/egui. "
             "Send a dependency fix upstream and ask the maintainer to carry it; see CONTRIBUTING.md, Design principles."
         )
     return 1 if found else 0

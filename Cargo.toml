@@ -202,17 +202,19 @@ fastframe-update = { git = "https://github.com/crmne/fastframe", tag = "v0.15.2"
 # emilk/egui#8655), and a saved window size keeps its zoom factor so a window
 # no longer shrinks each time it reopens (#293, emilk/egui#8656).
 # Every egui crate comes from the same revision so they share one emath and
-# epaint. Drop this once egui releases all three.
-ecolor = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-eframe = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui-wgpu = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui-winit = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui_extras = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui_glow = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-emath = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-epaint = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-epaint_default_fonts = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
+# epaint. The owner-approved ollisulopuisto fork adds only the viewport-scoped
+# selection endpoint API on top of the existing crmne pin (egui PR #1).
+# Drop the fork when upstream includes the endpoint API and carried fixes.
+ecolor = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+eframe = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+egui = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+egui-wgpu = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+egui-winit = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+egui_extras = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+egui_glow = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+emath = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+epaint = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+epaint_default_fonts = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
 # crmne/winit apps-0.30, shared with the same apps: winit 0.30.13 plus Wayland
 # `Occluded` for the xdg-shell suspended state with commits on the app's behalf
 # while it isn't presenting (rust-windowing/winit#4709, #4710), macOS Quit
