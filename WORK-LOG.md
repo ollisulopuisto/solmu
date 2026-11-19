@@ -676,3 +676,10 @@ so a fetch failure left the retried item with neither its suffix nor
 `item.attachment`, and the retry expanded to every attachment. The selection
 is now recorded on the item before the fallible fetch, and a regression test
 drives a failed plan followed by a retry through the mock server.
+
+## 2026-11-20: Remove the bridge album evidence workflow before merge
+
+Owner decision: the per-PR evidence workflows are not kept. The
+`bridge-album-evidence.yml` workflow (failing-first test plus before/after
+captures in both themes) served its purpose on this PR and is removed before
+merge; the mapping and regression tests it proved remain in normal CI.
