@@ -1816,6 +1816,8 @@ pub struct BeeperPreferences {
     /// Per-message bookmarks, local only: identity plus the text shown when
     /// the message was saved. Never written to remote accounts.
     pub saved: Vec<crate::saved::SavedMessage>,
+    /// Local display masks, never sent to the bridge.
+    pub hidden_messages: Vec<crate::hidden_messages::HiddenMessage>,
     pub incognito: bool,
     pub compact_list: bool,
     pub show_previews: bool,
@@ -1842,6 +1844,7 @@ impl Default for BeeperPreferences {
             read_later: Vec::new(),
             category_overrides: Vec::new(),
             saved: Vec::new(),
+            hidden_messages: Vec::new(),
             incognito: false,
             compact_list: false,
             show_previews: true,

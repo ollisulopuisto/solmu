@@ -3091,6 +3091,11 @@ pub enum Action {
         id: String,
     },
     /// Deletes a message locally, in the chat it belongs to.
+    SetMessageHidden {
+        chat: ChatId,
+        message: String,
+        hidden: bool,
+    },
     DeleteForMe {
         chat: ChatId,
         id: String,

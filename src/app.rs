@@ -8746,7 +8746,8 @@ impl App {
         };
         let messages = &conversation.messages;
         // The newest row, which may be an album of several messages.
-        let starts = crate::ui::conversation::row_starts(messages, self.selecting_in(chat));
+        let starts =
+            crate::ui::conversation::row_starts(messages, self.individual_message_rows(chat));
         let Some(&newest) = starts.last() else {
             return false;
         };
@@ -8760,6 +8761,20 @@ impl App {
 
     /// Whether messages are being selected in `chat`, which draws an album's
     /// items each in a row of its own.
+    pub(crate) fn has_hidden_messages(&self, chat: &str) -> bool {
+        self.chat(chat).is_some_and(|known| {
+            !crate::hidden_messages::ids_in(
+                &self.settings.beeper.hidden_messages,
+                &self.later_key(known),
+            )
+            .is_empty()
+        })
+    }
+
+    pub(crate) fn individual_message_rows(&self, chat: &str) -> bool {
+        self.selecting_in(chat) || self.has_hidden_messages(chat)
+    }
+
     pub fn selecting_in(&self, chat: &str) -> bool {
         self.selection
             .as_ref()
@@ -11149,6 +11164,33 @@ impl App {
                 }
                 self.backend.send(Command::Revoke { chat, id });
             }
+            Action::SetMessageHidden {
+                chat,
+                message,
+                hidden,
+            } => {
+                let Some(known) = self.chat(&chat) else {
+                    return;
+                };
+                let member = self.later_key(known);
+                if !crate::hidden_messages::set(
+                    &mut self.settings.beeper.hidden_messages,
+                    member,
+                    message,
+                    hidden,
+                ) {
+                    self.toast_error(
+                        crate::i18n::gettext(
+                            self.locale,
+                            "Hidden-message limit reached. Unhide a message before hiding another.",
+                        )
+                        .into_owned(),
+                    );
+                    return;
+                }
+                self.mark_settings_dirty();
+                ctx.request_repaint();
+            }
             Action::DeleteForMe { chat, id } => {
                 // The message stays until WhatsApp accepts the deletion.
                 // `Event::MessageDeleted` removes it and prunes the selection.
@@ -12600,8 +12642,10 @@ impl App {
                 // The cursor steps through the list's rows, an album being
                 // one, as the list resolves it: a cursor naming no loaded
                 // message stands on the newest.
-                let starts =
-                    crate::ui::conversation::row_starts(messages, self.selecting_in(&chat));
+                let starts = crate::ui::conversation::row_starts(
+                    messages,
+                    self.individual_message_rows(&chat),
+                );
                 let current = self
                     .message_cursor
                     .get(&chat)
@@ -33237,6 +33281,85 @@ mod linked_attachment_tests {
         });
         app.open_chat = Some("visible".into());
         (root, app, egui::Context::default(), commands)
+    }
+
+    #[test]
+    fn hidden_messages_use_individual_rows_for_cursor_navigation() {
+        let (_root, mut app, ctx, _commands) = fixture();
+        let mut messages = Vec::new();
+        for id in ["a", "b", "c"] {
+            let mut message = crate::archive::tests::message("visible", id, 100, false);
+            message.content = Content::Image {
+                caption: None,
+                media: crate::model::Media {
+                    album: Some("album".into()),
+                    mime: "image/png".into(),
+                    size: 0,
+                    width: None,
+                    height: None,
+                    path: None,
+                    state: Default::default(),
+                },
+                motion: None,
+            };
+            messages.push(message);
+        }
+        app.conversations
+            .entry("visible".into())
+            .or_default()
+            .messages = messages;
+        app.apply(
+            Action::SetMessageHidden {
+                chat: "visible".into(),
+                message: "b".into(),
+                hidden: true,
+            },
+            &ctx,
+        );
+        app.message_cursor.insert("visible".into(), "c".into());
+        app.apply(
+            Action::MessageCursor(crate::ui::list_nav::Step::Previous),
+            &ctx,
+        );
+        assert_eq!(app.message_cursor["visible"], "b");
+        assert!(!app.cursor_on_newest());
+        app.apply(
+            Action::MessageCursor(crate::ui::list_nav::Step::Previous),
+            &ctx,
+        );
+        assert_eq!(app.message_cursor["visible"], "a");
+    }
+
+    #[test]
+    fn hiding_a_message_is_persistent_local_state_not_a_bridge_command() {
+        let (_root, mut app, ctx, mut commands) = fixture();
+        let member = app.later_key(&app.chats[0]);
+        for hidden in [true, false] {
+            app.apply(
+                Action::SetMessageHidden {
+                    chat: "visible".into(),
+                    message: "one-message".into(),
+                    hidden,
+                },
+                &ctx,
+            );
+            assert_eq!(
+                crate::hidden_messages::ids_in(&app.settings.beeper.hidden_messages, &member)
+                    .contains("one-message"),
+                hidden,
+            );
+            assert!(
+                commands.try_recv().is_err(),
+                "hiding never contacts the bridge"
+            );
+            let encoded = serde_json::to_string(&app.settings.beeper).unwrap();
+            let restored: crate::settings::BeeperPreferences =
+                serde_json::from_str(&encoded).unwrap();
+            assert_eq!(
+                restored.hidden_messages,
+                app.settings.beeper.hidden_messages
+            );
+        }
     }
 
     #[test]

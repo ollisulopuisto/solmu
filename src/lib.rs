@@ -27,6 +27,7 @@ pub mod flat_groups;
 pub mod geo;
 pub mod ghost_groups;
 pub mod group_admin;
+pub mod hidden_messages;
 mod hyphenate;
 pub mod i18n;
 pub mod image_cache;

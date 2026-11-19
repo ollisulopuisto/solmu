@@ -2661,6 +2661,7 @@ struct View<'a> {
     /// Ids of this chat's locally saved messages, for the menu and the mark
     /// in the footer.
     saved: Option<&'a HashSet<String>>,
+    hidden: Option<&'a HashSet<String>>,
     /// Ids of this chat's pinned messages, for the menu and the bubble mark.
     pins: Option<&'a HashSet<String>>,
     /// The message the composer is editing: its bubble keeps an accent
@@ -2994,7 +2995,11 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     let streak_hues = chat
         .is_group()
         .then(|| sender_streak_hues(&conversation.messages));
-    let starts = row_starts(&conversation.messages, app.selecting_in(&chat.id));
+    let has_hidden = app.has_hidden_messages(&chat.id);
+    let starts = row_starts(
+        &conversation.messages,
+        app.individual_message_rows(&chat.id),
+    );
     let total = starts.len();
     // The current message: the one the cursor names, or the newest when it
     // names none, or a message that is gone. An album's item stands for its
@@ -3040,6 +3045,11 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             .into_iter()
             .map(str::to_owned)
             .collect();
+    let hidden_ids: HashSet<String> =
+        crate::hidden_messages::ids_in(&app.settings.beeper.hidden_messages, &app.later_key(chat))
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
     let view = View {
         pending_media: Some(&app.pending_media),
         link_menu_owner: None,
@@ -3076,6 +3086,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         open_menu: app.open_message_menu.as_deref(),
         starred: app.stars.get(&chat.id),
         saved: Some(&saved_ids),
+        hidden: Some(&hidden_ids),
         pins: app.pins.get(&chat.id),
         pin_notices: app
             .chat_pins
@@ -3423,6 +3434,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                         // same parent id. Only its first item owns a row; the
                         // remaining consecutive items are painted in that row.
                         if selection.is_none()
+                            && !has_hidden
                             && album_continues(&conversation.messages, message_index)
                         {
                             rows.insert(
@@ -3435,8 +3447,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                             previous = Some(message);
                             continue;
                         }
-                        let album = selection
-                            .is_none()
+                        let album = (selection.is_none() && !has_hidden)
                             .then(|| album_run(&conversation.messages, message_index))
                             .flatten();
                         let row_contains = |id: &str| {
@@ -4039,6 +4050,13 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                     attachment: attachment.as_deref(),
                                 },
                             );
+                            let label = if view.hidden.is_some_and(|ids| ids.contains(&message.id))
+                            {
+                                crate::i18n::gettext(view.locale, "Message hidden in Solmu")
+                                    .into_owned()
+                            } else {
+                                label
+                            };
                             super::list_nav::mark_row(
                                 ui.ctx(),
                                 row.inner,
@@ -5618,6 +5636,35 @@ fn bubble_frame(
     max_width: f32,
     actions: &mut Vec<Action>,
 ) -> egui::Response {
+    if view.hidden.is_some_and(|ids| ids.contains(&message.id)) {
+        return ui
+            .horizontal(|ui| {
+                ui.label(crate::i18n::gettext(view.locale, "Message hidden in Solmu"));
+                let unhide = ui.button(crate::i18n::gettext(view.locale, "Unhide"));
+                // Reveal while the conversation scroll area is still open,
+                // before Tab registration requests its re-layout pass.
+                theme::reveal_focus(&unhide);
+                if unhide.has_focus()
+                    && ui.ctx().data(|data| {
+                        data.get_temp::<bool>(theme::keyboard_focus_id())
+                            .unwrap_or(false)
+                    })
+                {
+                    view.keyboard_navigation.set(true);
+                }
+                if unhide
+                    .tab_stop(Stop::Unhide(bubble_id(&view.chat.id, &message.id).value()))
+                    .clicked()
+                {
+                    actions.push(Action::SetMessageHidden {
+                        chat: view.chat.id.clone(),
+                        message: message.id.clone(),
+                        hidden: false,
+                    });
+                }
+            })
+            .response;
+    }
     let outside_palette = view.palette;
     let own = message.from_me;
     let owner = bubble_id(&view.chat.id, &message.id);
@@ -7395,6 +7442,7 @@ fn message_menu_labels(locale: crate::i18n::Locale) -> Vec<String> {
         gettext(locale, "Edit"),
         gettext(locale, "Delete for everyone"),
         gettext(locale, "Delete for me"),
+        gettext(locale, "Hide in Solmu"),
         gettext(locale, "Add to favorites"),
         gettext(locale, "Open in system player"),
         gettext(locale, "Open file"),
@@ -7452,6 +7500,11 @@ pub(crate) fn list_menu(
     let mention_names = |id: &str| app.mention_name(id);
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
+    let hidden_ids: HashSet<String> =
+        crate::hidden_messages::ids_in(&app.settings.beeper.hidden_messages, &app.later_key(chat))
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
     let view = View {
         pending_media: None,
         link_menu_owner: None,
@@ -7498,6 +7551,7 @@ pub(crate) fn list_menu(
         motion_playing: None,
         starred: marks.starred.then_some(&stars),
         saved: Some(&saved_set),
+        hidden: Some(&hidden_ids),
         pins: app.pins.get(&message.chat),
         pin_notices: &[],
     };
@@ -7542,6 +7596,11 @@ pub(crate) fn linked_bubble(
     let keyboard_navigation = std::cell::Cell::new(false);
     let saved_set: HashSet<String> =
         crate::saved::ids_in(&app.settings.beeper.saved, &app.later_key(chat))
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+    let hidden_ids: HashSet<String> =
+        crate::hidden_messages::ids_in(&app.settings.beeper.hidden_messages, &app.later_key(chat))
             .into_iter()
             .map(str::to_owned)
             .collect();
@@ -7591,6 +7650,7 @@ pub(crate) fn linked_bubble(
         motion_playing: None,
         starred: app.stars.get(&message.chat),
         saved: Some(&saved_set),
+        hidden: Some(&hidden_ids),
         pins: app.pins.get(&message.chat),
         pin_notices: &[],
     };
@@ -8085,6 +8145,18 @@ fn context_menu(
         && widgets::menu_item(ui, &palette, Some(Icon::Copy), "Translate locally...")
     {
         actions.push(Action::TranslateLocally(text.clone()));
+    }
+    if widgets::menu_item(
+        ui,
+        &palette,
+        Some(Icon::EyeOff),
+        &crate::i18n::gettext(view.locale, "Hide in Solmu"),
+    ) {
+        actions.push(Action::SetMessageHidden {
+            chat: chat.clone(),
+            message: message.id.clone(),
+            hidden: true,
+        });
     }
     let age = view.now - message.timestamp;
     let can_edit =
@@ -14347,6 +14419,129 @@ mod tests {
     }
 
     #[test]
+    fn hidden_message_unhide_joins_the_custom_tab_cycle() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let message = crate::archive::tests::message("1@s.whatsapp.net", "hidden", 0, false);
+            let hidden = HashSet::from([message.id.clone()]);
+            let view = View {
+                hidden: Some(&hidden),
+                ..*view
+            };
+            let mut actions = Vec::new();
+            let mut draw = |events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        focus::begin(ui.ctx(), true);
+                        let start = ui.button("Start").tab_stop(Stop::Composer);
+                        if ui.ctx().memory(|memory| memory.focused()).is_none() {
+                            start.request_focus();
+                        }
+                        bubble_frame(ui, &view, &message, None, false, false, 400.0, &mut actions);
+                        focus::finish(ui.ctx(), true);
+                    },
+                );
+                output.textures_delta.clear();
+            };
+            draw(vec![]);
+            let key = |key, pressed| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            draw(vec![key(Key::Tab, true)]);
+            draw(vec![key(Key::Tab, false), key(Key::Enter, true)]);
+            draw(vec![key(Key::Enter, false)]);
+            assert!(actions.contains(&Action::SetMessageHidden {
+                chat: message.chat.clone(),
+                message: message.id.clone(),
+                hidden: false,
+            }));
+        });
+    }
+
+    #[test]
+    fn offscreen_unhide_focus_reveals_the_placeholder() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let message = crate::archive::tests::message("1@s.whatsapp.net", "hidden", 0, false);
+            let hidden = HashSet::from([message.id.clone()]);
+            let view = View {
+                hidden: Some(&hidden),
+                ..*view
+            };
+            let mut actions = Vec::new();
+            let mut draw = |events| {
+                let mut row = Rect::NOTHING;
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(600.0, 240.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        // Mirror the app's keyboard-focus tracking before
+                        // the custom Tab handler consumes the key event.
+                        super::super::track_keyboard_focus(ui.ctx());
+                        focus::begin(ui.ctx(), true);
+                        let start = ui.button("Start").tab_stop(Stop::Composer);
+                        if ui.ctx().memory(|memory| memory.focused()).is_none() {
+                            start.request_focus();
+                        }
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            ui.add_space(800.0);
+                            row = bubble_frame(
+                                ui,
+                                &view,
+                                &message,
+                                None,
+                                false,
+                                false,
+                                400.0,
+                                &mut actions,
+                            )
+                            .rect;
+                            ui.add_space(100.0);
+                        });
+                        focus::finish(ui.ctx(), true);
+                    },
+                );
+                output.textures_delta.clear();
+                row
+            };
+            let initial = draw(vec![]);
+            let stop = Stop::Unhide(bubble_id(&view.chat.id, &message.id).value());
+            let id = focus::control(&ctx, stop).expect("registered hidden-message control");
+            assert!(initial.top() > 240.0);
+            draw(vec![egui::Event::Key {
+                key: Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }]);
+            let revealed = draw(vec![]);
+            assert_eq!(ctx.memory(|memory| memory.focused()), Some(id));
+            // read_response exposes the previous pass here. Inspect the
+            // rectangle returned by this frame's actual placeholder layout.
+            assert!(revealed.top() >= 0.0, "{revealed:?}");
+            assert!(revealed.bottom() <= 240.0, "{revealed:?}");
+            assert!(view.keyboard_navigation.get());
+        });
+    }
+
+    #[test]
     fn the_edited_message_bubble_keeps_an_accent_outline() {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
@@ -14506,6 +14701,7 @@ mod tests {
             footer_right: None,
             neighbour_width: None,
             saved: None,
+            hidden: None,
             preview_worker,
             local_previews,
             auto_previews: false,
@@ -15263,7 +15459,7 @@ mod reaction_tests {
                 // "Save for later" awaits catalog extraction: until the
                 // maintainer regenerates them, every locale draws it in
                 // English, so it cannot count as untranslated here.
-                if english == "Save for later" {
+                if matches!(english.as_str(), "Save for later" | "Hide in Solmu") {
                     continue;
                 }
                 assert!(!spanish.contains(&english), "{english} in {spanish:?}");
@@ -15298,6 +15494,7 @@ mod reaction_tests {
                 || text == "Copy URL to clipboard"
                 || text == "Save for later"
                 || text == "Remove from Saved"
+                || text == "Hide in Solmu"
         };
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("photo.jpg");
