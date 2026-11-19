@@ -1350,27 +1350,22 @@ pub fn put_copy_button(
     label: &str,
     color: Color32,
 ) -> egui::Response {
-    // Allocate the exact band and paint the label by hand: Ui::put with
-    // a themed Button expands to the theme's minimum interact height
-    // (28pt against the 14pt band) and the overflow reaches into the
-    // first code row, where it intercepts selection drags.
+    // A real Button in a style-overridden child UI: a plain Ui::put
+    // expands the button to the theme's 28pt minimum interact height and
+    // the overflow reaches into the first code row, where it intercepts
+    // selection drags; a bare allocate_rect plus painted text keeps the
+    // geometry but has no accessible label. The child UI caps the
+    // interact height at the 14pt band, and the Button supplies its own
+    // accessibility label.
     let rect = copy_button_rect(panel);
-    let response = ui
-        .allocate_rect(rect, egui::Sense::click())
-        .on_hover_cursor(egui::CursorIcon::PointingHand);
-    let color = if response.hovered() {
-        color
-    } else {
-        color.gamma_multiply(0.75)
-    };
-    ui.painter().text(
-        rect.right_center(),
-        egui::Align2::RIGHT_CENTER,
-        label,
-        egui::TextStyle::Small.resolve(ui.style()),
-        color,
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
     );
-    response
+    child.spacing_mut().interact_size.y = 14.0;
+    child.spacing_mut().button_padding = egui::vec2(4.0, 0.0);
+    child.add(egui::Button::new(egui::RichText::new(label).small().color(color)).frame(false))
 }
 
 /// Paints the quiet inset panels behind each run of [`RowKind::Code`] or
@@ -3344,10 +3339,11 @@ mod monospace_tests {
             let body = Rect::from_min_size(Pos2::ZERO, laid.galley.size());
             for (_, panel) in code_panel_rects(body, Pos2::ZERO, &laid, None) {
                 let response = put_copy_button(ui, panel, "Copy code", Color32::WHITE);
-                assert_eq!(
-                    response.rect,
-                    copy_button_rect(panel),
-                    "copy button response outgrew its band"
+                let band = copy_button_rect(panel);
+                assert!(
+                    band.contains_rect(response.rect) && response.rect.height() <= 14.0,
+                    "copy button response {:?} outgrew its band {band:?}",
+                    response.rect
                 );
                 for (row, kind) in laid.galley.rows.iter().zip(laid.row_kinds().iter()) {
                     if !matches!(kind, RowKind::Code(_)) || row.row.glyphs.is_empty() {
@@ -3362,6 +3358,41 @@ mod monospace_tests {
                 }
             }
         });
+        output.textures_delta.clear();
+    }
+
+    /// The Copy code control must be a real labelled widget: a bare
+    /// allocate_rect plus painted text keeps the geometry but gives a
+    /// screen reader an unnamed hit region (Devin finding on db154ed).
+    #[test]
+    fn the_copy_button_has_an_accessible_label() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut id = None;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "```\ncd ~/koodi/solmu\ncargo build\n```";
+            let laid = layout_balanced(ui, text, &[], &style, 200.0, false);
+            let body = Rect::from_min_size(Pos2::ZERO, laid.galley.size());
+            for (_, panel) in code_panel_rects(body, Pos2::ZERO, &laid, None) {
+                id = Some(put_copy_button(ui, panel, "Copy code", Color32::WHITE).id);
+            }
+        });
+        let update = output
+            .platform_output
+            .accesskit_update
+            .expect("an accesskit tree update");
+        let labelled = update
+            .nodes
+            .iter()
+            .any(|(_, node)| node.label().is_some_and(|l| &*l == "Copy code"));
+        assert!(labelled, "copy button exposes no accessible label");
         output.textures_delta.clear();
     }
 
