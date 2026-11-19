@@ -114,7 +114,7 @@ fn unpunctuated_over_wide_url_char_splits_hyphenless() {
     // The greedy fallback: no punctuation, no hyphenation, split at
     // characters without a hyphen.
     let url = "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    let panic_on_url = |word: &str| -> Vec<Hyphen> {
+    let panic_on_url = |_: usize, word: &str| -> Vec<Hyphen> {
         panic!("URLs are never hyphenated: {word}");
     };
     let text = url.to_owned();
