@@ -5886,7 +5886,7 @@ impl App {
                     }
                     self.message_cursor.insert(chat.clone(), neighbour);
                 }
-                let removed = if let Some(conversation) = self.conversations.get_mut(&chat) {
+                let mut removed = if let Some(conversation) = self.conversations.get_mut(&chat) {
                     let removed: Vec<String> = conversation
                         .messages
                         .iter()
@@ -5901,6 +5901,15 @@ impl App {
                 } else {
                     Vec::new()
                 };
+                // The viewer's album can hold messages the loaded conversation
+                // does not, and split parts of the same bridge message.
+                if !self.events_hidden && self.viewer_media_chat.as_deref() == Some(chat.as_str()) {
+                    for item in self.viewer_media.iter().filter(|item| gone(&item.id)) {
+                        if !removed.contains(&item.id) {
+                            removed.push(item.id.clone());
+                        }
+                    }
+                }
                 if live && self.editing.as_deref() == Some(id.as_str()) {
                     self.editing = None;
                     self.composer.clear();

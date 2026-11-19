@@ -1545,6 +1545,7 @@ impl Api {
         Ok(path)
     }
 
+    #[cfg(test)]
     fn download_media(
         &self,
         chat: &str,

@@ -654,3 +654,16 @@ keyboard-navigation mode, so offscreen placeholders scroll into view. Added
 a small-scroll-area regression that tabs to a placeholder below the viewport.
 No appearance change; prior inspected synthetic captures remain representative.
 Local Rust execution unavailable; CI must validate this regression.
+
+
+## 2026-11-19: Fix PR #402 CI (clippy + album viewer regression)
+
+- Clippy: the `Api::download_media` convenience wrapper is only called by
+  unit tests, so `cargo clippy` flagged it as dead code. Marked it
+  `#[cfg(test)]`.
+- `the_album_follows_a_chat_while_the_viewer_is_open`: the rewritten
+  `MessageDeleted` handler collected removed ids only from the loaded
+  conversation, so a message present only in the viewer's album (the
+  fixture's case, and real chats whose page is not loaded) stayed in the
+  viewer. The handler now also collects matching ids from `viewer_media`
+  before forgetting them.
