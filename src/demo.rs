@@ -1755,6 +1755,7 @@ fn photos_sample(app: &mut App) {
     let _ = std::fs::create_dir_all(&dir);
     // Light towards the top; the time sits over the dark of its lower corner.
     let wide = stock::save_photo(&dir, stock::DUSK);
+    let tall = stock::save_photo(&dir, stock::TOWER);
     let photo = |caption: Option<&str>| {
         let mut media = media(
             "image/jpeg",
@@ -1776,6 +1777,29 @@ fn photos_sample(app: &mut App) {
             true,
             0,
             photo(Some("The launch, from the causeway")),
+        ),
+        message(
+            id,
+            "photos-caption-tall",
+            true,
+            0,
+            Content::Image {
+                motion: None,
+                caption: Some(
+                    "The harbour tower from the ferry, zoomed all the way to the flag"
+                        .into(),
+                ),
+                media: {
+                    let mut media = media(
+                        "image/jpeg",
+                        stock::TOWER.bytes.len() as u64,
+                        Some(stock::TOWER.width),
+                        Some(stock::TOWER.height),
+                    );
+                    media.path = Some(tall.clone());
+                    media
+                },
+            },
         ),
         message(id, "photos-in", false, 0, photo(None)),
         message(id, "photos-out", true, 0, photo(None)),
