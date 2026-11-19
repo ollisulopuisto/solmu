@@ -1778,29 +1778,6 @@ fn photos_sample(app: &mut App) {
             0,
             photo(Some("The launch, from the causeway")),
         ),
-        message(
-            id,
-            "photos-caption-tall",
-            true,
-            0,
-            Content::Image {
-                motion: None,
-                caption: Some(
-                    "The harbour tower from the ferry, zoomed all the way to the flag"
-                        .into(),
-                ),
-                media: {
-                    let mut media = media(
-                        "image/jpeg",
-                        stock::TOWER.bytes.len() as u64,
-                        Some(stock::TOWER.width),
-                        Some(stock::TOWER.height),
-                    );
-                    media.path = Some(tall.clone());
-                    media
-                },
-            },
-        ),
         message(id, "photos-in", false, 0, photo(None)),
         message(id, "photos-out", true, 0, photo(None)),
         message(
@@ -1816,6 +1793,30 @@ fn photos_sample(app: &mut App) {
             true,
             0,
             Content::text("Passing this along"),
+        ),
+        // Last, so the run's earlier rows keep their own footers: a slim
+        // portrait with a caption, for the caption wrap floor.
+        message(
+            id,
+            "photos-caption-tall",
+            true,
+            0,
+            Content::Image {
+                motion: None,
+                caption: Some(
+                    "The harbour tower from the ferry, zoomed all the way to the flag".into(),
+                ),
+                media: {
+                    let mut media = media(
+                        "image/jpeg",
+                        stock::TOWER.bytes.len() as u64,
+                        Some(stock::TOWER.width),
+                        Some(stock::TOWER.height),
+                    );
+                    media.path = Some(tall.clone());
+                    media
+                },
+            },
         ),
     ];
     for (index, row) in rows.iter_mut().enumerate() {
