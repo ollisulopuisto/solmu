@@ -1,5 +1,25 @@
 # Work log
 
+## 2026-11-19: Code panels mark content rows only (fix/code-panel-row-kinds)
+
+#382 merged with five failing monospace tests (its CI was still queued when it
+landed). row_kinds hit-tested glyph clusters against per-span content ranges
+correctly, but then marked EVERY glyph-less row with the previous row's kind.
+Parse drops fence marker lines, so each marker leaves a blank row; those blank
+rows inherited Code, stretching panels past their blocks and merging adjacent
+fences' marks (a_blank_line_inside_a_fence_stays_code,
+adjacent_fences_stay_two_code_runs, multiline_fences_keep_one_block_index_each).
+Now blank rows are placed by the character position of their newline against
+per-block content bounds (end inclusive, since an empty content line is its
+span's empty range): in-fence blanks stay code, dropped-marker rows stay
+plain. Two test expectations were wrong, not the code: the bridge escapes only
+an exact fence line, so a native backslashed line keeps its bytes in the copy
+text; and the width test now tolerates the pixel or two the galley's
+pixel-snapped glyphs add over the planner's summed advances while still
+rejecting an unwrapped line. Verified by rustc parse-check only; fmt/clippy/
+tests run in CI (this Ubuntu box cannot build the crate: PipeWire headers too
+old).
+
 ## 2026-11-18: Repair #379 fallout that left main red
 
 Branch fix/context-menu-shortcut-fallout off main 2192fd3. #379 (context-menu

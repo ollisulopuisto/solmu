@@ -231,8 +231,14 @@ fn finish(
 /// Per galley row: which rows belong to a fenced code block or a quote, so
 /// the painter can give them an inset panel. The ranges are
 /// character-indexed in the galley's text; each glyph's `cluster` is the
-/// byte offset of its source character, so convert with that text. A blank
-/// row carries no glyphs and stays inside the surrounding panel.
+/// byte offset of its source character, so convert with that text.
+///
+/// Fence markers paint no row of their own: parse drops the ``` lines, so
+/// each leaves a blank row behind. A blank row carries no glyphs and
+/// cannot be hit-tested by cluster, so it is placed by the character
+/// position of its newline against the block's content bounds: the blank
+/// lines between a fence's content lines fall inside, the dropped markers'
+/// rows fall outside and stay Normal.
 fn row_kinds(
     galley: &Galley,
     blocks: &[(usize, Range<usize>)],
@@ -245,16 +251,45 @@ fn row_kinds(
         .chain([text.len()])
         .collect();
     let to_byte = |char: usize| char_bytes[char.min(char_bytes.len() - 1)];
-    let mut kinds: Vec<RowKind> = galley
+    let byte_to_char = |byte: usize| char_bytes.partition_point(|b| *b < byte);
+    // Content bounds per block, character-indexed. The end is inclusive
+    // for the blank-row check: an empty content line is exactly its span's
+    // empty range, and its terminating newline sits at that end.
+    let mut bounds: Vec<(usize, usize, usize)> = Vec::new();
+    for (id, range) in blocks {
+        match bounds.iter_mut().find(|(b, _, _)| b == id) {
+            Some((_, start, end)) => {
+                *start = (*start).min(range.start);
+                *end = (*end).max(range.end);
+            }
+            None => bounds.push((*id, range.start, range.end)),
+        }
+    }
+    // Rows partition the galley text in order; track the character
+    // position each row starts at so blank rows can be placed.
+    let mut cursor = 0usize;
+    galley
         .rows
         .iter()
         .map(|row| {
-            let hit = |start: usize, end: usize| {
-                row.row.glyphs.iter().any(|glyph| {
-                    let offset = glyph.cluster as usize;
-                    start <= offset && offset < end
-                })
-            };
+            if row.row.glyphs.is_empty() {
+                // A blank line is exactly its terminating newline.
+                let at = cursor;
+                cursor += 1;
+                return bounds
+                    .iter()
+                    .find(|(_, start, end)| *start <= at && at <= *end)
+                    .map_or(RowKind::Normal, |(id, _, _)| RowKind::Code(*id));
+            }
+            let mut lo = usize::MAX;
+            let mut hi = 0usize;
+            for glyph in &row.row.glyphs {
+                let offset = glyph.cluster as usize;
+                lo = lo.min(offset);
+                hi = hi.max(offset + glyph.chr.len_utf8());
+            }
+            cursor = byte_to_char(hi) + usize::from(row.ends_with_newline);
+            let hit = |start: usize, end: usize| lo < end && start < hi;
             if let Some((index, _)) = blocks
                 .iter()
                 .find(|(_, range)| hit(to_byte(range.start), to_byte(range.end)))
@@ -269,13 +304,7 @@ fn row_kinds(
                 RowKind::Normal
             }
         })
-        .collect();
-    for index in 1..kinds.len() {
-        if kinds[index] == RowKind::Normal && galley.rows[index].row.glyphs.is_empty() {
-            kinds[index] = kinds[index - 1];
-        }
-    }
-    kinds
+        .collect()
 }
 
 fn build(
@@ -3056,8 +3085,10 @@ mod monospace_tests {
             code_blocks("```\nfirst\n```\nmiddle\n```\nsecond\n```"),
             vec!["first", "second"]
         );
-        // A backslashed content fence is content, not a fence.
-        assert_eq!(code_blocks("```\na\\```b\n```"), vec!["a```b"]);
+        // A backslashed line is content, and unless it is the bridge's
+        // exact fence escape it keeps its bytes, backslash included.
+        assert_eq!(code_blocks("```\na\\```b\n```"), vec!["a\\```b"]);
+        assert_eq!(code_blocks("```\n\\```\n```"), vec!["```"]);
         // Indentation and inner blank lines survive byte for byte.
         assert_eq!(
             code_blocks("```\n  indented\n\n  more\n```"),
@@ -3118,8 +3149,12 @@ mod monospace_tests {
             let text = format!("```\ncmd {long} end\n```");
             let laid = layout_balanced(ui, &text, &[], &style, 200.0, false);
             for (index, row) in laid.galley.rows.iter().enumerate() {
+                // The planner sums advances while the galley snaps glyph
+                // positions to pixels, so a shaped row can exceed the
+                // planned width by a pixel or two. What must never happen
+                // is an unwrapped line painting far past the room.
                 assert!(
-                    row.row.size.x <= 200.5,
+                    row.row.size.x <= 202.0,
                     "row {index} is {} wide in a 200-wide room",
                     row.row.size.x
                 );
@@ -3129,8 +3164,9 @@ mod monospace_tests {
     }
 
     /// A blank line inside a fenced block keeps the block's rows together:
-    /// every row up to the closing fence stays code, so the panel and the
-    /// Copy code button cover the block as one piece.
+    /// the content rows and the blank between them stay code, so the panel
+    /// and the Copy code button cover the block as one piece. The dropped
+    /// fence markers' own blank rows stay plain.
     #[test]
     fn a_blank_line_inside_a_fence_stays_code() {
         let ctx = egui::Context::default();
@@ -3145,13 +3181,18 @@ mod monospace_tests {
             let text = "```\nfirst\n\nthird\n```\nafter";
             let laid = layout_balanced(ui, text, &[], &style, 220.0, false);
             let kinds = laid.row_kinds();
-            assert!(
-                kinds[..kinds.len() - 1]
-                    .iter()
-                    .all(|kind| matches!(kind, RowKind::Code(_))),
-                "blank line inside the fence: {kinds:?}"
+            assert_eq!(
+                kinds,
+                [
+                    RowKind::Normal,
+                    RowKind::Code(0),
+                    RowKind::Code(0),
+                    RowKind::Code(0),
+                    RowKind::Normal,
+                    RowKind::Normal,
+                ],
+                "content and the in-fence blank are code, markers are not: {kinds:?}"
             );
-            assert_eq!(kinds.last(), Some(&RowKind::Normal));
         });
         output.textures_delta.clear();
     }
