@@ -22,6 +22,7 @@ pub mod composed_forward;
 pub mod demo;
 pub mod emoji;
 pub mod energy;
+pub mod face_detect;
 pub mod flat_groups;
 pub mod geo;
 pub mod ghost_groups;

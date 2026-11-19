@@ -16,13 +16,137 @@ pub struct Identity {
     pub chat: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Appearance {
-    Initials { text: String, colour: [u8; 3] },
-    Image { file: String },
+/// Where the square crop window sits on the stored source image. x/y are the
+/// window centre as a fraction of the source's width/height; zoom scales the
+/// window, 1.0 fits the largest centred square.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Crop {
+    pub x: f32,
+    pub y: f32,
+    pub zoom: f32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Default for Crop {
+    /// The centre crop entries had before cropping existed.
+    fn default() -> Self {
+        Self {
+            x: 0.5,
+            y: 0.5,
+            zoom: 1.0,
+        }
+    }
+}
+
+pub const MIN_ZOOM: f32 = 1.0;
+pub const MAX_ZOOM: f32 = 8.0;
+/// A detected face's bounding side is framed with this much room around it.
+pub const FACE_HEADROOM: f32 = 2.2;
+
+fn sane_aspect(aspect: f32) -> f32 {
+    if aspect.is_finite() && aspect > 0.0 {
+        aspect
+    } else {
+        1.0
+    }
+}
+
+fn sane_zoom(zoom: f32) -> f32 {
+    if zoom.is_finite() {
+        zoom.clamp(MIN_ZOOM, MAX_ZOOM)
+    } else {
+        1.0
+    }
+}
+
+/// The window's half size as a fraction of the source's width and height.
+fn half_window(aspect: f32, zoom: f32) -> (f32, f32) {
+    let aspect = sane_aspect(aspect);
+    let zoom = sane_zoom(zoom);
+    (
+        (1.0 / aspect).min(1.0) / (2.0 * zoom),
+        aspect.min(1.0) / (2.0 * zoom),
+    )
+}
+
+/// The window's full size as a fraction of the source's width and height.
+pub fn crop_window(aspect: f32, zoom: f32) -> (f32, f32) {
+    let (half_w, half_h) = half_window(aspect, zoom);
+    (2.0 * half_w, 2.0 * half_h)
+}
+
+/// Keep the window square, inside the image and the zoom within bounds.
+pub fn clamp_crop(aspect: f32, crop: Crop) -> Crop {
+    let zoom = sane_zoom(crop.zoom);
+    let (half_w, half_h) = half_window(aspect, zoom);
+    let x = if crop.x.is_finite() {
+        crop.x.clamp(half_w, 1.0 - half_w)
+    } else {
+        0.5
+    };
+    let y = if crop.y.is_finite() {
+        crop.y.clamp(half_h, 1.0 - half_h)
+    } else {
+        0.5
+    };
+    Crop { x, y, zoom }
+}
+
+/// The window as a texture UV rect [left, top, right, bottom] in 0..=1.
+/// `aspect` is the source image's width / height.
+pub fn crop_uv(aspect: f32, crop: Crop) -> [f32; 4] {
+    let crop = clamp_crop(aspect, crop);
+    let (half_w, half_h) = half_window(aspect, crop.zoom);
+    [
+        crop.x - half_w,
+        crop.y - half_h,
+        crop.x + half_w,
+        crop.y + half_h,
+    ]
+}
+
+/// Centre the window on a detected face with some headroom. The face is in
+/// image coordinates: centre as a fraction of width/height, side as a
+/// fraction of the image's short side.
+pub fn face_crop(aspect: f32, face: crate::face_detect::Face) -> Crop {
+    let zoom = if face.side.is_finite() && face.side > 0.0 {
+        1.0 / (face.side * FACE_HEADROOM)
+    } else {
+        1.0
+    };
+    clamp_crop(
+        aspect,
+        Crop {
+            x: face.x,
+            y: face.y,
+            zoom,
+        },
+    )
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Appearance {
+    Initials {
+        text: String,
+        colour: [u8; 3],
+    },
+    Image {
+        file: String,
+        /// Square crop window; the centre crop when absent (entries saved
+        /// before cropping existed).
+        #[serde(default)]
+        crop: Crop,
+        /// Source image width / height; 1.0 for entries saved when only the
+        /// cropped square was stored.
+        #[serde(default = "default_source_aspect")]
+        source_aspect: f32,
+    },
+}
+
+fn default_source_aspect() -> f32 {
+    1.0
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
     pub identities: Vec<Identity>,
     pub appearance: Appearance,
@@ -67,8 +191,12 @@ pub fn image_path(state: &Path, file: &str) -> Option<PathBuf> {
         .then(|| state.join("custom-avatars").join(file))
 }
 
+/// Largest side of the stored source image. Cropping happens at display
+/// time, so the source keeps its aspect ratio.
+pub const SOURCE_MAX_DIMENSION: u32 = 1024;
+
 /// Read only a bounded local file. The picker never accepts URLs.
-pub fn import(path: &Path) -> Result<(String, Vec<u8>), String> {
+pub fn import(path: &Path) -> Result<(String, Vec<u8>, u32, u32), String> {
     let metadata = std::fs::metadata(path).map_err(|_| "Could not open image")?;
     if !metadata.is_file() || metadata.len() > MAX_BYTES {
         return Err("Choose an image file up to 10 MB".into());
@@ -78,15 +206,19 @@ pub fn import(path: &Path) -> Result<(String, Vec<u8>), String> {
     file.take(MAX_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "Could not read image")?;
-    let png = normalize(&bytes)?;
+    let (png, width, height) = normalize_source(&bytes)?;
     let hash: String = Sha256::digest(&png)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    Ok((format!("{hash}.png"), png))
+    Ok((format!("{hash}.png"), png, width, height))
 }
 
-pub fn normalize(bytes: &[u8]) -> Result<Vec<u8>, String> {
+/// Decode, orient and bound a picked image, keeping its aspect ratio for the
+/// editor's crop window. Never upscales to fill a square and never crops
+/// here, so the thin-image blowup of scaling a sliver to fill a square is
+/// impossible: total pixels stay bounded by the decode limits above.
+pub fn normalize_source(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
     if bytes.len() as u64 > MAX_BYTES {
         return Err("Image is larger than 10 MB".into());
     }
@@ -118,22 +250,24 @@ pub fn normalize(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let mut decoded =
         image::DynamicImage::from_decoder(decoder).map_err(|_| "Could not decode image")?;
     decoded.apply_orientation(orientation);
-    // Crop before scaling: scaling a thin rectangle to fill a square can
-    // otherwise allocate gigabytes despite bounded decoded dimensions.
-    let side = decoded.width().min(decoded.height());
-    let square = decoded
-        .crop_imm(
-            (decoded.width() - side) / 2,
-            (decoded.height() - side) / 2,
-            side,
-            side,
-        )
-        .resize_exact(512, 512, image::imageops::FilterType::Lanczos3);
+    // Bound the stored source without changing its shape; clamp the target
+    // sides so a thin image (8192x1) shrinks to 1024x1, never to zero.
+    let scaled = if decoded.width().max(decoded.height()) > SOURCE_MAX_DIMENSION {
+        let scale =
+            f64::from(SOURCE_MAX_DIMENSION) / f64::from(decoded.width().max(decoded.height()));
+        let target_w =
+            ((f64::from(decoded.width()) * scale).round() as u32).clamp(1, SOURCE_MAX_DIMENSION);
+        let target_h =
+            ((f64::from(decoded.height()) * scale).round() as u32).clamp(1, SOURCE_MAX_DIMENSION);
+        decoded.resize_exact(target_w, target_h, image::imageops::FilterType::Lanczos3)
+    } else {
+        decoded
+    };
     let mut png = Cursor::new(Vec::new());
-    square
+    scaled
         .write_to(&mut png, image::ImageFormat::Png)
         .map_err(|_| "Could not prepare avatar")?;
-    Ok(png.into_inner())
+    Ok((png.into_inner(), scaled.width(), scaled.height()))
 }
 
 #[cfg(test)]
@@ -147,24 +281,175 @@ mod tests {
     }
     #[test]
     fn imports_are_decoded_bounded_and_reencoded_not_passed_through() {
-        assert!(normalize(b"not an image").is_err());
-        assert!(normalize(&vec![0; MAX_BYTES as usize + 1]).is_err());
-        assert!(normalize(&png(MAX_DIMENSION + 1, 1)).is_err());
+        assert!(normalize_source(b"not an image").is_err());
+        assert!(normalize_source(&vec![0; MAX_BYTES as usize + 1]).is_err());
+        assert!(normalize_source(&png(MAX_DIMENSION + 1, 1)).is_err());
         let mut source = png(900, 600);
         source.extend_from_slice(b"private trailing metadata must not survive");
-        let clean = normalize(&source).unwrap();
+        let (clean, width, height) = normalize_source(&source).unwrap();
+        assert_eq!((width, height), (900, 600));
         let decoded = image::load_from_memory(&clean).unwrap();
-        assert_eq!((decoded.width(), decoded.height()), (512, 512));
+        assert_eq!((decoded.width(), decoded.height()), (900, 600));
         assert!(!clean.windows(8).any(|s| s == b"metadata"));
-        assert_eq!(clean, normalize(&clean).unwrap());
+        assert_eq!(clean, normalize_source(&clean).unwrap().0);
     }
     #[test]
-    fn degenerate_aspect_ratios_are_cropped_before_upscaling() {
+    fn oversized_sources_shrink_without_changing_shape() {
+        let (clean, width, height) = normalize_source(&png(4096, 2048)).unwrap();
+        assert_eq!(
+            (width, height),
+            (SOURCE_MAX_DIMENSION, SOURCE_MAX_DIMENSION / 2)
+        );
+        let decoded = image::load_from_memory(&clean).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (width, height));
+    }
+    #[test]
+    fn degenerate_aspect_ratios_never_upscale_or_blow_up() {
         for (width, height) in [(8192, 1), (1, 8192)] {
-            let clean = normalize(&png(width, height)).unwrap();
+            let (clean, width, height) = normalize_source(&png(width, height)).unwrap();
+            assert!(width.max(height) <= SOURCE_MAX_DIMENSION);
+            assert!(width.min(height) >= 1);
             let decoded = image::load_from_memory(&clean).unwrap();
-            assert_eq!((decoded.width(), decoded.height()), (512, 512));
+            assert_eq!((decoded.width(), decoded.height()), (width, height));
+            // A one-pixel-wide window is still a valid, bounded UV rect.
+            let uv = crop_uv(width as f32 / height as f32, Crop::default());
+            assert!(uv[0] >= 0.0 && uv[1] >= 0.0 && uv[2] <= 1.0 && uv[3] <= 1.0);
+            assert!(uv[0] < uv[2] && uv[1] < uv[3]);
         }
+    }
+    #[test]
+    fn crop_window_stays_square_inside_any_source() {
+        // Square source, default crop: the whole texture.
+        assert_eq!(crop_uv(1.0, Crop::default()), [0.0, 0.0, 1.0, 1.0]);
+        // Wide source: the window takes the full height, centred.
+        let uv = crop_uv(2.0, Crop::default());
+        assert_eq!([uv[1], uv[3]], [0.0, 1.0]);
+        assert!(((uv[2] - uv[0]) - 0.5).abs() < 1e-6);
+        assert!((uv[0] - 0.25).abs() < 1e-6);
+        // Tall source: the window takes the full width, centred.
+        let uv = crop_uv(0.5, Crop::default());
+        assert_eq!([uv[0], uv[2]], [0.0, 1.0]);
+        assert!(((uv[3] - uv[1]) - 0.5).abs() < 1e-6);
+        assert!((uv[1] - 0.25).abs() < 1e-6);
+        // Zooming halves the window; clamping keeps it inside at the edges.
+        assert_eq!(
+            clamp_crop(
+                1.0,
+                Crop {
+                    x: 0.0,
+                    y: 1.0,
+                    zoom: 2.0
+                }
+            ),
+            Crop {
+                x: 0.25,
+                y: 0.75,
+                zoom: 2.0
+            }
+        );
+        assert_eq!(crop_window(1.0, 2.0), (0.5, 0.5));
+        // Zoom is bounded; nonsense numbers fall back to the centre crop.
+        assert_eq!(
+            clamp_crop(
+                1.0,
+                Crop {
+                    x: 0.5,
+                    y: 0.5,
+                    zoom: 99.0
+                }
+            )
+            .zoom,
+            MAX_ZOOM
+        );
+        assert_eq!(
+            clamp_crop(
+                1.0,
+                Crop {
+                    x: 0.5,
+                    y: 0.5,
+                    zoom: 0.0
+                }
+            )
+            .zoom,
+            MIN_ZOOM
+        );
+        assert_eq!(
+            clamp_crop(
+                0.0,
+                Crop {
+                    x: f32::NAN,
+                    y: f32::INFINITY,
+                    zoom: f32::NAN
+                }
+            ),
+            Crop::default()
+        );
+    }
+    #[test]
+    fn face_crop_centres_on_the_face_with_headroom() {
+        let face = crate::face_detect::Face {
+            x: 0.5,
+            y: 0.4,
+            side: 0.25,
+        };
+        let crop = face_crop(1.0, face);
+        assert_eq!(crop.x, 0.5);
+        assert_eq!(crop.y, 0.4);
+        assert!((crop.zoom - 1.0 / (0.25 * FACE_HEADROOM)).abs() < 1e-6);
+        // A huge face never zooms out past the full frame; a zero or NaN
+        // side falls back to the default zoom.
+        let huge = face_crop(1.0, crate::face_detect::Face { side: 4.0, ..face });
+        assert_eq!(huge.zoom, MIN_ZOOM);
+        let broken = face_crop(
+            1.0,
+            crate::face_detect::Face {
+                side: f32::NAN,
+                ..face
+            },
+        );
+        assert_eq!(broken.zoom, 1.0);
+        // A face near an edge keeps the window inside the image.
+        let edge = face_crop(
+            1.0,
+            crate::face_detect::Face {
+                x: 0.05,
+                y: 0.05,
+                ..face
+            },
+        );
+        let uv = crop_uv(1.0, edge);
+        assert!(uv[0] >= 0.0 && uv[1] >= 0.0 && uv[2] <= 1.0 && uv[3] <= 1.0);
+    }
+    #[test]
+    fn entries_saved_before_cropping_default_to_the_centre_crop() {
+        let old = r#"[{"identities":[{"account":"a","origin":null,"backend_account":null,"chat":"c"}],"appearance":{"Image":{"file":"abc.png"}}}]"#;
+        let mut entries: Vec<Entry> = serde_json::from_str(old).unwrap();
+        let Appearance::Image {
+            file,
+            crop,
+            source_aspect,
+        } = &entries[0].appearance
+        else {
+            panic!("image entry");
+        };
+        assert_eq!(file, "abc.png");
+        assert_eq!(*crop, Crop::default());
+        assert_eq!(*source_aspect, 1.0);
+        // Saving now writes the crop fields, and the entry round-trips.
+        entries[0].appearance = Appearance::Image {
+            file: "abc.png".into(),
+            crop: Crop {
+                x: 0.4,
+                y: 0.3,
+                zoom: 1.5,
+            },
+            source_aspect: 1.5,
+        };
+        let persisted = serde_json::to_string(&entries).unwrap();
+        assert!(persisted.contains("\"crop\":{"), "{persisted}");
+        assert!(persisted.contains("\"source_aspect\":1.5"), "{persisted}");
+        let restored: Vec<Entry> = serde_json::from_str(&persisted).unwrap();
+        assert_eq!(restored, entries);
     }
     #[test]
     fn image_paths_cannot_escape_owned_state() {
