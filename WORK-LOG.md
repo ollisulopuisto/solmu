@@ -591,3 +591,12 @@ reserved band, but that control had no accessible label (Devin finding):
 it is now a real Button in a child UI whose interact height is capped at
 the band, pinned by an accesskit tree test. No release, #359 or DMG
 work.
+
+## 2026-11-19 - Outgoing collapsed text alignment
+
+Owner screenshot shows long outgoing text left of its bubble. The collapsed
+body painted a child at the cursor minimum before the right-aligned parent
+allocated the row. Allocate first and use that exact rect for painting and
+clipping. Incoming and outgoing containment regression added, plus synthetic
+outgoing demo fixture and an explicit before/after evidence workflow. No local
+Rust toolchain; CI and evidence run must validate before merge. No DMG dispatch.
