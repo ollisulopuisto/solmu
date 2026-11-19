@@ -3391,7 +3391,7 @@ mod monospace_tests {
         let labelled = update
             .nodes
             .iter()
-            .any(|(_, node)| node.label().is_some_and(|l| &*l == "Copy code"));
+            .any(|(_, node)| node.label().is_some_and(|l| l == "Copy code"));
         assert!(labelled, "copy button exposes no accessible label");
         output.textures_delta.clear();
     }
