@@ -6193,8 +6193,13 @@ fn natural_content_width(message: &Message, cap: f32, text: Option<f32>) -> Opti
     if let Content::Image { media, .. } | Content::Video { media, .. } = &message.content
         && !matches!(message.content, Content::Video {note:false,..} if message.thumbnail.is_none())
     {
-        let width = frame_size(media, None, cap.min(PICTURE_WIDTH), PICTURE_HEIGHT).x;
-        return Some(width.max(text.unwrap_or(0.)).min(cap));
+        let frame = frame_size(media, None, cap.min(PICTURE_WIDTH), PICTURE_HEIGHT).x;
+        // The caption draws wrapped to the picture's width, floored at
+        // CAPTION_MIN_WRAP, so that is all the width it can need. Settling
+        // to its full measure used to inflate the bubble past the picture
+        // and leave a dead strip beside it.
+        let caption = text.unwrap_or(0.).min(frame.max(CAPTION_MIN_WRAP));
+        return Some(frame.max(caption).min(cap));
     }
     let card = message.quoted.is_some()
         || match &message.content {
@@ -8439,6 +8444,18 @@ fn shared_contact_details(vcard: &str, fallback_name: &str) -> Option<SharedCont
     })
 }
 
+/// The width a caption wraps at under its picture: the picture's drawn
+/// width, but never narrower than CAPTION_MIN_WRAP while the settled bubble
+/// allows it. A quoted message spans the settled width, matching its quote
+/// block.
+fn caption_wrap(drawn: f32, settled: f32, quoted: bool) -> f32 {
+    if quoted {
+        settled.max(drawn)
+    } else {
+        drawn.max(CAPTION_MIN_WRAP).min(settled.max(drawn))
+    }
+}
+
 /// Draws a message body and returns optional footer space on its last line.
 fn content(
     ui: &mut egui::Ui,
@@ -8553,12 +8570,7 @@ fn content(
             };
             let drawn = drawn.width();
             {
-                // Wrap the caption to the settled image or quote width.
-                let wrap = if message.quoted.is_some() {
-                    width.max(drawn)
-                } else {
-                    drawn
-                };
+                let wrap = caption_wrap(drawn, width, message.quoted.is_some());
                 rich_body(
                     ui,
                     view,
@@ -8594,11 +8606,7 @@ fn content(
                 voice_transcript(ui, view, message, path, actions);
             }
             caption.as_ref().and_then(|caption| {
-                let wrap = if message.quoted.is_some() {
-                    width.max(drawn)
-                } else {
-                    drawn
-                };
+                let wrap = caption_wrap(drawn, width, message.quoted.is_some());
                 rich_body(
                     ui,
                     view,
@@ -10639,6 +10647,9 @@ pub(crate) fn thumbnail_uri(ctx: &egui::Context, chat: &str, id: &str, bytes: &[
 /// Default image bounds based on [`CARD_WIDTH`].
 const PICTURE_WIDTH: f32 = CARD_WIDTH;
 const PICTURE_HEIGHT: f32 = 440.0;
+/// A caption never wraps narrower than this under a slim portrait picture:
+/// a tall screenshot must not squeeze its caption into a one-word column.
+const CAPTION_MIN_WRAP: f32 = 200.0;
 const STICKER_SIDE: f32 = 180.0;
 /// Height of a header row, the chat list's and the conversation's alike, so
 /// their titles share a centre line.
