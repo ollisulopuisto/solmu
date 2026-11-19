@@ -5045,15 +5045,16 @@ mod context_menu_key_tests {
             .clone();
         let ctx = egui::Context::default();
         app.attach(&ctx);
-        for (key, alt) in [
-            (egui::Key::E, false),
-            (egui::Key::I, false),
-            (egui::Key::I, true),
+        for (key, alt, shift) in [
+            (egui::Key::E, false, true),
+            (egui::Key::I, false, false),
+            (egui::Key::I, true, false),
         ] {
             app.actions.clear();
             let modifiers = egui::Modifiers {
                 command: true,
                 alt,
+                shift,
                 ..egui::Modifiers::NONE
             };
             let palette = app.palette;

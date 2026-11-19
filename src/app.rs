@@ -55,8 +55,32 @@ struct ChatSearchMemo {
 pub const PAGE: usize = 60;
 /// Minimum delay between phone history requests.
 const PHONE_COOLDOWN: Duration = Duration::from_secs(6);
-/// WhatsApp message-edit window.
+/// WhatsApp message-edit window, and the conservative fallback for a
+/// network whose edit window is unknown.
 pub const EDIT_WINDOW: Duration = Duration::from_secs(15 * 60);
+
+/// The bridge network's own message-edit window, `None` where the network
+/// has no message editing at all. The windows come from each network's own
+/// documentation: WhatsApp, Facebook/Messenger, Instagram and Google
+/// Messages allow edits for 15 minutes, LinkedIn for 60, Signal for 24
+/// hours and Telegram for 48. Slack and Discord set no limit (a Slack
+/// workspace still can), so they get a generous 30 days rather than
+/// forever. Attachments stay uneditable everywhere: the Beeper API refuses
+/// them.
+pub fn edit_window(network: Option<&str>) -> Option<Duration> {
+    const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+    let name = network?.trim().to_ascii_lowercase();
+    Some(match name.as_str() {
+        "whatsapp" | "facebook/messenger" | "instagram" | "google messages" => EDIT_WINDOW,
+        "linkedin" => Duration::from_secs(60 * 60),
+        "signal" => DAY,
+        "telegram" => 2 * DAY,
+        "slack" | "discord" => 30 * DAY,
+        "imessage" => return None,
+        _ => EDIT_WINDOW,
+    })
+}
+
 /// WhatsApp revoke-for-everyone window.
 pub const REVOKE_WINDOW: Duration = Duration::from_secs(2 * 24 * 60 * 60);
 
@@ -4558,11 +4582,15 @@ impl App {
         None
     }
 
-    /// Whether an outgoing message is still editable.
-    pub fn can_edit(&self, message: &Message) -> bool {
+    /// Whether an outgoing message in `chat` is still editable. The window
+    /// is the bridge network's own, WhatsApp's when the network is unknown.
+    pub fn can_edit(&self, chat: &Chat, message: &Message) -> bool {
+        let Some(window) = edit_window(chat.backend_network.as_deref()) else {
+            return false;
+        };
         message.from_me
             && matches!(message.content, Content::Text { .. })
-            && crate::util::now() - message.timestamp <= EDIT_WINDOW.as_secs() as i64
+            && crate::util::now() - message.timestamp <= window.as_secs() as i64
     }
 
     /// Whether an outgoing message can still be revoked for everyone.
@@ -8635,12 +8663,14 @@ impl App {
     /// editing. Non-text and revoked messages cannot be edited and are
     /// skipped.
     pub(crate) fn previous_own_editable(&self) -> Option<String> {
-        let conversation = self.conversations.get(self.open_chat.as_deref()?)?;
+        let open = self.open_chat.as_deref()?;
+        let chat = self.chat(open)?;
+        let conversation = self.conversations.get(open)?;
         conversation
             .messages
             .iter()
             .rev()
-            .find(|message| self.can_edit(message))
+            .find(|message| self.can_edit(chat, message))
             .map(|message| message.id.clone())
     }
 
@@ -15336,6 +15366,46 @@ fn notification_eligible(chat: &Chat, now: i64, message_at: i64) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn edit_window_follows_the_bridge_network() {
+        let minute = 60;
+        assert_eq!(
+            edit_window(Some("WhatsApp")),
+            Some(Duration::from_secs(15 * minute))
+        );
+        assert_eq!(
+            edit_window(Some("Facebook/Messenger")),
+            Some(Duration::from_secs(15 * minute))
+        );
+        assert_eq!(
+            edit_window(Some("Google Messages")),
+            Some(Duration::from_secs(15 * minute))
+        );
+        assert_eq!(
+            edit_window(Some("linkedin")),
+            Some(Duration::from_secs(60 * minute))
+        );
+        assert_eq!(
+            edit_window(Some("Signal")),
+            Some(Duration::from_secs(24 * 60 * minute))
+        );
+        assert_eq!(
+            edit_window(Some("Telegram")),
+            Some(Duration::from_secs(48 * 60 * minute))
+        );
+        assert_eq!(
+            edit_window(Some("Slack")),
+            Some(Duration::from_secs(30 * 24 * 60 * minute))
+        );
+        assert_eq!(edit_window(Some("iMessage")), None);
+        // Unknown networks keep the conservative WhatsApp window.
+        assert_eq!(edit_window(None), Some(Duration::from_secs(15 * minute)));
+        assert_eq!(
+            edit_window(Some("Some Future Bridge")),
+            Some(Duration::from_secs(15 * minute))
+        );
+    }
+
     use super::*;
     use crate::model::{ChatKind, Content, Dialog, Media, MediaState, ReplyTarget, ToastKind};
 

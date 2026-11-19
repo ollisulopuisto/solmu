@@ -2663,6 +2663,9 @@ struct View<'a> {
     saved: Option<&'a HashSet<String>>,
     /// Ids of this chat's pinned messages, for the menu and the bubble mark.
     pins: Option<&'a HashSet<String>>,
+    /// The message the composer is editing: its bubble keeps an accent
+    /// outline, so what is being edited is unambiguous.
+    editing: Option<&'a str>,
     /// Active pins of this chat, for the notices in the transcript.
     pin_notices: &'a [crate::archive::Pinned],
     reaction: Option<&'a str>,
@@ -3045,6 +3048,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         show_timestamp: true,
         footer_right: None,
         neighbour_width: None,
+        editing: app.editing.as_deref(),
         palette,
         locale: app.locale,
         chat,
@@ -5820,6 +5824,19 @@ fn bubble_frame(
         ui.ctx()
             .data_mut(|data| data.insert_temp(bubble_id.with("backdrop-shape"), shape));
     }
+    // The message open in the composer's edit strip keeps an accent
+    // outline, transparent bubbles included.
+    let being_edited = view.editing == Some(message.id.as_str());
+    if being_edited && ui.is_rect_visible(inner.response.rect) {
+        ui.painter().rect_stroke(
+            inner.response.rect.expand(1.5),
+            widgets::BUBBLE_RADIUS + 2,
+            Stroke::new(2.0, palette.accent),
+            egui::StrokeKind::Outside,
+        );
+    }
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(bubble_id.with("being-edited"), being_edited));
     let mut painted = inner.response.rect;
     match tail {
         Some(widgets::Side::Left) => painted.min.x -= widgets::TAIL_WIDTH,
@@ -7377,6 +7394,7 @@ pub(crate) fn list_menu(
     let view = View {
         pending_media: None,
         link_menu_owner: None,
+        editing: None,
         sender_hue: None,
         hide_grouped_status: false,
         show_timestamp: true,
@@ -7469,6 +7487,7 @@ pub(crate) fn linked_bubble(
     let view = View {
         pending_media: Some(&app.pending_media),
         link_menu_owner: None,
+        editing: None,
         sender_hue: None,
         hide_grouped_status: false,
         show_timestamp,
@@ -8007,9 +8026,13 @@ fn context_menu(
         actions.push(Action::TranslateLocally(text.clone()));
     }
     let age = view.now - message.timestamp;
-    let can_edit = message.from_me
-        && matches!(message.content, Content::Text { .. })
-        && age <= crate::app::EDIT_WINDOW.as_secs() as i64;
+    let can_edit = crate::app::edit_window(view.chat.backend_network.as_deref()).is_some_and(
+        |window| {
+            message.from_me
+                && matches!(message.content, Content::Text { .. })
+                && age <= window.as_secs() as i64
+        },
+    );
     let can_revoke = if view.chat.backend_account.is_some() {
         view.chat
             .mutation_capabilities
@@ -8021,11 +8044,12 @@ fn context_menu(
             && age <= crate::app::REVOKE_WINDOW.as_secs() as i64
     };
     if can_edit
-        && widgets::menu_item(
+        && widgets::menu_item_bound(
             ui,
             &palette,
             Some(Icon::Pencil),
             &crate::i18n::gettext(view.locale, "Edit"),
+            "message-edit",
         )
     {
         if matches!(origin, MenuOrigin::List) {
@@ -14060,6 +14084,130 @@ mod tests {
     }
 
     #[test]
+    fn context_menu_ctrl_e_edits_the_menu_message() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let now = crate::util::now();
+            let mut message =
+                crate::archive::tests::message("1@s.whatsapp.net", "own-menu-target", 0, true);
+            message.timestamp = now - 10;
+            let view = View {
+                now,
+                ..*view
+            };
+            let mut actions = Vec::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        vec2(600.0, 1400.0),
+                    )),
+                    events: vec![egui::Event::Key {
+                        key: Key::E,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::COMMAND,
+                    }],
+                    ..Default::default()
+                },
+                |ui| context_menu(ui, &view, &message, MenuOrigin::Chat, &mut actions),
+            );
+            output.textures_delta.clear();
+            assert_eq!(actions, [Action::Edit("own-menu-target".into())]);
+        });
+    }
+
+    #[test]
+    fn context_menu_edit_follows_the_bridge_network_window() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let now = crate::util::now();
+            let mut message =
+                crate::archive::tests::message("1@s.whatsapp.net", "own-old", 0, true);
+            // Two hours old: past WhatsApp's 15 minutes, inside Signal's 24.
+            message.timestamp = now - 2 * 3600;
+            for (network, expected) in [
+                (Some("Signal"), Some(Action::Edit("own-old".into()))),
+                (Some("WhatsApp"), None),
+                (Some("iMessage"), None),
+                (None, None),
+            ] {
+                let mut chat = view.chat.clone();
+                chat.backend_network = network.map(str::to_string);
+                let view = View {
+                    chat: &chat,
+                    now,
+                    ..*view
+                };
+                let mut actions = Vec::new();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(600.0, 1400.0),
+                        )),
+                        events: vec![egui::Event::Key {
+                            key: Key::E,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::COMMAND,
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| context_menu(ui, &view, &message, MenuOrigin::Chat, &mut actions),
+                );
+                output.textures_delta.clear();
+                assert_eq!(
+                    actions.first().cloned(),
+                    expected,
+                    "network {network:?}: edit offered only inside its window"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn the_edited_message_bubble_keeps_an_accent_outline() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let message = crate::archive::tests::message("1@s.whatsapp.net", "own-edit", 0, true);
+            for (editing, expected) in [(Some("own-edit"), true), (None, false)] {
+                let view = View {
+                    editing,
+                    ..*view
+                };
+                let mut actions = Vec::new();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(600.0, 1400.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        bubble_frame(ui, &view, &message, None, false, false, 400.0, &mut actions);
+                    },
+                );
+                output.textures_delta.clear();
+                let marked = ctx.data(|data| {
+                    data.get_temp::<bool>(bubble_id(&view.chat.id, &message.id).with("being-edited"))
+                });
+                assert_eq!(
+                    marked,
+                    Some(expected),
+                    "editing {editing:?}: outline flag"
+                );
+            }
+        });
+    }
+
+    #[test]
     fn context_menu_shortcut_targets_the_menu_message_not_the_latest() {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
@@ -14180,6 +14328,7 @@ mod tests {
         let view = View {
             pending_media: None,
             link_menu_owner: None,
+            editing: None,
             sender_hue: None,
             hide_grouped_status: false,
             show_timestamp: true,

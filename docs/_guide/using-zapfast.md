@@ -48,8 +48,14 @@ Right-clicking a web link in message text opens only **Open link** and **Copy
 link**, for that exact destination. Copy keeps its query and fragment. The
 shortened destination can be read in full by hovering it. Right-clicking other
 message text, padding, or a link-preview card still opens the message menu.
-Editing uses the composer. Press Escape to cancel. If WhatsApp refuses an
-edit, the message keeps its earlier text.
+Editing uses the composer: `Ctrl+E` (Command+E on macOS) starts editing
+your latest message, as does Arrow Up from an empty composer, and the
+message being edited keeps an accent outline. Press Escape to cancel. How
+long a message stays editable is the network's own window: 15 minutes on
+WhatsApp, Facebook/Messenger, Instagram and Google Messages, 60 minutes on
+LinkedIn, 24 hours on Signal, 48 hours on Telegram, and no practical limit
+on Slack and Discord. If the network refuses an edit, the message keeps its
+earlier text.
 
 **Development builds** also show when your message was delivered and read when
 you click its time or ticks, as on WhatsApp.
@@ -709,8 +715,8 @@ connection and asks first. It clears messages on this computer and your phone,
 removes cached media from this computer, and keeps the chat. Media saved in
 your configured download folder stays there. **Delete chat** in
 the same menu also needs a connection and confirmation. Groups and channels
-can be left from the same menu, keeping their history here. `Ctrl+E`
-(Command+E on macOS) archives the open chat, or unarchives it from
+can be left from the same menu, keeping their history here. `Ctrl+Shift+E`
+(Command+Shift+E on macOS) archives the open chat, or unarchives it from
 **Archived**, as in WhatsApp.
 
 Solmu follows your phone's **Keep chats archived** (in WhatsApp's chat
