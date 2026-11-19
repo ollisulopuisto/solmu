@@ -354,6 +354,27 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     {
         actions.push(Action::MessageCursor(step));
     }
+    // Option+Tab (and Shift) cycles the sidebar's group headings; the list
+    // pass owns the section order. On macOS the combination has no system
+    // meaning, unlike Command+Tab.
+    if !app.list_is_flat()
+        && app.dialog.is_none()
+        && !app.show_update
+        && app.picker.is_none()
+        && app.reaction_target.is_none()
+        && !menu_open
+    {
+        ctx.input_mut(|input| {
+            // Shift with Alt is consumed first: consume_key also matches an
+            // event carrying extra modifiers, so plain Alt would take it.
+            if input.consume_key(ALT_SHIFT, Key::Tab) {
+                app.flat_group_ui.jump = Some(false);
+            }
+            if input.consume_key(Modifiers::ALT, Key::Tab) {
+                app.flat_group_ui.jump = Some(true);
+            }
+        });
+    }
     // PgUp/PgDn/Home/End scroll the open chat. PgUp/PgDn also work while the
     // composer has focus, since egui's TextEdit does not handle them itself;
     // Home/End keep moving the text cursor in a non-empty field, as ↑ keeps
@@ -1274,6 +1295,13 @@ const COMMAND_ALT: Modifiers = Modifiers {
     ..Modifiers::NONE
 };
 
+/// Alt with Shift held, for the table.
+const ALT_SHIFT: Modifiers = Modifiers {
+    alt: true,
+    shift: true,
+    ..Modifiers::NONE
+};
+
 /// One keyboard shortcut, defined once: the handler's binding, the help
 /// dialog's row and the macOS menu's accelerator all come from this entry,
 /// so the three surfaces cannot drift.
@@ -1408,6 +1436,13 @@ const SCROLL_TOP: Shortcut = Shortcut {
         text: "Jump to Oldest Loaded",
         accelerator: "Super+ArrowUp",
     }),
+};
+const GROUP_CYCLE: Shortcut = Shortcut {
+    id: "group-cycle",
+    keys: &[(Modifiers::ALT, Key::Tab), (ALT_SHIFT, Key::Tab)],
+    label: Some("Alt+Tab / Alt+Shift+Tab"),
+    description: Some("Jump to the next group in the sidebar (Shift: previous)"),
+    menu: None,
 };
 const RAIL_CHATS: Shortcut = Shortcut {
     id: "rail-chats",
@@ -1700,6 +1735,7 @@ pub static REGISTRY: &[Row] = &[
     ),
     Row::Binding(&SCROLL_BOTTOM),
     Row::Binding(&SCROLL_TOP),
+    Row::Binding(&GROUP_CYCLE),
     Row::Help("Alt+\u{2191} / Alt+\u{2193}", "Previous / next chat"),
     Row::Help("Ctrl+Shift+[ / ]", "Previous / next chat, as in WhatsApp"),
     Row::Help(TAB_STEP_KEYS, "Next / previous chat, as in Safari's tabs"),
@@ -2181,6 +2217,10 @@ mod tests {
             ),
             ("Ctrl+\u{2193}", "Jump to the newest message"),
             ("Ctrl+\u{2191}", "Jump to the oldest loaded message"),
+            (
+                "Alt+Tab / Alt+Shift+Tab",
+                "Jump to the next group in the sidebar (Shift: previous)",
+            ),
             ("Alt+\u{2191} / Alt+\u{2193}", "Previous / next chat"),
             ("Ctrl+Shift+[ / ]", "Previous / next chat, as in WhatsApp"),
             (TAB_STEP_KEYS, "Next / previous chat, as in Safari's tabs"),
@@ -2382,6 +2422,7 @@ mod tests {
     const KEYLESS_MENU: &[(&str, Option<&str>)] = &[
         ("rail-chats", Some("go-chats")),
         ("next-account", Some("go-next-number")),
+        ("group-cycle", None),
         ("forward-message", Some("chat-forward")),
         ("focus-messages", None),
         ("close-chat", None),
@@ -3810,6 +3851,30 @@ mod tests {
         let survived = press(&mut app, &ctx, Key::End, Modifiers::COMMAND);
         assert!(!survived);
         assert_eq!(app.actions, [Action::ScrollToBottom]);
+    }
+
+    #[test]
+    fn option_tab_queues_a_group_jump() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
+        assert!(!survived);
+        assert_eq!(app.flat_group_ui.jump, Some(true));
+        let survived = press(
+            &mut app,
+            &ctx,
+            Key::Tab,
+            Modifiers::ALT | Modifiers::SHIFT,
+        );
+        assert!(!survived);
+        assert_eq!(app.flat_group_ui.jump, Some(false));
+        // Plain and Ctrl+Tab never queue a jump: focus traversal and chat
+        // switching own them.
+        app.flat_group_ui.jump = None;
+        press(&mut app, &ctx, Key::Tab, Modifiers::NONE);
+        press(&mut app, &ctx, Key::Tab, Modifiers::COMMAND);
+        assert_eq!(app.flat_group_ui.jump, None);
     }
 
     #[test]

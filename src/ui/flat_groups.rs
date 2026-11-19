@@ -17,6 +17,15 @@ pub struct State {
     /// Recent sections opened past their unread filter this session: a
     /// group's id, or `None` for Other.
     pub show_all: HashSet<Option<u64>>,
+    /// The heading the group jump last landed on: a group's id, or `None`
+    /// for Other.
+    pub jumped: Option<Option<u64>>,
+    /// A queued jump direction (true: next, false: previous), consumed by
+    /// the list pass that knows the section order.
+    pub jump: Option<bool>,
+    /// The heading a jump must still scroll to and focus: the list pass
+    /// clears it when that heading is drawn.
+    jump_pending: Option<Option<u64>>,
     /// Demo/test instrumentation: actual alias widgets built in the last frame.
     #[cfg(any(test, feature = "demo"))]
     pub built_rows: usize,
@@ -623,6 +632,28 @@ fn section_header(
     response
 }
 
+/// The heading a jump lands on: the next or previous visible section from
+/// the current one, wrapping at both ends. With no current position, or one
+/// no longer on screen, forward starts at the first section and backward at
+/// the last.
+fn jump_target(
+    jumped: Option<Option<u64>>,
+    visible: &[Option<u64>],
+    forward: bool,
+) -> Option<Option<u64>> {
+    if visible.is_empty() {
+        return None;
+    }
+    let pos = jumped.and_then(|current| visible.iter().position(|id| *id == current));
+    let next = match (pos, forward) {
+        (Some(pos), true) => (pos + 1) % visible.len(),
+        (Some(pos), false) => (pos + visible.len() - 1) % visible.len(),
+        (None, true) => 0,
+        (None, false) => visible.len() - 1,
+    };
+    Some(visible[next])
+}
+
 /// Unread chats among `chats`: the same test Needs me uses, so a muted chat
 /// does not count.
 fn unread_count(chats: &[&Chat]) -> usize {
@@ -868,6 +899,26 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
     // even when it holds nothing, so the chat can always be ungrouped.
     let dragging_chat = egui::DragAndDrop::has_payload_of_type::<Member>(ui.ctx());
     let other_hidden = other_header_hidden(app, other_empty, dragging_chat);
+    // Option+Tab queues a group jump; the section order lives here. Landing
+    // unfolds the group: the jump exists to look at a group, so arriving
+    // folded would show nothing new.
+    if ui.is_enabled()
+        && let Some(forward) = app.flat_group_ui.jump.take()
+    {
+        let visible: Vec<Option<u64>> = sections
+            .iter()
+            .filter(|section| match section.id {
+                Some(_) => !header_hidden(app, section.all.is_empty()),
+                None => !other_hidden,
+            })
+            .map(|section| section.id)
+            .collect();
+        if let Some(target) = jump_target(app.flat_group_ui.jumped, &visible, forward) {
+            app.flat_group_ui.jumped = Some(target);
+            app.flat_group_ui.collapsed.remove(&target);
+            app.flat_group_ui.jump_pending = Some(target);
+        }
+    }
     if ui.is_enabled()
         && let Some(target) = app.scroll_chat_into_view.as_ref()
     {
@@ -953,6 +1004,11 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
                 unread_count(&members),
                 !recent,
             );
+            if app.flat_group_ui.jump_pending == Some(Some(id)) {
+                ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
+                response.request_focus();
+                app.flat_group_ui.jump_pending = None;
+            }
             if !recent {
                 response.dnd_set_drag_payload(GroupDrag(id));
                 if let Some(moving) = response.dnd_hover_payload::<GroupDrag>()
@@ -1046,6 +1102,11 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
                 unread_count(&members),
                 false,
             );
+            if app.flat_group_ui.jump_pending == Some(None) {
+                ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
+                response.request_focus();
+                app.flat_group_ui.jump_pending = None;
+            }
             if response.clicked() {
                 if ui.input(|input| input.modifiers.shift) {
                     fold_all(app, &groups, !folded);
@@ -1144,6 +1205,17 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn jump_target_wraps_and_starts_at_the_edges() {
+        let visible = [Some(1), Some(2), None];
+        assert_eq!(jump_target(None, &visible, true), Some(Some(1)));
+        assert_eq!(jump_target(None, &visible, false), Some(None));
+        assert_eq!(jump_target(Some(Some(1)), &visible, true), Some(Some(2)));
+        assert_eq!(jump_target(Some(None), &visible, true), Some(Some(1)));
+        assert_eq!(jump_target(Some(Some(1)), &visible, false), Some(None));
+        assert_eq!(jump_target(Some(Some(9)), &visible, true), Some(Some(1)));
+        assert_eq!(jump_target(None, &[], true), None);
+    }
     #[test]
     fn divider_header_is_dense_and_folds_on_click() {
         let ctx = egui::Context::default();
