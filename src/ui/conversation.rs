@@ -12546,6 +12546,54 @@ mod tests {
     }
 
     #[test]
+    fn captioned_photo_settles_to_the_picture_not_the_caption_measure() {
+        // A landscape picture with a long caption: the caption wraps to the
+        // picture, so the bubble must not grow to the caption's measure and
+        // leave a dead strip beside the picture.
+        let row = message(Content::Image {
+            caption: Some("a caption long enough to measure wide".into()),
+            media: media(Some(640), Some(480)),
+            motion: None,
+        });
+        assert_eq!(natural_content_width(&row, 540., Some(540.)), Some(320.));
+        // A short caption still settles to the frame, never below it.
+        assert_eq!(natural_content_width(&row, 540., Some(40.)), Some(320.));
+    }
+
+    #[test]
+    fn a_slim_portrait_photo_gives_its_caption_a_readable_floor() {
+        // 200x600 fits by height: the frame is 440 * 200/600 = 146.67 wide.
+        // A long caption needs only the wrap floor, not its full measure.
+        let row = message(Content::Image {
+            caption: Some("a long caption".into()),
+            media: media(Some(200), Some(600)),
+            motion: None,
+        });
+        assert_eq!(
+            natural_content_width(&row, 540., Some(540.)),
+            Some(200.),
+            "the caption wrap floor, not the caption's full measure"
+        );
+        // A short caption narrows to the picture frame itself.
+        let frame = 440. * 200. / 600.;
+        let width = natural_content_width(&row, 540., Some(40.)).unwrap();
+        assert!((width - frame).abs() < 0.01, "{width}");
+    }
+
+    #[test]
+    fn caption_wrap_floors_slim_pictures_but_never_overflows_the_bubble() {
+        // Portrait picture in a roomy bubble: the caption gets the floor.
+        assert_eq!(caption_wrap(140., 320., false), 200.);
+        // Landscape picture wider than the floor: wraps to the picture.
+        assert_eq!(caption_wrap(320., 320., false), 320.);
+        // A tight bubble never lets the floor overflow it.
+        assert_eq!(caption_wrap(140., 150., false), 150.);
+        // Quotes keep spanning the settled width.
+        assert_eq!(caption_wrap(140., 320., true), 320.);
+        assert_eq!(caption_wrap(320., 140., true), 320.);
+    }
+
+    #[test]
     fn received_album_uses_its_natural_card_width_not_the_viewport() {
         let mut source = media(None, None);
         source.album = Some("album".into());
