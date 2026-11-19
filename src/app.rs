@@ -5833,9 +5833,8 @@ impl App {
             Event::MessageDeleted { chat, id } => {
                 // A bridge-level deletion names the shared message id: every
                 // split part of a multi-attachment message goes with it.
-                let gone = |message: &str| {
-                    message == id || crate::model::attachment_part(message).0 == id
-                };
+                let gone =
+                    |message: &str| message == id || crate::model::attachment_part(message).0 == id;
                 // The current message deleted, the list's cursor goes to the
                 // one after it, or before it when it was the newest, so the
                 // reader stays where they were rather than at the newest.

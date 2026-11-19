@@ -51,7 +51,8 @@ impl Album {
                 if !wire.chat_id.is_empty() && wire.chat_id != chat {
                     return Err("Media history did not match the requested chat".into());
                 }
-                self.items.retain(|item| crate::model::attachment_part(&item.id).0 != wire.id);
+                self.items
+                    .retain(|item| crate::model::attachment_part(&item.id).0 != wire.id);
                 if wire.is_hidden || wire.is_deleted {
                     continue;
                 }

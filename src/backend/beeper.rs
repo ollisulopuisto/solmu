@@ -1223,7 +1223,9 @@ impl Api {
         if let Ok(wire) = self.get_message(chat, id) {
             let mut parts = self.map_messages(&wire, chat);
             if parts.len() == 1 {
-                emit(Event::MessageUpdated(Box::new(parts.pop().expect("one mapped part"))));
+                emit(Event::MessageUpdated(Box::new(
+                    parts.pop().expect("one mapped part"),
+                )));
             } else {
                 // A multi-attachment message's update replaces every part;
                 // the merge path keeps each part's download state.
@@ -3178,11 +3180,8 @@ fn map_messages(m: &BeeperMessage, fallback_chat: &str) -> Vec<Message> {
         .filter_map(|(part, &index)| {
             let mut message = base.clone();
             message.id = crate::model::attachment_part_id(&m.id, index);
-            message.content = attachment_content_at(
-                m,
-                index,
-                if part == 0 { caption.clone() } else { None },
-            )?;
+            message.content =
+                attachment_content_at(m, index, if part == 0 { caption.clone() } else { None })?;
             if part > 0 {
                 message.quoted = None;
                 message.reactions = Vec::new();
@@ -4859,10 +4858,7 @@ pub fn run(
                         result: result.clone(),
                     });
                     match result {
-                        Ok(()) => emit(Event::MessageDeleted {
-                            chat,
-                            id: wire_id,
-                        }),
+                        Ok(()) => emit(Event::MessageDeleted { chat, id: wire_id }),
                         Err(error) => emit(Event::Info(format!(
                             "Delete failed or uncertain: {error}. Check state before retrying."
                         ))),
@@ -5931,7 +5927,9 @@ fn poll_forward_mark(
                 || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
         });
         let mapped = api.map_messages(&wire, chat);
-        let failed = mapped.iter().any(|part| matches!(part.status, Delivery::Failed));
+        let failed = mapped
+            .iter()
+            .any(|part| matches!(part.status, Delivery::Failed));
         if confirmed {
             emit(Event::BeeperSendConfirmed {
                 origin: api.base_url.clone(),
@@ -6001,7 +5999,9 @@ fn poll_pending_send(
                 });
             }
             let mapped = api.map_messages(&m, chat);
-            let send_failed = mapped.iter().any(|part| matches!(part.status, Delivery::Failed));
+            let send_failed = mapped
+                .iter()
+                .any(|part| matches!(part.status, Delivery::Failed));
             // Some bridges (reported for WhatsApp) never attach a sendStatus.
             // Once the lookup has resolved to a final message ID that is ours,
             // in this chat, with no status at all, the message is no longer a
@@ -6270,7 +6270,7 @@ mod tests {
         assert!(parts[0].edited);
         // The rest are plain album items.
         for part in &parts[1..] {
-            let Content::Image { caption, .. } | Content::Video { caption, .. } = &part.content
+            let (Content::Image { caption, .. } | Content::Video { caption, .. }) = &part.content
             else {
                 panic!("album item is a picture or a clip")
             };
@@ -6296,7 +6296,11 @@ mod tests {
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0].id, "album-1");
         assert_eq!(parts[0].content.media().unwrap().album, None);
-        let Content::Image { caption: Some(caption), .. } = &parts[0].content else {
+        let Content::Image {
+            caption: Some(caption),
+            ..
+        } = &parts[0].content
+        else {
             panic!("single attachment keeps its caption")
         };
         assert_eq!(caption, "the caption");
