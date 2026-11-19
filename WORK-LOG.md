@@ -23,6 +23,19 @@ toolchain); fmt/clippy/tests run in CI, plus an evidence workflow with
 failing-first test proof and before/after demo captures (bridge-album page
 through the real mapper, synthetic content only). No merge by the author.
 
+Devin review round one: forwarding a chosen part now validates against the
+bridge id and sends only that attachment instead of failing the identity
+check or expanding to the whole set; a jump to an unloaded later part
+compares bridge ids so it stops on the right page; selecting several parts
+of one bridge message for delete coalesces to success per part when the
+first delete's tombstone answers the rest; poll notifications pick the
+first displayed row per bridge message (the first usable attachment is not
+always attachment 0) and quote jumps land on it through
+Conversation::message_or_first_part; the viewer gallery orders a message's
+parts by attachment index instead of id text ("#att10" after "#att2").
+Regression tests cover each, including a mock-server tombstone delete and a
+mock-server forward of "album-1#att2" through planning and submission.
+
 ## 2026-11-19: Avatar crop editor with macOS face centring (feat/avatar-crop-reframe)
 
 Branch feat/avatar-crop-reframe off main 7d4b87a, version 26.11.2. The

@@ -356,6 +356,18 @@ impl Conversation {
     pub fn message(&self, id: &str) -> Option<&Message> {
         self.messages.iter().find(|message| message.id == id)
     }
+
+    /// The row a bridge-level id lands on: the exact row, or the first
+    /// displayed part when the id names a bridge message split into one row
+    /// per attachment. Quote and search jumps name the bridge id.
+    pub fn message_or_first_part(&self, id: &str) -> Option<&Message> {
+        self.message(id).or_else(|| {
+            self.messages
+                .iter()
+                .filter(|message| crate::model::attachment_part(&message.id).0 == id)
+                .min_by_key(|message| crate::model::attachment_part(&message.id).1)
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -12725,6 +12737,14 @@ impl App {
                 let Some(chat) = self.open_chat.clone() else {
                     return;
                 };
+                // A quote jump names the bridge message; the list shows the
+                // row of its first usable attachment.
+                let id = self
+                    .conversations
+                    .get(&chat)
+                    .and_then(|conversation| conversation.message_or_first_part(&id))
+                    .map(|message| message.id.clone())
+                    .unwrap_or(id);
                 let load = {
                     let conversation = self.conversations.entry(chat.clone()).or_default();
                     if conversation.message(&id).is_none() && !conversation.loading_older {
@@ -23872,6 +23892,40 @@ mod tests {
             forwarded: false,
             thumbnail: None,
         }
+    }
+
+    #[test]
+    fn a_quote_jump_lands_on_the_first_part_of_a_split_message() {
+        let mut conversation = Conversation::default();
+        conversation.merge(
+            vec![
+                message("chat", "album-1#att1", 100),
+                message("chat", "album-1#att2", 100),
+                message("chat", "plain", 101),
+            ],
+            false,
+        );
+        // When attachment 0 was unusable no row carries the bridge id itself.
+        assert!(conversation.message("album-1").is_none());
+        assert_eq!(
+            conversation
+                .message_or_first_part("album-1")
+                .map(|m| m.id.as_str()),
+            Some("album-1#att1")
+        );
+        assert_eq!(
+            conversation
+                .message_or_first_part("album-1#att2")
+                .map(|m| m.id.as_str()),
+            Some("album-1#att2")
+        );
+        assert_eq!(
+            conversation
+                .message_or_first_part("plain")
+                .map(|m| m.id.as_str()),
+            Some("plain")
+        );
+        assert!(conversation.message_or_first_part("elsewhere").is_none());
     }
 
     /// Bridge participant names resolve members who never sent a loaded

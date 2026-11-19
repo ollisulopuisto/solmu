@@ -1714,8 +1714,29 @@ impl Api {
                 expanded.push(item);
                 continue;
             }
+            // A split multi-attachment message's parts share the bridge id:
+            // identity validates against it, while the chosen part's index
+            // selects its own attachment rather than the whole set.
+            let (wire, named_part) = crate::model::attachment_part(&item.source_message);
+            item.source_message = wire.to_owned();
+            let selected = item
+                .attachment
+                .or_else(|| (named_part > 0).then_some(named_part));
             match self.get_message(&item.source_chat, &item.source_message) {
                 Ok(message) if !message.attachments.is_empty() => {
+                    if let Some(selected) = selected {
+                        if selected >= message.attachments.len() {
+                            item.state = State::FailedBeforeSend(
+                                "The selected attachment is no longer available".into(),
+                            );
+                            expanded.push(item);
+                            continue;
+                        }
+                        item.attachment = Some(selected);
+                        item.planned = true;
+                        expanded.push(item);
+                        continue;
+                    }
                     for attachment in 0..message.attachments.len() {
                         let mut copy = item.clone();
                         copy.attachment = Some(attachment);
@@ -3202,6 +3223,19 @@ fn map_messages(m: &BeeperMessage, fallback_chat: &str) -> Vec<Message> {
         .collect()
 }
 
+/// One notification per bridge message: the first displayed row of a split
+/// multi-attachment message carries the alert, the rest of the album would
+/// only repeat it. The first usable part is not always attachment 0, so no
+/// id suffix picks the row; the mapping order does.
+fn notification_rows(messages: &[Message]) -> Vec<Message> {
+    let mut seen = HashSet::new();
+    messages
+        .iter()
+        .filter(|m| !m.from_me && seen.insert(crate::model::attachment_part(&m.id).0.to_owned()))
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 fn map_chat(c: &BeeperChat, network_label: &dyn Fn(&BeeperChat) -> String) -> Chat {
     map_chat_for(c, network_label, None)
@@ -3458,6 +3492,9 @@ fn load_until_message(
     let mut seen = HashSet::new();
     let mut pending: Vec<Message> = Vec::new();
     let mut complete = false;
+    // The jump target may be one part of a split multi-attachment message;
+    // history pages carry the bridge id every part shares.
+    let target_wire = crate::model::attachment_part(target).0;
     for page_no in 0..SEARCH_JUMP_MAX_PAGES {
         let state = cursors.get(chat);
         if state.is_some_and(|state| !state.has_more_older) {
@@ -3476,7 +3513,7 @@ fn load_until_message(
                 let found = page
                     .items
                     .iter()
-                    .any(|m| m.id == target && !m.is_hidden && !m.is_deleted);
+                    .any(|m| m.id == target_wire && !m.is_hidden && !m.is_deleted);
                 let next =
                     history_cursor(page.oldest_cursor.as_deref(), Some(&cursor), page.has_more);
                 let error = next.as_ref().err().cloned();
@@ -4820,15 +4857,19 @@ pub fn run(
                         {
                             return Err("Message identity changed; nothing sent".into());
                         }
-                        if message.is_deleted
-                            || message.is_hidden
+                        if message.is_deleted {
+                            // Selecting several parts of one bridge message
+                            // deletes it once per part; after the first delete
+                            // the rest meet its tombstone, which is the end
+                            // state they asked for.
+                            return Ok(());
+                        }
+                        if message.is_hidden
                             || message.send_status.as_ref().is_some_and(|s| {
                                 matches!(s.status.as_str(), "pending" | "sending" | "failed")
                             })
                         {
-                            return Err(
-                                "Message is deleted, hidden or not final; nothing sent".into()
-                            );
+                            return Err("Message is hidden or not final; nothing sent".into());
                         }
                         let mapped = api.map_message(&message, &chat);
                         if let Some(why) = caps.delete_refusal(
@@ -6108,14 +6149,7 @@ fn poll_newer(
                     });
                 }
                 if !messages.is_empty() {
-                    // One notification per bridge message: a multi-attachment
-                    // event's first part carries its identity, the rest of the
-                    // album would only repeat the same alert.
-                    let incoming: Vec<Message> = messages
-                        .iter()
-                        .filter(|m| !m.from_me && crate::model::attachment_part(&m.id).1 == 0)
-                        .cloned()
-                        .collect();
+                    let incoming = notification_rows(&messages);
                     emit(Event::Messages {
                         chat: chat.clone(),
                         messages,
@@ -6320,7 +6354,13 @@ mod tests {
         assert_eq!(caption.as_deref(), Some("the caption"));
         // The displayed id still names the wire attachment, so its download
         // fetches the right one.
+        assert_eq!(crate::model::attachment_part(&parts[0].id), ("album-1", 1));
         assert_eq!(crate::model::attachment_part(&parts[1].id), ("album-1", 2));
+        // The poll alerts once, on the first surviving part, and a quote jump
+        // naming the bridge id lands on that same row.
+        let alerts = notification_rows(&parts);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].id, "album-1#att1");
     }
 
     #[test]
@@ -7259,6 +7299,90 @@ mod tests {
         assert_eq!(
             json(6),
             serde_json::json!({"text":item.text,"attachment":{"uploadID":"uploaded-second","fileName":"second.txt"}})
+        );
+        let _ = std::fs::remove_dir_all(forward_test_dirs().cache);
+    }
+
+    #[test]
+    fn forwarding_a_later_attachment_part_sends_only_that_attachment() {
+        let message = r#"{"id":"album-1","chatID":"source","accountID":"telegram","attachments":[{"id":"mxc://first","fileName":"first.txt","mimeType":"text/plain"},{"id":"mxc://second","fileName":"second.txt","mimeType":"text/plain"},{"id":"mxc://third","fileName":"third.txt","mimeType":"text/plain"}]}"#;
+        let responses = vec![
+            (
+                "GET /v1/chats/source/messages/album-1 ",
+                200,
+                message.into(),
+            ),
+            (
+                "GET /v1/chats/source ",
+                200,
+                r#"{"id":"source","accountID":"telegram"}"#.into(),
+            ),
+            (
+                "GET /v1/chats/target ",
+                200,
+                r#"{"id":"target","accountID":"signal"}"#.into(),
+            ),
+            (
+                "GET /v1/chats/source/messages/album-1 ",
+                200,
+                message.into(),
+            ),
+            (
+                "GET /v1/chats/source/messages/album-1 ",
+                200,
+                message.into(),
+            ),
+            (
+                "GET /v1/assets/serve?url=mxc%3A%2F%2Fthird ",
+                200,
+                "third attachment".into(),
+            ),
+            (
+                "POST /v1/assets/upload/base64 ",
+                200,
+                r#"{"uploadID":"uploaded-third"}"#.into(),
+            ),
+            (
+                "POST /v1/chats/target/messages ",
+                200,
+                r#"{"pendingMessageID":"queued","chatID":"target"}"#.into(),
+            ),
+        ];
+        let (api, server) = forward_fixture(responses);
+        let mut item = forward_fixture_item(&api.base_url);
+        // The conversation list shows the third attachment under this id.
+        item.source_message = "album-1#att2".into();
+        item.planned = false;
+        let planned = api.plan_forwards(vec![item]);
+        assert_eq!(
+            planned.len(),
+            1,
+            "a chosen part never expands into the whole set"
+        );
+        assert!(planned[0].planned);
+        assert_eq!(
+            planned[0].source_message, "album-1",
+            "identity validates against the bridge id"
+        );
+        assert_eq!(planned[0].attachment, Some(2));
+        let accepted = api
+            .send_forward(&planned[0], &forward_test_dirs(), &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(accepted.pending_id, "queued");
+        let requests = server.join().unwrap();
+        let json = |index: usize| {
+            serde_json::from_str::<serde_json::Value>(
+                requests[index].split("\r\n\r\n").nth(1).unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            json(6),
+            serde_json::json!({"content":"dGhpcmQgYXR0YWNobWVudA==","fileName":"third.txt"})
+        );
+        assert_eq!(
+            json(7),
+            serde_json::json!({"text":planned[0].text,"attachment":{"uploadID":"uploaded-third","fileName":"third.txt"}})
         );
         let _ = std::fs::remove_dir_all(forward_test_dirs().cache);
     }
@@ -8370,6 +8494,53 @@ mod tests {
             events.lock().unwrap().push(event)
         });
         assert!(events.into_inner().unwrap().iter().any(|event| matches!(event, Event::Messages { messages, older: true, .. } if messages.iter().any(|m| m.id=="target"))));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn load_until_stops_on_the_page_holding_a_split_parts_bridge_message() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            let body = r#"{"items":[{"id":"album-1","chatID":"chat","timestamp":"2026-06-01T00:00:00Z","type":"IMAGE","attachments":[{"id":"mxc://x/a","type":"img"},{"id":"mxc://x/b","type":"img"},{"id":"mxc://x/c","type":"img"}]}],"hasMore":false}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let mut cursors = HashMap::from([(
+            "chat".into(),
+            ChatCursors {
+                oldest: Some("start".into()),
+                newest: None,
+                has_more_older: true,
+            },
+        )]);
+        let events = std::sync::Mutex::new(Vec::new());
+        load_until_message(&api, &mut cursors, "chat", "album-1#att2", &|event| {
+            events.lock().unwrap().push(event)
+        });
+        let events = events.into_inner().unwrap();
+        assert!(
+            events.iter().any(|event| matches!(event, Event::Messages { messages, older: true, .. } if messages.iter().any(|m| m.id == "album-1#att2"))),
+            "the page's mapped parts reach the list"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::OlderFetched { .. })),
+            "finding the part's bridge message ends the walk"
+        );
         worker.join().unwrap();
     }
 
@@ -10419,6 +10590,126 @@ mod tests {
         );
         assert_eq!(captured.len(), 6);
         stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn deleting_every_part_of_one_bridge_message_reports_success_for_each() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let message_gets = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (gets2, stop2) = (message_gets.clone(), stop.clone());
+        let server = std::thread::spawn(move || {
+            while !stop2.load(Ordering::Relaxed) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                };
+                let gets2 = gets2.clone();
+                std::thread::spawn(move || {
+                    // An accepted socket inherits the listener's non-blocking mode on macOS.
+                    stream.set_nonblocking(false).unwrap();
+                    let mut buffer = [0u8; 4096];
+                    let length = stream.read(&mut buffer).unwrap();
+                    let request = String::from_utf8_lossy(&buffer[..length]);
+                    let path = request.split_whitespace().nth(1).unwrap_or("");
+                    let body = if request.starts_with("DELETE ") {
+                        "{}".to_string()
+                    } else if path == "/v1/accounts" {
+                        ACCOUNTS_JSON.to_string()
+                    } else if path.starts_with("/v1/chats?") {
+                        CHATS_JSON.to_string()
+                    } else if path == "/v1/chats/chat" {
+                        r#"{"id":"chat","accountID":"bridge","capabilities":{"deleteForMe":true}}"#
+                            .to_string()
+                    } else if path == "/v1/chats/chat/messages/album-1" {
+                        if gets2.fetch_add(1, Ordering::Relaxed) == 0 {
+                            r#"{"id":"album-1","chatID":"chat","accountID":"bridge","text":"hi"}"#
+                                .to_string()
+                        } else {
+                            // The first part's delete already removed the
+                            // bridge message: the next part meets its tombstone.
+                            r#"{"id":"album-1","chatID":"chat","accountID":"bridge","isDeleted":true}"#
+                                .to_string()
+                        }
+                    } else if path.starts_with("/v1/chats/chat/messages") {
+                        r#"{"items":[],"hasMore":false}"#.to_string()
+                    } else {
+                        "{}".to_string()
+                    };
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                });
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = AppDirs::under(dir.path()).as_account();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        std::thread::spawn({
+            let base = base.clone();
+            move || {
+                run(
+                    BeeperConfig {
+                        base_url: base,
+                        token: "test".into(),
+                    },
+                    dirs,
+                    event_tx,
+                    rx,
+                    Waker::default(),
+                )
+            }
+        });
+        collect_until(&event_rx, Duration::from_secs(5), &|e| {
+            matches!(e, Event::Chats(_))
+        });
+        // Two parts of one bridge message are selected and deleted together.
+        let expected = crate::merged::Member {
+            origin: base,
+            account: "bridge".into(),
+            chat: "chat".into(),
+        };
+        for request in 0..2u64 {
+            tx.send(Command::BatchDelete {
+                request,
+                expected: expected.clone(),
+                chat: "chat".into(),
+                id: "album-1#att2".into(),
+                everyone: false,
+            })
+            .unwrap();
+        }
+        let events = collect_until(&event_rx, Duration::from_secs(10), &|e| {
+            matches!(
+                e,
+                Event::MutationResult {
+                    request: 1,
+                    result: Ok(()),
+                    ..
+                }
+            )
+        });
+        for done in 0..2u64 {
+            assert!(
+                events.iter().any(|e| matches!(
+                    e,
+                    Event::MutationResult {
+                        request: r,
+                        result: Ok(()),
+                        ..
+                    } if *r == done
+                )),
+                "delete request {done} reports success, not a false failure from the tombstone"
+            );
+        }
+        stop.store(true, Ordering::Relaxed);
+        let _ = server.join();
     }
 
     #[test]

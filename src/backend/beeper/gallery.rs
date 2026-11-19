@@ -78,7 +78,13 @@ impl Album {
             self.items.sort_by(|a, b| {
                 a.timestamp
                     .cmp(&b.timestamp)
-                    .then(a.id.cmp(&b.id))
+                    .then_with(|| {
+                        // Parts of one bridge message order by attachment
+                        // index: as text "#att10" would sort before "#att2".
+                        let (a_base, a_part) = crate::model::attachment_part(&a.id);
+                        let (b_base, b_part) = crate::model::attachment_part(&b.id);
+                        a_base.cmp(b_base).then(a_part.cmp(&b_part))
+                    })
                     .then(a.card.cmp(&b.card))
             });
             self.cursor = next;
@@ -186,6 +192,28 @@ mod tests {
             album
                 .load("c", Some("old"), |_| Ok(page(&[], Some("same"), true)))
                 .is_err()
+        );
+    }
+    #[test]
+    fn album_parts_order_by_attachment_index_not_id_text() {
+        let attachments: Vec<_> = (0..12)
+            .map(|i| {
+                serde_json::json!({"id":format!("mxc://example/{i}"),"type":"img","mimeType":"image/png"})
+            })
+            .collect();
+        let page: Page<BeeperMessage> = serde_json::from_value(serde_json::json!({
+            "items":[{"id":"m","chatID":"c","timestamp":"2026-11-11T10:00:00Z","type":"IMAGE","attachments":attachments}],
+            "hasMore":false
+        }))
+        .unwrap();
+        let mut album = Album::default();
+        let (items, more) = album.load("c", None, |_| Ok(page.clone())).unwrap();
+        assert!(!more);
+        let mut expected = vec!["m".to_string()];
+        expected.extend((1..12).map(|i| format!("m#att{i}")));
+        assert_eq!(
+            items.iter().map(|i| i.id.clone()).collect::<Vec<_>>(),
+            expected
         );
     }
     #[test]
