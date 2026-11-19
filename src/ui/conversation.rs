@@ -9967,11 +9967,12 @@ fn rich_body(
         let row = &laid.galley.rows[shown - 1];
         row.pos.y + row.row.size.y
     };
-    let at = ui.cursor().min;
-    let body = Rect::from_min_size(
-        at,
-        vec2(span.unwrap_or(width).max(laid.galley.size().x), height),
-    );
+    // Allocate first: outgoing rows align to the right, so the cursor's
+    // minimum is not necessarily the origin of the allocated body.
+    let (_, body) = ui.allocate_space(vec2(
+        span.unwrap_or(width).max(laid.galley.size().x),
+        height,
+    ));
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(body)
@@ -9992,7 +9993,6 @@ fn rich_body(
         laid,
         (!expanded).then_some(height),
     );
-    ui.allocate_space(body.size());
     let label = if expanded {
         crate::i18n::gettext(view.locale, "Show less").into_owned()
     } else {
