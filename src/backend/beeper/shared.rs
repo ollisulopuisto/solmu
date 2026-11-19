@@ -29,7 +29,7 @@ fn collect(
             if !ids.insert(wire.id.clone()) || wire.is_hidden || wire.is_deleted {
                 continue;
             }
-            rows.push(map_message(&wire, chat));
+            rows.extend(map_messages(&wire, chat));
             if rows.len() >= 20_000 {
                 row_cap_hit = true;
                 break;

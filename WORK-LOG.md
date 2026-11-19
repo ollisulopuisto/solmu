@@ -1,5 +1,28 @@
 # Work log
 
+## 2026-11-19: Beeper bridge messages show every attachment (fix/beeper-multi-attachment-messages)
+
+Olli reported bridge messages with several attachments showing only the
+first. The Beeper API delivers a multi-attachment send as ONE wire message
+with an attachments array, and attachment_content() mapped only
+attachments.first(). map_messages() now splits such an event into one row
+per usable attachment sharing the bridge id as their album, so the existing
+album row draws them together; the first part keeps the bridge id, caption,
+quote, reactions, mentions and edit mark, later parts get "{wire}#att<n>"
+ids (model::attachment_part / attachment_part_id) that resolve back to the
+bridge message and their own attachment index. Boundaries resolve the part
+id: get_message (edit, react, delete identity checks, forward planning,
+quote resolution), the reaction/edit/delete URLs and emitted MessageDeleted
+(delete of any part removes the whole bridge message; app-side the delete
+event removes every part and moves the cursor past the album), the media
+worker (a part downloads its own attachment via download_media_at's
+existing index parameter), and replyToMessageID on send. Poll notifications
+fire once per bridge message, not per part. Viewer gallery and the
+shared-items panel list every part. No local compile on this box (no GUI
+toolchain); fmt/clippy/tests run in CI, plus an evidence workflow with
+failing-first test proof and before/after demo captures (bridge-album page
+through the real mapper, synthetic content only). No merge by the author.
+
 ## 2026-11-19: Avatar crop editor with macOS face centring (feat/avatar-crop-reframe)
 
 Branch feat/avatar-crop-reframe off main 7d4b87a, version 26.11.2. The

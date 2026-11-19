@@ -51,24 +51,26 @@ impl Album {
                 if !wire.chat_id.is_empty() && wire.chat_id != chat {
                     return Err("Media history did not match the requested chat".into());
                 }
-                self.items.retain(|item| item.id != wire.id);
+                self.items.retain(|item| crate::model::attachment_part(&item.id).0 != wire.id);
                 if wire.is_hidden || wire.is_deleted {
                     continue;
                 }
-                let message = map_message(wire, chat);
-                for item in crate::model::MediaItem::of_content(
-                    &message.id,
-                    message.timestamp,
-                    &message.content,
-                    None,
-                    |_| false,
-                ) {
-                    if !self
-                        .items
-                        .iter()
-                        .any(|known| known.id == item.id && known.card == item.card)
-                    {
-                        self.items.push(item);
+                // A multi-attachment wire message contributes one item per part.
+                for part in map_messages(wire, chat) {
+                    for item in crate::model::MediaItem::of_content(
+                        &part.id,
+                        part.timestamp,
+                        &part.content,
+                        None,
+                        |_| false,
+                    ) {
+                        if !self
+                            .items
+                            .iter()
+                            .any(|known| known.id == item.id && known.card == item.card)
+                        {
+                            self.items.push(item);
+                        }
                     }
                 }
             }

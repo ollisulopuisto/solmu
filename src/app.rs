@@ -5831,6 +5831,11 @@ impl App {
                 }
             }
             Event::MessageDeleted { chat, id } => {
+                // A bridge-level deletion names the shared message id: every
+                // split part of a multi-attachment message goes with it.
+                let gone = |message: &str| {
+                    message == id || crate::model::attachment_part(message).0 == id
+                };
                 // The current message deleted, the list's cursor goes to the
                 // one after it, or before it when it was the newest, so the
                 // reader stays where they were rather than at the newest.
@@ -5838,18 +5843,23 @@ impl App {
                     let at = conversation
                         .messages
                         .iter()
-                        .position(|message| message.id == id)?;
-                    conversation
-                        .messages
-                        .get(at + 1)
+                        .position(|message| gone(&message.id))?;
+                    conversation.messages[at + 1..]
+                        .iter()
+                        .find(|message| !gone(&message.id))
                         .or_else(|| {
-                            at.checked_sub(1)
-                                .and_then(|at| conversation.messages.get(at))
+                            conversation.messages[..at]
+                                .iter()
+                                .rev()
+                                .find(|message| !gone(&message.id))
                         })
                         .map(|message| message.id.clone())
                 });
                 if live
-                    && self.message_cursor.get(&chat) == Some(&id)
+                    && self
+                        .message_cursor
+                        .get(&chat)
+                        .is_some_and(|cursor| gone(cursor))
                     && let Some(neighbour) = neighbour
                 {
                     // The followed message deleted, the cursor's new message
@@ -5858,34 +5868,49 @@ impl App {
                         .cursor_followed
                         .as_ref()
                         .is_some_and(|(followed_chat, followed)| {
-                            *followed_chat == chat && *followed == id
+                            *followed_chat == chat && gone(followed)
                         })
                     {
                         self.cursor_followed = Some((chat.clone(), neighbour.clone()));
                     }
                     self.message_cursor.insert(chat.clone(), neighbour);
                 }
-                if let Some(conversation) = self.conversations.get_mut(&chat) {
-                    conversation.messages.retain(|message| message.id != id);
-                    conversation.width_book.invalidate(&id);
-                }
+                let removed = if let Some(conversation) = self.conversations.get_mut(&chat) {
+                    let removed: Vec<String> = conversation
+                        .messages
+                        .iter()
+                        .filter(|message| gone(&message.id))
+                        .map(|message| message.id.clone())
+                        .collect();
+                    conversation.messages.retain(|message| !gone(&message.id));
+                    for id in &removed {
+                        conversation.width_book.invalidate(id);
+                    }
+                    removed
+                } else {
+                    Vec::new()
+                };
                 if live && self.editing.as_deref() == Some(id.as_str()) {
                     self.editing = None;
                     self.composer.clear();
                 }
-                self.forget_viewer_item(&chat, &id);
+                for id in &removed {
+                    self.forget_viewer_item(&chat, id);
+                }
                 // A photo that left the chat leaves the album on screen.
                 self.refresh_viewer_album(&chat);
                 // A deleted message leaves the line under the header and
                 // the mark on its bubble behind.
                 if let Some(pins) = self.chat_pins.get_mut(&chat) {
-                    pins.retain(|pin| pin.id != id);
+                    pins.retain(|pin| !gone(&pin.id));
                 }
                 if let Some(ids) = self.pins.get_mut(&chat) {
-                    ids.remove(&id);
+                    ids.retain(|pinned| !gone(pinned));
                 }
                 // A deleted message leaves the starred list.
-                self.forget_star(&chat, &id);
+                for id in &removed {
+                    self.forget_star(&chat, id);
+                }
             }
             Event::ChatRemoved { chat } => {
                 self.forget_chat(&chat);
@@ -22995,6 +23020,56 @@ mod tests {
                 Ok(Command::SetMessagePinned { pinned: false, .. })
             ),
             "unpinning always goes through"
+        );
+    }
+
+    /// A bridge-level deletion names the shared message id: every split part
+    /// of a multi-attachment message leaves the conversation with it.
+    #[test]
+    fn a_deleted_bridge_message_removes_all_its_parts() {
+        let mut app = app();
+        let (backend, events) = Backend::detached();
+        app.backend = backend;
+        let chat = "1@s.whatsapp.net";
+        app.chats.push(Chat::new(chat.into(), "Fixture".into()));
+        let part = |id: &str, timestamp: i64| {
+            let mut row = message(chat, id, timestamp);
+            row.content = Content::Image {
+                caption: None,
+                motion: None,
+                media: crate::model::Media {
+                    mime: "image/jpeg".into(),
+                    size: 0,
+                    width: None,
+                    height: None,
+                    album: Some("album-1".into()),
+                    path: None,
+                    state: Default::default(),
+                },
+            };
+            row
+        };
+        app.conversations.entry(chat.into()).or_default().merge(
+            vec![
+                part("album-1", 1),
+                part("album-1#att1", 2),
+                part("album-1#att2", 3),
+                message(chat, "other", 4),
+            ],
+            false,
+        );
+        events
+            .send(Event::MessageDeleted {
+                chat: chat.to_owned(),
+                id: "album-1".into(),
+            })
+            .unwrap();
+        app.handle_events();
+        let messages = &app.conversations[chat].messages;
+        assert_eq!(
+            messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec!["other"],
+            "the whole album goes, unrelated rows stay"
         );
     }
 

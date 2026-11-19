@@ -1943,6 +1943,39 @@ impl Media {
     }
 }
 
+/// Marks the attachment index inside the displayed id of one part of a
+/// bridge message that carried several attachments. The Beeper API delivers
+/// a multi-attachment message as one event, while the conversation list
+/// shows each attachment as its own message; the extra parts carry the
+/// bridge id with this mark and the attachment's 1-based-onward index.
+const ATTACHMENT_PART_MARK: &str = "#att";
+
+/// Displayed message id for the part showing attachment `index` (0-based) of
+/// the bridge message `wire_id`. Attachment 0 keeps the bridge id itself, so
+/// single-attachment messages and every id the bridge returns stay as they
+/// are, and replies or deletions naming the bridge id hit the first part.
+pub fn attachment_part_id(wire_id: &str, index: usize) -> String {
+    if index == 0 {
+        wire_id.to_string()
+    } else {
+        format!("{wire_id}{ATTACHMENT_PART_MARK}{index}")
+    }
+}
+
+/// The bridge message id behind a displayed id, and which attachment that
+/// part shows: `(id, 0)` for anything that is not a split part. Only the
+/// exact mark plus a positive index is read as a part suffix, so a bridge id
+/// that merely contains the mark keeps its own identity.
+pub fn attachment_part(id: &str) -> (&str, usize) {
+    let Some((base, suffix)) = id.rsplit_once(ATTACHMENT_PART_MARK) else {
+        return (id, 0);
+    };
+    match suffix.parse::<usize>() {
+        Ok(index) if index >= 1 && !base.is_empty() => (base, index),
+        _ => (id, 0),
+    }
+}
+
 /// A motion photo's clip. Its download keys stay in the archive.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Motion {
@@ -3609,6 +3642,18 @@ mod storage_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn attachment_part_ids_round_trip_to_the_bridge_message() {
+        use super::{attachment_part, attachment_part_id};
+        assert_eq!(attachment_part_id("m1", 0), "m1");
+        assert_eq!(attachment_part(&attachment_part_id("m1", 3)), ("m1", 3));
+        assert_eq!(attachment_part("m1"), ("m1", 0));
+        // Lookalikes keep their own identity.
+        assert_eq!(attachment_part("m1#att"), ("m1#att", 0));
+        assert_eq!(attachment_part("m1#attx"), ("m1#attx", 0));
+        assert_eq!(attachment_part("#att2"), ("#att2", 0));
+    }
+
     #[test]
     fn list_mode_next_cycles_all_unread_needs_me() {
         use super::ListMode;
