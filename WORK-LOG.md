@@ -514,12 +514,17 @@ back to a 0.5 px bound, and a new test fails on any hyphen glyph in a
 laid-out code block. No release, #359
 or DMG work.
 
-## 2026-11-19 - Copy code button floats below the panel (overlap repair)
+## 2026-11-19 - Copy code button floats above the panel (overlap repair)
 
 The Copy code button painted at the panel's top right inside it, over the
 code text whenever a row reached the right edge (visible on narrow panels
-like two short shell commands). It now hangs off the panel's bottom right,
-in the blank row the closing fence leaves, so it can never cover code. The
-panel geometry is shared (code_panel_rects/copy_button_rect) and a test
-asserts the button rect intersects no code row. No release, #359 or DMG
-work.
+like two short shell commands). It now hangs off the panel's top right, in
+the blank row the opening fence's dropped marker leaves, so it can never
+cover code. A first version hung it below the panel, but a collapse clip
+cuts a long block mid-panel and the clamped panel bottom sits at the clip,
+which left the button outside the visible body and unreachable (Devin
+finding on d0034ec). Top placement stays visible whenever any of the
+block is. The panel geometry is shared (code_panel_rects/
+copy_button_rect); one test asserts the button rect intersects no code
+row, another that it stays above a mid-block clip. No release, #359 or
+DMG work.

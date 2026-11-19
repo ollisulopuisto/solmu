@@ -1327,13 +1327,16 @@ pub fn code_panel_rects(
         .collect()
 }
 
-/// The Copy code button hangs off the panel's bottom right: a closed fence
-/// leaves a blank row under its block, so the button sits in empty space
-/// and can never cover code, however narrow the panel.
+/// The Copy code button hangs off the panel's top right: the opening
+/// fence's dropped marker leaves a blank row above the block, so the
+/// button sits in empty space and can never cover code, however narrow
+/// the panel. Top placement keeps it visible when a collapse clip cuts
+/// the block mid-panel: the clamped panel bottom lands at or below the
+/// clip, but the top stays on screen.
 pub fn copy_button_rect(panel: Rect) -> Rect {
     Rect::from_min_max(
-        Pos2::new(panel.max.x - 68.0, panel.max.y - 2.0),
-        Pos2::new(panel.max.x - 4.0, panel.max.y + 14.0),
+        Pos2::new(panel.max.x - 68.0, panel.min.y - 16.0),
+        Pos2::new(panel.max.x - 4.0, panel.min.y - 2.0),
     )
 }
 
@@ -3282,6 +3285,40 @@ mod monospace_tests {
                         "copy button {button:?} covers code row {text_rect:?}"
                     );
                 }
+            }
+        });
+        output.textures_delta.clear();
+    }
+
+    /// A collapse clip can cut a code block mid-panel: the clamped
+    /// panel's bottom sits at the clip, so a button hanging below the
+    /// panel lands outside the visible body and Copy code is
+    /// unreachable. The button must hang off the panel's top, which
+    /// stays visible whenever any of the block is.
+    #[test]
+    fn the_copy_button_stays_visible_on_a_clipped_block() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "intro\n```\nline one\nline two\nline three\nline four\nline five\n```";
+            let laid = layout_balanced(ui, text, &[], &style, 200.0, false);
+            // Cut the block mid-panel: rows past the clip are invisible.
+            let clip = laid.galley.rows[4].pos.y + 1.0;
+            let body = Rect::from_min_size(Pos2::ZERO, laid.galley.size());
+            let panels = code_panel_rects(body, Pos2::ZERO, &laid, Some(clip));
+            assert_eq!(panels.len(), 1, "expected one clipped code panel");
+            for (_, panel) in panels {
+                let button = copy_button_rect(panel);
+                assert!(
+                    button.max.y <= clip,
+                    "copy button {button:?} falls below the clip {clip}"
+                );
             }
         });
         output.textures_delta.clear();
