@@ -490,3 +490,18 @@ against its chat, not the open background chat. Global shortcuts defer while a
 popup is open. Hints use the shared shortcut registry/platform notation. No
 avatar right-click entry. Native target/collision tests and dark/light capture
 scenes added; results pending. No release, #359 or DMG work.
+
+## 2026-11-19 - Code panel row kinds repair (#388), hyphen-in-code root fix
+
+PR #388 fixes the five code-panel test failures #382 merged with. Row kinds
+now place blank rows by their newline's character position inside a block's
+content bounds instead of inheriting the previous row's kind, so the dropped
+fence markers' blank rows stay plain while a blank line inside a fence stays
+code. The remaining width failure was a real overflow, not glyph snap: the
+balancer hyphenated long code runs and measured the inserted "-" at the
+regular font's advance while the galley paints it at the code font's
+(9.15 vs ~5 px at body 16), and a hyphen in code shows a character that was
+never typed. Code tokens no longer hyphenate; over-wide code wraps per
+character as before. The width test is back to a 0.5 px bound, and a new
+test fails on any hyphen glyph in a laid-out code block. No release, #359
+or DMG work.

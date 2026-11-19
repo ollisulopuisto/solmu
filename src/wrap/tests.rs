@@ -10,13 +10,15 @@ fn widths_of(text: &str) -> Vec<f32> {
     text.chars().map(|_| PX).collect()
 }
 
-fn no_hyphens(_: &str) -> Vec<Hyphen> {
+fn no_hyphens(_: usize, _: &str) -> Vec<Hyphen> {
     Vec::new()
 }
 
 /// A hyphenator scripted per word: (word, [(char index, joint)]).
-fn scripted(points: Vec<(&'static str, Vec<(usize, bool)>)>) -> impl Fn(&str) -> Vec<Hyphen> {
-    move |word| {
+fn scripted(
+    points: Vec<(&'static str, Vec<(usize, bool)>)>,
+) -> impl Fn(usize, &str) -> Vec<Hyphen> {
+    move |_, word| {
         points
             .iter()
             .find(|(w, _)| *w == word)
@@ -30,7 +32,12 @@ fn scripted(points: Vec<(&'static str, Vec<(usize, bool)>)>) -> impl Fn(&str) ->
     }
 }
 
-fn plan(text: &str, urls: &[(usize, usize)], hyph: &dyn Fn(&str) -> Vec<Hyphen>, cap: f32) -> Plan {
+fn plan(
+    text: &str,
+    urls: &[(usize, usize)],
+    hyph: &dyn Fn(usize, &str) -> Vec<Hyphen>,
+    cap: f32,
+) -> Plan {
     let items = tokenize(text, &widths_of(text), urls, hyph);
     balance(&items, cap, PX)
 }

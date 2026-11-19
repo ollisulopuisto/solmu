@@ -516,7 +516,12 @@ fn measure_job(
         let token_chars = next - pos;
         let token_width: f32 = pieces.iter().map(|p| p.3).sum();
         let is_url = urls.iter().any(|(s, e)| *s <= start && end <= *e);
+        // Code never hyphenates: an inserted "-" would paint as code that
+        // is not in the text (and at the code font's width, which the
+        // planner's regular-font hyphen width would undercount).
+        let mono = font_at(start).family == egui::FontFamily::Monospace;
         let hyphenated = !is_url
+            && !mono
             && !first.is_whitespace()
             && token_chars > crate::wrap::MIN_HYPHENATED_CHARS
             && !text[start..end].contains(emoji::PLACEHOLDER)
@@ -542,8 +547,8 @@ fn measure_job(
         }
         pos = next;
     }
-    let items = crate::wrap::tokenize(text, &widths, &urls, &|word| {
-        if word.contains(emoji::PLACEHOLDER) {
+    let items = crate::wrap::tokenize(text, &widths, &urls, &|at, word| {
+        if word.contains(emoji::PLACEHOLDER) || font_at(at).family == egui::FontFamily::Monospace {
             Vec::new()
         } else {
             crate::hyphenate::hyphenate(word)
@@ -3151,14 +3156,41 @@ mod monospace_tests {
             for (index, row) in laid.galley.rows.iter().enumerate() {
                 // The planner sums advances while the galley snaps glyph
                 // positions to pixels, so a shaped row can exceed the
-                // planned width by a pixel or two. What must never happen
-                // is an unwrapped line painting far past the room.
+                // planned width by a fraction of a pixel, never more.
                 assert!(
-                    row.row.size.x <= 202.0,
+                    row.row.size.x <= 200.5,
                     "row {index} is {} wide in a 200-wide room",
                     row.row.size.x
                 );
             }
+        });
+        output.textures_delta.clear();
+    }
+
+    /// A long code line soft-wraps character by character: a hyphenation
+    /// "-" inside a fenced block would paint as code that was never typed.
+    #[test]
+    fn a_long_code_line_wraps_without_a_hyphen_glyph() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let long = "x".repeat(300);
+            let text = format!("```\ncmd {long} end\n```");
+            let laid = layout_balanced(ui, &text, &[], &style, 200.0, false);
+            let hyphens = laid
+                .galley
+                .rows
+                .iter()
+                .flat_map(|row| row.row.glyphs.iter())
+                .filter(|glyph| glyph.chr == '-')
+                .count();
+            assert_eq!(hyphens, 0, "code rows paint no inserted hyphen");
         });
         output.textures_delta.clear();
     }

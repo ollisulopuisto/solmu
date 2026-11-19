@@ -106,12 +106,13 @@ impl Item {
 
 /// Splits `text` into tokens. `widths` carries one advance width per
 /// character of `text`; `urls` marks byte ranges detected as URLs;
-/// `hyphenate` offers hyphenation points for a single word.
+/// `hyphenate` offers hyphenation points for a single word, keyed by the
+/// word's byte offset so the caller can exempt spans that must not hyphenate.
 pub fn tokenize(
     text: &str,
     widths: &[f32],
     urls: &[(usize, usize)],
-    hyphenate: &dyn Fn(&str) -> Vec<Hyphen>,
+    hyphenate: &dyn Fn(usize, &str) -> Vec<Hyphen>,
 ) -> Vec<Item> {
     debug_assert_eq!(widths.len(), text.chars().count());
     let chars: Vec<(usize, char)> = text.char_indices().collect();
@@ -137,7 +138,7 @@ pub fn tokenize(
                 item.kind = Kind::Url;
             } else if item.len() > MIN_HYPHENATED_CHARS {
                 let word = &text[item.start..item.end];
-                let mut points = hyphenate(word);
+                let mut points = hyphenate(item.start, word);
                 points.retain(|h| {
                     h.at >= MIN_HYPHEN_FRAGMENT && h.at <= item.len() - MIN_HYPHEN_FRAGMENT
                 });
