@@ -656,7 +656,9 @@ Click a message result to jump to it, or a contact to start a chat. Use
 without leaving the composer (Command instead of Ctrl on macOS). With the
 sidebar grouped into sections, `Alt+Tab` jumps to the next group heading
 (`Alt+Shift+Tab` to the previous), unfolding the group it lands on and
-wrapping around after the last. Use
+wrapping around after the last. `Ctrl+Shift+G` collapses every group
+(pressing it again when all are collapsed expands them), and the View menu
+carries Collapse All Groups and Expand All Groups. Use
 `Ctrl+1` through `Ctrl+0` to open the favorite at that position in the sidebar. Within an open
 chat, `PgUp`/`PgDn` scroll by about a page, and `Home`/`End` (or `Ctrl+End`,
 or `Ctrl+↓`/`Ctrl+↑`) jump to the top or the newest message when the input

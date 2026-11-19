@@ -3267,6 +3267,12 @@ pub enum Action {
     /// Jumps the sidebar to the next (true) or previous (false) group
     /// heading, from the View menu; the key route queues the same jump.
     JumpGroup(bool),
+    /// Collapses (true) or expands (false) every group heading in the chat
+    /// list, from the View menu.
+    FoldAllGroups(bool),
+    /// Shift+Cmd+G: collapse every group heading, or expand them all when
+    /// everything already is folded.
+    ToggleFoldAllGroups,
     /// Widens an in-chat find to every chat: the query moves to the chat
     /// list's search field, which then searches all chats.
     FindEverywhere,

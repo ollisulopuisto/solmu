@@ -159,6 +159,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     // or with no field focused.
     let jump_allowed =
         jump_keys_reach_chat(editing_text, composer_focused, app.composer.is_empty());
+    let menu_open = egui::Popup::is_any_open(ctx);
     let mut actions = Vec::new();
     ctx.input_mut(|input| {
         // The message list's key counts only with its modifier alone:
@@ -176,6 +177,21 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
                 } if messages_modifier_alone(*modifiers)
             )
         });
+        // Cmd+Shift+G folds every group heading (unfolds when all are
+        // folded). Consumed before plain Cmd+G below: consume_key also
+        // matches an event carrying extra modifiers, so the layout toggle
+        // would swallow the chord. In a flat list the chord is reserved and
+        // does nothing. The list pass owns the sections, so this only queues.
+        if input.consume_key(COMMAND_SHIFT, Key::G)
+            && app.grouped_list_showing()
+            && app.dialog.is_none()
+            && !app.show_update
+            && app.picker.is_none()
+            && app.reaction_target.is_none()
+            && !menu_open
+        {
+            actions.push(Action::ToggleFoldAllGroups);
+        }
         let mut key = |modifiers: Modifiers, key: Key, action: Action| {
             if input.consume_key(modifiers, key) {
                 actions.push(action);
@@ -324,7 +340,6 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     }
     drop_shortcut_text(ctx);
     // Escape cancels the topmost state. Menus handle Escape themselves.
-    let menu_open = egui::Popup::is_any_open(ctx);
     let search_focused = ctx.memory(|memory| memory.has_focus(egui::Id::new("chat-search")));
     if app.chat_view()
         && app.selection.as_ref().is_some_and(|(chat, selected)| {
@@ -1461,6 +1476,13 @@ const GROUP_CYCLE: Shortcut = Shortcut {
     description: Some("Jump to the next group in the sidebar (Shift: previous)"),
     menu: None,
 };
+const FOLD_TOGGLE: Shortcut = Shortcut {
+    id: "fold-toggle",
+    keys: &[(COMMAND_SHIFT, Key::G)],
+    label: Some("Ctrl+Shift+G"),
+    description: Some("Collapse all groups in the sidebar (again: expand)"),
+    menu: None,
+};
 const RAIL_CHATS: Shortcut = Shortcut {
     id: "rail-chats",
     keys: &[(COMMAND_SHIFT, Key::Num1)],
@@ -1753,6 +1775,7 @@ pub static REGISTRY: &[Row] = &[
     Row::Binding(&SCROLL_BOTTOM),
     Row::Binding(&SCROLL_TOP),
     Row::Binding(&GROUP_CYCLE),
+    Row::Binding(&FOLD_TOGGLE),
     Row::Help("Alt+\u{2191} / Alt+\u{2193}", "Previous / next chat"),
     Row::Help("Ctrl+Shift+[ / ]", "Previous / next chat, as in WhatsApp"),
     Row::Help(TAB_STEP_KEYS, "Next / previous chat, as in Safari's tabs"),
@@ -1883,6 +1906,8 @@ pub const MENU_COMMANDS: &[&str] = &[
     "view-page-down",
     "view-next-group",
     "view-previous-group",
+    "view-collapse-all",
+    "view-expand-all",
     "chat-clear",
     "chat-leave",
 ];
@@ -1983,6 +2008,12 @@ pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
         "view-previous-group" => app
             .grouped_list_showing()
             .then_some(Action::JumpGroup(false)),
+        "view-collapse-all" => app
+            .grouped_list_showing()
+            .then_some(Action::FoldAllGroups(true)),
+        "view-expand-all" => app
+            .grouped_list_showing()
+            .then_some(Action::FoldAllGroups(false)),
         "chat-clear" => chat
             .filter(|_| app.is_connected())
             .map(|chat| Action::ShowDialog(Dialog::ConfirmClearChat(chat.id.clone()))),
@@ -2246,6 +2277,10 @@ mod tests {
                 "Alt+Tab / Alt+Shift+Tab",
                 "Jump to the next group in the sidebar (Shift: previous)",
             ),
+            (
+                "Ctrl+Shift+G",
+                "Collapse all groups in the sidebar (again: expand)",
+            ),
             ("Alt+\u{2191} / Alt+\u{2193}", "Previous / next chat"),
             ("Ctrl+Shift+[ / ]", "Previous / next chat, as in WhatsApp"),
             (TAB_STEP_KEYS, "Next / previous chat, as in Safari's tabs"),
@@ -2448,6 +2483,8 @@ mod tests {
         ("rail-chats", Some("go-chats")),
         ("next-account", Some("go-next-number")),
         ("group-cycle", Some("view-next-group")),
+        ("group-cycle", None),
+        ("fold-toggle", None),
         ("forward-message", Some("chat-forward")),
         ("focus-messages", None),
         ("close-chat", None),
@@ -3909,6 +3946,21 @@ mod tests {
         assert!(app.list_is_flat());
         assert!(menu_actions(&app, "view-next-group").is_empty());
         assert!(menu_actions(&app, "view-previous-group").is_empty());
+    }
+
+    #[test]
+    fn shift_command_g_queues_a_fold_toggle() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        let survived = press(&mut app, &ctx, Key::G, COMMAND_SHIFT);
+        assert!(!survived);
+        assert_eq!(app.actions, [Action::ToggleFoldAllGroups]);
+        // Plain Cmd+G still switches the list layout.
+        app.actions.clear();
+        let survived = press(&mut app, &ctx, Key::G, Modifiers::COMMAND);
+        assert!(!survived);
+        assert_eq!(app.actions, [Action::ToggleListLayout]);
     }
 
     #[test]
