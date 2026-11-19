@@ -18398,11 +18398,12 @@ mod tests {
         (app, ctx, chat, events)
     }
 
-    /// Whether the floating return-to-bottom button is drawn, found by its
+    /// Whether the floating jump-to-latest pill is drawn, found by its
     /// name in the accessibility tree.
     fn return_to_bottom_shown(app: &mut App, ctx: &egui::Context) -> bool {
         tree_after(app, ctx, None).nodes.iter().any(|(_, node)| {
-            node.role() == egui::accesskit::Role::Button && node.label() == Some("Newest message")
+            node.role() == egui::accesskit::Role::Button
+                && node.label().is_some_and(|label| label.contains("Jump to latest"))
         })
     }
 

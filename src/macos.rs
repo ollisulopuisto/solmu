@@ -138,6 +138,9 @@ fn build_menu() -> tray_icon::menu::Result<Menu> {
         &registered("list-mode"),
         &registered("list-layout"),
         &Native::separator(),
+        &item("view-page-up", "Scroll Up a Page", Some("PageUp")),
+        &item("view-page-down", "Scroll Down a Page", Some("PageDown")),
+        &Native::separator(),
         &Native::fullscreen(None),
     ])?;
     let go = Submenu::new("Go", true);
@@ -163,7 +166,8 @@ fn build_menu() -> tray_icon::menu::Result<Menu> {
         &Native::separator(),
         &item("chat-quote-reply", "Quote Reply", None),
         &item("chat-forward", "Forward\u{2026}", None),
-        &item("chat-newest", "Jump to Newest", None),
+        &registered("scroll-bottom"),
+        &registered("scroll-top"),
         &Native::separator(),
         &item("chat-clear", "Clear Chat\u{2026}", None),
         &item("chat-leave", "Leave\u{2026}", None),
