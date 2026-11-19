@@ -3932,6 +3932,9 @@ mod tests {
         assert!(app.list_is_flat());
         assert!(menu_actions(&app, "view-next-group").is_empty());
         assert!(menu_actions(&app, "view-previous-group").is_empty());
+    }
+
+    #[test]
     fn shift_command_g_queues_a_fold_toggle() {
         let (_root, mut app, ids) = app_with_chats(1);
         app.open_chat = Some(ids[0].clone());
