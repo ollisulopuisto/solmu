@@ -4313,9 +4313,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         let rect = output.inner_rect;
         let unread = app.chat(&chat.id).map_or(0, |chat| chat.unread);
         let label = crate::i18n::gettext(app.locale, "\u{2193} Jump to latest").to_string();
-        let galley = ui
-            .painter()
-            .layout_no_wrap(label.clone(), theme::semibold(13.0), palette.accent);
+        let galley =
+            ui.painter()
+                .layout_no_wrap(label.clone(), theme::semibold(13.0), palette.accent);
         // The unread count rides inside the pill's right end.
         let badge_w = if unread > 0 { 26.0 } else { 0.0 };
         let size = galley.size() + egui::vec2(36.0 + badge_w, 16.0);

@@ -1386,7 +1386,10 @@ const FORWARD: Shortcut = Shortcut {
 };
 const SCROLL_BOTTOM: Shortcut = Shortcut {
     id: "scroll-bottom",
-    keys: &[(Modifiers::COMMAND, Key::ArrowDown), (Modifiers::COMMAND, Key::End)],
+    keys: &[
+        (Modifiers::COMMAND, Key::ArrowDown),
+        (Modifiers::COMMAND, Key::End),
+    ],
     label: Some("Ctrl+\u{2193}"),
     description: Some("Jump to the newest message"),
     menu: Some(MenuItem {

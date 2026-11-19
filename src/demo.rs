@@ -18403,7 +18403,9 @@ mod tests {
     fn return_to_bottom_shown(app: &mut App, ctx: &egui::Context) -> bool {
         tree_after(app, ctx, None).nodes.iter().any(|(_, node)| {
             node.role() == egui::accesskit::Role::Button
-                && node.label().is_some_and(|label| label.contains("Jump to latest"))
+                && node
+                    .label()
+                    .is_some_and(|label| label.contains("Jump to latest"))
         })
     }
 
