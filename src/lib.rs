@@ -58,6 +58,7 @@ pub mod read_http;
 pub mod recurrence;
 pub mod run_widths;
 pub mod safety;
+pub mod hidden_messages;
 pub mod saved;
 pub mod scheduler;
 pub mod scheduler_api;

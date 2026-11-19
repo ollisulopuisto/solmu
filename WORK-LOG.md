@@ -600,3 +600,12 @@ allocated the row. Allocate first and use that exact rect for painting and
 clipping. Incoming and outgoing containment regression added, plus synthetic
 outgoing demo fixture and an explicit before/after evidence workflow. No local
 Rust toolchain; CI and evidence run must validate before merge. No DMG dispatch.
+## 2026-11-19 - Local message display masks
+
+Distinct Hide in Solmu action, not bridge Delete for me. A small placeholder
+keeps Unhide available after restart. Only exact source/message identities are
+persisted beside local bookmarks; original messages are not deleted. Hidden
+chat albums use individual rows so masks cannot hide sibling attachments.
+Tests cover identity isolation, serde round trip and no backend command.
+No local Rust toolchain; CI and synthetic before/after evidence still pending.
+No DMG dispatch.

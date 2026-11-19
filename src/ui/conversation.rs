@@ -2661,6 +2661,7 @@ struct View<'a> {
     /// Ids of this chat's locally saved messages, for the menu and the mark
     /// in the footer.
     saved: Option<&'a HashSet<String>>,
+    hidden: Option<&'a HashSet<String>>,
     /// Ids of this chat's pinned messages, for the menu and the bubble mark.
     pins: Option<&'a HashSet<String>>,
     /// The message the composer is editing: its bubble keeps an accent
@@ -2994,7 +2995,12 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     let streak_hues = chat
         .is_group()
         .then(|| sender_streak_hues(&conversation.messages));
-    let starts = row_starts(&conversation.messages, app.selecting_in(&chat.id));
+    let has_hidden = !crate::hidden_messages::ids_in(
+        &app.settings.beeper.hidden_messages,
+        &app.later_key(chat),
+    )
+    .is_empty();
+    let starts = row_starts(&conversation.messages, app.selecting_in(&chat.id) || has_hidden);
     let total = starts.len();
     // The current message: the one the cursor names, or the newest when it
     // names none, or a message that is gone. An album's item stands for its
@@ -3040,6 +3046,11 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             .into_iter()
             .map(str::to_owned)
             .collect();
+    let hidden_ids: HashSet<String> =
+        crate::hidden_messages::ids_in(&app.settings.beeper.hidden_messages, &app.later_key(chat))
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
     let view = View {
         pending_media: Some(&app.pending_media),
         link_menu_owner: None,
@@ -3076,6 +3087,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         open_menu: app.open_message_menu.as_deref(),
         starred: app.stars.get(&chat.id),
         saved: Some(&saved_ids),
+        hidden: Some(&hidden_ids),
         pins: app.pins.get(&chat.id),
         pin_notices: app
             .chat_pins
@@ -3423,6 +3435,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                         // same parent id. Only its first item owns a row; the
                         // remaining consecutive items are painted in that row.
                         if selection.is_none()
+                            && !has_hidden
                             && album_continues(&conversation.messages, message_index)
                         {
                             rows.insert(
@@ -3435,8 +3448,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                             previous = Some(message);
                             continue;
                         }
-                        let album = selection
-                            .is_none()
+                        let album = (selection.is_none() && !has_hidden)
                             .then(|| album_run(&conversation.messages, message_index))
                             .flatten();
                         let row_contains = |id: &str| {
@@ -5618,6 +5630,23 @@ fn bubble_frame(
     max_width: f32,
     actions: &mut Vec<Action>,
 ) -> egui::Response {
+    if view.hidden.is_some_and(|ids| ids.contains(&message.id)) {
+        return ui
+            .horizontal(|ui| {
+                ui.label(crate::i18n::gettext(view.locale, "Message hidden in Solmu"));
+                if ui
+                    .button(crate::i18n::gettext(view.locale, "Unhide"))
+                    .clicked()
+                {
+                    actions.push(Action::SetMessageHidden {
+                        chat: view.chat.id.clone(),
+                        message: message.id.clone(),
+                        hidden: false,
+                    });
+                }
+            })
+            .response;
+    }
     let outside_palette = view.palette;
     let own = message.from_me;
     let owner = bubble_id(&view.chat.id, &message.id);
@@ -7452,6 +7481,11 @@ pub(crate) fn list_menu(
     let mention_names = |id: &str| app.mention_name(id);
     let avatars = HashMap::new();
     let keyboard_navigation = std::cell::Cell::new(false);
+    let hidden_ids: HashSet<String> =
+        crate::hidden_messages::ids_in(&app.settings.beeper.hidden_messages, &app.later_key(chat))
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
     let view = View {
         pending_media: None,
         link_menu_owner: None,
@@ -7498,6 +7532,7 @@ pub(crate) fn list_menu(
         motion_playing: None,
         starred: marks.starred.then_some(&stars),
         saved: Some(&saved_set),
+        hidden: Some(&hidden_ids),
         pins: app.pins.get(&message.chat),
         pin_notices: &[],
     };
@@ -7542,6 +7577,11 @@ pub(crate) fn linked_bubble(
     let keyboard_navigation = std::cell::Cell::new(false);
     let saved_set: HashSet<String> =
         crate::saved::ids_in(&app.settings.beeper.saved, &app.later_key(chat))
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+    let hidden_ids: HashSet<String> =
+        crate::hidden_messages::ids_in(&app.settings.beeper.hidden_messages, &app.later_key(chat))
             .into_iter()
             .map(str::to_owned)
             .collect();
@@ -7591,6 +7631,7 @@ pub(crate) fn linked_bubble(
         motion_playing: None,
         starred: app.stars.get(&message.chat),
         saved: Some(&saved_set),
+        hidden: Some(&hidden_ids),
         pins: app.pins.get(&message.chat),
         pin_notices: &[],
     };
@@ -8085,6 +8126,18 @@ fn context_menu(
         && widgets::menu_item(ui, &palette, Some(Icon::Copy), "Translate locally...")
     {
         actions.push(Action::TranslateLocally(text.clone()));
+    }
+    if widgets::menu_item(
+        ui,
+        &palette,
+        Some(Icon::EyeOff),
+        &crate::i18n::gettext(view.locale, "Hide in Solmu"),
+    ) {
+        actions.push(Action::SetMessageHidden {
+            chat: chat.clone(),
+            message: message.id.clone(),
+            hidden: true,
+        });
     }
     let age = view.now - message.timestamp;
     let can_edit =
@@ -14506,6 +14559,7 @@ mod tests {
             footer_right: None,
             neighbour_width: None,
             saved: None,
+            hidden: None,
             preview_worker,
             local_previews,
             auto_previews: false,

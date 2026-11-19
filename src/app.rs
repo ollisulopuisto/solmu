@@ -11149,6 +11149,20 @@ impl App {
                 }
                 self.backend.send(Command::Revoke { chat, id });
             }
+            Action::SetMessageHidden { chat, message, hidden } => {
+                let Some(known) = self.chat(&chat) else {
+                    return;
+                };
+                let member = self.later_key(known);
+                crate::hidden_messages::set(
+                    &mut self.settings.beeper.hidden_messages,
+                    member,
+                    message,
+                    hidden,
+                );
+                self.mark_settings_dirty();
+                ctx.request_repaint();
+            }
             Action::DeleteForMe { chat, id } => {
                 // The message stays until WhatsApp accepts the deletion.
                 // `Event::MessageDeleted` removes it and prunes the selection.
@@ -33237,6 +33251,31 @@ mod linked_attachment_tests {
         });
         app.open_chat = Some("visible".into());
         (root, app, egui::Context::default(), commands)
+    }
+
+    #[test]
+    fn hiding_a_message_is_persistent_local_state_not_a_bridge_command() {
+        let (_root, mut app, ctx, mut commands) = fixture();
+        let member = app.later_key(&app.chats[0]);
+        for hidden in [true, false] {
+            app.apply(
+                Action::SetMessageHidden {
+                    chat: "visible".into(),
+                    message: "one-message".into(),
+                    hidden,
+                },
+                &ctx,
+            );
+            assert_eq!(
+                crate::hidden_messages::ids_in(&app.settings.beeper.hidden_messages, &member)
+                    .contains("one-message"),
+                hidden,
+            );
+            assert!(commands.try_recv().is_err(), "hiding never contacts the bridge");
+            let encoded = serde_json::to_string(&app.settings.beeper).unwrap();
+            let restored: crate::settings::BeeperPreferences = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(restored.hidden_messages, app.settings.beeper.hidden_messages);
+        }
     }
 
     #[test]

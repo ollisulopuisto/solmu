@@ -971,3 +971,14 @@ The Filters link-suggestion list scrolls through every pending pair. Each row
 has a single-line name and its Link / Not the same person buttons. Long names
 are shortened to fit the menu; hover the name to read the full pair. Only rows
 in view are drawn, so offscreen pairs do not build widgets or scan the chat list.
+
+### Hide a message only in Solmu
+
+Right-click a message and choose **Hide in Solmu**. Its body becomes a small
+"Message hidden in Solmu" row. Choose **Unhide** on that row to restore it,
+including after restarting Solmu. This preference is local to the exact
+server, account, chat and message. It does not call the bridge or delete the
+message from the archive or the network. This is display cleanup, not secure
+erasure: saved copies, chat previews, search and quoted replies are unchanged.
+An album is shown as individual rows while any message in its chat is hidden,
+so each hidden item can be restored independently.
