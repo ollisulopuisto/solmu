@@ -1455,7 +1455,7 @@ dependencies = [
 [[package]]
 name = "ecolor"
 version = "0.36.2"
-source = "git+https://github.com/crmne/egui?rev=6ce633ba5f7f64d19ef6d204f9377da560bb546b#6ce633ba5f7f64d19ef6d204f9377da560bb546b"
+source = "git+https://github.com/ollisulopuisto/egui?rev=97916754a8ec918be112ec80095c351922c4fc73#97916754a8ec918be112ec80095c351922c4fc73"
 dependencies = [
  "bytemuck",
  "emath",
@@ -1465,7 +1465,7 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.36.2"
-source = "git+https://github.com/crmne/egui?rev=6ce633ba5f7f64d19ef6d204f9377da560bb546b#6ce633ba5f7f64d19ef6d204f9377da560bb546b"
+source = "git+https://github.com/ollisulopuisto/egui?rev=97916754a8ec918be112ec80095c351922c4fc73#97916754a8ec918be112ec80095c351922c4fc73"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1506,7 +1506,7 @@ checksum = "7bd50d24b1b75aa817bb0339cb9f2e0e664bdfab1e160a69a0fda9145b77fab2"
 [[package]]
 name = "egui"
 version = "0.36.2"
-source = "git+https://github.com/crmne/egui?rev=6ce633ba5f7f64d19ef6d204f9377da560bb546b#6ce633ba5f7f64d19ef6d204f9377da560bb546b"
+source = "git+https://github.com/ollisulopuisto/egui?rev=97916754a8ec918be112ec80095c351922c4fc73#97916754a8ec918be112ec80095c351922c4fc73"
 dependencies = [
  "accesskit",
  "ahash",
@@ -1527,7 +1527,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.36.2"
-source = "git+https://github.com/crmne/egui?rev=6ce633ba5f7f64d19ef6d204f9377da560bb546b#6ce633ba5f7f64d19ef6d204f9377da560bb546b"
+source = "git+https://github.com/ollisulopuisto/egui?rev=97916754a8ec918be112ec80095c351922c4fc73#97916754a8ec918be112ec80095c351922c4fc73"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1546,7 +1546,7 @@ dependencies = [
 [[package]]
 name = "egui-winit"
 version = "0.36.2"
-source = "git+https://github.com/crmne/egui?rev=6ce633ba5f7f64d19ef6d204f9377da560bb546b#6ce633ba5f7f64d19ef6d204f9377da560bb546b"
+source = "git+https://github.com/ollisulopuisto/egui?rev=97916754a8ec918be112ec80095c351922c4fc73#97916754a8ec918be112ec80095c351922c4fc73"
 dependencies = [
  "accesskit_winit",
  "arboard",
@@ -1568,7 +1568,7 @@ dependencies = [
 [[package]]
 name = "egui_extras"
 version = "0.36.2"
-source = "git+https://github.com/crmne/egui?rev=6ce633ba5f7f64d19ef6d204f9377da560bb546b#6ce633ba5f7f64d19ef6d204f9377da560bb546b"
+source = "git+https://github.com/ollisulopuisto/egui?rev=97916754a8ec918be112ec80095c351922c4fc73#97916754a8ec918be112ec80095c351922c4fc73"
 dependencies = [
  "ahash",
  "egui",
@@ -1584,7 +1584,7 @@ dependencies = [
 [[package]]
 name = "egui_glow"
 version = "0.36.2"
-source = "git+https://github.com/crmne/egui?rev=6ce633ba5f7f64d19ef6d204f9377da560bb546b#6ce633ba5f7f64d19ef6d204f9377da560bb546b"
+source = "git+https://github.com/ollisulopuisto/egui?rev=97916754a8ec918be112ec80095c351922c4fc73#97916754a8ec918be112ec80095c351922c4fc73"
 dependencies = [
  "bytemuck",
  "egui",
@@ -1603,7 +1603,7 @@ checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 [[package]]
 name = "emath"
 version = "0.36.2"
-source = "git+https://github.com/crmne/egui?rev=6ce633ba5f7f64d19ef6d204f9377da560bb546b#6ce633ba5f7f64d19ef6d204f9377da560bb546b"
+source = "git+https://github.com/ollisulopuisto/egui?rev=97916754a8ec918be112ec80095c351922c4fc73#97916754a8ec918be112ec80095c351922c4fc73"
 dependencies = [
  "bytemuck",
  "serde",
@@ -1722,7 +1722,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.36.2"
-source = "git+https://github.com/crmne/egui?rev=6ce633ba5f7f64d19ef6d204f9377da560bb546b#6ce633ba5f7f64d19ef6d204f9377da560bb546b"
+source = "git+https://github.com/ollisulopuisto/egui?rev=97916754a8ec918be112ec80095c351922c4fc73#97916754a8ec918be112ec80095c351922c4fc73"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1748,7 +1748,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.36.2"
-source = "git+https://github.com/crmne/egui?rev=6ce633ba5f7f64d19ef6d204f9377da560bb546b#6ce633ba5f7f64d19ef6d204f9377da560bb546b"
+source = "git+https://github.com/ollisulopuisto/egui?rev=97916754a8ec918be112ec80095c351922c4fc73#97916754a8ec918be112ec80095c351922c4fc73"
 
 [[package]]
 name = "equivalent"
