@@ -12338,6 +12338,9 @@ impl App {
                 self.account_mut().settings.flat_list.insert(key, flat);
                 self.account_mut().mark_settings_dirty();
             }
+            Action::JumpGroup(forward) => {
+                self.flat_group_ui.jump = Some(forward);
+            }
             Action::JoinGroup => {
                 use crate::model::InviteState;
                 let ready = self.invite.as_ref().and_then(|invite| match &invite.state {

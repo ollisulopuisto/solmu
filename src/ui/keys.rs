@@ -356,8 +356,10 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     }
     // Option+Tab (and Shift) cycles the sidebar's group headings; the list
     // pass owns the section order. On macOS the combination has no system
-    // meaning, unlike Command+Tab.
+    // meaning, unlike Command+Tab. A focused text field keeps it: the jump
+    // focuses a heading, which would steal the field's typing focus.
     if !app.list_is_flat()
+        && !editing_text
         && app.dialog.is_none()
         && !app.show_update
         && app.picker.is_none()
@@ -1864,6 +1866,8 @@ pub const MENU_COMMANDS: &[&str] = &[
     "chat-oldest",
     "view-page-up",
     "view-page-down",
+    "view-next-group",
+    "view-previous-group",
     "chat-clear",
     "chat-leave",
 ];
@@ -1958,6 +1962,8 @@ pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
         "chat-oldest" => chat.map(|_| Action::ScrollPage(Scroll::Top)),
         "view-page-up" => chat.map(|_| Action::ScrollPage(Scroll::PageUp)),
         "view-page-down" => chat.map(|_| Action::ScrollPage(Scroll::PageDown)),
+        "view-next-group" => (!app.list_is_flat()).then_some(Action::JumpGroup(true)),
+        "view-previous-group" => (!app.list_is_flat()).then_some(Action::JumpGroup(false)),
         "chat-clear" => chat
             .filter(|_| app.is_connected())
             .map(|chat| Action::ShowDialog(Dialog::ConfirmClearChat(chat.id.clone()))),
@@ -2422,7 +2428,7 @@ mod tests {
     const KEYLESS_MENU: &[(&str, Option<&str>)] = &[
         ("rail-chats", Some("go-chats")),
         ("next-account", Some("go-next-number")),
-        ("group-cycle", None),
+        ("group-cycle", Some("view-next-group")),
         ("forward-message", Some("chat-forward")),
         ("focus-messages", None),
         ("close-chat", None),
@@ -3851,6 +3857,39 @@ mod tests {
         let survived = press(&mut app, &ctx, Key::End, Modifiers::COMMAND);
         assert!(!survived);
         assert_eq!(app.actions, [Action::ScrollToBottom]);
+    }
+
+    #[test]
+    fn option_tab_stays_with_a_focused_text_field() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        let field = egui::Id::new("composer-text");
+        egui::widgets::text_edit::TextEditState::default().store(&ctx, field);
+        ctx.memory_mut(|memory| memory.request_focus(field));
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
+        assert!(survived, "a text field keeps Option+Tab");
+        assert_eq!(app.flat_group_ui.jump, None);
+    }
+
+    #[test]
+    fn menu_group_jump_routes_like_the_key() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        assert_eq!(
+            menu_actions(&app, "view-next-group"),
+            [Action::JumpGroup(true)]
+        );
+        assert_eq!(
+            menu_actions(&app, "view-previous-group"),
+            [Action::JumpGroup(false)]
+        );
+        // The flat list has no groups to jump between.
+        let ctx = egui::Context::default();
+        app.apply(Action::ToggleListLayout, &ctx);
+        assert!(app.list_is_flat());
+        assert!(menu_actions(&app, "view-next-group").is_empty());
+        assert!(menu_actions(&app, "view-previous-group").is_empty());
     }
 
     #[test]
