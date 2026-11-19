@@ -1965,7 +1965,9 @@ pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
         "chat-oldest" => chat.map(|_| Action::ScrollPage(Scroll::Top)),
         "view-page-up" => chat.map(|_| Action::ScrollPage(Scroll::PageUp)),
         "view-page-down" => chat.map(|_| Action::ScrollPage(Scroll::PageDown)),
-        "view-next-group" => app.grouped_list_showing().then_some(Action::JumpGroup(true)),
+        "view-next-group" => app
+            .grouped_list_showing()
+            .then_some(Action::JumpGroup(true)),
         "view-previous-group" => app
             .grouped_list_showing()
             .then_some(Action::JumpGroup(false)),
@@ -3927,12 +3929,7 @@ mod tests {
         let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
         assert!(!survived);
         assert_eq!(app.flat_group_ui.jump, Some(true));
-        let survived = press(
-            &mut app,
-            &ctx,
-            Key::Tab,
-            Modifiers::ALT | Modifiers::SHIFT,
-        );
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT | Modifiers::SHIFT);
         assert!(!survived);
         assert_eq!(app.flat_group_ui.jump, Some(false));
         // Plain and Ctrl+Tab never queue a jump: focus traversal and chat
