@@ -38,7 +38,7 @@ mod imp {
     use super::Face;
     use objc2::Encode;
     use objc2::msg_send;
-    use objc2::rc::Retained;
+    use objc2::rc::{Allocated, Retained};
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use std::ffi::c_void;
     use std::ptr;
@@ -88,7 +88,7 @@ mod imp {
             if data.is_null() {
                 return None;
             }
-            let alloc: *mut AnyObject = msg_send![handler_class, alloc];
+            let alloc: Allocated<AnyObject> = msg_send![handler_class, alloc];
             let handler: Option<Retained<AnyObject>> = msg_send![
                 alloc,
                 initWithData: data,
@@ -97,8 +97,7 @@ mod imp {
             let handler = handler?;
             let request: Option<Retained<AnyObject>> = msg_send![request_class, new];
             let request = request?;
-            let requests: *mut AnyObject =
-                msg_send![array_class, arrayWithObject: Retained::as_ptr(&request).as_ptr()];
+            let requests: *mut AnyObject = msg_send![array_class, arrayWithObject: Retained::as_ptr(&request) as *mut AnyObject];
             if requests.is_null() {
                 return None;
             }

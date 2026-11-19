@@ -518,7 +518,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                                             chip(
                                                 ui,
                                                 &palette,
-                                                crate::i18n::gettext(locale, "Auto: face"),
+                                                &crate::i18n::gettext(locale, "Auto: face"),
                                             );
                                             let reface = ui.button(crate::i18n::gettext(
                                                 locale,
