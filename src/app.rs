@@ -12384,6 +12384,7 @@ impl App {
             }
             Action::JumpGroup(forward) => {
                 self.flat_group_ui.jump = Some(forward);
+            }
             Action::FoldAllGroups(fold) => {
                 self.flat_group_ui.fold = Some(if fold {
                     crate::ui::flat_groups::Fold::Collapse
