@@ -497,11 +497,19 @@ PR #388 fixes the five code-panel test failures #382 merged with. Row kinds
 now place blank rows by their newline's character position inside a block's
 content bounds instead of inheriting the previous row's kind, so the dropped
 fence markers' blank rows stay plain while a blank line inside a fence stays
-code. The remaining width failure was a real overflow, not glyph snap: the
-balancer hyphenated long code runs and measured the inserted "-" at the
-regular font's advance while the galley paints it at the code font's
-(9.15 vs ~5 px at body 16), and a hyphen in code shows a character that was
-never typed. Code tokens no longer hyphenate; over-wide code wraps per
-character as before. The width test is back to a 0.5 px bound, and a new
-test fails on any hyphen glyph in a laid-out code block. No release, #359
+code. Code tokens no longer hyphenate, since a hyphen in code shows a
+character that was never typed. That did not fix the width failure: CI on
+4ea9c98 still measured 22-char rows at 201.3125pt in the 200pt panel. The
+real cause sits in the balancing planner. Every mid-word split charged
+FORCED_SPLIT_PENALTY (1M), so packing an unbreakable string into more lines
+cost millions per extra line, while overflowing the cap by 1.4375pt cost
+slack^2 x OVERFLOW_PENALTY, about 2000, per row. The planner saved lines
+and overran the cap on every row. Now only a word's first forced split
+pays the penalty; splits of an already-split word are free, so a fitting
+plan always beats an overflowing one. A short word wider than the cap
+still overflows in one piece rather than splitting. Reproduced against the
+real fonts and egui layout in a local lab (rows now 192.1875pt) and pinned
+by a failing-first planner test at the exact CI metrics. The width test is
+back to a 0.5 px bound, and a new test fails on any hyphen glyph in a
+laid-out code block. No release, #359
 or DMG work.

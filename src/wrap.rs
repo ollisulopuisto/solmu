@@ -423,7 +423,17 @@ pub fn balance(items: &[Item], max_width: f32, hyphen_width: f32) -> Plan {
                 slack * slack
             };
             let brk = units[q - 1].brk;
-            cost += brk.penalty();
+            let mut brk_penalty = brk.penalty();
+            if brk == Break::Forced && p > 0 && units[p - 1].item == units[q - 1].item {
+                // The line starts inside the same word the break splits, so
+                // that word was split already: only a word's first forced
+                // split pays FORCED_SPLIT_PENALTY. Charging every split makes
+                // each extra line of an unbreakable string cost 1M, and the
+                // planner then prefers rows that overflow the cap (a small
+                // overflow's slack^2 * OVERFLOW_PENALTY is far below 1M).
+                brk_penalty = 0.0;
+            }
+            cost += brk_penalty;
             let ends_hyphen = brk.hyphen_glyph();
             for h in 0..2 {
                 if dp[p][h].is_infinite() {

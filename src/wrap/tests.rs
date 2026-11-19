@@ -255,3 +255,25 @@ fn unbreakable_word_overflows_instead_of_vanishing() {
     assert_eq!(plan.lines, 1);
     assert_eq!(plan.width, 30.0);
 }
+
+#[test]
+fn over_wide_word_packs_within_the_cap() {
+    // A single 300-char word with no hyphenation points, at the code
+    // font's 9.15625pt advance in a 200pt panel, must pack within the
+    // cap. 21 chars fit (192.1875pt); 22 do not (201.4375pt). Every
+    // forced split used to pay FORCED_SPLIT_PENALTY, so packing one more
+    // line cost 1M while a 1.4375pt overflow per row cost ~2000: the
+    // planner saved lines and overran the cap. Only a word's first
+    // forced split carries the penalty now.
+    let text = "x".repeat(300);
+    let widths = vec![9.15625_f32; text.len()];
+    let items = tokenize(&text, &widths, &[], &no_hyphens);
+    let plan = balance(&items, 200.0, PX);
+    assert!(
+        plan.width <= 200.0,
+        "plan overflows the cap: width {}, breaks {:?}",
+        plan.width,
+        plan.breaks
+    );
+    assert_eq!(plan.lines, 15, "expected 15 packed lines of 21 chars");
+}
