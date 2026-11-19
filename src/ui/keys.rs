@@ -357,8 +357,11 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     // Option+Tab (and Shift) cycles the sidebar's group headings; the list
     // pass owns the section order. On macOS the combination has no system
     // meaning, unlike Command+Tab. A focused text field keeps it: the jump
-    // focuses a heading, which would steal the field's typing focus.
-    if !app.list_is_flat()
+    // focuses a heading, which would steal the field's typing focus. The
+    // grouped list must be on screen: queued in a heading-free view (search
+    // results, starred, saved, locked, archived), the jump would sit pending
+    // and fire when the grouped list returns.
+    if app.grouped_list_showing()
         && !editing_text
         && app.dialog.is_none()
         && !app.show_update
@@ -1962,8 +1965,10 @@ pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
         "chat-oldest" => chat.map(|_| Action::ScrollPage(Scroll::Top)),
         "view-page-up" => chat.map(|_| Action::ScrollPage(Scroll::PageUp)),
         "view-page-down" => chat.map(|_| Action::ScrollPage(Scroll::PageDown)),
-        "view-next-group" => (!app.list_is_flat()).then_some(Action::JumpGroup(true)),
-        "view-previous-group" => (!app.list_is_flat()).then_some(Action::JumpGroup(false)),
+        "view-next-group" => app.grouped_list_showing().then_some(Action::JumpGroup(true)),
+        "view-previous-group" => app
+            .grouped_list_showing()
+            .then_some(Action::JumpGroup(false)),
         "chat-clear" => chat
             .filter(|_| app.is_connected())
             .map(|chat| Action::ShowDialog(Dialog::ConfirmClearChat(chat.id.clone()))),
@@ -3890,6 +3895,28 @@ mod tests {
         assert!(app.list_is_flat());
         assert!(menu_actions(&app, "view-next-group").is_empty());
         assert!(menu_actions(&app, "view-previous-group").is_empty());
+    }
+
+    #[test]
+    fn group_jump_waits_for_the_grouped_list() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        // Search results replace the headings: no jump queues, by key or menu.
+        app.search = "Alice".into();
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
+        assert!(survived, "search results own the sidebar");
+        assert_eq!(app.flat_group_ui.jump, None);
+        assert!(menu_actions(&app, "view-next-group").is_empty());
+        // Back on the grouped list, both routes queue again.
+        app.search.clear();
+        assert_eq!(
+            menu_actions(&app, "view-next-group"),
+            [Action::JumpGroup(true)]
+        );
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
+        assert!(!survived);
+        assert_eq!(app.flat_group_ui.jump, Some(true));
     }
 
     #[test]

@@ -3728,6 +3728,23 @@ impl App {
             .unwrap_or(false)
     }
 
+    /// Whether the sidebar currently shows the grouped chat list, the view
+    /// the group jump and fold-everything act on. Mirrors list_for_layout's
+    /// routing: search results, starred, saved, locked and archived views
+    /// have no group headings, so a jump queued there would sit pending and
+    /// fire unexpectedly when the grouped list returns.
+    pub(crate) fn grouped_list_showing(&self) -> bool {
+        !self.locked_folder_open()
+            && !self.secret_code_matched()
+            && !self.show_starred
+            && !self.show_saved
+            && self.search.trim().is_empty()
+            && !self.show_archived
+            && (!self.list_is_flat()
+                || (self.list_mode != crate::model::ListMode::Recent
+                    && self.visible_chats().is_empty()))
+    }
+
     pub fn mode_matches_at(&self, chat: &Chat, mode: crate::model::ListMode, now: i64) -> bool {
         use crate::model::ListMode;
         // A chat opened from an unread-type list stays until the view changes.
