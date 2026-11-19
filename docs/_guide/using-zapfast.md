@@ -982,3 +982,7 @@ message from the archive or the network. This is display cleanup, not secure
 erasure: saved copies, chat previews, search and quoted replies are unchanged.
 An album is shown as individual rows while any message in its chat is hidden,
 so each hidden item can be restored independently.
+
+Local message masks are limited to 4096 entries. At the limit, Solmu asks you
+to unhide a message before adding another; it never silently restores an old
+hidden message to make room. This also bounds settings growth and lookup work.

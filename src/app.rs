@@ -11173,12 +11173,21 @@ impl App {
                     return;
                 };
                 let member = self.later_key(known);
-                crate::hidden_messages::set(
+                if !crate::hidden_messages::set(
                     &mut self.settings.beeper.hidden_messages,
                     member,
                     message,
                     hidden,
-                );
+                ) {
+                    self.toast_error(
+                        crate::i18n::gettext(
+                            self.locale,
+                            "Hidden-message limit reached. Unhide a message before hiding another.",
+                        )
+                        .into_owned(),
+                    );
+                    return;
+                }
                 self.mark_settings_dirty();
                 ctx.request_repaint();
             }
