@@ -22,7 +22,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/local-hide-shots"
           for theme in light dark; do
-            for page in hidden-message-before hidden-message media-album hidden-album; do
+            for page in hidden-message-before hidden-message hidden-album-before hidden-album; do
               target/debug/solmu --demo-shot "$RUNNER_TEMP/local-hide-shots/$page-$theme.png" --demo-size 1180x1200 --demo-page "$page,$theme" --demo-shot-delay 6000
             done
           done

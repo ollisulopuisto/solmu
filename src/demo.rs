@@ -2871,17 +2871,24 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     );
                 }
             }
-            "hidden-album" => {
+            "hidden-album" | "hidden-album-before" => {
                 media_album_sample(app, true);
-                app.apply(
-                    crate::model::Action::SetMessageHidden {
-                        chat: SAMPLES[0].id.into(),
-                        message: "album-1".into(),
-                        hidden: true,
-                    },
-                    &egui::Context::default(),
-                );
-                app.scroll_to_bottom = false;
+                app.conversations
+                    .get_mut(SAMPLES[0].id)
+                    .unwrap()
+                    .messages
+                    .truncate(2);
+                if part == "hidden-album" {
+                    app.apply(
+                        crate::model::Action::SetMessageHidden {
+                            chat: SAMPLES[0].id.into(),
+                            message: "album-1".into(),
+                            hidden: true,
+                        },
+                        &egui::Context::default(),
+                    );
+                }
+                app.scroll_to_bottom = true;
             }
             "media-album" => media_album_sample(app, true),
             "media-album-failed" => {
