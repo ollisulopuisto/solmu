@@ -146,6 +146,9 @@ fn build_menu() -> tray_icon::menu::Result<Menu> {
         &item("view-next-group", "Jump to Next Group", None),
         &item("view-previous-group", "Jump to Previous Group", None),
         &Native::separator(),
+        &item("view-collapse-all", "Collapse All Groups", None),
+        &item("view-expand-all", "Expand All Groups", None),
+        &Native::separator(),
         &Native::fullscreen(None),
     ])?;
     let go = Submenu::new("Go", true);

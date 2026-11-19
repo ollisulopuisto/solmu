@@ -23,6 +23,9 @@ pub struct State {
     /// A queued jump direction (true: next, false: previous), consumed by
     /// the list pass that knows the section order.
     pub jump: Option<bool>,
+    /// A queued fold-everything request from a menu entry or the toggle
+    /// chord, consumed by the list pass that owns the sections.
+    pub fold: Option<Fold>,
     /// The heading a jump must still scroll to and focus: the list pass
     /// clears it when that heading is drawn.
     jump_pending: Option<Option<u64>>,
@@ -664,6 +667,26 @@ fn unread_count(chats: &[&Chat]) -> usize {
         .count()
 }
 
+/// A fold-everything request queued for the list pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fold {
+    /// Collapse every heading.
+    Collapse,
+    /// Expand every heading.
+    Expand,
+    /// Collapse all, or expand all when everything is folded already.
+    Toggle,
+}
+
+/// The toggle's direction: collapse everything, unless every heading is
+/// folded already — then expand.
+fn toggle_target(
+    collapsed: &HashSet<Option<u64>>,
+    ids: impl Iterator<Item = Option<u64>>,
+) -> bool {
+    !ids.all(|id| collapsed.contains(&id))
+}
+
 /// Other's heading follows the empty-heading rule, except while a chat is
 /// being dragged: then it stays as the drop target that ungroups.
 fn other_header_hidden(app: &App, empty: bool, dragging_chat: bool) -> bool {
@@ -918,6 +941,20 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
             app.flat_group_ui.collapsed.remove(&target);
             app.flat_group_ui.jump_pending = Some(target);
         }
+    }
+    // The View menu's fold entries and the toggle chord queue here, where
+    // the sections and their folded state live.
+    if ui.is_enabled()
+        && let Some(fold) = app.flat_group_ui.fold.take()
+    {
+        let fold = match fold {
+            Fold::Collapse => true,
+            Fold::Expand => false,
+            Fold::Toggle => {
+                toggle_target(&app.flat_group_ui.collapsed, sections.iter().map(|s| s.id))
+            }
+        };
+        fold_all(app, &groups, fold);
     }
     if ui.is_enabled()
         && let Some(target) = app.scroll_chat_into_view.as_ref()
@@ -1304,6 +1341,16 @@ mod tests {
         marked.marked_unread = true;
         assert_eq!(unread_count(&[&unread, &read, &marked]), 2);
         assert_eq!(unread_count(&[]), 0);
+    }
+
+    #[test]
+    fn fold_toggle_collapses_unless_everything_is_folded() {
+        let mut collapsed = HashSet::new();
+        assert!(toggle_target(&collapsed, [Some(1), None].into_iter()));
+        collapsed.insert(Some(1));
+        assert!(toggle_target(&collapsed, [Some(1), None].into_iter()));
+        collapsed.insert(None);
+        assert!(!toggle_target(&collapsed, [Some(1), None].into_iter()));
     }
 
     #[test]
