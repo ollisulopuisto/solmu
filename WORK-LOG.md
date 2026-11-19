@@ -23,6 +23,26 @@ math and serde tests were verified in a scratch crate against the real
 image/serde versions, fmt via rustfmt; clippy and the full suite run in CI.
 macOS detection itself is unverified (Linux box): the macOS CI leg compiles
 it, runtime behaviour needs a Mac. No merge by the author.
+## 2026-11-19: Captioned media bubbles settle to the picture (fix/captioned-media-bubble-width)
+
+Olli reported sent bubbles going "all funny" with a narrow media attached:
+the bubble settled to max(picture frame, caption measure at the cap) while
+the caption drew wrapped to the drawn picture width, so a long caption
+inflated the bubble past the picture (dead strip beside it) and a slim
+portrait shot squeezed its caption into a one-word column. Fix in
+src/ui/conversation.rs: natural_content_width settles a captioned picture
+or video to max(frame, min(caption measure, max(frame, CAPTION_MIN_WRAP)))
+with CAPTION_MIN_WRAP = 200pt, and the new caption_wrap helper gives the
+drawn caption the same floor (quoted messages still span the settled
+width). Also asked: whether a neighbour message resizes an earlier bubble.
+From the code: only plain-text own bubbles share a run's width
+(planned_widths shares_width, #282 tolerances); a media bubble repaints at
+a new width only when its own inputs change, and WidthBook::plan plays the
+retarget animation only when a row is appended, so a late width correction
+lands on the next message's arrival and looks caused by it. Failing-first
+tests (commit before the fix): caption measure vs picture width, portrait
+floor, caption_wrap bounds. Not run locally: no Rust toolchain on this box
+(PipeWire headers too old); fmt, clippy and tests run in CI.
 
 ## 2026-11-19: Code panels mark content rows only (fix/code-panel-row-kinds)
 

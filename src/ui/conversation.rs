@@ -6193,8 +6193,13 @@ fn natural_content_width(message: &Message, cap: f32, text: Option<f32>) -> Opti
     if let Content::Image { media, .. } | Content::Video { media, .. } = &message.content
         && !matches!(message.content, Content::Video {note:false,..} if message.thumbnail.is_none())
     {
-        let width = frame_size(media, None, cap.min(PICTURE_WIDTH), PICTURE_HEIGHT).x;
-        return Some(width.max(text.unwrap_or(0.)).min(cap));
+        let frame = frame_size(media, None, cap.min(PICTURE_WIDTH), PICTURE_HEIGHT).x;
+        // The caption draws wrapped to the picture's width, floored at
+        // CAPTION_MIN_WRAP, so that is all the width it can need. Settling
+        // to its full measure used to inflate the bubble past the picture
+        // and leave a dead strip beside it.
+        let caption = text.unwrap_or(0.).min(frame.max(CAPTION_MIN_WRAP));
+        return Some(frame.max(caption).min(cap));
     }
     let card = message.quoted.is_some()
         || match &message.content {
@@ -8439,6 +8444,18 @@ fn shared_contact_details(vcard: &str, fallback_name: &str) -> Option<SharedCont
     })
 }
 
+/// The width a caption wraps at under its picture: the picture's drawn
+/// width, but never narrower than CAPTION_MIN_WRAP while the settled bubble
+/// allows it. A quoted message spans the settled width, matching its quote
+/// block.
+fn caption_wrap(drawn: f32, settled: f32, quoted: bool) -> f32 {
+    if quoted {
+        settled.max(drawn)
+    } else {
+        drawn.max(CAPTION_MIN_WRAP).min(settled.max(drawn))
+    }
+}
+
 /// Draws a message body and returns optional footer space on its last line.
 fn content(
     ui: &mut egui::Ui,
@@ -8553,12 +8570,7 @@ fn content(
             };
             let drawn = drawn.width();
             {
-                // Wrap the caption to the settled image or quote width.
-                let wrap = if message.quoted.is_some() {
-                    width.max(drawn)
-                } else {
-                    drawn
-                };
+                let wrap = caption_wrap(drawn, width, message.quoted.is_some());
                 rich_body(
                     ui,
                     view,
@@ -8594,11 +8606,7 @@ fn content(
                 voice_transcript(ui, view, message, path, actions);
             }
             caption.as_ref().and_then(|caption| {
-                let wrap = if message.quoted.is_some() {
-                    width.max(drawn)
-                } else {
-                    drawn
-                };
+                let wrap = caption_wrap(drawn, width, message.quoted.is_some());
                 rich_body(
                     ui,
                     view,
@@ -10639,6 +10647,9 @@ pub(crate) fn thumbnail_uri(ctx: &egui::Context, chat: &str, id: &str, bytes: &[
 /// Default image bounds based on [`CARD_WIDTH`].
 const PICTURE_WIDTH: f32 = CARD_WIDTH;
 const PICTURE_HEIGHT: f32 = 440.0;
+/// A caption never wraps narrower than this under a slim portrait picture:
+/// a tall screenshot must not squeeze its caption into a one-word column.
+const CAPTION_MIN_WRAP: f32 = 200.0;
 const STICKER_SIDE: f32 = 180.0;
 /// Height of a header row, the chat list's and the conversation's alike, so
 /// their titles share a centre line.
@@ -12543,6 +12554,54 @@ mod tests {
             width < 160.,
             "portrait ratio determines the natural width: {width}"
         );
+    }
+
+    #[test]
+    fn captioned_photo_settles_to_the_picture_not_the_caption_measure() {
+        // A landscape picture with a long caption: the caption wraps to the
+        // picture, so the bubble must not grow to the caption's measure and
+        // leave a dead strip beside the picture.
+        let row = message(Content::Image {
+            caption: Some("a caption long enough to measure wide".into()),
+            media: media(Some(640), Some(480)),
+            motion: None,
+        });
+        assert_eq!(natural_content_width(&row, 540., Some(540.)), Some(320.));
+        // A short caption still settles to the frame, never below it.
+        assert_eq!(natural_content_width(&row, 540., Some(40.)), Some(320.));
+    }
+
+    #[test]
+    fn a_slim_portrait_photo_gives_its_caption_a_readable_floor() {
+        // 200x600 fits by height: the frame is 440 * 200/600 = 146.67 wide.
+        // A long caption needs only the wrap floor, not its full measure.
+        let row = message(Content::Image {
+            caption: Some("a long caption".into()),
+            media: media(Some(200), Some(600)),
+            motion: None,
+        });
+        assert_eq!(
+            natural_content_width(&row, 540., Some(540.)),
+            Some(200.),
+            "the caption wrap floor, not the caption's full measure"
+        );
+        // A short caption narrows to the picture frame itself.
+        let frame = 440. * 200. / 600.;
+        let width = natural_content_width(&row, 540., Some(40.)).unwrap();
+        assert!((width - frame).abs() < 0.01, "{width}");
+    }
+
+    #[test]
+    fn caption_wrap_floors_slim_pictures_but_never_overflows_the_bubble() {
+        // Portrait picture in a roomy bubble: the caption gets the floor.
+        assert_eq!(caption_wrap(140., 320., false), 200.);
+        // Landscape picture wider than the floor: wraps to the picture.
+        assert_eq!(caption_wrap(320., 320., false), 320.);
+        // A tight bubble never lets the floor overflow it.
+        assert_eq!(caption_wrap(140., 150., false), 150.);
+        // Quotes keep spanning the settled width.
+        assert_eq!(caption_wrap(140., 320., true), 320.);
+        assert_eq!(caption_wrap(320., 140., true), 320.);
     }
 
     #[test]
