@@ -28,6 +28,23 @@ new fetch, so the avatar worker's small queue sees no extra pressure.
 Failing-first test covers miss-then-fallback and a real thumbnail winning.
 Verified by rustc parse-check only; fmt/clippy/tests run in CI (this Ubuntu
 box cannot build the crate: PipeWire headers too old).
+## 2026-11-18: Code and quote panels with Copy code (feat/code-quote-panels)
+
+Styling PR, second half (markup groundwork was commit 0c1d1b9): markup.rs now
+also paints the panels (paint_row_panels: low-alpha fill across the body
+width, pale accent bar on the leading edge, code panels returned in source
+order) and keeps a blank row inside a fence marked Code so the panel stays
+one piece. conversation.rs rich_body_full paints the panels under the text
+and puts a frameless Copy code button at each code panel's top right; it
+copies markup::code_blocks(text)[k] exactly (fences, prose, timestamps and
+link annotations excluded, collapsed lines included) and swaps to Copied for
+about a second via temp data + request_repaint_after. Selection drags are
+untouched. The long-code-line overflow is covered failing-first by
+fenced_code_rows_fit_the_layout_width (wrap.rs already force-breaks overlong
+tokens); verified only by rustc parse-check locally, since this Ubuntu box
+cannot build the crate (PipeWire headers too old) - fmt/clippy/tests and any
+visual check run in CI.
+
 
 
 ## 2026-11-18: Final helper pins from the published whisper-helper-v1.9.5 release

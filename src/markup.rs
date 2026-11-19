@@ -8,7 +8,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use egui::text::LayoutJob;
-use egui::{Color32, FontId, Galley, Pos2, Stroke, TextFormat};
+use egui::{Color32, FontId, Galley, Pos2, Rect, Stroke, TextFormat};
 use fastframe_text::snap_to_pixels;
 
 use crate::bidi;
@@ -32,6 +32,20 @@ pub struct Style {
 }
 
 /// Message text prepared for painting.
+/// What decorates one laid-out row: a fenced code panel, a quote panel,
+/// or nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowKind {
+    /// Ordinary body text.
+    Normal,
+    /// A line inside a fenced code block: the block's index into
+    /// [`code_blocks`], so two adjacent fences stay two panels and each
+    /// Copy code button reaches its own block.
+    Code(usize),
+    /// A `> ` quoted line.
+    Quote,
+}
+
 pub struct Text {
     pub galley: Arc<Galley>,
     /// Character ranges linked to web addresses.
@@ -58,6 +72,12 @@ struct Shared {
     /// characters (a "\n" or "-\n" per break), so transcript formatting
     /// can drop them.
     inserted: Vec<(usize, usize)>,
+    /// Per galley row: which rows belong to a fenced code block or a quote,
+    /// so the painter can give them an inset panel. Rows survive a font
+    /// reload like everything else here: a balanced body is broken into
+    /// hard lines with unlimited wrap, so its row structure does not depend
+    /// on font metrics, and the greedy path finishes fresh every call.
+    row_kinds: Vec<RowKind>,
 }
 
 impl Text {
@@ -106,6 +126,11 @@ impl Text {
     pub fn inserted(&self) -> &[(usize, usize)] {
         &self.shared.inserted
     }
+
+    /// Which decoration each galley row gets, aligned to `galley.rows`.
+    pub fn row_kinds(&self) -> &[RowKind] {
+        &self.shared.row_kinds
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -115,6 +140,13 @@ struct Span {
     italic: bool,
     strike: bool,
     mono: bool,
+    /// A fenced code block's line, as opposed to inline `code`.
+    block: bool,
+    /// The fenced block's index into [`code_blocks`]: every content line of
+    /// one fence shares it, adjacent fences stay distinct, and empty fences
+    /// (which [`code_blocks`] drops) consume no index. Meaningful only when
+    /// `block` is true.
+    block_id: usize,
     link: Option<String>,
     mention: bool,
     /// Paints a quoted line's bar and indent.
@@ -139,6 +171,13 @@ struct Built {
     links: Vec<(Range<usize>, String)>,
     big: bool,
     accessible_text: String,
+    /// Character ranges of fenced code block lines in the job text, each
+    /// paired with its block's index into [`code_blocks`]. One fence emits
+    /// one range per content line, so the index, not the range position,
+    /// identifies the block.
+    blocks: Vec<(usize, Range<usize>)>,
+    /// Character ranges of quoted lines in the job text.
+    quotes: Vec<Range<usize>>,
 }
 
 /// Lays text out within `max_width`. `grow_emoji` is false for text that
@@ -169,7 +208,10 @@ fn finish(
     copy_links: Option<Vec<(Range<usize>, String)>>,
     inserted: Vec<(usize, usize)>,
 ) -> Text {
+    // The block and quote ranges are character-indexed; galley sections use
+    // byte ranges, so convert with the final job text.
     let galley = bidi::layout_job(ui, built.job);
+    let row_kinds = row_kinds(&galley, &built.blocks, &built.quotes);
     let copy_links = copy_links.unwrap_or_else(|| built.links.clone());
     Text {
         galley,
@@ -181,8 +223,59 @@ fn finish(
             accessible_text: built.accessible_text,
             unbroken,
             inserted,
+            row_kinds,
         }),
     }
+}
+
+/// Per galley row: which rows belong to a fenced code block or a quote, so
+/// the painter can give them an inset panel. The ranges are
+/// character-indexed in the galley's text; each glyph's `cluster` is the
+/// byte offset of its source character, so convert with that text. A blank
+/// row carries no glyphs and stays inside the surrounding panel.
+fn row_kinds(
+    galley: &Galley,
+    blocks: &[(usize, Range<usize>)],
+    quotes: &[Range<usize>],
+) -> Vec<RowKind> {
+    let text = &galley.job.text;
+    let char_bytes: Vec<usize> = text
+        .char_indices()
+        .map(|(b, _)| b)
+        .chain([text.len()])
+        .collect();
+    let to_byte = |char: usize| char_bytes[char.min(char_bytes.len() - 1)];
+    let mut kinds: Vec<RowKind> = galley
+        .rows
+        .iter()
+        .map(|row| {
+            let hit = |start: usize, end: usize| {
+                row.row.glyphs.iter().any(|glyph| {
+                    let offset = glyph.cluster as usize;
+                    start <= offset && offset < end
+                })
+            };
+            if let Some((index, _)) = blocks
+                .iter()
+                .find(|(_, range)| hit(to_byte(range.start), to_byte(range.end)))
+            {
+                RowKind::Code(*index)
+            } else if quotes
+                .iter()
+                .any(|range| hit(to_byte(range.start), to_byte(range.end)))
+            {
+                RowKind::Quote
+            } else {
+                RowKind::Normal
+            }
+        })
+        .collect();
+    for index in 1..kinds.len() {
+        if kinds[index] == RowKind::Normal && galley.rows[index].row.glyphs.is_empty() {
+            kinds[index] = kinds[index - 1];
+        }
+    }
+    kinds
 }
 
 fn build(
@@ -200,6 +293,8 @@ fn build(
     job.wrap.max_width = max_width;
     let mut placements = Vec::new();
     let mut links = Vec::new();
+    let mut blocks = Vec::new();
+    let mut quotes = Vec::new();
     let mut characters = 0;
     for span in display_spans(parse(text, mentions)) {
         let font_id = if span.mono {
@@ -232,12 +327,25 @@ fn build(
             } else {
                 Stroke::NONE
             },
+            // Inline `code` gets a quiet inset; fenced blocks paint a panel
+            // per row instead (see RowKind).
+            background: if span.mono && !span.block {
+                style.secondary.gamma_multiply(0.12)
+            } else {
+                Color32::TRANSPARENT
+            },
             ..Default::default()
         };
         let before = characters;
         let after = before + emoji::append(ui, &mut job, &mut placements, &span.text, &format);
         if let Some(url) = span.link {
             links.push((before..after, url));
+        }
+        if span.block {
+            blocks.push((span.block_id, before..after));
+        }
+        if span.quote {
+            quotes.push(before..after);
         }
         characters = after;
     }
@@ -254,6 +362,8 @@ fn build(
         links,
         big,
         accessible_text: plain(text, mentions),
+        blocks,
+        quotes,
     }
 }
 
@@ -495,19 +605,24 @@ impl Prepared {
         grow_emoji: bool,
     ) -> Self {
         let built = build(ui, text, mentions, style, max_width, grow_emoji);
-        let whole = |built: Built| Self {
-            text: text.into(),
-            mentions: mentions.into(),
-            job: built.job,
-            links: built.links.clone(),
-            big: built.big,
-            shared: Arc::new(Shared {
-                placements: built.placements,
-                copy_links: built.links,
-                accessible_text: built.accessible_text,
-                unbroken: None,
-                inserted: Vec::new(),
-            }),
+        let whole = |built: Built| {
+            let galley = bidi::layout_job(ui, built.job.clone());
+            let row_kinds = row_kinds(&galley, &built.blocks, &built.quotes);
+            Self {
+                text: text.into(),
+                mentions: mentions.into(),
+                job: built.job,
+                links: built.links.clone(),
+                big: built.big,
+                shared: Arc::new(Shared {
+                    placements: built.placements,
+                    copy_links: built.links,
+                    accessible_text: built.accessible_text,
+                    unbroken: None,
+                    inserted: Vec::new(),
+                    row_kinds,
+                }),
+            }
         };
         if built.big || max_width <= 0.0 {
             // Emoji-only text never balances; a zero cap leaves nothing to do.
@@ -519,10 +634,18 @@ impl Prepared {
         }
         let unbroken = built.job.text.clone();
         let copy_links = built.links.clone();
-        let (mut job, links, inserted) = insert_breaks(built.job, &built.links, &breaks);
+        let (mut job, links, blocks, quotes, inserted) = insert_breaks(
+            built.job,
+            &built.links,
+            &built.blocks,
+            &built.quotes,
+            &breaks,
+        );
         // Breaks are hard newlines now; keep egui from re-wrapping a line
         // that shaped a hair wider than the balancer measured.
         job.wrap.max_width = f32::INFINITY;
+        let galley = bidi::layout_job(ui, job.clone());
+        let row_kinds = row_kinds(&galley, &blocks, &quotes);
         Self {
             text: text.into(),
             mentions: mentions.into(),
@@ -535,6 +658,7 @@ impl Prepared {
                 accessible_text: built.accessible_text,
                 unbroken: Some(unbroken),
                 inserted,
+                row_kinds,
             }),
         }
     }
@@ -682,12 +806,21 @@ fn balanced_breaks(
 /// newlines (plus a hyphen glyph for hyphenated breaks), shifting section
 /// and link ranges. Breaks the text already makes itself (at its own
 /// newlines) are skipped.
-/// The job, link ranges and inserted-character ranges after break insertion.
-type Broken = (LayoutJob, Vec<(Range<usize>, String)>, Vec<(usize, usize)>);
+/// The job, link, code-block and quote ranges (all character-indexed) and
+/// inserted-character ranges after break insertion.
+type Broken = (
+    LayoutJob,
+    Vec<(Range<usize>, String)>,
+    Vec<(usize, Range<usize>)>,
+    Vec<Range<usize>>,
+    Vec<(usize, usize)>,
+);
 
 fn insert_breaks(
     mut job: LayoutJob,
     links: &[(Range<usize>, String)],
+    blocks: &[(usize, Range<usize>)],
+    quotes: &[Range<usize>],
     breaks: &[crate::wrap::LineBreak],
 ) -> Broken {
     let text = std::mem::take(&mut job.text);
@@ -710,7 +843,13 @@ fn insert_breaks(
     }
     if insertions.is_empty() {
         job.text = text;
-        return (job, links.to_vec(), Vec::new());
+        return (
+            job,
+            links.to_vec(),
+            blocks.to_vec(),
+            quotes.to_vec(),
+            Vec::new(),
+        );
     }
     // shift[i] = inserted characters before original character i.
     let n_chars = char_bytes.len() - 1;
@@ -775,8 +914,27 @@ fn insert_breaks(
             (start..end, url.clone())
         })
         .collect();
+    let shift_ranges = |ranges: &[Range<usize>]| -> Vec<Range<usize>> {
+        ranges
+            .iter()
+            .map(|range| {
+                let start = range.start + shift[range.start.min(n_chars)];
+                let end = range.end + shift[range.end.min(n_chars)];
+                start..end
+            })
+            .collect()
+    };
+    let blocks = blocks
+        .iter()
+        .map(|(id, range)| {
+            let start = range.start + shift[range.start.min(n_chars)];
+            let end = range.end + shift[range.end.min(n_chars)];
+            (*id, start..end)
+        })
+        .collect();
+    let quotes = shift_ranges(quotes);
     job.text = new_text;
-    (job, links, inserted_ranges)
+    (job, links, blocks, quotes, inserted_ranges)
 }
 
 /// Paints laid-out text at `pos`.
@@ -930,6 +1088,32 @@ pub fn editable_mentions(text: &str, mentions: &[Mention]) -> String {
 fn parse(text: &str, mentions: &[Mention]) -> Vec<Span> {
     let mut spans = Vec::new();
     let mut in_block = false;
+    // Fences are numbered like code_blocks numbers its entries: only a fence
+    // whose joined contents are nonempty gets an index. An empty fence emits
+    // no panel and no copy entry, so its spans lose the block flag here.
+    let mut fence_ord = 0;
+    let mut fence_lines = 0;
+    let mut fence_first_empty = false;
+    let mut fence_start = 0;
+    let mut kept: Vec<usize> = Vec::new();
+    fn close_fence(
+        spans: &mut [Span],
+        fence_start: usize,
+        fence_lines: usize,
+        fence_first_empty: bool,
+        fence_ord: usize,
+        kept: &mut Vec<usize>,
+    ) {
+        // code_blocks keeps a fence whose lines join to a nonempty string:
+        // two or more lines (the join holds a newline), or one nonempty line.
+        if fence_lines >= 2 || (fence_lines == 1 && !fence_first_empty) {
+            kept.push(fence_ord);
+        } else {
+            for span in &mut spans[fence_start..] {
+                span.block = false;
+            }
+        }
+    }
     let mut first = true;
     for line in text.split('\n') {
         if !first {
@@ -942,22 +1126,34 @@ fn parse(text: &str, mentions: &[Mention]) -> Vec<Span> {
         let trimmed = line.trim_end();
         // A standalone ``` toggles a block. Inline ``` is handled below.
         if trimmed.trim() == "```" {
+            if in_block {
+                close_fence(
+                    &mut spans,
+                    fence_start,
+                    fence_lines,
+                    fence_first_empty,
+                    fence_ord,
+                    &mut kept,
+                );
+                fence_ord += 1;
+            } else {
+                fence_lines = 0;
+                fence_first_empty = false;
+                fence_start = spans.len();
+            }
             in_block = !in_block;
             continue;
         }
         if in_block {
-            // The bridge mapper escapes a content line that would collide
-            // with the fence by backslashing its backticks; that exact
-            // escape, and only it, resolves back, so a native backslash
-            // line keeps its bytes and indentation survives.
-            let resolved = line.find("\\```").and_then(|at| {
-                let candidate = format!("{}{}", &line[..at], &line[at + 1..]);
-                (candidate.trim() == "```").then_some(candidate)
-            });
-            let line = resolved.as_deref().unwrap_or(line);
+            if fence_lines == 0 {
+                fence_first_empty = line.is_empty();
+            }
+            fence_lines += 1;
             spans.push(Span {
-                text: line.to_owned(),
+                text: fenced_line(line).into_owned(),
                 mono: true,
+                block: true,
+                block_id: fence_ord,
                 ..Default::default()
             });
             continue;
@@ -998,7 +1194,122 @@ fn parse(text: &str, mentions: &[Mention]) -> Vec<Span> {
             }
         }
     }
+    if in_block {
+        close_fence(
+            &mut spans,
+            fence_start,
+            fence_lines,
+            fence_first_empty,
+            fence_ord,
+            &mut kept,
+        );
+    }
+    // Remap fence ordinals to code_blocks indices; spans of dropped fences
+    // lost the block flag in close_fence.
+    for span in &mut spans {
+        if span.block {
+            span.block_id = kept
+                .iter()
+                .position(|ord| *ord == span.block_id)
+                .expect("block span of a kept fence");
+        }
+    }
     spans
+}
+
+/// A fenced block's content line. The bridge mapper escapes a content
+/// line that would collide with the fence by backslashing its backticks;
+/// that exact escape, and only it, resolves back, so a native backslash
+/// line keeps its bytes and indentation survives.
+fn fenced_line(line: &str) -> std::borrow::Cow<'_, str> {
+    let resolved = line.find("\\```").and_then(|at| {
+        let candidate = format!("{}{}", &line[..at], &line[at + 1..]);
+        (candidate.trim() == "```").then_some(candidate)
+    });
+    match resolved {
+        Some(resolved) => std::borrow::Cow::Owned(resolved),
+        None => std::borrow::Cow::Borrowed(line),
+    }
+}
+
+/// Paints the quiet inset panels behind each run of [`RowKind::Code`] or
+/// [`RowKind::Quote`] rows: a low-alpha fill across the body width plus a
+/// pale accent bar on the leading edge. Returns each code panel with its
+/// index into [`code_blocks`], so callers can add a Copy code button per
+/// panel. `clip_height` limits painting to the visible rows of a collapsed
+/// message, in galley coordinates like [`paint_selectable_height`].
+pub fn paint_row_panels(
+    painter: &egui::Painter,
+    body: Rect,
+    origin: Pos2,
+    laid: &Text,
+    clip_height: Option<f32>,
+    fill: Color32,
+    bar: Color32,
+) -> Vec<(usize, Rect)> {
+    const PAD: f32 = 3.0;
+    const BAR: f32 = 2.5;
+    let rows = &laid.galley.rows;
+    let kinds = laid.row_kinds();
+    let mut panels = Vec::new();
+    let mut start = 0;
+    while start < rows.len() {
+        let kind = kinds[start];
+        let mut end = start + 1;
+        while end < rows.len() && kinds[end] == kind {
+            end += 1;
+        }
+        if kind != RowKind::Normal {
+            let top = rows[start].pos.y;
+            let bottom = rows[end - 1].pos.y + rows[end - 1].row.size.y;
+            if !clip_height.is_some_and(|clip| top >= clip) {
+                let bottom = clip_height.map_or(bottom, |clip| bottom.min(clip));
+                let panel = Rect::from_min_max(
+                    Pos2::new(body.min.x, origin.y + top - PAD),
+                    Pos2::new(body.max.x, origin.y + bottom + PAD),
+                );
+                painter.rect_filled(panel, 4.0, fill);
+                painter.rect_filled(
+                    Rect::from_min_max(panel.min, Pos2::new(panel.min.x + BAR, panel.max.y)),
+                    1.0,
+                    bar,
+                );
+                if let RowKind::Code(index) = kind {
+                    panels.push((index, panel));
+                }
+            }
+        }
+        start = end;
+    }
+    panels
+}
+
+/// The exact contents of each fenced code block in `text`, in order: no
+/// fences, no surrounding prose, with the bridge's fence escape resolved.
+/// An unterminated fence runs to the end of the text, as it paints.
+pub fn code_blocks(text: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut current: Option<Vec<String>> = None;
+    for line in text.split('\n') {
+        let trimmed = line.trim_end();
+        if trimmed.trim() == "```" {
+            match current.take() {
+                Some(lines) => blocks.push(lines.join("\n")),
+                None => current = Some(Vec::new()),
+            }
+            continue;
+        }
+        if let Some(lines) = current.as_mut() {
+            lines.push(fenced_line(line).into_owned());
+        }
+    }
+    if let Some(lines) = current {
+        blocks.push(lines.join("\n"));
+    }
+    // An empty fence paints no row and gets no panel; drop it so panel and
+    // block indices stay aligned. Blank lines inside a block survive.
+    blocks.retain(|block| !block.is_empty());
+    blocks
 }
 
 /// Collapse a trailing `Title (url)` only for painting. The source, plain
@@ -2423,7 +2734,11 @@ mod tests {
                 !std::sync::Arc::ptr_eq(&cached.shared, &relaid.shared),
                 "an edited body lays out again"
             );
-            assert_eq!(relaid.unbroken_text(), edited);
+            assert_eq!(
+                relaid.unbroken_text(),
+                edited.replace("@35850123", "@Ada"),
+                "copy text preserves the edit and resolves the mention name"
+            );
             assert!(
                 !std::sync::Arc::ptr_eq(&cached.shared, &renamed_layout.shared),
                 "a renamed mention lays out again"
@@ -2621,5 +2936,223 @@ mod monospace_tests {
         );
         assert!(links("mail hello@section8berlin.com or nothing").is_empty());
         assert!(links("version 0.3.0 of main.rs").is_empty());
+    }
+
+    /// Fenced lines are flagged as block code; inline `code` is not.
+    #[test]
+    fn fenced_lines_are_block_code_and_inline_code_is_not() {
+        let spans = parse("before\n```\nlet x = 1;\n```\nafter `inl`", &[]);
+        let block: Vec<_> = spans.iter().filter(|span| span.block).collect();
+        assert_eq!(block.len(), 1);
+        assert_eq!(block[0].text, "let x = 1;");
+        assert!(block[0].mono);
+        let inline = spans
+            .iter()
+            .find(|span| span.text == "inl")
+            .expect("inline code span");
+        assert!(inline.mono && !inline.block);
+    }
+
+    /// Two fences with nothing between them are two blocks and two row
+    /// runs, so each panel's Copy code button reaches its own block.
+    #[test]
+    fn adjacent_fences_stay_two_code_runs() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "```\nfirst\n```\n```\nsecond\n```";
+            let laid = layout_balanced(ui, text, &[], &style, 220.0, false);
+            let kinds = laid.row_kinds();
+            assert_eq!(
+                kinds
+                    .iter()
+                    .filter(|kind| matches!(kind, RowKind::Code(0)))
+                    .count(),
+                1,
+                "first block: {kinds:?}"
+            );
+            assert_eq!(
+                kinds
+                    .iter()
+                    .filter(|kind| matches!(kind, RowKind::Code(1)))
+                    .count(),
+                1,
+                "second block: {kinds:?}"
+            );
+            assert_eq!(code_blocks(text), ["first", "second"]);
+        });
+        output.textures_delta.clear();
+    }
+
+    /// Every line of a multiline fence carries the same block index, a blank
+    /// line stays inside its block, an empty fence consumes no index, and
+    /// each panel's Copy code button reaches its own block.
+    #[test]
+    fn multiline_fences_keep_one_block_index_each() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "```\nalpha\n\nbeta\n```\nprose\n```\n```\nmore\n```\ngamma\ndelta\n```";
+            let laid = layout_balanced(ui, text, &[], &style, 220.0, false);
+            let kinds = laid.row_kinds();
+            // alpha, the blank line and beta are block 0; gamma and delta 1.
+            assert_eq!(
+                kinds
+                    .iter()
+                    .filter(|kind| matches!(kind, RowKind::Code(0)))
+                    .count(),
+                3,
+                "first block: {kinds:?}"
+            );
+            assert_eq!(
+                kinds
+                    .iter()
+                    .filter(|kind| matches!(kind, RowKind::Code(1)))
+                    .count(),
+                2,
+                "second block: {kinds:?}"
+            );
+            assert_eq!(code_blocks(text), ["alpha\n\nbeta", "gamma\ndelta"]);
+        });
+        output.textures_delta.clear();
+    }
+
+    /// Blank lines belong to the copy text, and an empty fence, which
+    /// paints no row and gets no panel, gets no copy entry either, so panel
+    /// and block indices stay aligned.
+    #[test]
+    fn code_blocks_keep_blank_lines_and_skip_empty_fences() {
+        // A leading blank line is part of the block.
+        assert_eq!(code_blocks("```\n\nfirst\n```"), ["\nfirst"]);
+        // An empty fence paints no panel, so it has no copy entry either.
+        assert_eq!(
+            code_blocks("```\n```\ntext\n```\necho hi\n```"),
+            ["echo hi"]
+        );
+    }
+
+    /// Copy code takes the exact block: no fences, no surrounding prose,
+    /// the bridge's fence escape resolved, several blocks in order, and an
+    /// unterminated fence running to the end like it paints.
+    #[test]
+    fn code_blocks_copy_the_exact_block_contents() {
+        assert_eq!(
+            code_blocks("run this:\n```\ncd ~/koodi\ncargo build\n```\nthen wait"),
+            vec!["cd ~/koodi\ncargo build"]
+        );
+        assert_eq!(
+            code_blocks("```\nfirst\n```\nmiddle\n```\nsecond\n```"),
+            vec!["first", "second"]
+        );
+        // A backslashed content fence is content, not a fence.
+        assert_eq!(code_blocks("```\na\\```b\n```"), vec!["a```b"]);
+        // Indentation and inner blank lines survive byte for byte.
+        assert_eq!(
+            code_blocks("```\n  indented\n\n  more\n```"),
+            vec!["  indented\n\n  more"]
+        );
+        assert_eq!(code_blocks("```\nnever closed"), vec!["never closed"]);
+        assert!(code_blocks("no code here").is_empty());
+        // An empty fence paints no panel, so it has no copy entry.
+        assert!(code_blocks("```\n```").is_empty());
+    }
+
+    /// Panel rows follow the galley: quote and code rows are marked, plain
+    /// rows are not, and the marks survive the balancer's inserted breaks.
+    #[test]
+    fn row_kinds_track_quote_and_code_rows() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "> wait for the fixes\nuse a local build:\n```\ncargo build --locked --release --target aarch64-apple-darwin and some more words to wrap\n```\ndone";
+            let laid = layout_balanced(ui, text, &[], &style, 220.0, false);
+            assert_eq!(laid.row_kinds().len(), laid.galley.rows.len());
+            assert_eq!(laid.row_kinds()[0], RowKind::Quote);
+            let code_rows = laid
+                .row_kinds()
+                .iter()
+                .filter(|kind| matches!(kind, RowKind::Code(_)))
+                .count();
+            assert!(
+                code_rows >= 2,
+                "the long code line wraps and every wrapped row stays code: {code_rows}"
+            );
+            assert_eq!(laid.row_kinds().last(), Some(&RowKind::Normal));
+        });
+        output.textures_delta.clear();
+    }
+
+    /// Code lines never paint wider than their room: a fenced block with a
+    /// very long line wraps to the layout width instead of overflowing the
+    /// bubble.
+    #[test]
+    fn fenced_code_rows_fit_the_layout_width() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let long = "x".repeat(300);
+            let text = format!("```\ncmd {long} end\n```");
+            let laid = layout_balanced(ui, &text, &[], &style, 200.0, false);
+            for (index, row) in laid.galley.rows.iter().enumerate() {
+                assert!(
+                    row.row.size.x <= 200.5,
+                    "row {index} is {} wide in a 200-wide room",
+                    row.row.size.x
+                );
+            }
+        });
+        output.textures_delta.clear();
+    }
+
+    /// A blank line inside a fenced block keeps the block's rows together:
+    /// every row up to the closing fence stays code, so the panel and the
+    /// Copy code button cover the block as one piece.
+    #[test]
+    fn a_blank_line_inside_a_fence_stays_code() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "```\nfirst\n\nthird\n```\nafter";
+            let laid = layout_balanced(ui, text, &[], &style, 220.0, false);
+            let kinds = laid.row_kinds();
+            assert!(
+                kinds[..kinds.len() - 1]
+                    .iter()
+                    .all(|kind| matches!(kind, RowKind::Code(_))),
+                "blank line inside the fence: {kinds:?}"
+            );
+            assert_eq!(kinds.last(), Some(&RowKind::Normal));
+        });
+        output.textures_delta.clear();
     }
 }

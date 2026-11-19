@@ -9936,6 +9936,57 @@ fn rich_body(
     None
 }
 
+/// One Copy code button at the top right of each fenced code panel. The
+/// click copies the exact block contents, fences and prose excluded, and the
+/// label briefly swaps to Copied. Plain selection drags stay untouched.
+fn copy_code_buttons(
+    ui: &mut egui::Ui,
+    view: &View<'_>,
+    id: egui::Id,
+    text: &str,
+    panels: &[(usize, Rect)],
+    palette: &crate::theme::Palette,
+) {
+    if panels.is_empty() {
+        return;
+    }
+    let blocks = markup::code_blocks(text);
+    for &(index, panel) in panels {
+        let Some(block) = blocks.get(index) else {
+            continue;
+        };
+        let copied_id = id.with(("copied", index));
+        let copied_at: Option<std::time::Instant> = ui.ctx().data(|data| data.get_temp(copied_id));
+        let copied = copied_at.is_some_and(|at| at.elapsed().as_secs_f32() < 1.2);
+        if copied {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(300));
+        }
+        let label = if copied {
+            crate::i18n::gettext(view.locale, "Copied")
+        } else {
+            crate::i18n::gettext(view.locale, "Copy code")
+        };
+        let button = egui::Button::new(
+            egui::RichText::new(label.as_ref())
+                .small()
+                .color(palette.accent),
+        )
+        .frame(false);
+        let rect = Rect::from_min_size(
+            pos2(panel.max.x - 68.0, panel.min.y + 2.0),
+            vec2(64.0, 16.0),
+        );
+        if ui.put(rect, button).clicked() {
+            ui.ctx().copy_text(block.clone());
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(copied_id, std::time::Instant::now()));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(1200));
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn rich_body_full(
     ui: &mut egui::Ui,
@@ -10087,6 +10138,17 @@ fn rich_body_full(
         rect.min
     };
     if visible || selection_alive {
+        // Quiet inset panels behind fenced code and quote rows, painted
+        // under the text. The code panels get a Copy code button each.
+        let code_panels = markup::paint_row_panels(
+            ui.painter(),
+            rect,
+            origin,
+            &laid,
+            displayed_height,
+            palette.text.gamma_multiply(0.05),
+            palette.accent.gamma_multiply(0.5),
+        );
         markup::paint_selectable_height(
             ui,
             laid.as_ref(),
@@ -10096,6 +10158,7 @@ fn rich_body_full(
             visible,
             displayed_height,
         );
+        copy_code_buttons(ui, view, id, text, &code_panels, &palette);
     }
     let web_links: Vec<(Rect, String)> = laid
         .links

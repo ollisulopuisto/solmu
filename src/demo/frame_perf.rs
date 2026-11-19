@@ -66,7 +66,7 @@ fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -> Durati
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(1180.0, 780.0),
+                egui::vec2(1180.0, 420.0),
             )),
             events,
             ..Default::default()
@@ -81,8 +81,8 @@ fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -> Durati
     start.elapsed()
 }
 
-/// Starts a drag selection over the visible messages and keeps the button
-/// held. Returns whether a selection is live afterwards.
+/// Selects text inside a visible message body and releases the button.
+/// Returns whether a selection is live afterwards.
 fn hold_selection(app: &mut App, ctx: &egui::Context, chat: &str, rows: usize) -> bool {
     // Use an actual visible body, never a guessed point in empty space.
     let body = (0..rows)
@@ -90,7 +90,7 @@ fn hold_selection(app: &mut App, ctx: &egui::Context, chat: &str, rows: usize) -
         .find_map(|n| {
             let id = crate::ui::conversation::bubble_id(chat, &format!("perf-{n}"));
             ctx.data(|data| data.get_temp::<egui::Rect>(id.with("body")))
-                .filter(|rect| rect.center().y > 120.0 && rect.center().y < 650.0)
+                .filter(|rect| rect.center().y > 120.0 && rect.center().y < 280.0)
         })
         .expect("fixture has a visible text body");
     let press = egui::pos2(body.left() + 2.0, body.center().y);
@@ -154,9 +154,10 @@ fn cell(rows: usize, long: bool, select: bool) {
             let before = metrics();
             let events = if scrolling {
                 vec![
-                    egui::Event::PointerMoved(egui::pos2(700.0, 350.0)),
+                    egui::Event::PointerMoved(egui::pos2(700.0, 200.0)),
                     egui::Event::MouseWheel {
                         unit: egui::MouseWheelUnit::Point,
+                        phase: egui::TouchPhase::Move,
                         delta: egui::vec2(0.0, 90.0),
                         modifiers: egui::Modifiers::NONE,
                     },
