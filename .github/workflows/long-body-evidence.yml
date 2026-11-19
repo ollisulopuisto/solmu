@@ -15,7 +15,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - uses: jdx/mr-boxington-action@v1
+      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1
         with:
           cache-generation: test-v1
       - name: Check formatting and fixed regression
