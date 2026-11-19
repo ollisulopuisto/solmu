@@ -17,6 +17,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 - Sent text bubbles share a run's width only when they are near-equal to its widest text (within 16 points and 15%); media, cards, quotes and forwards keep their own width and no longer inflate short replies around them.
 - The chat list shows a contact's full-size picture when their thumbnail fetch missed, instead of bare initials while Contact info already has the photo.
+- Fenced code blocks and quotes sit on quiet inset panels with a pale accent bar, inline code gets a small inset, and each code panel has a Copy code button that copies the exact block contents.
 - A link preview that fails to load stays quiet: no unavailable row and no retry button under the message.
 
 - Long message bodies stop after 25 rendered lines. Show more gives the hidden-line count, Show less folds them again; copy, reply and forward keep the full message.

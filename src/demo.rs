@@ -2583,6 +2583,24 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.settings.flat_groups.grouped_view = true;
             }
             "history-date" => history_date_sample(app),
+            // Evidence-only page for the code/quote panel shots: two fenced
+            // blocks with prose between them, so the panels and their Copy
+            // code buttons show in one capture.
+            "code-panels" => {
+                let chat = SAMPLES[0].id;
+                let text = "Set it up like this:\n```\ncd ~/koodi/solmu\ncargo build\n```\nThen run the checks:\n```\ncargo test --locked\n```";
+                let row = message(
+                    chat,
+                    "demo-code-panels",
+                    false,
+                    crate::util::now(),
+                    Content::text(text),
+                );
+                let history = app.conversations.get_mut(chat).unwrap();
+                history.messages = vec![row];
+                app.open_chat = Some(chat.into());
+                app.scroll_to_bottom = false;
+            }
             "card-widths" => card_widths_sample(app),
             "minute-gutter" => minute_gutter_sample(app),
             "group-footer-reactions" => {
