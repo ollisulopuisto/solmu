@@ -69,7 +69,7 @@ pub const EDIT_WINDOW: Duration = Duration::from_secs(15 * 60);
 /// them.
 pub fn edit_window(network: Option<&str>) -> Option<Duration> {
     const DAY: Duration = Duration::from_secs(24 * 60 * 60);
-    let name = network?.trim().to_ascii_lowercase();
+    let name = network.unwrap_or("whatsapp").trim().to_ascii_lowercase();
     Some(match name.as_str() {
         "whatsapp" | "facebook/messenger" | "instagram" | "google messages" => EDIT_WINDOW,
         "linkedin" => Duration::from_secs(60 * 60),
