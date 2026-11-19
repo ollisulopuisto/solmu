@@ -530,5 +530,8 @@ row, another that it stays above a mid-block clip. A third pins the
 button's actual response rect: Ui::put expands a themed Button to the
 28pt minimum interact height, which leaked nine points into the first
 code row and intercepted selection drags (Devin finding on e4286bc), so
-the label is now painted by hand over an exact allocation in the
-reserved band. No release, #359 or DMG work.
+the label was first painted by hand over an exact allocation in the
+reserved band, but that control had no accessible label (Devin finding):
+it is now a real Button in a child UI whose interact height is capped at
+the band, pinned by an accesskit tree test. No release, #359 or DMG
+work.
