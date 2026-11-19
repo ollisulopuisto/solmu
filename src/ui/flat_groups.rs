@@ -943,12 +943,11 @@ pub fn list(app: &mut App, ui: &mut egui::Ui, to_top: bool) {
     let visible = visible_headings(app, &sections, other_hidden);
     if ui.is_enabled()
         && let Some(forward) = app.flat_group_ui.jump.take()
+        && let Some(target) = jump_target(app.flat_group_ui.jumped, &visible, forward)
     {
-        if let Some(target) = jump_target(app.flat_group_ui.jumped, &visible, forward) {
-            app.flat_group_ui.jumped = Some(target);
-            app.flat_group_ui.collapsed.remove(&target);
-            app.flat_group_ui.jump_pending = Some(target);
-        }
+        app.flat_group_ui.jumped = Some(target);
+        app.flat_group_ui.collapsed.remove(&target);
+        app.flat_group_ui.jump_pending = Some(target);
     }
     // The View menu's fold entries and the toggle chord queue here, where
     // the sections and their folded state live.
