@@ -1,6 +1,9 @@
 name: Long body alignment evidence
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/long-body-evidence.yml'
 permissions:
   contents: read
 jobs:
