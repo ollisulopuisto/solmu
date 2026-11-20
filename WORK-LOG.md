@@ -749,3 +749,25 @@ the album's shared painted bounds. Clear texture deltas in the new seeded
 fixtures. Native all-target/all-feature Clippy passes; local targeted application
 test execution exceeded120 seconds during compilation and has not run. CI must
 recheck the three existing demo failures, including right-click-beside-message.
+
+## Scoped message automation,20 November
+
+Implemented exact account/chat messages:send grants, old-read-token refusal,
+bounded authenticated loopback POST, metadata-only durable claim/outcome audit,
+revocation rechecks after identity lookup and disk claim, and no automatic retry.
+Added solmu-control text-file CLI and stdio solmu-mcp using the same API. Modern
+MCP2026-07-28 per-request metadata/discovery plus2025-11-25 compatibility; no
+remote MCP listener. Clients disable redirects, proxy routing and transport retries.
+Current app code constructs only the Beeper backend, so this serves the configured
+network connections including WhatsApp through Beeper. Earlier inherited native
+WhatsApp-mode notes do not describe a second live backend in this fork. Multiple
+origins and direct/standalone protocol login remain out of scope for this slice.
+
+Executed109 tests in an isolated build using actual production modules (only
+merged Person/Member data shapes stubbed):85 unit tests,16 existing readHTTP,
+4 writeHTTP/actualCLI,4 MCP/CLI protocol tests. Native lib/bins/test-target Clippy
+passed. Own review found and fixed POST pagination leakage, unbounded total socket
+read time, stale-grant check after disk claim, invalid token options, and Windows
+directory-sync incompatibility. Final all-target/all-feature native Clippy, formatting and diff checks pass;407 existing portable adapter tests also pass. Own adversarial review found no remaining issue in these paths.
+No real token, service, account query, live send, media upload or release created.
+Full application tests and native Mac execution not run locally.

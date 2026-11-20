@@ -23,6 +23,14 @@ struct Entry {
 #[serde(deny_unknown_fields)]
 struct Journal {
     entries: BTreeMap<String, Entry>,
+    #[serde(default)]
+    attempts: Vec<Attempt>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Attempt {
+    client_hash: String,
+    at: i64,
 }
 pub enum Claim {
     New,
@@ -69,10 +77,24 @@ impl WriteJournal {
             .map_err(|_| "write audit sync failed")?;
         tmp.persist(&self.path)
             .map_err(|_| "write audit persistence failed")?;
+        #[cfg(unix)]
         std::fs::File::open(parent)
             .and_then(|f| f.sync_all())
             .map_err(|_| "write audit directory sync failed")?;
         Ok(())
+    }
+    /// Record receipt before inspecting write content, including denied callers.
+    pub fn audit_attempt(&self, client_hash: &str, at: i64) -> Result<(), String> {
+        let _lock = crate::read_api::Registry::lock(&self.path)?;
+        let mut journal = self.load()?;
+        if journal.attempts.len() >= 10000 {
+            return Err("write audit full".into());
+        }
+        journal.attempts.push(Attempt {
+            client_hash: client_hash.into(),
+            at,
+        });
+        self.save(&journal)
     }
     pub fn claim(
         &self,

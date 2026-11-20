@@ -913,7 +913,16 @@ mod tests {
 
     #[test]
     fn nothing_but_get_on_the_allowlist_is_routable() {
-        let (registry, token) = setup(&SCOPES, &[]);
+        let (registry, token) = setup(
+            &[
+                "accounts:read",
+                "chats:read",
+                "messages:read",
+                "search:read",
+                "people:read",
+            ],
+            &[],
+        );
         for method in ["POST", "PUT", "PATCH", "DELETE"] {
             assert_eq!(run(&registry, &token, method, "/v1/chats").0, 405);
         }
@@ -957,7 +966,16 @@ mod tests {
 
     #[test]
     fn account_allowlist_filters_every_listing() {
-        let (registry, token) = setup(&SCOPES, &["a1"]);
+        let (registry, token) = setup(
+            &[
+                "accounts:read",
+                "chats:read",
+                "messages:read",
+                "search:read",
+                "people:read",
+            ],
+            &["a1"],
+        );
         let accounts = run(&registry, &token, "GET", "/v1/accounts");
         assert_eq!(accounts.1, r#"[{"accountID":"a1"}]"#);
         let chats: Value =
@@ -973,7 +991,16 @@ mod tests {
 
     #[test]
     fn account_allowlist_guards_messages_by_chat_owner() {
-        let (registry, token) = setup(&SCOPES, &["a1"]);
+        let (registry, token) = setup(
+            &[
+                "accounts:read",
+                "chats:read",
+                "messages:read",
+                "search:read",
+                "people:read",
+            ],
+            &["a1"],
+        );
         assert_eq!(
             run(&registry, &token, "GET", "/v1/chats/c-a1/messages").0,
             200
@@ -990,7 +1017,16 @@ mod tests {
 
     #[test]
     fn upstream_failures_never_leak_detail() {
-        let (registry, token) = setup(&SCOPES, &[]);
+        let (registry, token) = setup(
+            &[
+                "accounts:read",
+                "chats:read",
+                "messages:read",
+                "search:read",
+                "people:read",
+            ],
+            &[],
+        );
         let missing = run(&registry, &token, "GET", "/v1/chats/missing/messages");
         assert_eq!(missing.0, 404);
         assert!(!missing.1.contains("internal"));

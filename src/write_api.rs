@@ -16,8 +16,14 @@ pub fn handle(
     chat: &str,
     body: &[u8],
     now: i64,
-    revalidate: impl FnOnce() -> bool,
+    mut revalidate: impl FnMut() -> bool,
 ) -> (u16, String) {
+    if journal
+        .audit_attempt(&bearer.map(hash_token).unwrap_or_default(), now)
+        .is_err()
+    {
+        return response(503, "audit_unavailable", None);
+    }
     let Some(token) = bearer else {
         return response(401, "unauthorized", None);
     };
@@ -79,6 +85,11 @@ pub fn handle(
         Ok(Claim::Existing(outcome)) => return existing(outcome),
         Err(_) => return response(409, "request_conflict_or_audit_unavailable", None),
         Ok(Claim::New) => {}
+    }
+    // Disk claim may block too. Recheck once more at the last boundary before sending.
+    if !revalidate() {
+        let _ = journal.finish(&token_hash, &request.request_id, Outcome::Rejected);
+        return response(401, "authorization_changed", None);
     }
     let outcome = upstream.send_text(chat, &request.text);
     if journal
@@ -170,5 +181,61 @@ mod tests {
             401
         );
         assert_eq!(u.writes, 0);
+    }
+    #[test]
+    fn expiry_audit_failure_and_late_revocation_never_post() {
+        let (mut r, t, d, j) = setup();
+        let mut u = Mock {
+            reads: 0,
+            writes: 0,
+        };
+        r.clients[0].expires_at = Some(2);
+        assert_eq!(
+            handle(&r, &mut u, &j, Some(&t), "c", BODY, 2, || true).0,
+            401
+        );
+        r.clients[0].expires_at = None;
+        let unavailable = WriteJournal::new(d.path().join("absent/audit.json"));
+        assert_eq!(
+            handle(&r, &mut u, &unavailable, Some(&t), "c", BODY, 2, || true).0,
+            503
+        );
+        assert_eq!(u.reads, 0);
+        let mut checks = 0;
+        assert_eq!(
+            handle(&r, &mut u, &j, Some(&t), "c", BODY, 2, || {
+                checks += 1;
+                checks == 1
+            })
+            .0,
+            401
+        );
+        assert_eq!(checks, 2);
+        assert_eq!(u.writes, 0);
+    }
+    #[test]
+    fn unknown_outcomes_are_durable_and_never_resent() {
+        struct Unknown(usize);
+        impl Upstream for Unknown {
+            fn get(&mut self, _: &str) -> Result<(u16, String), String> {
+                Ok((200, r#"{"accountID":"a"}"#.into()))
+            }
+            fn send_text(&mut self, _: &str, _: &str) -> Outcome {
+                self.0 += 1;
+                Outcome::Unknown
+            }
+        }
+        let (r, t, d, j) = setup();
+        let mut u = Unknown(0);
+        assert_eq!(
+            handle(&r, &mut u, &j, Some(&t), "c", BODY, 2, || true).0,
+            409
+        );
+        let j = WriteJournal::new(d.path().join("audit.json"));
+        assert_eq!(
+            handle(&r, &mut u, &j, Some(&t), "c", BODY, 2, || true).0,
+            409
+        );
+        assert_eq!(u.0, 1);
     }
 }

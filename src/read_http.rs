@@ -153,6 +153,7 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str) {
         405 => "405 Method Not Allowed",
         409 => "409 Conflict",
         429 => "429 Too Many Requests",
+        503 => "503 Service Unavailable",
         _ => "502 Bad Gateway",
     };
     let response = format!(
@@ -166,7 +167,13 @@ fn read_head(stream: &mut TcpStream) -> Option<String> {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
+        stream
+            .set_read_timeout(Some(
+                deadline.checked_duration_since(std::time::Instant::now())?,
+            ))
+            .ok()?;
         if stream.read(&mut byte).ok()? != 1 {
             return None;
         }
@@ -213,6 +220,9 @@ pub fn serve_connection(stream: &mut TcpStream, path: &Path, shared: &Shared) {
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
         return respond(stream, 400, r#"{"error":"bad request"}"#);
     };
+    if parts.next() != Some("HTTP/1.1") || parts.next().is_some() {
+        return respond(stream, 400, r#"{"error":"bad request line"}"#);
+    }
     let headers: Vec<_> = head
         .lines()
         .skip(1)
@@ -223,7 +233,11 @@ pub fn serve_connection(stream: &mut TcpStream, path: &Path, shared: &Shared) {
         let Some((name, _)) = line.split_once(':') else {
             return respond(stream, 400, r#"{"error":"bad header"}"#);
         };
-        if !names.insert(name.to_ascii_lowercase())
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+            || !names.insert(name.to_ascii_lowercase())
             || name.eq_ignore_ascii_case("transfer-encoding")
         {
             return respond(stream, 400, r#"{"error":"ambiguous request"}"#);
@@ -253,13 +267,23 @@ pub fn serve_connection(stream: &mut TcpStream, path: &Path, shared: &Shared) {
     if !allowed {
         return respond(stream, 429, r#"{"error":"rate limited"}"#);
     }
+    if method == "GET" && target == "/v1/capabilities" {
+        let Some(client) = bearer.and_then(|t| registry.authenticate(t, at)) else {
+            return respond(stream, 401, r#"{"error":"unauthorized"}"#);
+        };
+        return respond(
+            stream,
+            200,
+            &serde_json::json!({"scopes":client.scopes,"accounts":client.accounts,"send_destinations":client.send_destinations,"expires_at":client.expires_at}).to_string(),
+        );
+    }
     if method == "POST" {
         let Some(client) = bearer.and_then(|t| registry.authenticate(t, at)) else {
             return respond(stream, 401, r#"{"error":"unauthorized"}"#);
         };
         let chat = match crate::read_api::route("GET", target) {
             Ok((crate::read_api::Route::Messages(chat), _)) if !target.contains('?') => chat,
-            _ => return respond(stream, 404, r#"{"error":"unknown write route"}"#),
+            _ => return respond(stream, 405, r#"{"error":"method not allowed"}"#),
         };
         if header(&head, "content-type")
             .and_then(|v| v.split(';').next())
@@ -281,9 +305,19 @@ pub fn serve_connection(stream: &mut TcpStream, path: &Path, shared: &Shared) {
         if !write_allowed(&key, at) {
             return respond(stream, 429, r#"{"error":"send rate limited"}"#);
         }
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
         let mut body = vec![0; length];
-        if stream.read_exact(&mut body).is_err() {
-            return respond(stream, 400, r#"{"error":"incomplete body"}"#);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut offset = 0;
+        while offset < length {
+            let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                return respond(stream, 400, r#"{"error":"body timeout"}"#);
+            };
+            let _ = stream.set_read_timeout(Some(left));
+            match stream.read(&mut body[offset..]) {
+                Ok(n) if n > 0 => offset += n,
+                _ => return respond(stream, 400, r#"{"error":"incomplete body"}"#),
+            }
         }
         let mut upstream = shared.source.open();
         let journal = crate::write_journal::WriteJournal::new(path.with_extension("writes.json"));

@@ -47,7 +47,9 @@ pub fn valid_destinations(destinations: &[Destination]) -> bool {
             !d.account.is_empty()
                 && d.account.len() <= 120
                 && !d.chat.is_empty()
-                && d.chat.len() <= 512
+                && d.chat.len() <= 256
+                && !d.chat.contains('/')
+                && !d.chat.contains("..")
                 && !d.account.chars().any(char::is_control)
                 && !d.chat.chars().any(char::is_control)
         })
