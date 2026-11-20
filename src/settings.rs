@@ -1922,9 +1922,11 @@ mod media_tool_preferences_tests {
     fn selected_media_path_and_onboarding_round_trip() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("settings.json");
-        let mut settings = super::Settings::default();
-        settings.ffmpeg_path = Some(root.path().join("my-ffmpeg"));
-        settings.media_tools_onboarding_done = true;
+        let settings = super::Settings {
+            ffmpeg_path: Some(root.path().join("my-ffmpeg")),
+            media_tools_onboarding_done: true,
+            ..Default::default()
+        };
         settings.save(&path).unwrap();
         let loaded = super::Settings::load(&path);
         assert_eq!(loaded.ffmpeg_path, settings.ffmpeg_path);
