@@ -683,3 +683,13 @@ Owner decision: the per-PR evidence workflows are not kept. The
 `bridge-album-evidence.yml` workflow (failing-first test plus before/after
 captures in both themes) served its purpose on this PR and is removed before
 merge; the mapping and regression tests it proved remain in normal CI.
+
+## 2026-11-20 - Reject false-green server inventory diagnostics
+
+During the existing-server reliability audit, the read-only endpoint checker
+accepted an error-shaped chat or history response as an empty successful page.
+Validate account and chat identities, items arrays, pagination flag and cursor
+types, and sampled history structure before printing a summary. Invalid server
+JSON yields a nonzero exit with no private payload. Failing-first regressions
+cover these cases, valid empty inventory, and the CLI exit/output boundary.
+No real accounts queried, no native Mac run, no release or DMG dispatch.

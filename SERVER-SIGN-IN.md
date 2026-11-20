@@ -69,3 +69,13 @@ Visual previews exercise the real sign-in window without any user account.
 Full-app compilation, real Server interop, native Keychain/restart, native Mac
 launch and versioned DMG acceptance must still pass. A focused source-module
 pass is not a native release or end-to-end acceptance claim.
+
+## Read-only endpoint inventory checks
+
+`contrib/beeper-tools/check_endpoint.py` checks the existing API inventory
+without sending messages or changing read state. Its summary contains counts
+and allowlisted status labels, never message bodies or account identifiers.
+Malformed account/chat/history responses fail the check instead of appearing
+as an empty healthy inventory. A successful inventory check does not establish
+that every bridge is connected or that sending works. Use expected account and
+chat counts from a previous local check to detect missing inventory.
