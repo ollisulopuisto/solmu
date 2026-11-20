@@ -305,6 +305,46 @@ pub fn refusal_text(locale: Locale, reason: &str) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn technical_detail_expansion_is_independent_between_items_and_sessions() {
+        let ctx = egui::Context::default();
+        let mut ids = Vec::new();
+        let mut open = Vec::new();
+        let frame = |ctx: &egui::Context, ids: &mut Vec<egui::Id>, open: &mut Vec<bool>| {
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    for scope in ["batch-current", "batch-previous"] {
+                        for index in 0..2 {
+                            let response = egui::CollapsingHeader::new("Technical details")
+                                .id_salt((scope, index))
+                                .show(ui, |ui| {
+                                    ui.label("error");
+                                });
+                            ids.push(response.header_response.id);
+                            open.push(response.body_returned.is_some());
+                        }
+                    }
+                });
+            });
+        };
+        frame(&ctx, &mut ids, &mut open);
+        let mut unique = ids.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 4);
+        egui::collapsing_header::CollapsingState::load_with_default_open(&ctx, ids[0], false)
+            .set_open(true);
+        // Store the explicit state exactly as clicking the first header does.
+        let mut state =
+            egui::collapsing_header::CollapsingState::load_with_default_open(&ctx, ids[0], false);
+        state.set_open(true);
+        state.store(&ctx);
+        ids.clear();
+        open.clear();
+        frame(&ctx, &mut ids, &mut open);
+        assert_eq!(open, [true, false, false, false]);
+    }
+
+    #[test]
     fn result_names_action_and_state_never_internal_identifiers() {
         let root = tempfile::tempdir().unwrap();
         let (mut app, _) = App::headless(
