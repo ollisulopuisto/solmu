@@ -3059,7 +3059,7 @@ impl App {
             .find(|p| p.members.iter().any(|m| m.matches(chat)))
             .filter(|p| !p.name.trim().is_empty())
         {
-            return format!("{} · linked", person.name);
+            return person.name.clone();
         }
         if let Some(name) = self
             .settings
@@ -3889,7 +3889,7 @@ impl App {
                     status: message.status,
                 });
             }
-            display.network = Some(format!("{} networks · linked", members.len()));
+            display.network = Some(format!("{} networks", members.len()));
         }
         display
     }
@@ -15866,6 +15866,22 @@ fn notification_eligible(chat: &Chat, now: i64, message_at: i64) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn linked_sidebar_title_uses_only_the_person_name() {
+        let mut app = app();
+        let mut chat = Chat::new("fixture".into(), "Network name".into());
+        chat.backend_account = Some("account".into());
+        app.settings.beeper.people.push(crate::merged::Person {
+            name: "Alex".into(),
+            members: vec![crate::merged::Member::of(&chat).unwrap()],
+            primary: None,
+        });
+        app.chats.push(chat.clone());
+        assert_eq!(app.chat_title(&chat), "Alex");
+        let preview = app.beeper_person_preview(&chat);
+        assert!(!preview.network.unwrap_or_default().contains("linked"));
+    }
+
     #[test]
     fn edit_window_follows_the_bridge_network() {
         let minute = 60;
