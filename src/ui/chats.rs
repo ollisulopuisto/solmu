@@ -1728,13 +1728,7 @@ fn favorite_chip(
             widgets::paint_disappearing_badge(ui, &palette, avatar_rect);
         }
         network_badges(app, ui, &palette, avatar_rect, chat);
-        if chat.favorite {
-            // Paint only: the row remains the sole click target.
-            let heart = favorite_indicator_rect(avatar_rect);
-            Icon::Heart
-                .image(palette.secondary, 12.0)
-                .paint_at(ui, heart);
-        }
+
         if chat.looks_unread() {
             // The badge respects the same settings as the chat list: a dot
             // only when counts are off, dimmed in a muted chat.
@@ -2698,6 +2692,13 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
             widgets::paint_disappearing_badge(ui, &palette, avatar_rect);
         }
         network_badges(app, ui, &palette, avatar_rect, chat);
+        if chat.favorite {
+            // Paint only: the row remains the sole click target.
+            let heart = favorite_indicator_rect(avatar_rect);
+            Icon::Heart
+                .image(palette.secondary, 12.0)
+                .paint_at(ui, heart);
+        }
 
         let left = rect.left() + 76.0;
         let right = rect.right() - 14.0;
@@ -3690,6 +3691,50 @@ mod tests {
             assert!(heart.left() >= 0.0);
             assert!(heart.right() < avatar.left());
             assert!(heart.top() >= 0.0 && heart.bottom() <= height);
+        }
+    }
+
+    #[test]
+    fn actual_chat_row_paints_favorite_in_left_gutter_only_when_marked() {
+        fn marker(shape: &egui::Shape, expected: egui::Rect) -> bool {
+            if let egui::Shape::Vec(parts) = shape {
+                return parts.iter().any(|part| marker(part, expected));
+            }
+            let bounds = shape.visual_bounding_rect();
+            bounds.center().distance(expected.center()) < 0.5 && bounds.width() <= 14.0
+        }
+        for compact in [false, true] {
+            for favorite in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let (mut app, _) =
+                    App::headless(AppDirs::under(directory.path()), Settings::default());
+                app.settings.beeper.compact_list = compact;
+                let mut chat = Chat::new("fixture".into(), "Fixture".into());
+                chat.favorite = favorite;
+                let ctx = egui::Context::default();
+                app.attach(&ctx);
+                let mut painted = false;
+                for _ in 0..3 {
+                    let mut row_rect = Rect::NOTHING;
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        row_rect = row(&mut app, ui, &chat).rect
+                    });
+                    let avatar = Rect::from_center_size(
+                        pos2(row_rect.left() + 38.0, row_rect.center().y),
+                        Vec2::splat(48.0),
+                    );
+                    let expected = favorite_indicator_rect(avatar);
+                    painted = output
+                        .shapes
+                        .iter()
+                        .any(|shape| marker(&shape.shape, expected));
+                    output.textures_delta.clear();
+                }
+                assert_eq!(
+                    painted, favorite,
+                    "main row marker: compact={compact}, favorite={favorite}"
+                );
+            }
         }
     }
 
