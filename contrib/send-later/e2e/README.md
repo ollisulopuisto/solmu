@@ -38,3 +38,14 @@ Pieces:
 The daemon's own unit tests (`src/scheduler.rs`, `src/scheduler_api.rs`)
 cover the same rules at the module level; this suite proves the assembled
 binary keeps them.
+
+### Closed-client account-routing regression
+
+`closed_client.py --binary /path/to/solmu-scheduler` starts the real daemon
+with a synthetic loopback Beeper API. It verifies that a local profile ID is
+refused, then a separate enqueue client schedules with the chat's bridge
+account and exits before the due time. The daemon must deliver the exact
+text once and persist Sent after that client has exited. It uses temporary
+queue files and fixture tokens, never real accounts. This is not proof of a
+particular Studio installation, SSH configuration or real-network delivery.
+The main e2e runner invokes this check after its existing cases.

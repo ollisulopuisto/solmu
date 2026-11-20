@@ -1088,3 +1088,13 @@ The same linked-minute fixture failure affected #437 Ubuntu (2523 passed, one fa
 ## Terminal read synchronization404,20 November
 
 Linked-person reads fan out to each exact source. The read command used the generic Info toast for every HTTP failure, unlike history/poll terminal404 handling. A missing source now becomes unavailable for read synchronization until reconnect, logged once without identifiers. Local read clearing remains independent; no remote receipt is claimed. Other sources still synchronize;403/500 and transport errors stay visible. Read-only never posts. Three focused production-module tests pass, with the404 test first failing against the previous generic-failure behavior. Native test-target compilation passes; no live Server or Mac validation. No package publication.
+## 2026-11-20 - Send Later uses the chat bridge identity
+
+The app sent its local profile number as account_id, so the scheduler correctly
+rejected real bridged chats before queuing. Resolve the account from the
+selected chat instead. Unknown or blank identities stop locally without
+clearing the draft, and linked-person preferences cannot change the account.
+App regressions cover routing, quote/replacement preservation, and refusal.
+A real-daemon fixture test verifies a separate enqueue client exits before
+due time and the daemon still delivers once and persists Sent. This does not
+verify the user's live Studio installation or real-network delivery.

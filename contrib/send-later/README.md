@@ -73,6 +73,9 @@ permission - this directory only prepares the artifacts.
 - A malformed reconciliation search response leaves the send outcome unknown;
   it is not reported as proof that no matching copy exists. A valid empty
   search page is distinct from an unreadable or missing items array.
+- The app schedules using the selected chat's Beeper bridge account ID,
+  never the local Solmu profile number or a linked person's other network.
+  If that identity is not loaded, scheduling stops and keeps the draft.
 - Enqueue validates the chat and account against the Beeper API, so a
   message cannot be queued into a chat the account cannot send to.
 
