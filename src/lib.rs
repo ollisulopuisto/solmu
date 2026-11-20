@@ -91,6 +91,7 @@ pub mod suggest;
 
 pub mod whisper_runtime;
 
+pub mod media_tools;
 pub mod reply_graph;
 
 pub mod audience_queue;

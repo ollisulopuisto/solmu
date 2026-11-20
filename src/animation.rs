@@ -363,12 +363,14 @@ pub fn can_play_video() -> bool {
 fn ffmpeg_present() -> bool {
     static KNOWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *KNOWN.get_or_init(|| {
-        Command::new("ffmpeg")
-            .arg("-version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
+        crate::media_tools::resolve("ffmpeg").is_ok_and(|path| {
+            Command::new(path)
+                .arg("-version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        })
     })
 }
 
@@ -681,7 +683,7 @@ fn decode_with_ffmpeg(path: &Path, limit: usize) -> Option<Decoded> {
     if !ffmpeg_present() {
         return None;
     }
-    let probe = Command::new("ffprobe")
+    let probe = Command::new(crate::media_tools::resolve("ffprobe").ok()?)
         .args([
             "-v",
             "error",
@@ -706,7 +708,7 @@ fn decode_with_ffmpeg(path: &Path, limit: usize) -> Option<Decoded> {
     // Use even dimensions and preserve aspect ratio.
     let out_height = ((height as u64 * out_width as u64 / width as u64) as u32).max(2) & !1;
     let fps = 15u32;
-    let mut child = Command::new("ffmpeg")
+    let mut child = Command::new(crate::media_tools::resolve("ffmpeg").ok()?)
         .args(["-v", "error", "-i"])
         .arg(path)
         .args([
