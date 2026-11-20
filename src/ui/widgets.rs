@@ -1326,6 +1326,8 @@ pub fn bubble_shape(
 pub struct BubbleEffects {
     pub sender_shadow: Option<Color32>,
     pub flat_edge: bool,
+    /// Absolute tip position for an avatar-aligned incoming tail.
+    pub tail_tip_y: Option<f32>,
 }
 
 /// Group identity colours the drop shadow, including its triangular tail.
@@ -1356,7 +1358,11 @@ pub fn bubble_shape_with_shadow(
         let outline = top_tail_outline(rect, tail);
         return egui::Shape::mesh(fill_outline(&outline, color, 1.0 / pixels_per_point));
     }
-    let corners = bubble_corners(tail);
+    let corners = bubble_corners(if effects.tail_tip_y.is_some() {
+        None
+    } else {
+        tail
+    });
     let mut shadow = palette.bubble_shadow();
     if let Some(color) = effects.sender_shadow {
         shadow.color = color;
@@ -1369,7 +1375,7 @@ pub fn bubble_shape_with_shadow(
             Side::Left => (rect.left(), -TAIL_WIDTH, 3.0),
             Side::Right => (rect.right(), TAIL_WIDTH, -3.0),
         };
-        let top = rect.top();
+        let top = effects.tail_tip_y.unwrap_or(rect.top());
         let reach = TAIL_HEIGHT * (TAIL_WIDTH + into.abs()) / TAIL_WIDTH;
         let mut points = vec![
             pos2(edge + into, top),
@@ -1531,6 +1537,11 @@ pub mod balloon {
     /// (`CKUIBehaviorMac.textBalloonPillContentInsets`), two are 44.6; Solmu
     /// splits the difference.
     pub const SINGLE_LINE_MAX: f32 = 37.0;
+}
+
+/// The mouth-height approximation uses geometry, never face detection.
+pub fn avatar_tail_tip_y(avatar: Rect) -> f32 {
+    avatar.bottom() - avatar.height() / 3.0
 }
 
 /// Shared bubble geometry, retaining Messages' gradient but no bottom curl.
@@ -2072,6 +2083,15 @@ pub fn dotted_chip(
 mod tests {
     use super::*;
 
+    #[test]
+    fn avatar_tail_tip_is_one_third_above_bottom_for_any_avatar_rect() {
+        for (top, height) in [(0.0, 28.0), (50.0, 60.0), (-18.0, 36.0)] {
+            let avatar = Rect::from_min_size(pos2(10.0, top), vec2(height, height));
+            let y = avatar_tail_tip_y(avatar);
+            assert!((y - (top + height * 2.0 / 3.0)).abs() < 0.001);
+            assert!((avatar.bottom() - y - height / 3.0).abs() < 0.001);
+        }
+    }
     #[test]
     fn muted_unread_keeps_attention_color_instead_of_network_grey() {
         let palette = Palette::dark();

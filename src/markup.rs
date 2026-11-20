@@ -1520,6 +1520,14 @@ fn inline(line: &str) -> Vec<Span> {
     };
     while i < chars.len() {
         let c = chars[i];
+        // The HTML mapper distinguishes literal markers from semantic
+        // markup with a following nonprinting separator. Consume both as
+        // one literal character before testing code or emphasis syntax.
+        if matches!(c, '*' | '_' | '~' | '`') && chars.get(i + 1) == Some(&'\u{2063}') {
+            run.push(c);
+            i += 2;
+            continue;
+        }
         // The mapper's zero-width-space hint lets a marker open or close
         // mid-word: next to a marker it counts as a boundary but never
         // reaches the text. A zero-width space anywhere else is native
@@ -1539,7 +1547,18 @@ fn inline(line: &str) -> Vec<Span> {
             let rest: String = chars[i..].iter().collect();
             if let Some((end, _)) = link_at(&rest, 0) {
                 let token = &rest[..end];
-                run.push_str(token);
+                // Decode literal hints while keeping URLs in one run. This
+                // preserves their underscores and avoids rescanning a long
+                // hinted URL once per character.
+                let mut token_chars = token.chars().peekable();
+                while let Some(ch) = token_chars.next() {
+                    run.push(ch);
+                    if matches!(ch, '*' | '_' | '~' | '`')
+                        && token_chars.peek() == Some(&'\u{2063}')
+                    {
+                        token_chars.next();
+                    }
+                }
                 i += token.chars().count();
                 continue;
             }
@@ -1654,7 +1673,7 @@ fn against_slash(chars: &[char], i: usize) -> bool {
 }
 
 fn is_opener(chars: &[char], i: usize) -> bool {
-    if against_slash(chars, i) {
+    if against_slash(chars, i) || chars.get(i + 1) == Some(&'\u{2063}') {
         return false;
     }
     let before_ok = i == 0 || !chars[i - 1].is_alphanumeric();
@@ -1665,7 +1684,7 @@ fn is_opener(chars: &[char], i: usize) -> bool {
 }
 
 fn is_closer(chars: &[char], i: usize) -> bool {
-    if against_slash(chars, i) {
+    if against_slash(chars, i) || chars.get(i + 1) == Some(&'\u{2063}') {
         return false;
     }
     let before_ok = i > 0 && !chars[i - 1].is_whitespace() && chars[i - 1] != chars[i];
@@ -2449,6 +2468,34 @@ mod tests {
         assert_eq!(mono[0].text, "a\\");
         // A native zero-width space away from markers survives.
         assert_eq!(plain("a\u{200B}b", &[]), "a\u{200B}b");
+    }
+
+    #[test]
+    fn rich_literal_hint_keeps_markers_copy_links_and_surrounding_styles() {
+        let text = "*\u{2063}literal*\u{2063} _\u{2063}literal_\u{2063} ~\u{2063}literal~\u{2063} `\u{2063}literal`\u{2063}";
+        assert_eq!(plain(text, &[]), "*literal* _literal_ ~literal~ `literal`");
+        assert!(
+            parse(text, &[])
+                .iter()
+                .all(|span| !span.bold && !span.italic && !span.strike && !span.mono)
+        );
+        let styled = parse("*real *\u{2063}literal*\u{2063}*", &[]);
+        assert!(styled.iter().all(|span| span.bold));
+        assert_eq!(
+            styled
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect::<String>(),
+            "real *literal*"
+        );
+        assert_eq!(plain("a\u{2063}b", &[]), "a\u{2063}b");
+        assert_eq!(plain("*\u{2063} first", &[]), "* first");
+        assert_eq!(plain("`\u{2063}`\u{2063}`\u{2063}", &[]), "```");
+        let link = "https://example.com/a_\u{2063}b_\u{2063}c";
+        assert_eq!(plain(link, &[]), "https://example.com/a_b_c");
+        assert_eq!(links(link), vec!["https://example.com/a_b_c"]);
+        let shrug = "¯\\_(ツ)_/¯";
+        assert_eq!(plain(shrug, &[]), shrug);
     }
 
     #[test]

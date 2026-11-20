@@ -26,6 +26,14 @@ path = "src/bin/solmu-scheduler.rs"
 name = "solmu-reader"
 path = "src/bin/solmu-reader.rs"
 
+[[bin]]
+name = "solmu-control"
+path = "src/bin/solmu-control.rs"
+
+[[bin]]
+name = "solmu-mcp"
+path = "src/bin/solmu-mcp.rs"
+
 [dependencies]
 # Private temporary audio and verified atomic model installation. Already in lockfile.
 tempfile = "3"
@@ -68,6 +76,8 @@ zeroize = "1"
 rand = "0.10"
 # The updater's HTTP client, with the proxy setting.
 scraper = "0.29"
+# Verifies that reconstructed edit Markdown retains its rich-text meaning.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "socks", "json"] }
 # Downloads profile pictures. The protocol library already includes this crate
 # and TLS stack.

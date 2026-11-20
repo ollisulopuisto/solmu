@@ -40,22 +40,35 @@ fn resolve_preference(
 
 /// Automatic lookup never uses the explicit preference.
 pub fn detect(tool: &str) -> Result<PathBuf, String> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+    let dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|path| {
             std::env::split_paths(&path)
                 .filter(|path| path.is_absolute())
                 .collect()
         })
         .unwrap_or_default();
-    #[cfg(windows)]
-    prepend_application_dir(&mut dirs, std::env::current_exe().ok());
-    if cfg!(target_os = "macos") {
-        dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"].map(PathBuf::from));
-    }
-    resolve_in(tool, &dirs)
+    resolve_in(
+        tool,
+        &search_directories(dirs, std::env::consts::OS, std::env::current_exe().ok()),
+    )
 }
 
-#[cfg(any(test, windows))]
+/// Shared by actual resolution and platform regression fixtures. Keep the
+/// Finder fallback list here rather than duplicating it in tests.
+fn search_directories(
+    mut dirs: Vec<PathBuf>,
+    os: &str,
+    executable: Option<PathBuf>,
+) -> Vec<PathBuf> {
+    if os == "windows" {
+        prepend_application_dir(&mut dirs, executable);
+    }
+    if os == "macos" {
+        dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"].map(PathBuf::from));
+    }
+    dirs
+}
+
 fn prepend_application_dir(dirs: &mut Vec<PathBuf>, executable: Option<PathBuf>) {
     if let Some(parent) = executable
         .as_deref()
@@ -105,6 +118,27 @@ fn resolve_in(tool: &str, dirs: &[PathBuf]) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn finder_launch_without_homebrew_path_keeps_shell_precedence_and_fallbacks() {
+        let shell = vec![PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
+        assert_eq!(
+            search_directories(shell.clone(), "macos", None),
+            [
+                "/usr/bin",
+                "/bin",
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                "/opt/local/bin"
+            ]
+            .map(PathBuf::from)
+        );
+        assert_eq!(search_directories(shell.clone(), "linux", None), shell);
+        let empty = search_directories(Vec::new(), "macos", None);
+        assert_eq!(
+            empty,
+            ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"].map(PathBuf::from)
+        );
+    }
     #[test]
     fn resolver_finds_tools_without_a_shell_path_and_keeps_precedence() {
         let root =
