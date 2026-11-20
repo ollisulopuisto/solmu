@@ -3120,7 +3120,7 @@ pub enum Action {
         chat: ChatId,
         id: String,
         request: u64,
-        result: Result<String, String>,
+        result: Result<String, crate::rich_edit::Error>,
     },
     CancelEdit,
     /// Revokes an outgoing message for everyone. The chat travels with the

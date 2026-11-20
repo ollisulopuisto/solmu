@@ -768,3 +768,13 @@ passes. Four converter tests include13 markdown-rich-markdown-rich cases with
 byte-identical CommonMark rich output. This is not live Beeper/WhatsApp proof.
 Full native UI tests unrun. Demo compilation was killed by the environment;
 visual capture remains unverified, not waived. No real message/account touched.
+
+Review follow-up: validate every rich element and attribute before conversion,
+including code wrappers and list items. Refuse nested code-block breaks/links,
+styled code/list items and reversed lists. Preparation errors are structured
+Unsupported/Unavailable values, translated with literal gettext at the UI
+boundary; backend detail strings do not reach the toast. 412 portable tests pass
+again and native all-target/all-feature Clippy passes. Private actual app
+before-dark, after-dark and narrow-light pixels now inspected after a reduced
+debug binary build. Composer shows Markdown hyphens and bold markers rather than
+rendered bullets. No screenshots published; per-PR media gate remains held.

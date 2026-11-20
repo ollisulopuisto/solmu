@@ -1563,7 +1563,7 @@ pub enum Event {
         chat: ChatId,
         id: String,
         request: u64,
-        result: Result<String, String>,
+        result: Result<String, crate::rich_edit::Error>,
     },
     BeeperEditUncertain {
         chat: ChatId,

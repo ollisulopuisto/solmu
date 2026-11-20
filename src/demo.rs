@@ -4102,7 +4102,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     });
                 }
             }
-            "edit-markdown" => {
+            "edit-markdown" | "edit-markdown-before" => {
                 let chat = SAMPLES[0].id;
                 app.open_chat = Some(chat.to_owned());
                 let id = "markdown-edit-fixture";
@@ -4118,6 +4118,9 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                         Content::text("Keep the formatting\n• first item\n• bold second item"),
                     ));
                 app.composer = crate::rich_edit::markdown("<p>Keep the formatting</p><ul><li>first item</li><li><strong>bold second item</strong></li></ul>").unwrap();
+                if part == "edit-markdown-before" {
+                    app.composer = "Keep the formatting\n• first item\n• bold second item".into();
+                }
                 app.editing = Some(id.into());
                 app.focus_composer = true;
             }

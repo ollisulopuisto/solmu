@@ -11203,7 +11203,10 @@ impl App {
                     self.pending_edit = None;
                     match result {
                         Ok(text) => self.start_edit(id, text, ctx),
-                        Err(error) => self.toast_error(error),
+                        Err(error) => self.toast_error(match error {
+                            crate::rich_edit::Error::Unsupported => crate::i18n::gettext(self.locale, "This message has formatting that cannot be safely reconstructed as Markdown. No edit started.").into_owned(),
+                            crate::rich_edit::Error::Unavailable => crate::i18n::gettext(self.locale, "The current message could not be loaded. No edit started.").into_owned(),
+                        }),
                     }
                 }
             }

@@ -2,13 +2,30 @@
 //! the display renderer's WhatsApp-style markers or bullet glyphs.
 use scraper::{ElementRef, Html, Node};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Error {
+    Unsupported,
+    Unavailable,
+}
+impl From<&str> for Error {
+    fn from(_: &str) -> Self {
+        Self::Unsupported
+    }
+}
+impl From<String> for Error {
+    fn from(_: String) -> Self {
+        Self::Unsupported
+    }
+}
+
 const LIMIT: usize = 256 * 1024;
 
-pub fn markdown(rich: &str) -> Result<String, String> {
+pub fn markdown(rich: &str) -> Result<String, Error> {
     if rich.len() > LIMIT {
         return Err("Message is too large to prepare safely for editing".into());
     }
     let doc = Html::parse_fragment(rich);
+    validate(doc.root_element(), 0, false)?;
     let source = children(doc.root_element(), 0)?
         .trim_matches('\n')
         .to_owned();
@@ -24,10 +41,43 @@ pub fn markdown(rich: &str) -> Result<String, String> {
     Ok(source)
 }
 
+fn validate(e: ElementRef<'_>, depth: usize, in_pre: bool) -> Result<(), Error> {
+    if depth > 64 {
+        return Err(Error::Unsupported);
+    }
+    let tag = e.value().name();
+    for (name, value) in e.value().attrs() {
+        let supported = match (tag, name) {
+            ("a", "href" | "title") | ("ol", "start") => true,
+            ("code", "class") if in_pre => value.split_whitespace().all(|v| {
+                v.strip_prefix("language-").is_some_and(|s| {
+                    !s.is_empty()
+                        && s.chars()
+                            .all(|c| c.is_ascii_alphanumeric() || "_+-".contains(c))
+                })
+            }),
+            _ => false,
+        };
+        if !supported {
+            return Err(Error::Unsupported);
+        }
+    }
+    if in_pre && tag != "code" {
+        return Err(Error::Unsupported);
+    }
+    for child in e.children().filter_map(ElementRef::wrap) {
+        if tag == "code" {
+            return Err(Error::Unsupported);
+        }
+        validate(child, depth + 1, tag == "pre")?;
+    }
+    Ok(())
+}
+
 // Semantic HTML signature, independent of synonymous tags and serialization.
 // Keep code whitespace, list numbering, links and style boundaries. This is a
 // CommonMark safety oracle, not a claim about a particular bridge renderer.
-fn signature(e: ElementRef<'_>, depth: usize) -> Result<String, String> {
+fn signature(e: ElementRef<'_>, depth: usize) -> Result<String, Error> {
     if depth > 64 {
         return Err("Message formatting is nested too deeply".into());
     }
@@ -106,7 +156,7 @@ fn escape(text: &str) -> String {
     out
 }
 
-fn children(element: ElementRef<'_>, depth: usize) -> Result<String, String> {
+fn children(element: ElementRef<'_>, depth: usize) -> Result<String, Error> {
     if depth > 64 {
         return Err("Message formatting is nested too deeply to edit safely".into());
     }
@@ -135,6 +185,9 @@ fn children(element: ElementRef<'_>, depth: usize) -> Result<String, String> {
                     out.push_str(if loose { "\n\n" } else { "\n" });
                     out.push_str(rendered.trim_start_matches('\n'));
                 } else {
+                    if rendered.starts_with("\n\n") && out.ends_with('\n') {
+                        out.truncate(out.trim_end_matches('\n').len());
+                    }
                     out.push_str(&rendered);
                 }
             }
@@ -164,7 +217,7 @@ fn ticks(text: &str, min: usize) -> String {
     "`".repeat(min.max(longest + 1))
 }
 
-fn element_markdown(e: ElementRef<'_>, depth: usize) -> Result<String, String> {
+fn element_markdown(e: ElementRef<'_>, depth: usize) -> Result<String, Error> {
     let tag = e.value().name();
     // These cannot be represented by the supported Markdown subset. Never
     // silently discard a style, active element, attachment or mention target.
@@ -241,7 +294,7 @@ fn element_markdown(e: ElementRef<'_>, depth: usize) -> Result<String, String> {
                     let title = e.value().attr("title").map(|s| format!(" \"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))).unwrap_or_default();
                     format!("[{body}](<{url}>{title})")
                 }
-                _ => return Err(format!("Unsupported {tag} formatting; no edit started")),
+                _ => return Err(Error::Unsupported),
             })
         }
     }
@@ -287,7 +340,7 @@ mod tests {
     fn lists_remain_editable_markdown_not_display_bullets() {
         assert_eq!(
             markdown("<p>hello</p><ul><li>one</li><li>two</li></ul>").unwrap(),
-            "hello\n\n\n\n- one\n- two"
+            "hello\n\n- one\n- two"
         );
     }
     #[test]
@@ -314,6 +367,11 @@ mod tests {
             "<span style=\"color:red\">x</span>",
             "<a href=\"https://matrix.to/#/@user:server\">Name</a>",
             "<script>x()</script>",
+            "<pre>first<br>second</pre>",
+            "<pre><a href=\"https://example.com\">link</a></pre>",
+            "<pre><code style=\"color:red\">code</code></pre>",
+            "<ul><li style=\"color:red\">item</li></ul>",
+            "<ol reversed start=\"3\"><li>three</li><li>two</li></ol>",
         ] {
             assert!(markdown(rich).is_err(), "{rich}");
         }

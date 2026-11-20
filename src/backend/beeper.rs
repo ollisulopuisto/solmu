@@ -2879,7 +2879,7 @@ fn editable_markdown(
     chat: &str,
     id: &str,
     account: &str,
-) -> Result<String, String> {
+) -> Result<String, crate::rich_edit::Error> {
     if wire.id != id
         || wire.chat_id != chat
         || wire.account_id != account
@@ -4035,7 +4035,7 @@ pub fn run(
                         chat, text, message: "Beeper is not connected yet. Text restored; nothing was sent or queued for automatic retry.".into(),
                     }),
                     Ok(Command::PrepareEdit { chat, id, request, .. }) => emit(Event::BeeperEditPrepared {
-                        chat, id, request, result: Err("Beeper is not connected; no edit started".into()),
+                        chat, id, request, result: Err(crate::rich_edit::Error::Unavailable),
                     }),
                     Ok(Command::EditText { chat, id, text, .. }) => emit(Event::BeeperEditUncertain {
                         chat, id, text, message: "Beeper is not connected yet. Edit retained; nothing was changed.".into(),
@@ -4829,6 +4829,7 @@ pub fn run(
                 } => {
                     let result = api
                         .get_message(&chat, &id)
+                        .map_err(|_| crate::rich_edit::Error::Unavailable)
                         .and_then(|wire| editable_markdown(&wire, &chat, &id, &account));
                     emit(Event::BeeperEditPrepared {
                         chat,
