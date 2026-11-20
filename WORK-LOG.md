@@ -140,6 +140,12 @@ math and serde tests were verified in a scratch crate against the real
 image/serde versions, fmt via rustfmt; clippy and the full suite run in CI.
 macOS detection itself is unverified (Linux box): the macOS CI leg compiles
 it, runtime behaviour needs a Mac. No merge by the author.
+## Sidebar person names,20 November
+
+Implement approved sidebar sketch: remove linked suffix from chat title and network-count subtitle. Existing source-network avatar badges and combined timeline remain unchanged. Add title/subtitle regression. No new replacement icon. Native execution/pixel review pending.
+
+Pixel review caught a residual network-count suffix after removing linked. Removed that suffix from the merged-person preview; source badges stay intact. Both-theme synthetic Linux captures inspected with the full person name visible. Native Mac execution and review evidence publication remain separate gates.
+
 ## 2026-11-19: Captioned media bubbles settle to the picture (fix/captioned-media-bubble-width)
 
 Olli reported sent bubbles going "all funny" with a narrow media attached:

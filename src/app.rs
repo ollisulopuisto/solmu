@@ -3889,7 +3889,9 @@ impl App {
                     status: message.status,
                 });
             }
-            display.network = Some(format!("{} networks", members.len()));
+            // The source badges already identify linked networks. A count suffix
+            // competes with the person name in the narrow sidebar.
+            display.network = None;
         }
         display
     }
@@ -15880,7 +15882,10 @@ mod tests {
         app.chats.push(chat.clone());
         assert_eq!(app.chat_title(&chat), "Alex");
         let preview = app.beeper_person_preview(&chat);
-        assert!(!preview.network.unwrap_or_default().contains("linked"));
+        assert!(
+            preview.network.is_none(),
+            "source badges replace the count suffix"
+        );
     }
 
     #[test]
