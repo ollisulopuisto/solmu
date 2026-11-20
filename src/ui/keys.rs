@@ -25,16 +25,6 @@ pub(crate) fn menu_scroll_reaches_chat(app: &App, ctx: &egui::Context) -> bool {
 
 /// Routes keyboard commands to actions, respecting overlays and text focus.
 pub fn handle(app: &mut App, ctx: &egui::Context) {
-    if app.ghost_ui.confirmation.is_some() {
-        if ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape)) {
-            app.ghost_ui.compose = app
-                .ghost_ui
-                .confirmation
-                .take()
-                .map(|review| review.compose);
-        }
-        return;
-    }
     // Results own keyboard input, even after the new-message dialog closes.
     if let Some(queue) = app.audience_queue.as_mut().filter(|queue| queue.visible) {
         if !egui::Popup::is_any_open(ctx)

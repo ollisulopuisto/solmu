@@ -11,18 +11,6 @@ use crate::{
 #[derive(Default)]
 pub struct State {
     pub compose: Option<Compose>,
-    pub confirmation: Option<Confirmation>,
-}
-
-pub struct Confirmation {
-    pub compose: Compose,
-    pub acknowledged: bool,
-}
-pub fn review(app: &mut App, compose: Compose) {
-    app.ghost_ui.confirmation = Some(Confirmation {
-        compose,
-        acknowledged: false,
-    });
 }
 
 pub struct Compose {
@@ -181,7 +169,6 @@ pub fn bar(app: &mut App, ui: &mut egui::Ui) {
 
 pub fn dialogs(app: &mut App, ctx: &egui::Context) {
     queue_results(app, ctx);
-    confirmation(app, ctx);
     let Some(mut compose) = app.ghost_ui.compose.take() else {
         return;
     };
@@ -289,106 +276,10 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
     if cancel || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
         return;
     }
-    if send {
-        review(app, compose);
+    if send && submit(app, &mut compose) {
         return;
     }
     app.ghost_ui.compose = Some(compose);
-}
-
-fn confirmation(app: &mut App, ctx: &egui::Context) {
-    let Some(mut review) = app.ghost_ui.confirmation.take() else {
-        return;
-    };
-    let locale = app.locale;
-    let palette = app.palette;
-    let count = review.compose.members.len();
-    let mut close = false;
-    egui::Modal::new(egui::Id::new("audience-send-confirmation"))
-        .frame(
-            egui::Frame::new()
-                .fill(palette.overlay)
-                .stroke(egui::Stroke::new(1.0, palette.outline))
-                .inner_margin(22)
-                .corner_radius(egui::CornerRadius::same(crate::theme::RADIUS + 4)),
-        )
-        .show(ctx, |ui| {
-            ui.set_width(500.0);
-            ui.heading(
-                ngettext(
-                    locale,
-                    "Confirm send to {count} chat",
-                    "Confirm send to {count} chats",
-                    count as u32,
-                )
-                .replace("{count}", &count.to_string()),
-            );
-            ui.label(gettext(
-                locale,
-                "These are separate messages sent as you, not a network group.",
-            ));
-            egui::ScrollArea::vertical()
-                .id_salt("audience-confirm-list")
-                .max_height(180.0)
-                .show(ui, |ui| {
-                    for member in &review.compose.members {
-                        ui.label(
-                            chat_for(app, member)
-                                .filter(|chat| !chat.locked)
-                                .map(|chat| app.chat_title(chat))
-                                .unwrap_or_else(|| {
-                                    gettext(locale, "Unavailable chat").into_owned()
-                                }),
-                        );
-                    }
-                });
-            ui.separator();
-            ui.add(egui::Label::new(&review.compose.text).wrap());
-            for file in &review.compose.files {
-                ui.label(file.file_name().unwrap_or_default().to_string_lossy());
-            }
-            ui.checkbox(
-                &mut review.acknowledged,
-                ngettext(
-                    locale,
-                    "I reviewed this {count} recipient",
-                    "I reviewed these {count} recipients",
-                    count as u32,
-                )
-                .replace("{count}", &count.to_string()),
-            );
-            if let Some(notice) = &review.compose.notice {
-                ui.colored_label(ui.visuals().warn_fg_color, notice);
-            }
-            ui.horizontal(|ui| {
-                if ui.button(gettext(locale, "Back")).clicked() {
-                    close = true;
-                }
-                let label = ngettext(
-                    locale,
-                    "Confirm send to {count} chat",
-                    "Confirm send to {count} chats",
-                    count as u32,
-                )
-                .replace("{count}", &count.to_string());
-                if ui
-                    .add_enabled(review.acknowledged, egui::Button::new(label))
-                    .clicked()
-                    && submit(app, &mut review.compose)
-                {
-                    close = true;
-                    review.compose.text.clear();
-                    review.compose.files.clear();
-                }
-            });
-        });
-    if close {
-        if !review.compose.text.is_empty() || !review.compose.files.is_empty() {
-            app.ghost_ui.compose = Some(review.compose);
-        }
-    } else {
-        app.ghost_ui.confirmation = Some(review);
-    }
 }
 
 /// Checks the compose state and queues the sends. Returns true when the

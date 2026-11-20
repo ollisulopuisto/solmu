@@ -10912,7 +10912,7 @@ mod tests {
     }
 
     #[test]
-    fn bulk_send_requires_separate_counted_confirmation_and_enter_cannot_bypass_it() {
+    fn explicit_counted_send_starts_audience_without_extra_confirmation() {
         use egui::accesskit::Role;
         let mut app = app();
         let ctx = egui::Context::default();
@@ -10922,37 +10922,9 @@ mod tests {
         for _ in 0..8 {
             render(&mut app, &ctx);
         }
+        assert!(app.audience_queue.is_none());
         press_labelled(&mut app, &ctx, "Send to 2 chats", Role::Button);
-        assert!(app.audience_queue.is_none());
-        assert!(app.ghost_ui.confirmation.is_some());
-        for _ in 0..4 {
-            frame_with(
-                &mut app,
-                &ctx,
-                vec![egui::Event::Key {
-                    key: egui::Key::Enter,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-            );
-        }
-        assert!(app.audience_queue.is_none());
-        assert!(!app.ghost_ui.confirmation.as_ref().unwrap().acknowledged);
-        press_labelled(
-            &mut app,
-            &ctx,
-            "I reviewed these 2 recipients",
-            Role::CheckBox,
-        );
-        for _ in 0..4 {
-            render(&mut app, &ctx);
-        }
-        assert!(app.audience_queue.is_none());
-        press_labelled(&mut app, &ctx, "Confirm send to 2 chats", Role::Button);
         assert_eq!(app.audience_queue.as_ref().unwrap().rows.len(), 2);
-        assert!(app.ghost_ui.confirmation.is_none());
     }
 
     #[test]

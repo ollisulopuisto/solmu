@@ -226,7 +226,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     });
                 }
             } else {
-                let compose = super::ghost_groups::Compose {
+                let mut compose = super::ghost_groups::Compose {
                     group: None,
                     members: draft.members.clone(),
                     name: draft.name.clone(),
@@ -236,9 +236,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     notice: None,
                     from_selection: false,
                 };
-                super::ghost_groups::review(app, compose);
-                done = true;
-                app.actions.push(Action::CloseDialog);
+                if super::ghost_groups::submit(app, &mut compose) {
+                    done = true;
+                    app.actions.push(Action::CloseDialog);
+                } else {
+                    draft.notice = compose.notice;
+                }
             }
         }
         ui.menu_button(gettext(locale, "Other actions"), |ui| {
