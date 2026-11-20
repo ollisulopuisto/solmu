@@ -2641,6 +2641,8 @@ struct View<'a> {
     show_timestamp: bool,
     /// Current planned content width from the shared run pre-pass.
     neighbour_width: Option<f32>,
+    /// Older body covers this row above this edge.
+    covered_top: Option<f32>,
     footer_right: Option<f32>,
     palette: Palette,
     locale: crate::i18n::Locale,
@@ -3062,6 +3064,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         show_timestamp: true,
         footer_right: None,
         neighbour_width: None,
+        covered_top: None,
         editing: app.editing.as_deref(),
         palette,
         locale: app.locale,
@@ -3681,6 +3684,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                                     show_sender,
                                                     show_avatar,
                                                     tailed,
+                                                    overlap_previous: None,
                                                 },
                                                 &mut actions,
                                             )
@@ -3710,6 +3714,17 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                             show_sender,
                                             show_avatar,
                                             tailed,
+                                            overlap_previous: previous
+                                                .filter(|previous| {
+                                                    here == 0
+                                                        && !divider.as_ref().is_some_and(
+                                                            |(id, _, _)| row_contains(id),
+                                                        )
+                                                        && stack_pair(&view, previous, message)
+                                                })
+                                                .map(|previous| {
+                                                    bubble_id(&previous.chat, &previous.id)
+                                                }),
                                         },
                                         &mut actions,
                                     )
@@ -4765,6 +4780,7 @@ struct RunPlace {
     show_sender: bool,
     show_avatar: bool,
     tailed: bool,
+    overlap_previous: Option<egui::Id>,
 }
 
 /// Draws a message row and returns its bubble response for scrolling.
@@ -4782,6 +4798,7 @@ fn bubble(
         show_sender,
         show_avatar,
         tailed,
+        overlap_previous,
     } = place;
     let footer_right = view.footer_right.unwrap_or(ui.max_rect().right());
     let view = &View {
@@ -4815,7 +4832,20 @@ fn bubble(
     // into a selection (#246).
     let id = bubble_id(&view.chat.id, &message.id);
     let previous = ui.ctx().data(|data| data.get_temp::<Rect>(id.with("rect")));
+    let paint_pass = ui.ctx().cumulative_pass_nr();
+    let previous_cover = overlap_previous
+        .filter(|_| !view.selecting)
+        .and_then(|previous| {
+            ui.ctx().data(|data| {
+                (data.get_temp::<u64>(previous.with("paint-pass")) == Some(paint_pass))
+                    .then(|| data.get_temp::<Rect>(previous.with("rect")))
+                    .flatten()
+            })
+        });
     if let Some(rect) = previous {
+        let rect = rect.with_min_y(
+            previous_cover.map_or(rect.top(), |previous| previous.bottom().max(rect.top())),
+        );
         let strip = Rect::from_x_y_ranges(ui.max_rect().x_range(), rect.y_range());
         let strip = ui.interact(strip, id.with("row"), Sense::click_and_drag());
         if strip.clicked() {
@@ -4828,6 +4858,24 @@ fn bubble(
             });
         }
         reply_on_double_click(&strip, message, actions);
+    }
+    let overlap = overlap_previous.filter(|_| !view.selecting).and_then(|id| {
+        ui.ctx().data(|data| {
+            if data.get_temp::<u64>(id.with("paint-pass")) != Some(paint_pass) {
+                return None;
+            }
+            Some((
+                data.get_temp::<Rect>(id.with("rect"))?,
+                data.get_temp::<egui::Shape>(id.with("backdrop-shape"))?,
+            ))
+        })
+    });
+    let view = &View {
+        covered_top: overlap.as_ref().map(|(rect, _)| rect.bottom()),
+        ..*view
+    };
+    if overlap.is_some() {
+        ui.add_space(-STREAK_OVERLAP - ui.spacing().item_spacing.y);
     }
     let mut response = None;
     let mut area = ui.available_rect_before_wrap();
@@ -4919,6 +4967,22 @@ fn bubble(
                     max_width,
                     actions,
                 ));
+            }
+            if let Some((previous, shape)) = &overlap {
+                // Include the older bubble's shadow below its body: clipping
+                // at its bottom erased the depth cue and looked like touching.
+                let seam = Rect::from_min_max(
+                    pos2(
+                        previous.left() - widgets::TAIL_WIDTH - 4.0,
+                        previous.bottom() - STREAK_OVERLAP - 3.0,
+                    ),
+                    pos2(
+                        previous.right() + widgets::TAIL_WIDTH + 4.0,
+                        previous.bottom() + 4.0,
+                    ),
+                );
+                let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(seam));
+                painter.add(shape.clone());
             }
             // Every reaction belongs to its own message. Flow pills and the
             // timestamp together, wrapping rather than covering either one.
@@ -5608,7 +5672,6 @@ pub(crate) fn cadence_limits(messages: &[&Message]) -> Vec<i64> {
 /// Adjacent rows stack within the sender's current cadence: plain text,
 /// quoted replies, pictures and videos all join a run, in any order. Controls,
 /// metadata, album members and failure states remain hard boundaries.
-#[cfg(test)]
 fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
     let joins = |row: &Message| {
         !row.forwarded
@@ -5643,10 +5706,25 @@ fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
         && joins(next)
 }
 
-#[cfg(test)]
 pub(crate) fn stacks_after(previous: &Message, next: &Message) -> bool {
     stacks_with_limit(previous, next, 120)
 }
+
+fn stack_pair(view: &View<'_>, previous: &Message, next: &Message) -> bool {
+    let marked = |row: &Message| {
+        view.starred.is_some_and(|ids| ids.contains(&row.id))
+            || view.pins.is_some_and(|ids| ids.contains(&row.id))
+            || view.saved.is_some_and(|ids| ids.contains(&row.id))
+            || view.hidden.is_some_and(|ids| ids.contains(&row.id))
+    };
+    stacks_after(previous, next)
+        && !marked(previous)
+        && !marked(next)
+        && !bubbleless(&view.palette, previous)
+        && !bubbleless(&view.palette, next)
+}
+
+const STREAK_OVERLAP: f32 = 6.0;
 
 /// Room around a bubble's contents: none around a picture that stands
 /// without one, Messages' insets in its style, WhatsApp's otherwise.
@@ -5733,7 +5811,8 @@ fn bubble_frame(
     // the first frame's rect.
     let rect_id = bubble_id.with("rect");
     let previous = ui.ctx().data(|data| data.get_temp::<Rect>(rect_id));
-    let exposed = |rect: Rect| rect;
+    let exposed =
+        |rect: Rect| rect.with_min_y(view.covered_top.unwrap_or(rect.top()).max(rect.top()));
     let early = previous.map(|rect| ui.interact(exposed(rect), bubble_id, Sense::CLICK));
     // Painted once the contents are measured, beneath them.
     let backdrop = ui.painter().add(egui::Shape::Noop);
@@ -5745,7 +5824,10 @@ fn bubble_frame(
         widgets::Side::Left
     });
     let mut tiles: Vec<(Rect, String)> = Vec::new();
-    let margin = bubble_margin(&palette, message, false);
+    let mut margin = bubble_margin(&palette, message, false);
+    if view.covered_top.is_some() {
+        margin.top += STREAK_OVERLAP as i8;
+    }
     let inner = Frame::new().inner_margin(margin).show(ui, |ui| {
         ui.set_max_width(max_width);
         ui.spacing_mut().item_spacing.y = 4.0;
@@ -5961,14 +6043,13 @@ fn bubble_frame(
             ui.clip_rect().y_range(),
             widgets::BubbleEffects {
                 sender_shadow,
-                flat_edge: sender_shadow.is_some() || view.hide_grouped_status,
+                flat_edge: sender_shadow.is_some() || view.hide_grouped_status || view.covered_top.is_some(),
                 tail_tip_y: (!own && tail.is_some())
                     .then(|| {
                         ui.ctx()
                             .data(|d| d.get_temp::<f32>(bubble_id.with("avatar-tail-y")))
                     })
-                    .flatten(),
-            },
+                    .flatten(),            },
         );
         ui.painter().set(backdrop, shape.clone());
         ui.ctx()
@@ -7561,6 +7642,7 @@ pub(crate) fn list_menu(
         show_timestamp: true,
         footer_right: None,
         neighbour_width: None,
+        covered_top: None,
         palette: app.conversation_palette(),
         locale: app.locale,
         chat,
@@ -7618,6 +7700,7 @@ pub(crate) fn linked_bubble(
     ui: &mut egui::Ui,
     chat: &Chat,
     message: &Message,
+    previous: Option<&Message>,
     show_timestamp: bool,
     footer_right: f32,
     run_width: Option<f32>,
@@ -7660,6 +7743,7 @@ pub(crate) fn linked_bubble(
         show_timestamp,
         footer_right: Some(footer_right),
         neighbour_width: run_width,
+        covered_top: None,
         palette,
         locale: app.locale,
         chat,
@@ -7712,6 +7796,9 @@ pub(crate) fn linked_bubble(
             show_sender: chat.is_group() && !message.from_me,
             show_avatar: chat.is_group() && !message.from_me,
             tailed: true,
+            overlap_previous: previous
+                .filter(|previous| stack_pair(&view, previous, message))
+                .map(|previous| bubble_id(&previous.chat, &previous.id)),
         },
         actions,
     )
@@ -14747,6 +14834,7 @@ mod tests {
             show_timestamp: true,
             footer_right: None,
             neighbour_width: None,
+            covered_top: None,
             saved: None,
             hidden: None,
             preview_worker,

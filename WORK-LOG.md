@@ -768,3 +768,7 @@ the album's shared painted bounds. Clear texture deltas in the new seeded
 fixtures. Native all-target/all-feature Clippy passes; local targeted application
 test execution exceeded120 seconds during compilation and has not run. CI must
 recheck the three existing demo failures, including right-click-beside-message.
+
+## Restore overlapping consecutive bubbles,20 November
+
+Regression traced to #355, which replaced #246 seam overlap with separated rows. Restore6px overlap using current-pass predecessor geometry, older-edge repaint and covered hit-test clipping. Keep current width bands and every-body top tails. Selection and hard-boundary rows remain separate. Native tests updated for geometry, scroll and covered menus, and both-theme group-stack app captures added to the existing Mac CI smoke path. No real chat sent, no package published. Local native build/check execution remains pending after missing Linux development dependencies and bounded compile-time attempts.
