@@ -9,10 +9,23 @@ pub fn resolve(tool: &str) -> Result<PathBuf, String> {
                 .collect()
         })
         .unwrap_or_default();
+    #[cfg(windows)]
+    prepend_application_dir(&mut dirs, std::env::current_exe().ok());
     if cfg!(target_os = "macos") {
         dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"].map(PathBuf::from));
     }
     resolve_in(tool, &dirs)
+}
+
+#[cfg(any(test, windows))]
+fn prepend_application_dir(dirs: &mut Vec<PathBuf>, executable: Option<PathBuf>) {
+    if let Some(parent) = executable
+        .as_deref()
+        .and_then(Path::parent)
+        .filter(|path| path.is_absolute())
+    {
+        dirs.insert(0, parent.into());
+    }
 }
 
 fn executable(path: &Path) -> bool {
@@ -88,6 +101,36 @@ mod tests {
             error.contains(&shell.display().to_string())
                 && error.contains(&brew.display().to_string())
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn windows_style_application_siblings_precede_path_without_requiring_it() {
+        let root =
+            std::env::temp_dir().join(format!("solmu-sibling-resolver-{}", std::process::id()));
+        let app = root.join("app");
+        let path = root.join("path");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::create_dir_all(&path).unwrap();
+        let tool = if cfg!(windows) {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        };
+        for directory in [&app, &path] {
+            std::fs::write(directory.join(tool), b"fixture").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(
+                    directory.join(tool),
+                    std::fs::Permissions::from_mode(0o755),
+                )
+                .unwrap();
+            }
+        }
+        let mut dirs = vec![path];
+        prepend_application_dir(&mut dirs, Some(app.join("solmu.exe")));
+        assert_eq!(resolve_in("ffmpeg", &dirs).unwrap(), app.join(tool));
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
