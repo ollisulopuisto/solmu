@@ -88,7 +88,8 @@ impl BeeperConfig {
 // `#[serde(default)]` fields (serde issue #1541).
 #[serde(bound(deserialize = "T: Deserialize<'de>"))]
 struct Page<T> {
-    #[serde(default)]
+    // Missing items is a malformed response, not an empty final page.
+    // Keep the last good chats/history/search state on transport/schema errors.
     items: Vec<T>,
     #[serde(default)]
     has_more: bool,
@@ -11310,6 +11311,105 @@ mod tests {
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn malformed_inventory_page_reports_disconnect_without_replacing_chats() {
+        for body in [
+            "{}",
+            r#"{"error":"private server response"}"#,
+            r#"{"items":null}"#,
+        ] {
+            let (api, server) = forward_fixture(vec![
+                ("GET /v1/accounts ", 200, ACCOUNTS_JSON.into()),
+                ("GET /v1/chats?", 200, body.into()),
+            ]);
+            let events = Mutex::new(Vec::new());
+            let mut accounts = Vec::new();
+            refresh_inventory(&api, &mut accounts, &|event| {
+                events.lock().unwrap().push(event)
+            });
+            server.join().unwrap();
+            let events = events.into_inner().unwrap();
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, Event::Link(LinkStatus::Disconnected { .. })))
+            );
+            assert!(!events.iter().any(|event| matches!(event, Event::Chats(_))));
+        }
+    }
+
+    #[test]
+    fn valid_empty_inventory_remains_a_successful_refresh() {
+        let (api, server) = forward_fixture(vec![
+            ("GET /v1/accounts ", 200, "[]".into()),
+            ("GET /v1/chats?", 200, r#"{"items":[]}"#.into()),
+        ]);
+        let events = Mutex::new(Vec::new());
+        refresh_inventory(&api, &mut Vec::new(), &|event| {
+            events.lock().unwrap().push(event)
+        });
+        server.join().unwrap();
+        let events = events.into_inner().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Chats(chats) if chats.is_empty()))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Link(LinkStatus::Connected)))
+        );
+    }
+
+    #[test]
+    fn malformed_search_page_keeps_earlier_results_and_can_retry_the_same_cursor() {
+        let first = r#"{"items":[{"id":"one","chatID":"chat","text":"fixture"}],"hasMore":true,"oldestCursor":"next"}"#;
+        let last = r#"{"items":[{"id":"two","chatID":"chat","text":"fixture"}],"hasMore":false}"#;
+        let (api, server) = forward_fixture(vec![
+            ("GET /v1/messages/search?", 200, first.into()),
+            (
+                "GET /v1/messages/search?",
+                200,
+                r#"{"error":"private server response"}"#.into(),
+            ),
+            ("GET /v1/messages/search?", 200, last.into()),
+        ]);
+        let params = || vec![("query", "fixture".into())];
+        let mut cache = CachedSearch::default();
+        assert_eq!(cache.next(&api, params()).unwrap().items.len(), 1);
+        assert!(cache.next(&api, params()).is_err());
+        assert_eq!(cache.pages, 1);
+        assert_eq!(cache.page.as_ref().unwrap().items[0].id, "one");
+        assert_eq!(
+            cache.page.as_ref().unwrap().oldest_cursor.as_deref(),
+            Some("next")
+        );
+        let page = cache.next(&api, params()).unwrap();
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["one", "two"]
+        );
+        let requests = server.join().unwrap();
+        assert!(!requests[0].contains("cursor=next"));
+        assert!(requests[1].contains("cursor=next"));
+        assert!(requests[2].contains("cursor=next"));
+    }
+
+    #[test]
+    fn malformed_history_page_is_not_a_successful_end_of_history() {
+        let (api, server) = forward_fixture(vec![(
+            "GET /v1/chats/chat/messages ",
+            200,
+            r#"{"error":"private server response"}"#.into(),
+        )]);
+        assert!(api.list_messages("chat", None, None).is_err());
+        server.join().unwrap();
     }
 
     #[test]

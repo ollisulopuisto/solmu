@@ -693,3 +693,13 @@ types, and sampled history structure before printing a summary. Invalid server
 JSON yields a nonzero exit with no private payload. Failing-first regressions
 cover these cases, valid empty inventory, and the CLI exit/output boundary.
 No real accounts queried, no native Mac run, no release or DMG dispatch.
+
+## 2026-11-20 - Keep state when Server pages omit items
+
+The reliability audit found the app adapter also accepted error-shaped HTTP200
+JSON as an empty final page because items defaulted to an empty vector. Require
+the items array so existing error paths preserve the last good chat list,
+history and search continuation. Tests cover disconnected inventory without a
+Chats replacement event, legitimate empty inventory, malformed history, and
+search retaining results/cursor across refusal and successful retry.
+No real Server query or UI-layout changes; native/live acceptance unverified.
