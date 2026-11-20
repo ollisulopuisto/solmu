@@ -1532,6 +1532,13 @@ pub(crate) fn composer_with_capabilities(
                 }),
         )
         .show(ui, |ui| {
+            // Results own input. Returning from shortcut dispatch alone does not
+            // stop the background TextEdit from inserting Enter or typed text.
+            if app.audience_queue.as_ref().is_some_and(|queue|queue.visible){
+                ui.disable();
+                ui.memory_mut(|memory|memory.surrender_focus(egui::Id::new("composer-text")));
+            }
+
             if let Some((selected_chat, selected)) = app.selection.clone()
                 && selected_chat == chat.id
             {
@@ -1684,6 +1691,9 @@ pub(crate) fn composer_with_capabilities(
             // event modifiers directly. An active suggestion list consumes
             // plain Enter first when it has a selection.
             let send_key = has_focus
+                && app.dialog.is_none()
+                && app.ghost_ui.compose.is_none()
+                        && !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
                 && ui.input_mut(|input| {
                     let mut sent = false;
                     input.events.retain(|event| {
@@ -1708,6 +1718,9 @@ pub(crate) fn composer_with_capabilities(
             // Shift+Ctrl+Enter (Cmd on a Mac) schedules the draft instead of
             // sending it; plain Enter and the send shortcut stay untouched.
             let schedule_key = has_focus
+                && app.dialog.is_none()
+                && app.ghost_ui.compose.is_none()
+                        && !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
                 && app.editing.is_none()
                 && ui.input_mut(|input| {
                     let mut scheduled = false;
@@ -2641,6 +2654,8 @@ struct View<'a> {
     show_timestamp: bool,
     /// Current planned content width from the shared run pre-pass.
     neighbour_width: Option<f32>,
+    /// Older body covers this row above this edge.
+    covered_top: Option<f32>,
     footer_right: Option<f32>,
     palette: Palette,
     locale: crate::i18n::Locale,
@@ -2935,6 +2950,10 @@ fn sticky_date<R>(
 /// The conversation's messages. `under` is how much of the list's top lies
 /// beneath the header, which a vibrant window lays over it.
 fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
+    super::reply_threads::begin(app, ui, std::slice::from_ref(&chat.id));
+    if super::reply_threads::ordinary(app, ui, chat) {
+        return;
+    }
     let palette = app.conversation_palette();
     // Taken up front: `names_or` below borrows the rest of `app` for the
     // whole function, so a pending scroll must come out before that.
@@ -3058,6 +3077,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         show_timestamp: true,
         footer_right: None,
         neighbour_width: None,
+        covered_top: None,
         editing: app.editing.as_deref(),
         palette,
         locale: app.locale,
@@ -3594,19 +3614,11 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                     }
                                     ui.add_space(4.0);
                                 }
-                                let show_sender = shows_sender_pictures(chat)
-                                    && !message.from_me
-                                    && (new_day
-                                        || previous.is_none_or(|previous| {
-                                            previous.sender != message.sender || previous.from_me
-                                        }));
-                                // The first message of a run from one side, as the
-                                // phone draws it: a little apart, with a tail.
+                                // One tail belongs to the run, never each follower.
                                 let first_in_run = new_day
                                     || previous.is_none_or(|previous| !same_run(previous, message));
-                                // All skins use an outer-top tail on every bubble.
-                                // The sender's picture: beside the first message of a
-                                // run in WhatsApp's style, beside the last in Messages.
+                                let show_sender =
+                                    shows_sender_pictures(chat) && !message.from_me && first_in_run;
                                 let show_avatar = if palette.bubbles == theme::BubbleStyle::Messages
                                 {
                                     shows_sender_pictures(chat)
@@ -3615,7 +3627,11 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                 } else {
                                     show_sender
                                 };
-                                let tailed = true;
+                                let tailed = if shows_sender_pictures(chat) && !message.from_me {
+                                    show_avatar
+                                } else {
+                                    first_in_run
+                                };
                                 if first_in_run && !new_day && previous.is_some() {
                                     ui.add_space(RUN_GAP);
                                 }
@@ -3673,6 +3689,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                                     show_sender,
                                                     show_avatar,
                                                     tailed,
+                                                    overlap_previous: None,
                                                 },
                                                 &mut actions,
                                             )
@@ -3702,6 +3719,17 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                             show_sender,
                                             show_avatar,
                                             tailed,
+                                            overlap_previous: previous
+                                                .filter(|previous| {
+                                                    here == 0
+                                                        && !divider.as_ref().is_some_and(
+                                                            |(id, _, _)| row_contains(id),
+                                                        )
+                                                        && stack_pair(&view, previous, message)
+                                                })
+                                                .map(|previous| {
+                                                    bubble_id(&previous.chat, &previous.id)
+                                                }),
                                         },
                                         &mut actions,
                                     )
@@ -4213,6 +4241,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                     .interact_pos()
                     .is_some_and(|pos| bar.contains(pos)))
     });
+    super::reply_threads::finish(ui, palette.accent);
+    let restored_thread_scroll =
+        super::reply_threads::complete_full_scroll(ui.ctx(), output.id, output.state);
     let complete = conversation.complete;
     let loading = conversation.loading_older;
     let fetching = conversation.fetching_phone;
@@ -4226,7 +4257,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     // scrolls, rather than pushing the offset away from the top; PgUp/PgDn
     // steps are relative and still get it. The pass is redone at the new
     // offset, so the shift never shows.
-    if grew_above.abs() >= 0.5
+    if !restored_thread_scroll
+        && grew_above.abs() >= 0.5
         && !lay_out_all
         && !scroll_to_bottom
         && !at_bottom
@@ -4753,6 +4785,7 @@ struct RunPlace {
     show_sender: bool,
     show_avatar: bool,
     tailed: bool,
+    overlap_previous: Option<egui::Id>,
 }
 
 /// Draws a message row and returns its bubble response for scrolling.
@@ -4770,6 +4803,7 @@ fn bubble(
         show_sender,
         show_avatar,
         tailed,
+        overlap_previous,
     } = place;
     let footer_right = view.footer_right.unwrap_or(ui.max_rect().right());
     let view = &View {
@@ -4803,7 +4837,20 @@ fn bubble(
     // into a selection (#246).
     let id = bubble_id(&view.chat.id, &message.id);
     let previous = ui.ctx().data(|data| data.get_temp::<Rect>(id.with("rect")));
+    let paint_pass = ui.ctx().cumulative_pass_nr();
+    let previous_cover = overlap_previous
+        .filter(|_| !view.selecting)
+        .and_then(|previous| {
+            ui.ctx().data(|data| {
+                (data.get_temp::<u64>(previous.with("paint-pass")) == Some(paint_pass))
+                    .then(|| data.get_temp::<Rect>(previous.with("rect")))
+                    .flatten()
+            })
+        });
     if let Some(rect) = previous {
+        let rect = rect.with_min_y(
+            previous_cover.map_or(rect.top(), |previous| previous.bottom().max(rect.top())),
+        );
         let strip = Rect::from_x_y_ranges(ui.max_rect().x_range(), rect.y_range());
         let strip = ui.interact(strip, id.with("row"), Sense::click_and_drag());
         if strip.clicked() {
@@ -4816,6 +4863,48 @@ fn bubble(
             });
         }
         reply_on_double_click(&strip, message, actions);
+    }
+    let overlap = overlap_previous.filter(|_| !view.selecting).and_then(|id| {
+        ui.ctx().data(|data| {
+            if data.get_temp::<u64>(id.with("paint-pass")) != Some(paint_pass) {
+                return None;
+            }
+            Some((
+                data.get_temp::<Rect>(id.with("rect"))?,
+                data.get_temp::<egui::Shape>(id.with("backdrop-shape"))?,
+            ))
+        })
+    });
+    let view = &View {
+        covered_top: overlap.as_ref().map(|(rect, _)| rect.bottom()),
+        ..*view
+    };
+    if let (Some(previous_id), Some((previous, _))) = (overlap_previous, &overlap) {
+        let seam = Rect::from_min_max(
+            pos2(previous.left(), previous.bottom() - STREAK_OVERLAP),
+            previous.right_bottom(),
+        );
+        let hit = ui.interact(seam, previous_id.with("overlap-seam"), Sense::click());
+        if hit.double_clicked() {
+            if let Some(id) = ui
+                .ctx()
+                .data(|d| d.get_temp::<String>(previous_id.with("message-id")))
+            {
+                actions.push(Action::Reply(id));
+            }
+        } else if hit.clicked() && ui.input(|i| i.modifiers.command) {
+            // Resolve from the predecessor's stable UI id, without guessing
+            // another chat's same-named message.
+            if let Some(id) = ui
+                .ctx()
+                .data(|d| d.get_temp::<String>(previous_id.with("message-id")))
+            {
+                actions.push(Action::SelectMessage(id));
+            }
+        }
+    }
+    if overlap.is_some() {
+        ui.add_space(-STREAK_OVERLAP - ui.spacing().item_spacing.y);
     }
     let mut response = None;
     let mut area = ui.available_rect_before_wrap();
@@ -4834,6 +4923,15 @@ fn bubble(
                     ui.spacing_mut().item_spacing.x = 8.0;
                     let (space, _) =
                         ui.allocate_exact_size(Vec2::splat(SENDER_AVATAR), Sense::hover());
+                    let mouth_tail = (show_avatar
+                        && view.palette.bubbles != theme::BubbleStyle::Messages)
+                        .then(|| widgets::avatar_tail_tip_y(space));
+                    ui.ctx().data_mut(|d| {
+                        d.remove::<f32>(id.with("avatar-tail-y"));
+                        if let Some(y) = mouth_tail {
+                            d.insert_temp(id.with("avatar-tail-y"), y);
+                        }
+                    });
                     // Keep bubble content vertically laid out inside the row.
                     ui.vertical(|ui| {
                         response = Some(bubble_frame(
@@ -4898,6 +4996,28 @@ fn bubble(
                     max_width,
                     actions,
                 ));
+            }
+            if let Some((previous, shape)) = &overlap {
+                // Include the older bubble's shadow below its body: clipping
+                // at its bottom erased the depth cue and looked like touching.
+                let seam = Rect::from_min_max(
+                    pos2(
+                        previous.left() - widgets::TAIL_WIDTH - 4.0,
+                        previous.bottom()
+                            - overlap_previous
+                                .and_then(|id| {
+                                    ui.ctx()
+                                        .data(|d| d.get_temp::<f32>(id.with("repaint-inset")))
+                                })
+                                .unwrap_or(0.0),
+                    ),
+                    pos2(
+                        previous.right() + widgets::TAIL_WIDTH + 4.0,
+                        previous.bottom() + 4.0,
+                    ),
+                );
+                let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(seam));
+                painter.add(shape.clone());
             }
             // Every reaction belongs to its own message. Flow pills and the
             // timestamp together, wrapping rather than covering either one.
@@ -4983,6 +5103,26 @@ fn bubble(
                 } else {
                     ui.ctx()
                         .data_mut(|data| data.remove::<Rect>(footer_id(&last.chat, &last.id)));
+                }
+            }
+            if let Some(body) = &response {
+                let mut painted = body.clone();
+                painted.rect = ui
+                    .ctx()
+                    .data(|d| {
+                        d.get_temp::<Rect>(
+                            bubble_id(&message.chat, &message.id).with("painted-rect"),
+                        )
+                    })
+                    .unwrap_or(body.rect);
+                // Albums retain their ordinary single-row navigation and accessibility.
+                // Each member keeps its exact message identity for thread entry/jumps.
+                if let Some(items) = album {
+                    for item in items {
+                        super::reply_threads::row(ui, item, &painted, view.palette.accent, actions);
+                    }
+                } else {
+                    super::reply_threads::row(ui, message, &painted, view.palette.accent, actions);
                 }
             }
         },
@@ -5567,7 +5707,6 @@ pub(crate) fn cadence_limits(messages: &[&Message]) -> Vec<i64> {
 /// Adjacent rows stack within the sender's current cadence: plain text,
 /// quoted replies, pictures and videos all join a run, in any order. Controls,
 /// metadata, album members and failure states remain hard boundaries.
-#[cfg(test)]
 fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
     let joins = |row: &Message| {
         !row.forwarded
@@ -5602,16 +5741,32 @@ fn stacks_with_limit(previous: &Message, next: &Message, limit: i64) -> bool {
         && joins(next)
 }
 
-#[cfg(test)]
 pub(crate) fn stacks_after(previous: &Message, next: &Message) -> bool {
     stacks_with_limit(previous, next, 120)
 }
 
+fn stack_pair(view: &View<'_>, previous: &Message, next: &Message) -> bool {
+    let marked = |row: &Message| {
+        view.starred.is_some_and(|ids| ids.contains(&row.id))
+            || view.pins.is_some_and(|ids| ids.contains(&row.id))
+            || view.saved.is_some_and(|ids| ids.contains(&row.id))
+            || view.hidden.is_some_and(|ids| ids.contains(&row.id))
+    };
+    stacks_after(previous, next)
+        && !marked(previous)
+        && !marked(next)
+        && !bubbleless(&view.palette, previous)
+        && !bubbleless(&view.palette, next)
+}
+
+const STREAK_OVERLAP: f32 = 6.0;
+const STREAK_REPAINT_INSET: f32 = STREAK_OVERLAP + 3.0;
+
 /// Room around a bubble's contents: none around a picture that stands
 /// without one, Messages' insets in its style, WhatsApp's otherwise.
 fn bubble_margin(palette: &Palette, message: &Message, over_picture: bool) -> Margin {
-    if bare_picture(palette, message) {
-        Margin::ZERO
+    let mut margin = if bare_picture(palette, message) {
+        return Margin::ZERO;
     } else if palette.bubbles == theme::BubbleStyle::Messages {
         MESSAGES_BUBBLE_MARGIN
     } else {
@@ -5621,7 +5776,13 @@ fn bubble_margin(palette: &Palette, message: &Message, over_picture: bool) -> Ma
             top: 6,
             bottom: if over_picture { 6 } else { 5 },
         }
+    };
+    // The older edge is replayed above a later overlapping background. Keep
+    // that whole strip inside padding, never over glyphs, highlights or media.
+    if matches!(&message.content, Content::Text { .. }) {
+        margin.bottom = margin.bottom.max(STREAK_REPAINT_INSET as i8);
     }
+    margin
 }
 
 /// Draws a message bubble and its menu.
@@ -5685,6 +5846,8 @@ fn bubble_frame(
     // Register the bubble from its previous rect before its contents so inner
     // links, quotes, and attachments win clicks. The bubble handles right-click.
     let bubble_id = bubble_id(&view.chat.id, &message.id);
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(bubble_id.with("message-id"), message.id.clone()));
     // Hit evidence belongs to this frame, never the previous layout.
     ui.ctx()
         .data_mut(|data| data.remove::<Vec<(Rect, String)>>(bubble_id.with("web-link-hits")));
@@ -5692,7 +5855,8 @@ fn bubble_frame(
     // the first frame's rect.
     let rect_id = bubble_id.with("rect");
     let previous = ui.ctx().data(|data| data.get_temp::<Rect>(rect_id));
-    let exposed = |rect: Rect| rect;
+    let exposed =
+        |rect: Rect| rect.with_min_y(view.covered_top.unwrap_or(rect.top()).max(rect.top()));
     let early = previous.map(|rect| ui.interact(exposed(rect), bubble_id, Sense::CLICK));
     // Painted once the contents are measured, beneath them.
     let backdrop = ui.painter().add(egui::Shape::Noop);
@@ -5704,7 +5868,16 @@ fn bubble_frame(
         widgets::Side::Left
     });
     let mut tiles: Vec<(Rect, String)> = Vec::new();
-    let margin = bubble_margin(&palette, message, false);
+    let mut margin = bubble_margin(&palette, message, false);
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            bubble_id.with("repaint-inset"),
+            f32::from(margin.bottom).min(STREAK_REPAINT_INSET),
+        )
+    });
+    if view.covered_top.is_some() {
+        margin.top += STREAK_OVERLAP as i8;
+    }
     let inner = Frame::new().inner_margin(margin).show(ui, |ui| {
         ui.set_max_width(max_width);
         ui.spacing_mut().item_spacing.y = 4.0;
@@ -5920,7 +6093,15 @@ fn bubble_frame(
             ui.clip_rect().y_range(),
             widgets::BubbleEffects {
                 sender_shadow,
-                flat_edge: sender_shadow.is_some() || view.hide_grouped_status,
+                flat_edge: sender_shadow.is_some()
+                    || view.hide_grouped_status
+                    || view.covered_top.is_some(),
+                tail_tip_y: (!own && tail.is_some())
+                    .then(|| {
+                        ui.ctx()
+                            .data(|d| d.get_temp::<f32>(bubble_id.with("avatar-tail-y")))
+                    })
+                    .flatten(),
             },
         );
         ui.painter().set(backdrop, shape.clone());
@@ -7514,6 +7695,7 @@ pub(crate) fn list_menu(
         show_timestamp: true,
         footer_right: None,
         neighbour_width: None,
+        covered_top: None,
         palette: app.conversation_palette(),
         locale: app.locale,
         chat,
@@ -7571,6 +7753,7 @@ pub(crate) fn linked_bubble(
     ui: &mut egui::Ui,
     chat: &Chat,
     message: &Message,
+    previous: Option<&Message>,
     show_timestamp: bool,
     footer_right: f32,
     run_width: Option<f32>,
@@ -7613,6 +7796,7 @@ pub(crate) fn linked_bubble(
         show_timestamp,
         footer_right: Some(footer_right),
         neighbour_width: run_width,
+        covered_top: None,
         palette,
         locale: app.locale,
         chat,
@@ -7662,9 +7846,12 @@ pub(crate) fn linked_bubble(
         RunPlace {
             sender_hue: None,
             show_timestamp,
-            show_sender: false,
-            show_avatar: false,
-            tailed: true,
+            show_sender: chat.is_group() && !message.from_me,
+            show_avatar: chat.is_group() && !message.from_me,
+            tailed: previous.is_none_or(|previous| !same_run(previous, message)),
+            overlap_previous: previous
+                .filter(|previous| stack_pair(&view, previous, message))
+                .map(|previous| bubble_id(&previous.chat, &previous.id)),
         },
         actions,
     )
@@ -10244,6 +10431,11 @@ fn rich_body_full(
             }
         })
         .unwrap_or(rect);
+    let selection_rect = selection_rect.with_min_y(
+        view.covered_top
+            .unwrap_or(selection_rect.top())
+            .max(selection_rect.top()),
+    );
     let response = ui.interact(
         selection_rect,
         id.with("body-text"),
@@ -14618,6 +14810,18 @@ mod tests {
     }
 
     #[test]
+    fn overlap_repaint_stays_in_bottom_padding_for_both_skins() {
+        let message = crate::archive::tests::message("1@s.whatsapp.net", "padding", 0, false);
+        for style in [theme::BubbleStyle::WhatsApp, theme::BubbleStyle::Messages] {
+            let mut palette = theme::Palette::dark();
+            palette.bubbles = style;
+            assert!(
+                f32::from(bubble_margin(&palette, &message, false).bottom) >= STREAK_REPAINT_INSET
+            );
+        }
+    }
+
+    #[test]
     fn hidden_message_unhide_joins_the_custom_tab_cycle() {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
@@ -14899,6 +15103,7 @@ mod tests {
             show_timestamp: true,
             footer_right: None,
             neighbour_width: None,
+            covered_top: None,
             saved: None,
             hidden: None,
             preview_worker,
