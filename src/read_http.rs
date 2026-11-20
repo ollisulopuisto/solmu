@@ -338,7 +338,7 @@ pub fn serve_connection(stream: &mut TcpStream, path: &Path, shared: &Shared) {
         }
         let mut upstream = shared.source.open();
         let journal = crate::write_journal::WriteJournal::new(path.with_extension("writes.json"));
-        let (status, body) = crate::write_api::handle(
+        let (status, body) = crate::write_api::handle_recorded(
             &registry,
             &mut *upstream,
             &journal,

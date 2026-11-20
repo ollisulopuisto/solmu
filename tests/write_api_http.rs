@@ -388,3 +388,29 @@ fn actual_client_preserves_local_people_and_person_history_routes() {
     task.join().unwrap();
     assert_eq!(f.count.load(Ordering::SeqCst), 0);
 }
+
+#[test]
+fn http_receipts_roll_without_exhausting_claims_and_record_exactly_once() {
+    let f = Fixture::new();
+    let path = f.path.with_extension("writes.json");
+    let attempts: Vec<_> = (0..10000)
+        .map(|_| serde_json::json!({"client_hash":"untrusted", "at":0}))
+        .collect();
+    let journal = serde_json::json!({"entries":{},"attempts":attempts,"attempts_total":10000});
+    std::fs::write(&path, journal.to_string()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    assert!(f.post("unknown", "", "denied").starts_with("HTTP/1.1 401"));
+    assert!(f.post(&f.token, "", "accepted").starts_with("HTTP/1.1 200"));
+    let j: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(j["attempts_total"], 10002);
+    assert_eq!(j["attempts"].as_array().unwrap().len(), 10000);
+    assert_eq!(j["entries"].as_object().unwrap().len(), 1);
+    assert!(f.post(&f.token, "", "accepted").starts_with("HTTP/1.1 200"));
+    let j: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(j["attempts_total"], 10003);
+    assert_eq!(f.count.load(Ordering::SeqCst), 1);
+}

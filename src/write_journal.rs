@@ -25,6 +25,8 @@ struct Journal {
     entries: BTreeMap<String, Entry>,
     #[serde(default)]
     attempts: Vec<Attempt>,
+    #[serde(default)]
+    attempts_total: u64,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -107,9 +109,12 @@ impl WriteJournal {
     pub fn audit_attempt(&self, client_hash: &str, at: i64) -> Result<(), String> {
         let _lock = self.lock()?;
         let mut journal = self.load()?;
+        // Receipt history is a bounded recent window, not the durable claim
+        // ledger. Rejected traffic must never consume idempotency capacity.
         if journal.attempts.len() >= 10000 {
-            return Err("write audit full".into());
+            journal.attempts.drain(..journal.attempts.len() - 9999);
         }
+        journal.attempts_total = journal.attempts_total.saturating_add(1);
         journal.attempts.push(Attempt {
             client_hash: client_hash.into(),
             at,

@@ -13,6 +13,22 @@ Local full-test compilation again exceeded the execution window, so these tests
 are not claimed passed locally. The previous album/texture failures are absent
 from the latest Mac result. No screenshot or release change.
 
+## 2026-11-20: One receipt per automation request, bounded receipt history
+
+The follow-on review found HTTP and the shared write handler both recording a
+receipt, and denied traffic exhausting the receipt cap. HTTP now calls an
+internal already-recorded handler; direct callers keep the audited entry point.
+The metadata receipt history retains the latest 10,000 receipts plus a saturating
+lifetime count. It does not evict durable idempotency claims, whose separate
+10,000-entry cap still fails closed. This prevents unauthenticated receipt traffic
+from consuming claim capacity. Rotation is explicit here, not an automatic purge
+of send outcomes. Existing old journals load with a default receipt counter.
+
+Executed 114 production-module acceptance tests, including a full receipt window,
+an unauthorized attempt, an authorized send, and an idempotent retry: exactly
+one receipt per request, one retained claim and one synthetic upstream send.
+Native all-target/all-feature Clippy passed. No real credentials or messaging.
+
 ## 2026-11-19: Beeper bridge messages show every attachment (fix/beeper-multi-attachment-messages)
 
 Olli reported bridge messages with several attachments showing only the

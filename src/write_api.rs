@@ -16,7 +16,7 @@ pub fn handle(
     chat: &str,
     body: &[u8],
     now: i64,
-    mut revalidate: impl FnMut() -> bool,
+    revalidate: impl FnMut() -> bool,
 ) -> (u16, String) {
     if journal
         .audit_attempt(&bearer.map(hash_token).unwrap_or_default(), now)
@@ -24,6 +24,22 @@ pub fn handle(
     {
         return response(503, "audit_unavailable", None);
     }
+    handle_recorded(
+        registry, upstream, journal, bearer, chat, body, now, revalidate,
+    )
+}
+/// HTTP recorded the receipt before its early refusals. Direct callers use handle.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_recorded(
+    registry: &Registry,
+    upstream: &mut dyn Upstream,
+    journal: &WriteJournal,
+    bearer: Option<&str>,
+    chat: &str,
+    body: &[u8],
+    now: i64,
+    mut revalidate: impl FnMut() -> bool,
+) -> (u16, String) {
     let Some(token) = bearer else {
         return response(401, "unauthorized", None);
     };
