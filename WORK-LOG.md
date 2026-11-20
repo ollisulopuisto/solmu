@@ -879,3 +879,24 @@ Updated three existing paragraph fixtures for the intentional separation.
 429 portable production-source tests pass with this in-progress branch.
 Escaped-literal markers and reversed ordered lists are still unresolved; no
 claim that the full audit is fixed and no PR opened before that work is ready.
+## Preserve ordered rich-text lists, 20 November
+
+Claim: Instinct, branch `fix/preserve-ordered-rich-lists`, worktree
+`/home/sandbox/solmu-ordered-lists`. Reported numbered sends appeared as bullets.
+Root cause is the display adapter: `plain_rich_text` ignored ol/ul context and
+forced every li to a bullet, with an old fixture explicitly blessing that loss.
+Outbound `send_text` already posts the original Markdown without this converter.
+Track nested list counters and numeric start/value attributes, preserve ul
+bullets, and share the existing conservative attribute scanner with href.
+Indentation is capped and counter overflow saturates. No bullet spacing or bold
+layout implementation; those remain sketches awaiting the owner's choice.
+
+Failing-first extracted production-function reproduction: nested ol start=3
+returned bullets before the fix, then passed with numbering. Full portable
+adapter suite passed 422 tests, including a local HTTP wire check that numbered
+Markdown is identical on send POST and edit PUT. Applying this patch to #434's
+current source passed 427 portable tests, including the reverse converter and
+its CommonMark round trips. Full native Clippy hit the execution time limit
+twice, without a diagnostic; not claimed passed. Actual downstream WhatsApp
+receipt was not inspected and no real message was sent. No screenshot waiver
+for this PR assumed; separate ready PR with its missing review media noted.

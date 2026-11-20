@@ -2343,7 +2343,7 @@ fn rich_text_mentions(raw: &str) -> Vec<crate::model::MentionRef> {
 /// Conservative rich-text fallback. Never executes markup, loads assets or
 /// interprets CSS. Only an explicitly HTML-looking body is converted; ordinary
 /// angle-bracket text is left alone. Unknown entities remain literal.
-fn safe_html_href(tag: &str) -> Option<String> {
+fn html_attribute<'a>(tag: &'a str, wanted: &str) -> Option<&'a str> {
     let mut attrs = tag
         .split_once(char::is_whitespace)
         .map(|(_, attrs)| attrs)
@@ -2372,19 +2372,27 @@ fn safe_html_href(tag: &str) -> Option<String> {
                 (&attrs[..end], &attrs[end..])
             };
         attrs = remaining.trim_start();
-        if key.eq_ignore_ascii_case("href") {
-            let value = value.replace("&amp;", "&");
-            let url = reqwest::Url::parse(&value).ok()?;
-            if matches!(url.scheme(), "https" | "http" | "mailto")
-                && url.username().is_empty()
-                && url.password().is_none()
-            {
-                return Some(value);
-            }
-            return None;
+        if key.eq_ignore_ascii_case(wanted) {
+            return Some(value);
         }
     }
     None
+}
+
+fn safe_html_href(tag: &str) -> Option<String> {
+    let value = html_attribute(tag, "href")?.replace("&amp;", "&");
+    let url = reqwest::Url::parse(&value).ok()?;
+    (matches!(url.scheme(), "https" | "http" | "mailto")
+        && url.username().is_empty()
+        && url.password().is_none())
+    .then_some(value)
+}
+
+fn html_list_number(tag: &str, attribute: &str) -> Option<i64> {
+    decode_entities(html_attribute(tag, attribute)?)
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// The HTML entity decoding both halves of mention handling share, so the
@@ -2502,7 +2510,7 @@ fn plain_rich_text(raw: &str) -> String {
     // spans. Raw HTML is never emitted.
     let mut in_pre = false;
     let mut quote_depth: usize = 0;
-    let mut list_depth: usize = 0;
+    let mut lists: Vec<(bool, i64)> = Vec::new();
     let mut table_cell = false;
     // Styles covering the current text position, oldest first. Markers
     // materialize lazily, at the first text char they cover, and close at
@@ -2743,11 +2751,16 @@ fn plain_rich_text(raw: &str) -> String {
                             link_label = link.as_ref().map(|_| out.len());
                         }
                     }
-                    if matches!(name.as_str(), "ul" | "ol") && !in_pre {
+                    if !in_pre && matches!(name.as_str(), "ol" | "ul") {
                         if closing {
-                            list_depth = list_depth.saturating_sub(1);
+                            if lists
+                                .last()
+                                .is_some_and(|(ordered, _)| *ordered == (name == "ol"))
+                            {
+                                lists.pop();
+                            }
                         } else {
-                            list_depth += 1;
+                            lists.push((name == "ol", html_list_number(tag, "start").unwrap_or(1)));
                         }
                     }
                     if name == "br" && in_pre && !closing {
@@ -2764,7 +2777,7 @@ fn plain_rich_text(raw: &str) -> String {
                     }
                     if matches!(name.as_str(), "p" | "div")
                         && !in_pre
-                        && list_depth == 0
+                        && lists.is_empty()
                         && quote_depth == 0
                         && !out.trim().is_empty()
                     {
@@ -2787,8 +2800,15 @@ fn plain_rich_text(raw: &str) -> String {
                         if quote_depth > 0 && !in_pre && !out.ends_with("> ") {
                             out.push_str("> ");
                         }
-                        if name == "li" && !closing {
-                            out.push_str("• ");
+                        if name == "li" && !closing && !in_pre {
+                            out.push_str(&"  ".repeat(lists.len().saturating_sub(1).min(32)));
+                            if let Some((true, next)) = lists.last_mut() {
+                                let number = html_list_number(tag, "value").unwrap_or(*next);
+                                out.push_str(&format!("{number}. "));
+                                *next = number.saturating_add(1);
+                            } else {
+                                out.push_str("• ");
+                            }
                         }
                         if !closing
                             && matches!(name.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
@@ -2814,7 +2834,7 @@ fn plain_rich_text(raw: &str) -> String {
             (end, decode_entities(&rest[..end]))
         };
         rest = &rest[taken..];
-        if blocked.is_some() || (!in_pre && list_depth > 0 && run.trim().is_empty()) {
+        if blocked.is_some() || (!in_pre && !lists.is_empty() && run.trim().is_empty()) {
             continue;
         }
         for ch in run.chars() {
@@ -8089,6 +8109,120 @@ mod tests {
         );
     }
 
+    #[test]
+    fn numbered_send_and_edit_keep_original_markdown_on_the_wire() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut captured = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 4096];
+                loop {
+                    let n = stream.read(&mut buffer).unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&buffer[..n]);
+                    if let Some(end) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&bytes[..end]);
+                        let len: usize = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|s| s.trim().parse().ok())
+                            })
+                            .unwrap();
+                        if bytes.len() >= end + 4 + len {
+                            captured.push((
+                                head.lines().next().unwrap().to_owned(),
+                                serde_json::from_slice::<serde_json::Value>(
+                                    &bytes[end + 4..end + 4 + len],
+                                )
+                                .unwrap(),
+                            ));
+                            break;
+                        }
+                    }
+                }
+                let body = r#"{"pendingMessageID":"pending","chatID":"chat"}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            captured
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let source = "Try this:\n\n1. **Open** settings.\n2. Switch to dark style.";
+        api.send_text("chat", source, None, &[]).unwrap();
+        api.mutate(
+            reqwest::Method::PUT,
+            "/v1/chats/chat/messages/message",
+            Some(serde_json::json!({"text":source})),
+        )
+        .unwrap();
+        let requests = server.join().unwrap();
+        assert!(requests[0].0.starts_with("POST /v1/chats/chat/messages "));
+        assert!(
+            requests[1]
+                .0
+                .starts_with("PUT /v1/chats/chat/messages/message ")
+        );
+        assert_eq!(requests[0].1, serde_json::json!({"text":source}));
+        assert_eq!(requests[1].1, requests[0].1);
+    }
+
+    #[test]
+    fn ordered_rich_lists_reject_bad_numbers_and_keep_style_boundaries() {
+        assert_eq!(
+            plain_rich_text(
+                "<ol start='bad'><li value='NaN'><strong>Open</strong> settings</li><li>Next</li></ol>"
+            ),
+            "1. *Open* settings\n2. Next"
+        );
+        assert_eq!(
+            plain_rich_text("<ol start='9223372036854775807'><li>last</li><li>next</li></ol>"),
+            "9223372036854775807. last\n9223372036854775807. next"
+        );
+        assert_eq!(
+            plain_rich_text("<ol start='&#51;'><li>three</li></ol><p>After</p>"),
+            "3. three\nAfter"
+        );
+        assert_eq!(plain_rich_text("1. raw\n2. raw"), "1. raw\n2. raw");
+    }
+
+    #[test]
+    fn ordered_rich_lists_keep_start_nested_counters_and_item_values() {
+        assert_eq!(
+            plain_rich_text(
+                "<ol start=3><li>three<ul><li>child</li></ul></li><li value=8>eight</li><li>nine</li></ol>"
+            ),
+            "3. three\n  • child\n8. eight\n9. nine"
+        );
+        assert_eq!(
+            plain_rich_text("<ol><li>outer<ol><li>inner</li></ol></li><li>next</li></ol>"),
+            "1. outer\n  1. inner\n2. next"
+        );
+        assert_eq!(
+            plain_rich_text("<ol><li>one</li></ol><ol><li>new</li></ol>"),
+            "1. one\n1. new"
+        );
+        assert_eq!(
+            plain_rich_text("<ol start='-1'><li>minus</li><li>zero</li></ol>"),
+            "-1. minus\n0. zero"
+        );
+    }
+
     /// Bridge-labelled fixture matrix: the normalized-HTML shapes each
     /// network's bridge is expected to deliver through Beeper's `text`
     /// field, plus the raw/plain/Markdown fallbacks seen when a bridge does
@@ -8191,9 +8325,9 @@ mod tests {
                 "\u{2022} one\n\u{2022} two",
             ),
             (
-                "numbered list keeps bullets",
+                "numbered list keeps numbers",
                 "<ol><li>one</li><li>two</li></ol>",
-                "\u{2022} one\n\u{2022} two",
+                "1. one\n2. two",
             ),
             (
                 "styled link label",
