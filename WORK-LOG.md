@@ -869,3 +869,13 @@ with all six reverse-converter tests passing in the production-source
 portable harness, including the original13 CommonMark round-trip cases and
 unsafe-markup refusals. No display-adapter audit fixes yet. Full native
 CI/review and broader audit regression suite still required.
+
+Display-audit progress: failing-first tests reproduce heading-level loss and
+pretty-list blank lines. Preserve heading level as explicit # prefixes,
+paragraphs as blank-line-separated blocks versus a single br, nested br in
+pre as code newlines, table cells as a readable delimiter-separated fallback
+without leaked HTML tags, and ignore whitespace-only HTML list source runs.
+Updated three existing paragraph fixtures for the intentional separation.
+429 portable production-source tests pass with this in-progress branch.
+Escaped-literal markers and reversed ordered lists are still unresolved; no
+claim that the full audit is fixed and no PR opened before that work is ready.

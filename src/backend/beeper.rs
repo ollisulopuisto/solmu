@@ -2450,6 +2450,15 @@ fn plain_rich_text(raw: &str) -> String {
         "h2",
         "h3",
         "tr",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "th",
+        "td",
+        "h4",
+        "h5",
+        "h6",
         "del",
         "s",
         "strike",
@@ -2493,6 +2502,8 @@ fn plain_rich_text(raw: &str) -> String {
     // spans. Raw HTML is never emitted.
     let mut in_pre = false;
     let mut quote_depth: usize = 0;
+    let mut list_depth: usize = 0;
+    let mut table_cell = false;
     // Styles covering the current text position, oldest first. Markers
     // materialize lazily, at the first text char they cover, and close at
     // line ends because the renderer parses styles per line. A line or
@@ -2732,9 +2743,38 @@ fn plain_rich_text(raw: &str) -> String {
                             link_label = link.as_ref().map(|_| out.len());
                         }
                     }
+                    if matches!(name.as_str(), "ul" | "ol") && !in_pre {
+                        if closing {
+                            list_depth = list_depth.saturating_sub(1);
+                        } else {
+                            list_depth += 1;
+                        }
+                    }
+                    if name == "br" && in_pre && !closing {
+                        pre_content.push('\n');
+                    }
+                    if name == "tr" {
+                        table_cell = false;
+                    }
+                    if matches!(name.as_str(), "td" | "th") && !closing {
+                        if table_cell {
+                            out.push_str(" | ");
+                        }
+                        table_cell = true;
+                    }
+                    if matches!(name.as_str(), "p" | "div")
+                        && !in_pre
+                        && list_depth == 0
+                        && quote_depth == 0
+                        && !out.trim().is_empty()
+                    {
+                        while !out.ends_with("\n\n") {
+                            out.push('\n');
+                        }
+                    }
                     if matches!(
                         name.as_str(),
-                        "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3"
+                        "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
                     ) {
                         let broke = !out.ends_with('\n') && !out.ends_with("> ");
                         if broke {
@@ -2749,6 +2789,12 @@ fn plain_rich_text(raw: &str) -> String {
                         }
                         if name == "li" && !closing {
                             out.push_str("• ");
+                        }
+                        if !closing
+                            && matches!(name.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+                        {
+                            out.push_str(&"#".repeat((name.as_bytes()[1] - b'0') as usize));
+                            out.push(' ');
                         }
                     }
                 }
@@ -2768,7 +2814,7 @@ fn plain_rich_text(raw: &str) -> String {
             (end, decode_entities(&rest[..end]))
         };
         rest = &rest[taken..];
-        if blocked.is_some() {
+        if blocked.is_some() || (!in_pre && list_depth > 0 && run.trim().is_empty()) {
             continue;
         }
         for ch in run.chars() {
@@ -8051,6 +8097,40 @@ mod tests {
     /// These prove parser behaviour only; only live captures per bridge
     /// prove every bridge really sends these shapes.
     #[test]
+    fn rich_html_keeps_explicit_heading_levels() {
+        assert_eq!(plain_rich_text("<h1>Heading</h1>"), "# Heading");
+        assert_eq!(plain_rich_text("<h6>Heading</h6>"), "###### Heading");
+    }
+    #[test]
+    fn rich_html_keeps_paragraphs_distinct_from_hard_breaks() {
+        assert_eq!(plain_rich_text("<p>one</p><p>two</p>"), "one\n\ntwo");
+        assert_eq!(plain_rich_text("<p>one<br>two</p>"), "one\ntwo");
+    }
+    #[test]
+    fn rich_html_keeps_breaks_inside_preformatted_code() {
+        assert_eq!(
+            plain_rich_text("<pre>first<br>second</pre>"),
+            "```\nfirst\nsecond\n```"
+        );
+    }
+    #[test]
+    fn rich_html_table_fallback_keeps_cells_and_rows_without_raw_tags() {
+        assert_eq!(
+            plain_rich_text(
+                "<table><tr><th>Name</th><th>Value</th></tr><tr><td>A</td><td>B</td></tr></table>"
+            ),
+            "Name | Value\nA | B"
+        );
+    }
+    #[test]
+    fn rich_html_list_source_whitespace_is_not_content() {
+        assert_eq!(
+            plain_rich_text("<ul>\n<li>one</li>\n<li>two</li>\n</ul>"),
+            "• one\n• two"
+        );
+    }
+
+    #[test]
     fn rich_text_style_fixture_matrix() {
         let fixtures: &[(&str, &str, &str)] = &[
             // WhatsApp: *bold*, _italic_, ~strike~, `mono` arrive as tags.
@@ -8243,7 +8323,7 @@ mod tests {
         let raw = "<p><strong>bold</strong></p><p><em>italics</em></p><p><del>overstrike</del></p><ul><li>one</li><li>two</li></ul>";
         assert_eq!(
             plain_rich_text(raw),
-            "*bold*\n_italics_\n~overstrike~\n\u{2022} one\n\u{2022} two"
+            "*bold*\n\n_italics_\n\n~overstrike~\n\n\u{2022} one\n\u{2022} two"
         );
     }
 
@@ -8254,7 +8334,7 @@ mod tests {
     fn rich_text_styles_stay_safe() {
         assert_eq!(
             plain_rich_text("<p>a</p><script>alert(1)</script><p><strong>b</strong></p>"),
-            "a\n*b*"
+            "a\n\n*b*"
         );
         assert_eq!(
             plain_rich_text("<style>* { color: red }</style><p><em>x</em></p>"),
@@ -9909,7 +9989,7 @@ mod tests {
         // Styles survive as renderer markup; scripts and raw HTML never do.
         assert_eq!(
             plain_rich_text("<p>Hi &amp; welcome</p><br><p>Next <b>bold</b></p>"),
-            "Hi & welcome\nNext *bold*"
+            "Hi & welcome\n\nNext *bold*"
         );
         assert_eq!(
             plain_rich_text(
