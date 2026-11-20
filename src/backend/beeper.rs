@@ -1221,9 +1221,21 @@ impl Api {
 
     fn refresh_message(&self, chat: &str, id: &str, emit: &dyn Fn(Event)) {
         if let Ok(wire) = self.get_message(chat, id) {
-            emit(Event::MessageUpdated(Box::new(
-                self.map_message(&wire, chat),
-            )));
+            let mut parts = self.map_messages(&wire, chat);
+            if parts.len() == 1 {
+                emit(Event::MessageUpdated(Box::new(
+                    parts.pop().expect("one mapped part"),
+                )));
+            } else {
+                // A multi-attachment message's update replaces every part;
+                // the merge path keeps each part's download state.
+                emit(Event::Messages {
+                    chat: chat.into(),
+                    messages: parts,
+                    older: false,
+                    complete: false,
+                });
+            }
         } else {
             emit(Event::Info("Beeper accepted the change but the updated message could not be fetched; reopen the chat to confirm".into()));
         }
@@ -1344,6 +1356,24 @@ impl Api {
         message
     }
 
+    /// Every row a wire message shows as: one per attachment when the
+    /// bridge packs several into a single event.
+    fn map_messages(&self, wire: &BeeperMessage, chat: &str) -> Vec<Message> {
+        map_messages(wire, chat)
+            .into_iter()
+            .map(|mut message| {
+                if let Ok(ids) = self.own_ids.lock()
+                    && let Some(own) = ids.get(&wire.account_id)
+                {
+                    for reaction in &mut message.reactions {
+                        reaction.from_me = reaction.sender == *own;
+                    }
+                }
+                message
+            })
+            .collect()
+    }
+
     fn list_chats(&self) -> Result<Page<BeeperChat>, String> {
         let mut items = Vec::new();
         let mut cursor: Option<String> = None;
@@ -1410,6 +1440,8 @@ impl Api {
     }
 
     fn get_message(&self, chat: &str, id: &str) -> Result<BeeperMessage, String> {
+        // A split multi-attachment message's parts share the bridge id.
+        let (id, _) = crate::model::attachment_part(id);
         let message: BeeperMessage = self.get(
             &format!(
                 "/v1/chats/{}/messages/{}",
@@ -1513,6 +1545,7 @@ impl Api {
         Ok(path)
     }
 
+    #[cfg(test)]
     fn download_media(
         &self,
         chat: &str,
@@ -1682,8 +1715,35 @@ impl Api {
                 expanded.push(item);
                 continue;
             }
+            // A split multi-attachment message's parts share the bridge id:
+            // identity validates against it, while the chosen part's index
+            // selects its own attachment rather than the whole set.
+            let (wire, named_part) = crate::model::attachment_part(&item.source_message);
+            item.source_message = wire.to_owned();
+            let selected = item
+                .attachment
+                .or_else(|| (named_part > 0).then_some(named_part));
+            // Record the chosen part before any fallible step: a failed plan
+            // is retryable, and a retry must never widen one selected
+            // attachment into the message's whole set.
+            if item.attachment.is_none() {
+                item.attachment = selected;
+            }
             match self.get_message(&item.source_chat, &item.source_message) {
                 Ok(message) if !message.attachments.is_empty() => {
+                    if let Some(selected) = selected {
+                        if selected >= message.attachments.len() {
+                            item.state = State::FailedBeforeSend(
+                                "The selected attachment is no longer available".into(),
+                            );
+                            expanded.push(item);
+                            continue;
+                        }
+                        item.attachment = Some(selected);
+                        item.planned = true;
+                        expanded.push(item);
+                        continue;
+                    }
                     for attachment in 0..message.attachments.len() {
                         let mut copy = item.clone();
                         copy.attachment = Some(attachment);
@@ -1849,7 +1909,7 @@ impl Api {
         }
         let mut payload = serde_json::json!({"text":text});
         if let Some(reply) = reply {
-            payload["replyToMessageID"] = reply.into();
+            payload["replyToMessageID"] = crate::model::attachment_part(reply).0.into();
         }
         if !mentions.is_empty() {
             payload["mentions"] = mentions.into();
@@ -2009,7 +2069,7 @@ impl Api {
             message["text"] = caption.into();
         }
         if let Some(reply) = reply {
-            message["replyToMessageID"] = reply.into();
+            message["replyToMessageID"] = crate::model::attachment_part(reply).0.into();
         }
         if let Some(expected) = expected {
             let current = self.get_chat(chat)?;
@@ -2844,7 +2904,20 @@ fn body_of(m: &BeeperMessage) -> (String, bool) {
 }
 
 fn attachment_content(m: &BeeperMessage) -> Option<Content> {
-    let a = m.attachments.first()?;
+    let caption = m
+        .text
+        .as_ref()
+        .map(|text| plain_rich_text(text))
+        .filter(|t| !t.is_empty());
+    attachment_content_at(m, 0, caption)
+}
+
+fn attachment_content_at(
+    m: &BeeperMessage,
+    index: usize,
+    caption: Option<String>,
+) -> Option<Content> {
+    let a = m.attachments.get(index)?;
     // Older payloads lacking a usable source stay honest text placeholders.
     if a.id.is_none() && a.src_url.is_none() {
         return None;
@@ -2858,11 +2931,6 @@ fn attachment_content(m: &BeeperMessage) -> Option<Content> {
         path: None,
         state: Default::default(),
     };
-    let caption = m
-        .text
-        .as_ref()
-        .map(|text| plain_rich_text(text))
-        .filter(|t| !t.is_empty());
     let seconds = a.duration.map(|d| d.max(0.0).min(u32::MAX as f64) as u32);
     Some(match a.kind.as_deref().unwrap_or("") {
         "img" if a.is_sticker => Content::Sticker {
@@ -2968,6 +3036,28 @@ pub(crate) fn supplied_preview_demo(chat: &str) -> Message {
         "links":[{"title":"Summer plans", "summary":"A few ideas for the long summer evenings.", "url":"https://example.com/trips", "originalURL":"https://example.com/trips?utm_source=chat#july", "img":"https://example.com/not-fetched.jpg"}]
     })).expect("synthetic preview wire fixture");
     map_message(&wire, chat)
+}
+
+/// Synthetic wire fixture with several attachments in one bridge message,
+/// exercised through the real mapper for offline review captures.
+#[cfg(any(test, feature = "demo"))]
+pub(crate) fn multi_attachment_demo(chat: &str) -> Vec<Message> {
+    let wire: BeeperMessage = serde_json::from_value(serde_json::json!({
+        "id": "ada-album",
+        "chatID": chat,
+        "senderID": chat,
+        "senderName": "Alex",
+        "timestamp": "2026-11-19T10:00:00Z",
+        "type": "IMAGE",
+        "text": "Weekend references, all in one place",
+        "attachments": [
+            {"id": "mxc://example/one", "type": "img", "mimeType": "image/jpeg", "fileName": "first.jpg", "fileSize": 180000, "size": {"width": 900, "height": 700}},
+            {"id": "mxc://example/two", "type": "img", "mimeType": "image/jpeg", "fileName": "second.jpg", "fileSize": 190000, "size": {"width": 900, "height": 700}},
+            {"id": "mxc://example/three", "type": "video", "mimeType": "video/mp4", "fileName": "clip.mp4", "fileSize": 2400000, "size": {"width": 900, "height": 700}, "duration": 12.0}
+        ]
+    }))
+    .expect("synthetic multi-attachment wire fixture");
+    map_messages(&wire, chat)
 }
 
 #[cfg(test)]
@@ -3077,6 +3167,80 @@ fn map_message(m: &BeeperMessage, fallback_chat: &str) -> Message {
         forwarded: false,
         thumbnail: None,
     }
+}
+
+/// The wire indices of the attachments that have a usable source.
+fn usable_attachments(m: &BeeperMessage) -> Vec<usize> {
+    m.attachments
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.id.is_some() || a.src_url.is_some())
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Every row a wire message shows as. The bridge delivers a message with
+/// several attachments as one event; the conversation list and the album UI
+/// show one message per attachment, so such an event splits into parts that
+/// share the bridge id as their album. The first usable part keeps the
+/// message's identity: the bridge id itself, caption, quote, reactions,
+/// mentions and edit mark, so replies and deletions naming the bridge id
+/// land on it. Later parts get a derived id that still resolves back to the
+/// bridge message and their own attachment index (see
+/// `model::attachment_part`), no caption and no reactions of their own.
+/// Attachments without a usable source are skipped rather than shown as
+/// empty rows; a message with no usable attachment keeps the legacy
+/// single-message mapping, text placeholder included.
+fn map_messages(m: &BeeperMessage, fallback_chat: &str) -> Vec<Message> {
+    let usable = usable_attachments(m);
+    if usable.len() <= 1 {
+        return vec![map_message(m, fallback_chat)];
+    }
+    let caption = m
+        .text
+        .as_ref()
+        .map(|text| plain_rich_text(text))
+        .filter(|t| !t.is_empty());
+    let base = map_message(m, fallback_chat);
+    usable
+        .iter()
+        .enumerate()
+        .filter_map(|(part, &index)| {
+            let mut message = base.clone();
+            message.id = crate::model::attachment_part_id(&m.id, index);
+            message.content =
+                attachment_content_at(m, index, if part == 0 { caption.clone() } else { None })?;
+            if part > 0 {
+                message.quoted = None;
+                message.reactions = Vec::new();
+                message.mentions = Vec::new();
+                message.edited = false;
+            }
+            // The album row groups pictures and ordinary videos; audio and
+            // documents show as their own rows right after.
+            if matches!(
+                message.content,
+                Content::Image { .. } | Content::Video { note: false, .. }
+            ) && let Some(media) = message.content.media_mut()
+            {
+                media.album = Some(m.id.clone());
+            }
+            Some(message)
+        })
+        .collect()
+}
+
+/// One notification per bridge message: the first displayed row of a split
+/// multi-attachment message carries the alert, the rest of the album would
+/// only repeat it. The first usable part is not always attachment 0, so no
+/// id suffix picks the row; the mapping order does.
+fn notification_rows(messages: &[Message]) -> Vec<Message> {
+    let mut seen = HashSet::new();
+    messages
+        .iter()
+        .filter(|m| !m.from_me && seen.insert(crate::model::attachment_part(&m.id).0.to_owned()))
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -3335,6 +3499,9 @@ fn load_until_message(
     let mut seen = HashSet::new();
     let mut pending: Vec<Message> = Vec::new();
     let mut complete = false;
+    // The jump target may be one part of a split multi-attachment message;
+    // history pages carry the bridge id every part shares.
+    let target_wire = crate::model::attachment_part(target).0;
     for page_no in 0..SEARCH_JUMP_MAX_PAGES {
         let state = cursors.get(chat);
         if state.is_some_and(|state| !state.has_more_older) {
@@ -3353,7 +3520,7 @@ fn load_until_message(
                 let found = page
                     .items
                     .iter()
-                    .any(|m| m.id == target && !m.is_hidden && !m.is_deleted);
+                    .any(|m| m.id == target_wire && !m.is_hidden && !m.is_deleted);
                 let next =
                     history_cursor(page.oldest_cursor.as_deref(), Some(&cursor), page.has_more);
                 let error = next.as_ref().err().cloned();
@@ -3367,7 +3534,7 @@ fn load_until_message(
                     page.items
                         .iter()
                         .filter(|m| !m.is_hidden && !m.is_deleted)
-                        .map(|m| api.map_message(m, chat)),
+                        .flat_map(|m| api.map_messages(m, chat)),
                 );
                 complete = !page.has_more;
                 if found
@@ -3504,7 +3671,10 @@ pub fn run(
                 let result = if card.is_some() {
                     Err("Carousel attachments are not supported yet".into())
                 } else {
-                    media_api.download_media(&chat, &message, &media_dirs, manual)
+                    // A split message's part fetches its own attachment of the
+                    // shared bridge message; the event keeps the displayed id.
+                    let (wire, index) = crate::model::attachment_part(&message);
+                    media_api.download_media_at(&chat, wire, index, &media_dirs, manual)
                 };
                 if media_events
                     .send(Event::Media {
@@ -4193,7 +4363,7 @@ pub fn run(
                                 .items
                                 .iter()
                                 .filter(|m| !m.is_hidden && !m.is_deleted)
-                                .map(|m| api.map_message(m, &chat))
+                                .flat_map(|m| api.map_messages(m, &chat))
                                 .collect();
                             messages.sort_by_key(|m| m.timestamp);
                             // Opening a chat moves its forward cursor past this
@@ -4285,7 +4455,7 @@ pub fn run(
                                     .items
                                     .iter()
                                     .filter(|m| !m.is_hidden && !m.is_deleted)
-                                    .map(|m| api.map_message(m, &chat))
+                                    .flat_map(|m| api.map_messages(m, &chat))
                                     .collect();
                                 messages.sort_by_key(|m| m.timestamp);
                                 emit(Event::Messages {
@@ -4633,6 +4803,7 @@ pub fn run(
                     text,
                     mentions,
                 } => {
+                    let id = crate::model::attachment_part(&id).0.to_owned();
                     let result = if !mentions.is_empty() {
                         Err("Beeper mention edits are not supported; no edit sent".into())
                     } else {
@@ -4673,6 +4844,10 @@ pub fn run(
                         } => (chat, id, everyone, Some(request), Some(expected)),
                         _ => unreachable!(),
                     };
+                    // A split part's delete removes the whole bridge message:
+                    // the bridge knows no per-attachment delete.
+                    let (wire_id, _) = crate::model::attachment_part(&id);
+                    let wire_id = wire_id.to_owned();
                     let result = api.get_chat(&chat).and_then(|state| {
                         if !mutation_identity_matches(expected.as_ref(), &state, &api.base_url) {
                             return Err("Chat identity changed; nothing sent".into());
@@ -4683,21 +4858,25 @@ pub fn run(
                             .as_ref()
                             .map(|caps| caps.mutations.clone())
                             .unwrap_or_default();
-                        let message = api.get_message(&chat, &id)?;
-                        if message.id != id
+                        let message = api.get_message(&chat, &wire_id)?;
+                        if message.id != wire_id
                             || (!message.chat_id.is_empty() && message.chat_id != chat)
                         {
                             return Err("Message identity changed; nothing sent".into());
                         }
-                        if message.is_deleted
-                            || message.is_hidden
+                        if message.is_deleted {
+                            // Selecting several parts of one bridge message
+                            // deletes it once per part; after the first delete
+                            // the rest meet its tombstone, which is the end
+                            // state they asked for.
+                            return Ok(());
+                        }
+                        if message.is_hidden
                             || message.send_status.as_ref().is_some_and(|s| {
                                 matches!(s.status.as_str(), "pending" | "sending" | "failed")
                             })
                         {
-                            return Err(
-                                "Message is deleted, hidden or not final; nothing sent".into()
-                            );
+                            return Err("Message is hidden or not final; nothing sent".into());
                         }
                         let mapped = api.map_message(&message, &chat);
                         if let Some(why) = caps.delete_refusal(
@@ -4713,7 +4892,7 @@ pub fn run(
                             &format!(
                                 "/v1/chats/{}/messages/{}?forEveryone={everyone}",
                                 encode_segment(&chat),
-                                encode_segment(&id)
+                                encode_segment(&wire_id)
                             ),
                             None,
                         )
@@ -4727,7 +4906,7 @@ pub fn run(
                         result: result.clone(),
                     });
                     match result {
-                        Ok(()) => emit(Event::MessageDeleted { chat, id }),
+                        Ok(()) => emit(Event::MessageDeleted { chat, id: wire_id }),
                         Err(error) => emit(Event::Info(format!(
                             "Delete failed or uncertain: {error}. Check state before retrying."
                         ))),
@@ -4738,6 +4917,9 @@ pub fn run(
                     message,
                     emoji,
                 } => {
+                    // A reaction to any part of a split message reacts to the
+                    // one bridge message behind them.
+                    let message = crate::model::attachment_part(&message).0.to_owned();
                     if emoji.is_empty() {
                         let wire = api.get_message(&chat, &message);
                         let chat_wire = api.get::<BeeperChat>(
@@ -5295,7 +5477,7 @@ pub fn run(
                     .items
                     .iter()
                     .filter(|m| !m.is_hidden && !m.is_deleted)
-                    .map(|m| api.map_message(m, chat))
+                    .flat_map(|m| api.map_messages(m, chat))
                     .collect();
                 messages.sort_by_key(|m| m.timestamp);
                 if !messages.is_empty() {
@@ -5792,8 +5974,10 @@ fn poll_forward_mark(
             s.status == "SUCCESS"
                 || (!s.status.starts_with("FAIL_") && !s.delivered_to_users.is_empty())
         });
-        let mapped = api.map_message(&wire, chat);
-        let failed = matches!(mapped.status, Delivery::Failed);
+        let mapped = api.map_messages(&wire, chat);
+        let failed = mapped
+            .iter()
+            .any(|part| matches!(part.status, Delivery::Failed));
         if confirmed {
             emit(Event::BeeperSendConfirmed {
                 origin: api.base_url.clone(),
@@ -5817,7 +6001,7 @@ fn poll_forward_mark(
         }
         emit(Event::Messages {
             chat: chat.clone(),
-            messages: vec![mapped],
+            messages: mapped,
             older: false,
             complete: false,
         });
@@ -5862,7 +6046,10 @@ fn poll_pending_send(
                     chat: chat.clone(),
                 });
             }
-            let mapped = api.map_message(&m, chat);
+            let mapped = api.map_messages(&m, chat);
+            let send_failed = mapped
+                .iter()
+                .any(|part| matches!(part.status, Delivery::Failed));
             // Some bridges (reported for WhatsApp) never attach a sendStatus.
             // Once the lookup has resolved to a final message ID that is ours,
             // in this chat, with no status at all, the message is no longer a
@@ -5874,17 +6061,15 @@ fn poll_pending_send(
                 && m.chat_id == *chat
                 && m.is_sender == Some(true)
                 && m.send_status.is_none();
-            let complete = explicit_success
-                || resolved_without_status
-                || matches!(mapped.status, Delivery::Failed);
-            if matches!(mapped.status, Delivery::Failed) {
+            let complete = explicit_success || resolved_without_status || send_failed;
+            if send_failed {
                 emit(Event::Info(
                     "Beeper reports that a message failed to send".into(),
                 ));
             }
             emit(Event::Messages {
                 chat: chat.clone(),
-                messages: vec![mapped],
+                messages: mapped,
                 older: false,
                 complete: false,
             });
@@ -5961,7 +6146,7 @@ fn poll_newer(
                     .items
                     .iter()
                     .filter(|m| !m.is_hidden && !m.is_deleted)
-                    .map(|m| api.map_message(m, chat))
+                    .flat_map(|m| api.map_messages(m, chat))
                     .collect();
                 messages.sort_by_key(|m| m.timestamp);
                 for m in page.items.iter().filter(|m| m.is_deleted) {
@@ -5971,8 +6156,7 @@ fn poll_newer(
                     });
                 }
                 if !messages.is_empty() {
-                    let incoming: Vec<Message> =
-                        messages.iter().filter(|m| !m.from_me).cloned().collect();
+                    let incoming = notification_rows(&messages);
                     emit(Event::Messages {
                         chat: chat.clone(),
                         messages,
@@ -6080,6 +6264,153 @@ mod tests {
                 assert_eq!(preview.is_some(), metadata);
             }
         }
+    }
+
+    fn multi_attachment_wire() -> BeeperMessage {
+        serde_json::from_value(serde_json::json!({
+            "id": "album-1",
+            "chatID": "chat",
+            "senderID": "sender",
+            "timestamp": "2026-11-19T10:00:00Z",
+            "type": "IMAGE",
+            "text": "the caption",
+            "linkedMessageID": "earlier",
+            "editedTimestamp": "2026-11-19T11:00:00Z",
+            "reactions": [{"participantID": "someone", "reactionKey": "\u{1F44D}", "emoji": true}],
+            "attachments": [
+                {"id": "mxc://example/one", "type": "img", "mimeType": "image/jpeg", "fileName": "first.jpg"},
+                {"id": "mxc://example/two", "type": "img", "mimeType": "image/jpeg", "fileName": "second.jpg"},
+                {"id": "mxc://example/three", "type": "video", "mimeType": "video/mp4", "fileName": "clip.mp4", "duration": 12.0}
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn multi_attachment_message_maps_to_one_row_per_attachment() {
+        let wire = multi_attachment_wire();
+        let parts = map_messages(&wire, "chat");
+        assert_eq!(parts.len(), 3, "every attachment gets its own row");
+        assert_eq!(parts[0].id, "album-1");
+        assert_eq!(parts[1].id, "album-1#att1");
+        assert_eq!(parts[2].id, "album-1#att2");
+        // Every part joins the album under the bridge message id.
+        for part in &parts {
+            assert_eq!(
+                part.content.media().unwrap().album.as_deref(),
+                Some("album-1")
+            );
+        }
+        // The first part carries the message's identity.
+        let Content::Image { caption, .. } = &parts[0].content else {
+            panic!("first part is the captioned image")
+        };
+        assert_eq!(caption.as_deref(), Some("the caption"));
+        assert!(parts[0].quoted.is_some());
+        assert_eq!(parts[0].reactions.len(), 1);
+        assert!(parts[0].edited);
+        // The rest are plain album items.
+        for part in &parts[1..] {
+            let (Content::Image { caption, .. } | Content::Video { caption, .. }) = &part.content
+            else {
+                panic!("album item is a picture or a clip")
+            };
+            assert!(caption.is_none(), "the caption is not repeated per item");
+            assert!(part.quoted.is_none());
+            assert!(part.reactions.is_empty());
+            assert!(part.mentions.is_empty());
+            assert!(!part.edited);
+        }
+        assert!(matches!(parts[2].content, Content::Video { .. }));
+        for part in &parts {
+            assert_eq!(part.timestamp, parts[0].timestamp);
+            assert_eq!(part.sender, parts[0].sender);
+            assert_eq!(part.from_me, parts[0].from_me);
+        }
+    }
+
+    #[test]
+    fn single_attachment_keeps_the_legacy_mapping() {
+        let mut wire = multi_attachment_wire();
+        wire.attachments.truncate(1);
+        let parts = map_messages(&wire, "chat");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].id, "album-1");
+        assert_eq!(parts[0].content.media().unwrap().album, None);
+        let Content::Image {
+            caption: Some(caption),
+            ..
+        } = &parts[0].content
+        else {
+            panic!("single attachment keeps its caption")
+        };
+        assert_eq!(caption, "the caption");
+    }
+
+    #[test]
+    fn attachments_without_a_source_are_skipped() {
+        let mut wire = multi_attachment_wire();
+        // No id and no srcURL: there is nothing to download or show.
+        wire.attachments[0].id = None;
+        let parts = map_messages(&wire, "chat");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].id, "album-1#att1");
+        let Content::Image { caption, .. } = &parts[0].content else {
+            panic!("first usable part carries the identity")
+        };
+        assert_eq!(caption.as_deref(), Some("the caption"));
+        // The displayed id still names the wire attachment, so its download
+        // fetches the right one.
+        assert_eq!(crate::model::attachment_part(&parts[0].id), ("album-1", 1));
+        assert_eq!(crate::model::attachment_part(&parts[1].id), ("album-1", 2));
+        // The poll alerts once, on the first surviving part, and a quote jump
+        // naming the bridge id lands on that same row.
+        let alerts = notification_rows(&parts);
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].id, "album-1#att1");
+    }
+
+    #[test]
+    fn no_usable_attachment_stays_a_text_placeholder() {
+        let mut wire = multi_attachment_wire();
+        for attachment in &mut wire.attachments {
+            attachment.id = None;
+        }
+        let parts = map_messages(&wire, "chat");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].id, "album-1");
+        assert!(matches!(parts[0].content, Content::Text { .. }));
+    }
+
+    #[test]
+    fn a_split_parts_id_resolves_to_the_bridge_message() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let _ = stream.read(&mut request);
+            let request = String::from_utf8_lossy(&request).to_string();
+            assert!(
+                request.starts_with("GET /v1/chats/chat/messages/album-1 "),
+                "a part's displayed id must not reach the wire: {request}"
+            );
+            let body = r#"{"id":"album-1","chatID":"chat","text":"hi"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let message = api.get_message("chat", "album-1#att2").unwrap();
+        assert_eq!(message.id, "album-1");
+        server.join().unwrap();
     }
 
     #[test]
@@ -6977,6 +7308,133 @@ mod tests {
             serde_json::json!({"text":item.text,"attachment":{"uploadID":"uploaded-second","fileName":"second.txt"}})
         );
         let _ = std::fs::remove_dir_all(forward_test_dirs().cache);
+    }
+
+    #[test]
+    fn forwarding_a_later_attachment_part_sends_only_that_attachment() {
+        let message = r#"{"id":"album-1","chatID":"source","accountID":"telegram","attachments":[{"id":"mxc://first","fileName":"first.txt","mimeType":"text/plain"},{"id":"mxc://second","fileName":"second.txt","mimeType":"text/plain"},{"id":"mxc://third","fileName":"third.txt","mimeType":"text/plain"}]}"#;
+        let responses = vec![
+            (
+                "GET /v1/chats/source/messages/album-1 ",
+                200,
+                message.into(),
+            ),
+            (
+                "GET /v1/chats/source ",
+                200,
+                r#"{"id":"source","accountID":"telegram"}"#.into(),
+            ),
+            (
+                "GET /v1/chats/target ",
+                200,
+                r#"{"id":"target","accountID":"signal"}"#.into(),
+            ),
+            (
+                "GET /v1/chats/source/messages/album-1 ",
+                200,
+                message.into(),
+            ),
+            (
+                "GET /v1/chats/source/messages/album-1 ",
+                200,
+                message.into(),
+            ),
+            (
+                "GET /v1/assets/serve?url=mxc%3A%2F%2Fthird ",
+                200,
+                "third attachment".into(),
+            ),
+            (
+                "POST /v1/assets/upload/base64 ",
+                200,
+                r#"{"uploadID":"uploaded-third"}"#.into(),
+            ),
+            (
+                "POST /v1/chats/target/messages ",
+                200,
+                r#"{"pendingMessageID":"queued","chatID":"target"}"#.into(),
+            ),
+        ];
+        let (api, server) = forward_fixture(responses);
+        let mut item = forward_fixture_item(&api.base_url);
+        // The conversation list shows the third attachment under this id.
+        item.source_message = "album-1#att2".into();
+        item.planned = false;
+        let planned = api.plan_forwards(vec![item]);
+        assert_eq!(
+            planned.len(),
+            1,
+            "a chosen part never expands into the whole set"
+        );
+        assert!(planned[0].planned);
+        assert_eq!(
+            planned[0].source_message, "album-1",
+            "identity validates against the bridge id"
+        );
+        assert_eq!(planned[0].attachment, Some(2));
+        let accepted = api
+            .send_forward(&planned[0], &forward_test_dirs(), &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(accepted.pending_id, "queued");
+        let requests = server.join().unwrap();
+        let json = |index: usize| {
+            serde_json::from_str::<serde_json::Value>(
+                requests[index].split("\r\n\r\n").nth(1).unwrap(),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            json(6),
+            serde_json::json!({"content":"dGhpcmQgYXR0YWNobWVudA==","fileName":"third.txt"})
+        );
+        assert_eq!(
+            json(7),
+            serde_json::json!({"text":planned[0].text,"attachment":{"uploadID":"uploaded-third","fileName":"third.txt"}})
+        );
+        let _ = std::fs::remove_dir_all(forward_test_dirs().cache);
+    }
+
+    #[test]
+    fn a_retry_after_a_failed_plan_keeps_the_selected_attachment() {
+        let message = r#"{"id":"album-1","chatID":"source","accountID":"telegram","attachments":[{"id":"mxc://first","fileName":"first.txt","mimeType":"text/plain"},{"id":"mxc://second","fileName":"second.txt","mimeType":"text/plain"},{"id":"mxc://third","fileName":"third.txt","mimeType":"text/plain"}]}"#;
+        let responses = vec![
+            // The first planning attempt cannot fetch the source message.
+            ("GET /v1/chats/source/messages/album-1 ", 500, "{}".into()),
+            (
+                "GET /v1/chats/source/messages/album-1 ",
+                200,
+                message.into(),
+            ),
+        ];
+        let (api, server) = forward_fixture(responses);
+        let mut item = forward_fixture_item(&api.base_url);
+        // The conversation list shows the third attachment under this id.
+        item.source_message = "album-1#att2".into();
+        item.planned = false;
+        let failed = api.plan_forwards(vec![item]);
+        assert_eq!(failed.len(), 1);
+        assert!(matches!(
+            failed[0].state,
+            crate::composed_forward::State::FailedBeforeSend(_)
+        ));
+        assert!(!failed[0].planned);
+        assert_eq!(failed[0].source_message, "album-1");
+        assert_eq!(
+            failed[0].attachment,
+            Some(2),
+            "a failed plan keeps the chosen part for its retry"
+        );
+        let mut items = failed;
+        crate::composed_forward::retry_failed(&mut items);
+        let planned = api.plan_forwards(items);
+        assert_eq!(
+            planned.len(),
+            1,
+            "a retry never widens one selected part into the whole set"
+        );
+        assert!(planned[0].planned);
+        assert_eq!(planned[0].attachment, Some(2));
+        server.join().unwrap();
     }
 
     #[test]
@@ -8086,6 +8544,53 @@ mod tests {
             events.lock().unwrap().push(event)
         });
         assert!(events.into_inner().unwrap().iter().any(|event| matches!(event, Event::Messages { messages, older: true, .. } if messages.iter().any(|m| m.id=="target"))));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn load_until_stops_on_the_page_holding_a_split_parts_bridge_message() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            let body = r#"{"items":[{"id":"album-1","chatID":"chat","timestamp":"2026-06-01T00:00:00Z","type":"IMAGE","attachments":[{"id":"mxc://x/a","type":"img"},{"id":"mxc://x/b","type":"img"},{"id":"mxc://x/c","type":"img"}]}],"hasMore":false}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let mut cursors = HashMap::from([(
+            "chat".into(),
+            ChatCursors {
+                oldest: Some("start".into()),
+                newest: None,
+                has_more_older: true,
+            },
+        )]);
+        let events = std::sync::Mutex::new(Vec::new());
+        load_until_message(&api, &mut cursors, "chat", "album-1#att2", &|event| {
+            events.lock().unwrap().push(event)
+        });
+        let events = events.into_inner().unwrap();
+        assert!(
+            events.iter().any(|event| matches!(event, Event::Messages { messages, older: true, .. } if messages.iter().any(|m| m.id == "album-1#att2"))),
+            "the page's mapped parts reach the list"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::OlderFetched { .. })),
+            "finding the part's bridge message ends the walk"
+        );
         worker.join().unwrap();
     }
 
@@ -10135,6 +10640,126 @@ mod tests {
         );
         assert_eq!(captured.len(), 6);
         stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn deleting_every_part_of_one_bridge_message_reports_success_for_each() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let message_gets = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (gets2, stop2) = (message_gets.clone(), stop.clone());
+        let server = std::thread::spawn(move || {
+            while !stop2.load(Ordering::Relaxed) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                };
+                let gets2 = gets2.clone();
+                std::thread::spawn(move || {
+                    // An accepted socket inherits the listener's non-blocking mode on macOS.
+                    stream.set_nonblocking(false).unwrap();
+                    let mut buffer = [0u8; 4096];
+                    let length = stream.read(&mut buffer).unwrap();
+                    let request = String::from_utf8_lossy(&buffer[..length]);
+                    let path = request.split_whitespace().nth(1).unwrap_or("");
+                    let body = if request.starts_with("DELETE ") {
+                        "{}".to_string()
+                    } else if path == "/v1/accounts" {
+                        ACCOUNTS_JSON.to_string()
+                    } else if path.starts_with("/v1/chats?") {
+                        CHATS_JSON.to_string()
+                    } else if path == "/v1/chats/chat" {
+                        r#"{"id":"chat","accountID":"bridge","capabilities":{"deleteForMe":true}}"#
+                            .to_string()
+                    } else if path == "/v1/chats/chat/messages/album-1" {
+                        if gets2.fetch_add(1, Ordering::Relaxed) == 0 {
+                            r#"{"id":"album-1","chatID":"chat","accountID":"bridge","text":"hi"}"#
+                                .to_string()
+                        } else {
+                            // The first part's delete already removed the
+                            // bridge message: the next part meets its tombstone.
+                            r#"{"id":"album-1","chatID":"chat","accountID":"bridge","isDeleted":true}"#
+                                .to_string()
+                        }
+                    } else if path.starts_with("/v1/chats/chat/messages") {
+                        r#"{"items":[],"hasMore":false}"#.to_string()
+                    } else {
+                        "{}".to_string()
+                    };
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                });
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = AppDirs::under(dir.path()).as_account();
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        std::thread::spawn({
+            let base = base.clone();
+            move || {
+                run(
+                    BeeperConfig {
+                        base_url: base,
+                        token: "test".into(),
+                    },
+                    dirs,
+                    event_tx,
+                    rx,
+                    Waker::default(),
+                )
+            }
+        });
+        collect_until(&event_rx, Duration::from_secs(5), &|e| {
+            matches!(e, Event::Chats(_))
+        });
+        // Two parts of one bridge message are selected and deleted together.
+        let expected = crate::merged::Member {
+            origin: base,
+            account: "bridge".into(),
+            chat: "chat".into(),
+        };
+        for request in 0..2u64 {
+            tx.send(Command::BatchDelete {
+                request,
+                expected: expected.clone(),
+                chat: "chat".into(),
+                id: "album-1#att2".into(),
+                everyone: false,
+            })
+            .unwrap();
+        }
+        let events = collect_until(&event_rx, Duration::from_secs(10), &|e| {
+            matches!(
+                e,
+                Event::MutationResult {
+                    request: Some(1),
+                    result: Ok(()),
+                    ..
+                }
+            )
+        });
+        for done in 0..2u64 {
+            assert!(
+                events.iter().any(|e| matches!(
+                    e,
+                    Event::MutationResult {
+                        request: r,
+                        result: Ok(()),
+                        ..
+                    } if *r == Some(done)
+                )),
+                "delete request {done} reports success, not a false failure from the tombstone"
+            );
+        }
+        stop.store(true, Ordering::Relaxed);
+        let _ = server.join();
     }
 
     #[test]

@@ -15,6 +15,8 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- Bridge messages carrying several attachments show them all instead of only the first: the set appears as an album with its caption, and each item downloads, replies, reacts and is deleted together with the message.
+
 - Customize avatar: the Photo tab has a draggable, zoomable circular crop with live sidebar-size previews; on macOS the crop auto-centres on the detected face (native Vision, on-device) and can re-centre on demand, other platforms keep the centre crop. Existing avatars keep their look.
 - Sent text bubbles share a run's width only when they are near-equal to its widest text (within 16 points and 15%); media, cards, quotes and forwards keep their own width and no longer inflate short replies around them.
 - The chat list shows a contact's full-size picture when their thumbnail fetch missed, instead of bare initials while Contact info already has the photo.

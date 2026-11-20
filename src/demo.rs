@@ -2891,6 +2891,27 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.scroll_to_bottom = true;
             }
             "media-album" => media_album_sample(app, true),
+            "bridge-album" | "bridge-album-before" => {
+                // One bridge message with three attachments, through the real
+                // Beeper mapping; the "before" page truncates to the first
+                // attachment, what the old single-message mapping showed.
+                let chat = SAMPLES[0].id;
+                let mut rows = crate::backend::beeper::multi_attachment_demo(chat);
+                for (index, row) in rows.iter_mut().enumerate() {
+                    row.thumbnail = Some(sample_thumbnail(index as u32 + 10));
+                }
+                if part == "bridge-album-before" {
+                    rows.truncate(1);
+                    if let Some(first) = rows.first_mut()
+                        && let Some(media) = first.content.media_mut()
+                    {
+                        media.album = None;
+                    }
+                }
+                app.conversations.entry(chat.into()).or_default().messages = rows;
+                app.open_chat = Some(chat.into());
+                app.scroll_to_bottom = true;
+            }
             "media-album-failed" => {
                 media_album_sample(app, true);
                 let messages = &mut app.conversations.get_mut(SAMPLES[0].id).unwrap().messages;
@@ -9698,6 +9719,8 @@ mod tests {
             "carousel-viewer",
             "media-album",
             "media-album-before",
+            "bridge-album",
+            "bridge-album-before",
             "media-album-oversized",
             "media-album-oversized,light",
             "media-album-midnight",

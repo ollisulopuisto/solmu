@@ -1,5 +1,41 @@
 # Work log
 
+## 2026-11-19: Beeper bridge messages show every attachment (fix/beeper-multi-attachment-messages)
+
+Olli reported bridge messages with several attachments showing only the
+first. The Beeper API delivers a multi-attachment send as ONE wire message
+with an attachments array, and attachment_content() mapped only
+attachments.first(). map_messages() now splits such an event into one row
+per usable attachment sharing the bridge id as their album, so the existing
+album row draws them together; the first part keeps the bridge id, caption,
+quote, reactions, mentions and edit mark, later parts get "{wire}#att<n>"
+ids (model::attachment_part / attachment_part_id) that resolve back to the
+bridge message and their own attachment index. Boundaries resolve the part
+id: get_message (edit, react, delete identity checks, forward planning,
+quote resolution), the reaction/edit/delete URLs and emitted MessageDeleted
+(delete of any part removes the whole bridge message; app-side the delete
+event removes every part and moves the cursor past the album), the media
+worker (a part downloads its own attachment via download_media_at's
+existing index parameter), and replyToMessageID on send. Poll notifications
+fire once per bridge message, not per part. Viewer gallery and the
+shared-items panel list every part. No local compile on this box (no GUI
+toolchain); fmt/clippy/tests run in CI, plus an evidence workflow with
+failing-first test proof and before/after demo captures (bridge-album page
+through the real mapper, synthetic content only). No merge by the author.
+
+Devin review round one: forwarding a chosen part now validates against the
+bridge id and sends only that attachment instead of failing the identity
+check or expanding to the whole set; a jump to an unloaded later part
+compares bridge ids so it stops on the right page; selecting several parts
+of one bridge message for delete coalesces to success per part when the
+first delete's tombstone answers the rest; poll notifications pick the
+first displayed row per bridge message (the first usable attachment is not
+always attachment 0) and quote jumps land on it through
+Conversation::message_or_first_part; the viewer gallery orders a message's
+parts by attachment index instead of id text ("#att10" after "#att2").
+Regression tests cover each, including a mock-server tombstone delete and a
+mock-server forward of "album-1#att2" through planning and submission.
+
 ## 2026-11-19: Avatar crop editor with macOS face centring (feat/avatar-crop-reframe)
 
 Branch feat/avatar-crop-reframe off main 7d4b87a, version 26.11.2. The
@@ -618,3 +654,32 @@ keyboard-navigation mode, so offscreen placeholders scroll into view. Added
 a small-scroll-area regression that tabs to a placeholder below the viewport.
 No appearance change; prior inspected synthetic captures remain representative.
 Local Rust execution unavailable; CI must validate this regression.
+
+
+## 2026-11-19: Fix PR #402 CI (clippy + album viewer regression)
+
+- Clippy: the `Api::download_media` convenience wrapper is only called by
+  unit tests, so `cargo clippy` flagged it as dead code. Marked it
+  `#[cfg(test)]`.
+- `the_album_follows_a_chat_while_the_viewer_is_open`: the rewritten
+  `MessageDeleted` handler collected removed ids only from the loaded
+  conversation, so a message present only in the viewer's album (the
+  fixture's case, and real chats whose page is not loaded) stayed in the
+  viewer. The handler now also collects matching ids from `viewer_media`
+  before forgetting them.
+
+## 2026-11-19: Keep the selected attachment across forward retries (Devin security finding)
+
+Devin's re-review found that a failed plan dropped the attachment selection:
+`plan_forwards` canonicalized the source id and only then fetched the message,
+so a fetch failure left the retried item with neither its suffix nor
+`item.attachment`, and the retry expanded to every attachment. The selection
+is now recorded on the item before the fallible fetch, and a regression test
+drives a failed plan followed by a retry through the mock server.
+
+## 2026-11-20: Remove the bridge album evidence workflow before merge
+
+Owner decision: the per-PR evidence workflows are not kept. The
+`bridge-album-evidence.yml` workflow (failing-first test plus before/after
+captures in both themes) served its purpose on this PR and is removed before
+merge; the mapping and regression tests it proved remain in normal CI.

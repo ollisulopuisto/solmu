@@ -356,6 +356,18 @@ impl Conversation {
     pub fn message(&self, id: &str) -> Option<&Message> {
         self.messages.iter().find(|message| message.id == id)
     }
+
+    /// The row a bridge-level id lands on: the exact row, or the first
+    /// displayed part when the id names a bridge message split into one row
+    /// per attachment. Quote and search jumps name the bridge id.
+    pub fn message_or_first_part(&self, id: &str) -> Option<&Message> {
+        self.message(id).or_else(|| {
+            self.messages
+                .iter()
+                .filter(|message| crate::model::attachment_part(&message.id).0 == id)
+                .min_by_key(|message| crate::model::attachment_part(&message.id).1)
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -5831,6 +5843,10 @@ impl App {
                 }
             }
             Event::MessageDeleted { chat, id } => {
+                // A bridge-level deletion names the shared message id: every
+                // split part of a multi-attachment message goes with it.
+                let gone =
+                    |message: &str| message == id || crate::model::attachment_part(message).0 == id;
                 // The current message deleted, the list's cursor goes to the
                 // one after it, or before it when it was the newest, so the
                 // reader stays where they were rather than at the newest.
@@ -5838,18 +5854,23 @@ impl App {
                     let at = conversation
                         .messages
                         .iter()
-                        .position(|message| message.id == id)?;
-                    conversation
-                        .messages
-                        .get(at + 1)
+                        .position(|message| gone(&message.id))?;
+                    conversation.messages[at + 1..]
+                        .iter()
+                        .find(|message| !gone(&message.id))
                         .or_else(|| {
-                            at.checked_sub(1)
-                                .and_then(|at| conversation.messages.get(at))
+                            conversation.messages[..at]
+                                .iter()
+                                .rev()
+                                .find(|message| !gone(&message.id))
                         })
                         .map(|message| message.id.clone())
                 });
                 if live
-                    && self.message_cursor.get(&chat) == Some(&id)
+                    && self
+                        .message_cursor
+                        .get(&chat)
+                        .is_some_and(|cursor| gone(cursor))
                     && let Some(neighbour) = neighbour
                 {
                     // The followed message deleted, the cursor's new message
@@ -5858,34 +5879,58 @@ impl App {
                         .cursor_followed
                         .as_ref()
                         .is_some_and(|(followed_chat, followed)| {
-                            *followed_chat == chat && *followed == id
+                            *followed_chat == chat && gone(followed)
                         })
                     {
                         self.cursor_followed = Some((chat.clone(), neighbour.clone()));
                     }
                     self.message_cursor.insert(chat.clone(), neighbour);
                 }
-                if let Some(conversation) = self.conversations.get_mut(&chat) {
-                    conversation.messages.retain(|message| message.id != id);
-                    conversation.width_book.invalidate(&id);
+                let mut removed = if let Some(conversation) = self.conversations.get_mut(&chat) {
+                    let removed: Vec<String> = conversation
+                        .messages
+                        .iter()
+                        .filter(|message| gone(&message.id))
+                        .map(|message| message.id.clone())
+                        .collect();
+                    conversation.messages.retain(|message| !gone(&message.id));
+                    for id in &removed {
+                        conversation.width_book.invalidate(id);
+                    }
+                    removed
+                } else {
+                    Vec::new()
+                };
+                // The viewer's album can hold messages the loaded conversation
+                // does not, and split parts of the same bridge message.
+                if !self.events_hidden && self.viewer_media_chat.as_deref() == Some(chat.as_str()) {
+                    for item in self.viewer_media.iter().filter(|item| gone(&item.id)) {
+                        if !removed.contains(&item.id) {
+                            removed.push(item.id.clone());
+                        }
+                    }
                 }
                 if live && self.editing.as_deref() == Some(id.as_str()) {
                     self.editing = None;
                     self.composer.clear();
                 }
-                self.forget_viewer_item(&chat, &id);
+                for id in &removed {
+                    self.forget_viewer_item(&chat, id);
+                }
                 // A photo that left the chat leaves the album on screen.
                 self.refresh_viewer_album(&chat);
                 // A deleted message leaves the line under the header and
                 // the mark on its bubble behind.
                 if let Some(pins) = self.chat_pins.get_mut(&chat) {
-                    pins.retain(|pin| pin.id != id);
+                    pins.retain(|pin| !gone(&pin.id));
                 }
                 if let Some(ids) = self.pins.get_mut(&chat) {
-                    ids.remove(&id);
+                    ids.retain(|pinned| !gone(pinned));
                 }
                 // A deleted message leaves the starred list.
-                self.forget_star(&chat, &id);
+                for id in &removed {
+                    self.forget_star(&chat, id);
+                }
             }
             Event::ChatRemoved { chat } => {
                 self.forget_chat(&chat);
@@ -12701,6 +12746,14 @@ impl App {
                 let Some(chat) = self.open_chat.clone() else {
                     return;
                 };
+                // A quote jump names the bridge message; the list shows the
+                // row of its first usable attachment.
+                let id = self
+                    .conversations
+                    .get(&chat)
+                    .and_then(|conversation| conversation.message_or_first_part(&id))
+                    .map(|message| message.id.clone())
+                    .unwrap_or(id);
                 let load = {
                     let conversation = self.conversations.entry(chat.clone()).or_default();
                     if conversation.message(&id).is_none() && !conversation.loading_older {
@@ -22998,6 +23051,56 @@ mod tests {
         );
     }
 
+    /// A bridge-level deletion names the shared message id: every split part
+    /// of a multi-attachment message leaves the conversation with it.
+    #[test]
+    fn a_deleted_bridge_message_removes_all_its_parts() {
+        let mut app = app();
+        let (backend, events) = Backend::detached();
+        app.backend = backend;
+        let chat = "1@s.whatsapp.net";
+        app.chats.push(Chat::new(chat.into(), "Fixture".into()));
+        let part = |id: &str, timestamp: i64| {
+            let mut row = message(chat, id, timestamp);
+            row.content = Content::Image {
+                caption: None,
+                motion: None,
+                media: crate::model::Media {
+                    mime: "image/jpeg".into(),
+                    size: 0,
+                    width: None,
+                    height: None,
+                    album: Some("album-1".into()),
+                    path: None,
+                    state: Default::default(),
+                },
+            };
+            row
+        };
+        app.conversations.entry(chat.into()).or_default().merge(
+            vec![
+                part("album-1", 1),
+                part("album-1#att1", 2),
+                part("album-1#att2", 3),
+                message(chat, "other", 4),
+            ],
+            false,
+        );
+        events
+            .send(Event::MessageDeleted {
+                chat: chat.to_owned(),
+                id: "album-1".into(),
+            })
+            .unwrap();
+        app.handle_events();
+        let messages = &app.conversations[chat].messages;
+        assert_eq!(
+            messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            vec!["other"],
+            "the whole album goes, unrelated rows stay"
+        );
+    }
+
     /// The banner reads a cache, so a delete, a clear or a lock has to take
     /// the pinned words off it: the archive join would no longer return them.
     #[test]
@@ -23798,6 +23901,40 @@ mod tests {
             forwarded: false,
             thumbnail: None,
         }
+    }
+
+    #[test]
+    fn a_quote_jump_lands_on_the_first_part_of_a_split_message() {
+        let mut conversation = Conversation::default();
+        conversation.merge(
+            vec![
+                message("chat", "album-1#att1", 100),
+                message("chat", "album-1#att2", 100),
+                message("chat", "plain", 101),
+            ],
+            false,
+        );
+        // When attachment 0 was unusable no row carries the bridge id itself.
+        assert!(conversation.message("album-1").is_none());
+        assert_eq!(
+            conversation
+                .message_or_first_part("album-1")
+                .map(|m| m.id.as_str()),
+            Some("album-1#att1")
+        );
+        assert_eq!(
+            conversation
+                .message_or_first_part("album-1#att2")
+                .map(|m| m.id.as_str()),
+            Some("album-1#att2")
+        );
+        assert_eq!(
+            conversation
+                .message_or_first_part("plain")
+                .map(|m| m.id.as_str()),
+            Some("plain")
+        );
+        assert!(conversation.message_or_first_part("elsewhere").is_none());
     }
 
     /// Bridge participant names resolve members who never sent a loaded
