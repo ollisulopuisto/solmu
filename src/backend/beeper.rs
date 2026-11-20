@@ -2703,8 +2703,9 @@ fn plain_rich_text(raw: &str) -> String {
                                     // just the text; repeating the address in
                                     // parentheses would show such links twice.
                                     let shows_address = label_start.is_some_and(|start| {
-                                        let label =
-                                            crate::util::without_literal_hints(out[start..].trim());
+                                        let label = crate::literal_hints::without_literal_hints(
+                                            out[start..].trim(),
+                                        );
                                         // The word the label sits in: the renderer
                                         // judges `run_widths.rs` as a whole.
                                         let word_start = out[..start]
@@ -2712,8 +2713,9 @@ fn plain_rich_text(raw: &str) -> String {
                                             .rev()
                                             .find(|(_, c)| c.is_whitespace())
                                             .map_or(0, |(at, c)| at + c.len_utf8());
-                                        let word =
-                                            crate::util::without_literal_hints(&out[word_start..]);
+                                        let word = crate::literal_hints::without_literal_hints(
+                                            &out[word_start..],
+                                        );
                                         let bare = url
                                             .strip_prefix("https://")
                                             .or_else(|| url.strip_prefix("http://"))
@@ -8316,12 +8318,9 @@ mod tests {
         ] {
             let mapped = plain_rich_text(html);
             assert!(crate::merged::search_matches(&mapped, query, "", ""));
-            assert_eq!(
-                crate::model::Content::text(&mapped)
-                    .text_matching(query)
-                    .as_deref(),
-                Some(query)
-            );
+            let content = crate::model::Content::text(&mapped);
+            let snippet = content.text_matching(query).expect("matching snippet");
+            assert_eq!(crate::literal_hints::without_literal_hints(&snippet), query);
         }
     }
 

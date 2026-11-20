@@ -3422,10 +3422,11 @@ pub(crate) mod tests {
                     .len(),
                 1
             );
-            assert!(all[0].content.text_matching(query).unwrap().contains(query));
+            let snippet = all[0].content.text_matching(query).unwrap();
+            assert!(crate::markup::plain(&snippet, &[]).contains(query));
         }
         assert_eq!(
-            crate::util::without_literal_hints("a\u{2063}b"),
+            crate::literal_hints::without_literal_hints("a\u{2063}b"),
             "a\u{2063}b"
         );
     }

@@ -1426,8 +1426,11 @@ impl Content {
         self.searchable_fields()
             .into_iter()
             .flat_map(str::lines)
-            .map(crate::util::without_literal_hints)
-            .find(|line| line.to_lowercase().contains(&needle))
+            .find(|line| {
+                crate::literal_hints::without_literal_hints(line)
+                    .to_lowercase()
+                    .contains(&needle)
+            })
             .map(|line| line.trim().to_owned())
     }
 

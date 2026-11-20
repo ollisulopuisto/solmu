@@ -939,3 +939,12 @@ native archive global/scoped-search tests. Actual production SQL was executed
 against text, caption, URL and literal-marker rows. Native test-target check
 passes; portable suite with actual parser/search functions passes. Full native
 archive-test execution still awaits CI. Rendering representation is unchanged.
+
+#437 second review follow-up: text_matching now normalizes only its matching
+predicate and retains the protected source line for preview_line's one parse.
+Added a native application regression through text_matching and preview_line
+for literal stars, standalone backticks and filenames. The shared normalizer
+is now a small real module staged by the portable checker instead of a helper
+hidden behind its util stub. The repository's exact portable staging command
+passes438 tests; native test-target compilation passes. Retargeted to main
+after #434 merged; retained all follow-up fixes while reconciling its squash.

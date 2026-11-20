@@ -30579,6 +30579,42 @@ mod name_tests {
 
     /// Checks that mention names and preview tokens resolve consistently in synthetic messages.
     #[test]
+    fn search_snippets_preserve_literal_markers_through_preview_parsing() {
+        let app = app();
+        for (body, query) in [
+            ("*\u{2063}literal*\u{2063}", "*literal*"),
+            ("`\u{2063}`\u{2063}`\u{2063}", "```"),
+            ("run_\u{2063}widths.rs", "run_widths.rs"),
+        ] {
+            let message = Message {
+                id: "literal-preview".into(),
+                chat: "1@s.whatsapp.net".into(),
+                sender: "1@s.whatsapp.net".into(),
+                sender_name: None,
+                from_me: false,
+                timestamp: 0,
+                content: Content::text(body),
+                status: Delivery::None,
+                delivered_at: None,
+                read_at: None,
+                quoted: None,
+                reactions: Vec::new(),
+                history_order: None,
+                edited: false,
+                mentions: Vec::new(),
+                forwarded: false,
+                thumbnail: None,
+            };
+            let snippet = message.text_matching(query).expect("query matches");
+            assert_eq!(
+                snippet, body,
+                "keep protected source for the preview parser"
+            );
+            assert_eq!(app.preview_line(&snippet, &message), query);
+        }
+    }
+
+    #[test]
     fn mentions_use_our_own_name_and_previews_resolve_tokens() {
         let app = app();
         assert_eq!(app.mention_name("15550001111@s.whatsapp.net"), "Carmine");
