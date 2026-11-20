@@ -10846,6 +10846,51 @@ mod tests {
         press_at(app, ctx, pos);
     }
 
+    #[test]
+    fn audience_results_own_escape_and_block_background_composer_enter() {
+        for send_by_enter in [false, true] {
+            let mut app = app();
+            app.settings.enter_sends = send_by_enter;
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            apply_flags(&mut app, Some("audience-results"));
+            app.composer = "background draft".into();
+            ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("composer-text")));
+            for key in [egui::Key::Enter, egui::Key::Tab, egui::Key::Enter] {
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            assert_eq!(app.composer, "background draft");
+            assert!(!app.actions.iter().any(|action| matches!(
+                action,
+                crate::model::Action::SendText { .. } | crate::model::Action::SendPending { .. }
+            )));
+            let chat = app.open_chat.clone();
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            assert!(!app.audience_queue.as_ref().unwrap().visible);
+            assert_eq!(app.open_chat, chat);
+        }
+    }
+
     fn new_group_dialog() -> (App, egui::Context) {
         let mut app = app();
         app.backend.record_demo_commands();

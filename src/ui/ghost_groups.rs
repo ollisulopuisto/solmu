@@ -533,6 +533,24 @@ mod tests {
     }
 
     #[test]
+    fn one_recipient_without_prepared_content_opens_existing_draft_unchanged() {
+        let (mut app, _root) = app_with(&["a"]);
+        let member = super::super::flat_groups::member(&app, &app.chats[0]);
+        app.open_chat = Some("a".into());
+        app.composer = "existing".into();
+        app.apply(
+            Action::PrepareNewMessage {
+                member,
+                text: String::new(),
+                files: vec![],
+            },
+            &egui::Context::default(),
+        );
+        assert_eq!(app.composer, "existing");
+        assert_eq!(app.open_chat.as_deref(), Some("a"));
+        assert!(app.dialog.is_none());
+    }
+    #[test]
     fn one_recipient_opens_with_prepared_text_and_file_without_sending() {
         let (mut app, _root) = app_with(&["a"]);
         let member = super::super::flat_groups::member(&app, &app.chats[0]);

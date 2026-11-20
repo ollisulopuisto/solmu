@@ -10054,6 +10054,16 @@ impl App {
                 {
                     return;
                 }
+                if text.is_empty() && files.is_empty() {
+                    // Navigating to an existing chat must keep its draft.
+                    self.apply(Action::OpenChat(member.chat.clone()), ctx);
+                    if self.open_chat.as_deref() == Some(&member.chat) {
+                        self.new_message = Default::default();
+                        self.dialog = None;
+                        self.focus_composer = true;
+                    }
+                    return;
+                }
                 if self.editing.is_some()
                     || self.parked_draft(&member.chat)
                     || (self.open_chat.as_deref() == Some(&member.chat)

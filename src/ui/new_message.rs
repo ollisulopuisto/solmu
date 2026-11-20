@@ -176,7 +176,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     let mut done = false;
     ui.horizontal_wrapped(|ui| {
-        let label = if draft.members.len() == 1 {
+        let label = if draft.members.is_empty() {
+            gettext(locale, "Choose recipients").into_owned()
+        } else if draft.members.len() == 1 {
             gettext(locale, "Open chat").into_owned()
         } else {
             ngettext(
