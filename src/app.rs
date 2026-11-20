@@ -1989,8 +1989,8 @@ impl App {
         let abandoned =
             (self.adding_account && !self.is_linked()).then(|| self.account().id.clone());
         self.park_composer();
-        self.forward_dialog_hidden =
-            matches!(self.dialog, Some(Dialog::Forward { .. })) || self.composed_forward_running();
+        self.forward_dialog_hidden = matches!(self.dialog, Some(Dialog::Forward { .. }))
+            || (self.composed_forward_running() && !self.forward_view_closed);
         self.clear_account_ui();
         self.active = index;
         self.adding_account = false;
@@ -1998,7 +1998,8 @@ impl App {
             self.remove_account(abandoned);
         }
         self.restore_composer();
-        if (self.forward_dialog_hidden || self.composed_forward_running())
+        if (self.forward_dialog_hidden
+            || (self.composed_forward_running() && !self.forward_view_closed))
             && let Some(first) = self.forward_items.first()
         {
             let chat = first.source_chat.clone();
@@ -4900,6 +4901,19 @@ impl App {
                     }
                 }
             }
+            Event::BeeperForwardRetryPrepared { generation, items } => {
+                if generation == self.forward_generation {
+                    for (index, item) in items {
+                        if index == self.forward_items.len() {
+                            self.forward_items.push(item);
+                        } else if let Some(previous) = self.forward_items.get_mut(index)
+                            && matches!(previous.state, crate::composed_forward::State::Waiting)
+                        {
+                            *previous = item;
+                        }
+                    }
+                }
+            }
             Event::BeeperForwardPrepared { generation, items } => {
                 if generation == self.forward_generation {
                     self.forward_items = items;
@@ -4935,6 +4949,22 @@ impl App {
                     self.settings.beeper.forwarded_messages.push(mark);
                     self.mark_settings_dirty();
                 }
+            }
+            Event::BeeperForwardFeedback {
+                origin,
+                account,
+                chat,
+                pending,
+                state,
+            } => {
+                crate::forward_results::feedback(
+                    &mut self.forward_items,
+                    &origin,
+                    &account,
+                    &chat,
+                    &pending,
+                    state,
+                );
             }
             Event::BeeperForwardResolved {
                 origin,
@@ -11096,6 +11126,49 @@ impl App {
                 }
             }
             Action::BackToForwardSelection => self.forward_reviewing = false,
+            Action::ShowForwardResults => {
+                self.forward_view_closed = false;
+                if let Some(first) = self.forward_items.first() {
+                    let chat = first.source_chat.clone();
+                    let mut messages = Vec::new();
+                    for item in &self.forward_items {
+                        if !messages.contains(&item.source_message) {
+                            messages.push(item.source_message.clone());
+                        }
+                    }
+                    self.dialog = Some(Dialog::Forward { chat, messages });
+                }
+            }
+            Action::HideForwardResults => {
+                if matches!(self.dialog, Some(Dialog::Forward { .. })) {
+                    self.dialog = None;
+                    self.forward_dialog_hidden = false;
+                    self.forward_view_closed = true;
+                }
+            }
+            Action::RetryForwardRecipient {
+                origin,
+                account,
+                chat,
+            } => {
+                if self.composed_forward_running() {
+                    return;
+                }
+                let items = crate::forward_results::retry_recipient(
+                    &mut self.forward_items,
+                    &origin,
+                    &account,
+                    &chat,
+                );
+                if !items.is_empty() {
+                    self.backend.send(Command::BeeperForward {
+                        generation: self.forward_generation,
+                        prepared: true,
+                        append_at: self.forward_items.len(),
+                        items,
+                    });
+                }
+            }
             Action::RetryComposedForward => {
                 if !self.forward_items.iter().any(|item| {
                     matches!(
@@ -11114,12 +11187,21 @@ impl App {
                 }) {
                     return;
                 }
-                crate::composed_forward::retry_failed(&mut self.forward_items);
+                let items = crate::composed_forward::prepare_retry(&mut self.forward_items);
                 self.backend.send(Command::BeeperForward {
                     generation: self.forward_generation,
-                    prepared: false,
-                    items: self.forward_items.iter().cloned().enumerate().collect(),
+                    prepared: true,
+                    append_at: self.forward_items.len(),
+                    items,
                 });
+            }
+            Action::ForwardToSelected => {
+                if self.forward_items.is_empty()
+                    && matches!(self.dialog, Some(Dialog::Forward { .. }))
+                {
+                    self.forward_reviewing = true;
+                    self.apply(Action::ConfirmForward, ctx);
+                }
             }
             Action::ConfirmForward => {
                 if !self.forward_items.is_empty() {
@@ -11172,6 +11254,7 @@ impl App {
                             self.backend.send(Command::BeeperForward {
                                 generation: self.forward_generation,
                                 prepared: false,
+                                append_at: 0,
                                 items: self.forward_items.iter().cloned().enumerate().collect(),
                             });
                         }
@@ -12514,6 +12597,7 @@ impl App {
                     self.location_draft.clear();
                 }
                 if let Dialog::Forward { chat, messages } = &dialog {
+                    self.forward_view_closed = false;
                     self.forward_search.clear();
                     self.forward_recipients.clear();
                     self.forward_reviewing = false;
@@ -12549,7 +12633,11 @@ impl App {
             }
             Action::CloseDialog => {
                 if self.composed_forward_running() {
-                    self.toast_error("The forward batch is still running. Wait for its results.");
+                    if matches!(self.dialog, Some(Dialog::Forward { .. })) {
+                        self.dialog = None;
+                        self.forward_dialog_hidden = false;
+                        self.forward_view_closed = true;
+                    }
                     return;
                 }
                 self.cancel_contact_dialog_request();
@@ -17817,9 +17905,12 @@ mod tests {
             state: crate::composed_forward::State::Sending,
         });
         app.apply(Action::CloseDialog, &ctx);
-        assert_eq!(app.dialog, Some(dialog.clone()));
+        assert!(app.dialog.is_none());
+        assert!(app.forward_view_closed);
         app.apply(Action::ShowDialog(forward_dialog(&["another"])), &ctx);
-        assert_eq!(app.dialog, Some(dialog));
+        assert!(app.dialog.is_none());
+        app.apply(Action::ShowForwardResults, &ctx);
+        assert!(app.dialog.is_some());
         app.apply(Action::ConfirmForward, &ctx);
         assert!(commands.try_recv().is_err());
         app.forward_items[0].state = crate::composed_forward::State::Accepted {
@@ -17971,17 +18062,25 @@ mod tests {
             crate::composed_forward::State::FailedBeforeSend("download".into());
         app.forward_items[2].state = crate::composed_forward::State::Uncertain("timeout".into());
         app.apply(Action::RetryComposedForward, &ctx);
-        let Command::BeeperForward { items, .. } = commands.try_recv().unwrap() else {
+        let Command::BeeperForward {
+            items, prepared, ..
+        } = commands.try_recv().unwrap()
+        else {
             panic!("expected retry");
         };
-        assert_eq!(items.len(), 3);
+        assert!(
+            prepared,
+            "retry must not replan or reindex accepted results"
+        );
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].0, 1);
+        assert_eq!(items[0].1.state, crate::composed_forward::State::Waiting);
         assert!(matches!(
-            items[0].1.state,
+            app.forward_items[0].state,
             crate::composed_forward::State::Accepted { .. }
         ));
-        assert_eq!(items[1].1.state, crate::composed_forward::State::Waiting);
         assert!(matches!(
-            items[2].1.state,
+            app.forward_items[2].state,
             crate::composed_forward::State::Uncertain(_)
         ));
     }

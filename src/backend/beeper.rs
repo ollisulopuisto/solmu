@@ -3960,10 +3960,12 @@ pub fn run(
             }
         })
         .expect("pending media worker");
-    let (forward_tx, forward_rx) =
-        std::sync::mpsc::sync_channel::<(u64, bool, Vec<(usize, crate::composed_forward::Item)>)>(
-            1,
-        );
+    let (forward_tx, forward_rx) = std::sync::mpsc::sync_channel::<(
+        u64,
+        bool,
+        usize,
+        Vec<(usize, crate::composed_forward::Item)>,
+    )>(1);
     let (forward_accepted_tx, forward_accepted_rx) =
         std::sync::mpsc::channel::<(String, String, String)>();
     let forward_api = api.clone();
@@ -3975,7 +3977,7 @@ pub fn run(
         .name("beeper-forward".into())
         .spawn(move || {
             use crate::composed_forward::State;
-            while let Ok((generation, prepared, mut items)) = forward_rx.recv() {
+            while let Ok((generation, prepared, append_at, mut items)) = forward_rx.recv() {
                 if !prepared {
                     let expanded = forward_api
                         .plan_forwards(items.into_iter().map(|(_, item)| item).collect());
@@ -3985,6 +3987,15 @@ pub fn run(
                     });
                     forward_waker.wake();
                     items = expanded.into_iter().enumerate().collect();
+                } else {
+                    items = crate::forward_results::expand_retry(items, append_at, |item| {
+                        forward_api.plan_forwards(vec![item])
+                    });
+                    let _ = forward_events.send(Event::BeeperForwardRetryPrepared {
+                        generation,
+                        items: items.clone(),
+                    });
+                    forward_waker.wake();
                 }
                 for (index, item) in items {
                     if !matches!(item.state, State::Waiting) {
@@ -4010,14 +4021,16 @@ pub fn run(
                                 chat: item.destination.clone(),
                                 message: accepted.pending_id.clone(),
                             });
+                            // Progress must enter the UI event queue before the
+                            // pending identity can resolve on the worker loop.
+                            send_state(State::Accepted {
+                                pending_id: accepted.pending_id.clone(),
+                            });
                             let _ = forward_accepted_tx.send((
                                 item.destination.clone(),
-                                accepted.pending_id.clone(),
+                                accepted.pending_id,
                                 item.destination_account.clone(),
                             ));
-                            send_state(State::Accepted {
-                                pending_id: accepted.pending_id,
-                            });
                         }
                         Err(state) => send_state(state),
                     }
@@ -4695,10 +4708,13 @@ pub fn run(
                 Command::BeeperForward {
                     generation,
                     prepared,
+                    append_at,
                     items,
                 } => {
-                    if let Err(error) = forward_tx.try_send((generation, prepared, items)) {
-                        let (generation, _, items) = match error {
+                    if let Err(error) =
+                        forward_tx.try_send((generation, prepared, append_at, items))
+                    {
+                        let (generation, _, _, items) = match error {
                             std::sync::mpsc::TrySendError::Full(value)
                             | std::sync::mpsc::TrySendError::Disconnected(value) => value,
                         };
@@ -6191,6 +6207,23 @@ fn poll_forward_mark(
                 chat: chat.clone(),
             });
         }
+        if confirmed || failed {
+            emit(Event::BeeperForwardFeedback {
+                origin: api.base_url.clone(),
+                account: account.into(),
+                chat: chat.clone(),
+                pending: pending.into(),
+                state: if confirmed {
+                    crate::composed_forward::State::Confirmed {
+                        message_id: wire.id.clone(),
+                    }
+                } else {
+                    crate::composed_forward::State::Uncertain(
+                        "Bridge reports failure; check chat history before sending again".into(),
+                    )
+                },
+            });
+        }
         if (confirmed || failed) && !wire.id.is_empty() {
             emit(Event::BeeperForwardResolved {
                 origin: api.base_url.clone(),
@@ -6217,6 +6250,15 @@ fn poll_forward_mark(
     }
     // Timeout never prunes persisted identity: a later startup resolves it.
     if elapsed >= Duration::from_secs(60) {
+        emit(Event::BeeperForwardFeedback {
+            origin: api.base_url.clone(),
+            account: account.into(),
+            chat: chat.clone(),
+            pending: pending.into(),
+            state: crate::composed_forward::State::Uncertain(
+                "Confirmation timed out; check chat history before sending again".into(),
+            ),
+        });
         emit(Event::Info(
             "Beeper forward confirmation timed out; check history before retrying".into(),
         ));
@@ -7824,6 +7866,28 @@ mod tests {
                 "{status}"
             );
             assert_eq!(
+                events.iter().any(|e| matches!(
+                    e,
+                    Event::BeeperForwardFeedback {
+                        state: crate::composed_forward::State::Confirmed { .. },
+                        ..
+                    }
+                )),
+                confirmed,
+                "{status}"
+            );
+            assert_eq!(
+                events.iter().any(|e| matches!(
+                    e,
+                    Event::BeeperForwardFeedback {
+                        state: crate::composed_forward::State::Uncertain(_),
+                        ..
+                    }
+                )),
+                failed,
+                "{status}"
+            );
+            assert_eq!(
                 events
                     .iter()
                     .any(|e| matches!(e, Event::BeeperForwardResolved { .. })),
@@ -7832,6 +7896,31 @@ mod tests {
             );
             server.join().unwrap();
         }
+    }
+
+    #[test]
+    fn composed_forward_timeout_is_unknown_and_never_confirmed() {
+        let (api, server) = forward_fixture(vec![(
+            "GET /v1/chats/target/messages/pending ",
+            404,
+            "{}".into(),
+        )]);
+        let events = Mutex::new(Vec::new());
+        assert!(!poll_forward_mark(
+            &api,
+            &"target".into(),
+            "pending",
+            "signal",
+            Duration::from_secs(61),
+            &|e| events.lock().unwrap().push(e)
+        ));
+        let events = events.into_inner().unwrap();
+        assert!(events.iter().any(|e|matches!(e,Event::BeeperForwardFeedback{pending,state:crate::composed_forward::State::Uncertain(_),..} if pending=="pending")));
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::BeeperForwardResolved { .. } | Event::BeeperSendConfirmed { .. }
+        )));
+        server.join().unwrap();
     }
 
     #[test]
@@ -7928,14 +8017,20 @@ mod tests {
             pending_id: "previous".into(),
         };
         items.insert(0, accepted.clone());
-        crate::composed_forward::retry_failed(&mut items);
-        let expanded = api.plan_forwards(items);
-        assert_eq!(expanded.len(), 3);
-        assert_eq!(expanded[0], accepted);
-        assert_eq!(expanded[1].attachment, Some(0));
-        assert_eq!(expanded[2].attachment, Some(1));
-        assert_eq!(expanded[2].text.lines().count(), 1);
-        assert!(expanded[1].planned && expanded[2].planned);
+        let retry = crate::composed_forward::prepare_retry(&mut items);
+        assert_eq!(retry.len(), 1);
+        assert_eq!(retry[0].0, 1);
+        let expanded = crate::forward_results::expand_retry(retry, items.len(), |item| {
+            api.plan_forwards(vec![item])
+        });
+        assert_eq!(expanded.len(), 2);
+        assert_eq!(items[0], accepted);
+        assert_eq!(expanded[0].0, 1);
+        assert_eq!(expanded[1].0, 2);
+        assert_eq!(expanded[0].1.attachment, Some(0));
+        assert_eq!(expanded[1].1.attachment, Some(1));
+        assert_eq!(expanded[1].1.text.lines().count(), 1);
+        assert!(expanded[0].1.planned && expanded[1].1.planned);
         server.join().unwrap();
     }
 
