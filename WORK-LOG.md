@@ -778,3 +778,8 @@ again and native all-target/all-feature Clippy passes. Private actual app
 before-dark, after-dark and narrow-light pixels now inspected after a reduced
 debug binary build. Composer shows Markdown hyphens and bold markers rather than
 rendered bullets. No screenshots published; per-PR media gate remains held.
+
+Added an executed local HTTP wire regression: fresh POST and edit PUT both
+submit the same Markdown text byte-for-byte in the JSON text field, never
+display bullets/renderer markers. 413 portable tests pass; Clippy passes.
+This verifies Solmu's transport contract, not Beeper's downstream conversion.
