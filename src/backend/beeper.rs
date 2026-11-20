@@ -2435,6 +2435,20 @@ fn decode_entities(text: &str) -> String {
     decoded
 }
 
+/// Strip only the mapper's literal-marker hints for label comparison.
+/// Rendering and copy resolve the same hints in markup::inline.
+fn without_literal_hints(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        out.push(ch);
+        if matches!(ch, '*' | '_' | '~' | '`') && chars.peek() == Some(&'\u{2063}') {
+            chars.next();
+        }
+    }
+    out
+}
+
 fn plain_rich_text(raw: &str) -> String {
     let lower = raw.to_ascii_lowercase();
     let known = [
@@ -2703,7 +2717,7 @@ fn plain_rich_text(raw: &str) -> String {
                                     // just the text; repeating the address in
                                     // parentheses would show such links twice.
                                     let shows_address = label_start.is_some_and(|start| {
-                                        let label = out[start..].trim();
+                                        let label = without_literal_hints(out[start..].trim());
                                         // The word the label sits in: the renderer
                                         // judges `run_widths.rs` as a whole.
                                         let word_start = out[..start]
@@ -2711,7 +2725,7 @@ fn plain_rich_text(raw: &str) -> String {
                                             .rev()
                                             .find(|(_, c)| c.is_whitespace())
                                             .map_or(0, |(at, c)| at + c.len_utf8());
-                                        let word = &out[word_start..];
+                                        let word = without_literal_hints(&out[word_start..]);
                                         let bare = url
                                             .strip_prefix("https://")
                                             .or_else(|| url.strip_prefix("http://"))
@@ -2728,7 +2742,7 @@ fn plain_rich_text(raw: &str) -> String {
                                         let same_as_bare = label.trim_end_matches('/')
                                             == bare.trim_end_matches('/')
                                             && (!url.starts_with("http://")
-                                                || crate::markup::links(word).is_empty());
+                                                || crate::markup::links(&word).is_empty());
                                         label == url
                                             || label.trim_end_matches('/')
                                                 == url.trim_end_matches('/')
@@ -2865,7 +2879,8 @@ fn plain_rich_text(raw: &str) -> String {
         if blocked.is_some() || (!in_pre && !lists.is_empty() && run.trim().is_empty()) {
             continue;
         }
-        for ch in run.chars() {
+        let chars: Vec<_> = run.chars().collect();
+        for (index, &ch) in chars.iter().enumerate() {
             if in_pre {
                 pre_content.push(ch);
                 continue;
@@ -2906,6 +2921,20 @@ fn plain_rich_text(raw: &str) -> String {
                 out.push('\\');
             }
             out.push(ch);
+            // Literal HTML text is not another layer of WhatsApp markup.
+            // A nonprinting hint after literal markers lets the renderer
+            // distinguish them from the semantic markers emitted above.
+            // Native backslashes are untouched, including the shrug.
+            let shrug_underscore = ch == '_'
+                && (index
+                    .checked_sub(1)
+                    .is_some_and(|i| matches!(chars[i], '\\' | '/'))
+                    || chars
+                        .get(index + 1)
+                        .is_some_and(|c| matches!(c, '\\' | '/')));
+            if !in_code && !shrug_underscore && matches!(ch, '*' | '_' | '~' | '`') {
+                out.push('\u{2063}');
+            }
         }
     }
     // Text runs and URLs decode at emission, so `out` is already decoded:
@@ -8279,6 +8308,19 @@ mod tests {
     }
 
     #[test]
+    fn rich_html_literal_markers_are_not_reinterpreted_as_styles() {
+        assert_eq!(
+            plain_rich_text("<p>*literal* _literal_ ~literal~ `literal`</p>"),
+            "*\u{2063}literal*\u{2063} _\u{2063}literal_\u{2063} ~\u{2063}literal~\u{2063} `\u{2063}literal`\u{2063}"
+        );
+        assert_eq!(
+            plain_rich_text("<strong>real *literal*</strong>"),
+            "*real *\u{2063}literal*\u{2063}*"
+        );
+        assert_eq!(plain_rich_text("<code>*literal*</code>"), "`*literal*`");
+    }
+
+    #[test]
     fn rich_html_keeps_explicit_heading_levels() {
         assert_eq!(plain_rich_text("<h1>Heading</h1>"), "# Heading");
         assert_eq!(plain_rich_text("<h6>Heading</h6>"), "###### Heading");
@@ -12386,7 +12428,7 @@ mod tests {
             plain_rich_text(
                 r#"<a href="https://yle.fi/a/7-10106742?utm_source=a&amp;utm_medium=b">https://yle.fi/a/7-10106742?utm_source=a&amp;utm_medium=b</a>"#
             ),
-            "https://yle.fi/a/7-10106742?utm_source=a&utm_medium=b"
+            "https://yle.fi/a/7-10106742?utm_\u{2063}source=a&utm_\u{2063}medium=b"
         );
         // A trailing-slash difference still reads as the same address.
         assert_eq!(
@@ -12407,7 +12449,7 @@ mod tests {
         // with a scheme, so the text stays and the renderer decides.
         assert_eq!(
             plain_rich_text(r#"run_<a href="http://widths.rs">widths.rs</a>"#),
-            "run_widths.rs"
+            "run_\u{2063}widths.rs"
         );
         assert_eq!(
             plain_rich_text(r#"<a href="https://example.com">example.com</a>"#),

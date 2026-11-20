@@ -900,3 +900,32 @@ its CommonMark round trips. Full native Clippy hit the execution time limit
 twice, without a diagnostic; not claimed passed. Actual downstream WhatsApp
 receipt was not inspected and no real message was sent. No screenshot waiver
 for this PR assumed; separate ready PR with its missing review media noted.
+
+## Markdown fidelity audit completion,20 November
+
+The audit fixes each reported readback loss separately: heading prefixes,
+paragraph separation versus a hard break, breaks within preformatted text,
+table cells/rows without leaked HTML tags, source-whitespace-only list runs,
+reversed ordered counters (including direct-item-count defaults and minimum
+integer saturation), and literal HTML style markers. Literal characters carry
+a nonprinting renderer hint distinct from emitted semantic styles; inline
+parsing removes the hint for rendering, copy and link detection. Native
+backslashes and the shrug's slash-adjacent underscores stay untouched. Link
+label comparison strips only those marker hints before comparing destinations.
+
+Nested mixed lists and single hard breaks now reconstruct safely for editing.
+Each refusal change has a failing-first regression and safe/unsafe round-trip
+checks. Unsupported semantics still fail closed. Exact source spelling is not
+recovered; original HTML remains the source, not a second stored Markdown copy.
+
+Validation: 437 portable adapter/reverse-edit tests pass. Replacing the harness's
+markup leaf stub with extracted, unchanged production text-parser functions and
+actual mention-token helpers, plus one mapper-to-parser acceptance test, passes
+463 tests, including 25 text-parser tests. This is not a whole-app test run.
+The reverse-list and literal-marker new tests failed before their fixes. Native
+`cargo check --locked --tests -j1` passes with incremental disabled; native tests
+are compiled, not run. A preliminary check exhausted disk space; old local
+build caches were removed and the check completed. No native linking retry.
+Review screenshots and actual Beeper/WhatsApp bridge round trips remain absent;
+no new per-PR visual waiver is assumed. Existing #434 and #435 waivers do not
+cover this follow-up. No review media committed/hosted and no real sends.
