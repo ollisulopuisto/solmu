@@ -15,6 +15,8 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- Ordered lists in Beeper rich-text messages keep their numbers after sending, including nested lists and non-default starting numbers, instead of appearing as bullets. Outbound Markdown stays unchanged.
+
 - Bridge messages carrying several attachments show them all instead of only the first: the set appears as an album with its caption, and each item downloads, replies, reacts and is deleted together with the message.
 
 - Customize avatar: the Photo tab has a draggable, zoomable circular crop with live sidebar-size previews; on macOS the crop auto-centres on the detected face (native Vision, on-device) and can re-centre on demand, other platforms keep the centre crop. Existing avatars keep their look.
