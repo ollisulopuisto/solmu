@@ -2826,7 +2826,7 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
             )
         } else if let Some(last) = &chat.last {
             let mut prefix = String::new();
-            if last.from_me {
+            if last.from_me && last.reaction.is_none() {
                 let tick_rect =
                     Rect::from_center_size(pos2(x + 8.0, line_y + 8.0), Vec2::splat(16.0));
                 let delivery = super::conversation::display_delivery(
@@ -2837,7 +2837,7 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
                 );
                 widgets::ticks(ui, &palette, tick_rect, delivery);
                 x += advance_after_ticks(delivery);
-            } else if chat.is_group() {
+            } else if chat.is_group() && last.reaction.is_none() {
                 let sender = app.display_name_or(&last.sender, last.sender_name.as_deref());
                 let first = app.short_name(&last.sender, &sender);
                 prefix = format!("{first}: ");
