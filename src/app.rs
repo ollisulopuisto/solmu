@@ -4784,6 +4784,12 @@ impl App {
                 member,
                 state,
             } => {
+                if self.audience_queue.as_mut().is_some_and(|queue| {
+                    queue.feedback(&local, &member, state.clone(), Instant::now())
+                }) {
+                    return;
+                }
+
                 if let Some(record) = self
                     .pending_media
                     .get_mut(&local)
@@ -4812,6 +4818,19 @@ impl App {
                 message,
                 complete,
             } => {
+                if complete
+                    && self.audience_queue.as_mut().is_some_and(|queue| {
+                        queue.feedback(
+                            &local,
+                            &member,
+                            crate::pending_media::State::Confirmed,
+                            Instant::now(),
+                        )
+                    })
+                {
+                    return;
+                }
+
                 if let Some(record) = self
                     .pending_media
                     .get(&local)
@@ -9444,6 +9463,28 @@ impl App {
     }
 
     fn tick(&mut self, ctx: &egui::Context) {
+        for account in &mut self.accounts {
+            let Some(queue) = account.audience_queue.as_mut() else {
+                continue;
+            };
+            if queue.pending() {
+                if account.link.is_connected() {
+                    let chats = &account.chats;
+                    if let Some(job) = queue.next(Instant::now(), |member| {
+                        chats.iter().filter(|chat| member.matches(chat)).count() == 1
+                            && chats
+                                .iter()
+                                .any(|chat| member.matches(chat) && chat.can_send() && !chat.locked)
+                    }) {
+                        account.backend.send(Command::BeeperMedia(job));
+                    }
+                }
+                if !queue.paused {
+                    ctx.request_repaint_after(Duration::from_millis(500));
+                }
+            }
+        }
+
         if let Some(result) = self
             .local_whisper_removal
             .as_ref()
@@ -9993,6 +10034,51 @@ impl App {
             return;
         }
         match action {
+            Action::PrepareNewMessage {
+                member,
+                text,
+                files,
+            } => {
+                if self
+                    .chats
+                    .iter()
+                    .filter(|chat| chat.id == member.chat)
+                    .count()
+                    != 1
+                    || member.account != self.account().id.0
+                    || !self.chats.iter().any(|chat| {
+                        crate::ui::flat_groups::member(self, chat) == member
+                            && chat.can_send()
+                            && !chat.locked
+                    })
+                {
+                    return;
+                }
+                if self.editing.is_some()
+                    || self.parked_draft(&member.chat)
+                    || (self.open_chat.as_deref() == Some(&member.chat)
+                        && (!self.composer.trim().is_empty() || !self.pending.is_empty()))
+                {
+                    self.new_message.notice = Some(
+                        crate::i18n::gettext(
+                            self.locale,
+                            "This chat has an unsent draft. Nothing was replaced.",
+                        )
+                        .into_owned(),
+                    );
+                    return;
+                }
+                self.apply(Action::OpenChat(member.chat.clone()), ctx);
+                if self.open_chat.as_deref() != Some(&member.chat) {
+                    return;
+                }
+                self.composer = text;
+                self.stage_all(files.into_iter().map(Pending::File));
+                self.new_message = Default::default();
+                self.dialog = None;
+                self.focus_composer = true;
+            }
+
             Action::RetryPendingMedia(local) => {
                 let job = self
                     .pending_media

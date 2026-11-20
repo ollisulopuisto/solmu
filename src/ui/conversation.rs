@@ -1684,6 +1684,8 @@ pub(crate) fn composer_with_capabilities(
             // event modifiers directly. An active suggestion list consumes
             // plain Enter first when it has a selection.
             let send_key = has_focus
+                && app.dialog.is_none()
+                && !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
                 && ui.input_mut(|input| {
                     let mut sent = false;
                     input.events.retain(|event| {
@@ -1708,6 +1710,8 @@ pub(crate) fn composer_with_capabilities(
             // Shift+Ctrl+Enter (Cmd on a Mac) schedules the draft instead of
             // sending it; plain Enter and the send shortcut stay untouched.
             let schedule_key = has_focus
+                && app.dialog.is_none()
+                && !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
                 && app.editing.is_none()
                 && ui.input_mut(|input| {
                     let mut scheduled = false;

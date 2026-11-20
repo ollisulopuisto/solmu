@@ -3065,6 +3065,51 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 form.error = Some(crate::app_lock::FormError::TooShort);
                 app.app_lock.form = Some(form);
             }
+            "new-message-selected" | "audience-results" => {
+                for chat in &mut app.chats {
+                    chat.backend_origin = Some("https://synthetic.invalid".into());
+                    chat.backend_account = Some("demo".into());
+                }
+                let members: Vec<_> = app
+                    .chats
+                    .iter()
+                    .filter(|chat| {
+                        [SAMPLES[0].id, SAMPLES[3].id, SAMPLES[4].id].contains(&chat.id.as_str())
+                    })
+                    .map(|chat| crate::ui::flat_groups::member(app, chat))
+                    .collect();
+                if part == "new-message-selected" {
+                    app.dialog = Some(crate::model::Dialog::NewChat);
+                    app.new_message.members = members[..2].to_vec();
+                    app.new_message.text = "Meet by the entrance at 18:00?".into();
+                    app.new_message.keep = true;
+                    app.new_message.name = "Weekend friends".into();
+                } else {
+                    let mut queue = crate::audience_queue::Queue::new(
+                        "Weekend friends".into(),
+                        members
+                            .iter()
+                            .map(|m| crate::merged::Member {
+                                origin: m.origin.clone().unwrap(),
+                                account: m.bridge_account.clone().unwrap(),
+                                chat: m.chat.clone(),
+                            })
+                            .collect(),
+                        "Meet by the entrance at 18:00?".into(),
+                        vec![],
+                        std::time::Instant::now(),
+                    )
+                    .unwrap();
+                    queue.rows[0].states[0] = Some(crate::pending_media::State::Confirmed);
+                    queue.rows[1].states[0] = Some(crate::pending_media::State::Accepted {
+                        pending: "fixture".into(),
+                    });
+                    queue.rows[2].states[0] = Some(crate::pending_media::State::NotSubmitted(
+                        "Synthetic offline recipient; no request submitted".into(),
+                    ));
+                    app.audience_queue = Some(queue);
+                }
+            }
             "new-chat" => app.dialog = Some(crate::model::Dialog::NewChat),
             // New group: two people picked and a third being looked for,
             // then the group being named.
@@ -10789,6 +10834,9 @@ mod tests {
         label: &str,
         role: egui::accesskit::Role,
     ) {
+        if label == "New group" {
+            press_labelled(app, ctx, "Other actions", egui::accesskit::Role::Button);
+        }
         let nodes = accessible_nodes(app, ctx, Vec::new());
         let pos = nodes
             .iter()
@@ -10841,7 +10889,7 @@ mod tests {
         use egui::accesskit::Role;
         let (mut app, ctx) = new_group_dialog();
         let labels = accessible_labels(&mut app, &ctx);
-        for row in ["New group", "Add contact"] {
+        for row in ["New message", "Other actions"] {
             assert!(labels.iter().any(|label| label == row), "{labels:?}");
         }
         press_labelled(&mut app, &ctx, "New group", Role::Button);
