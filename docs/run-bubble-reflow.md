@@ -7,7 +7,7 @@ join the run's widest natural text width when they are near-equal to it
 bubble keeps its natural width, and media, cards, quotes and forwards never
 take part in the shared width at all, so one wide message cannot inflate the
 short replies around it. All skins use outer top-corner tails on every
-bubble, 4-point row gaps and 14-point run gaps. A run gets its timestamp and
+bubble. Eligible same-sender neighbors overlap by6 points, with the older lower edge repainted in front and the newer content inset below it. Other rows keep4-point gaps and14-point run gaps. Selection mode always separates rows. A run gets its timestamp and
 normal receipt on its last row; per-message reactions, failure actions and
 marks remain attached to that row.
 
@@ -53,3 +53,6 @@ coverage now tests both separated neighboring bubbles. Full-timeline signatures
 still have linear cost, and pane/font changes deliberately remeasure; large
 history resize performance has not been benchmarked. History inserts snap, and
 bounce overshoot is bounded by the pane cap.
+
+
+20 November follow-up: restore the overlapping streak behaviour requested again by the owner after #355 removed it. Preserve near-equal width planning and reflow. Only current-pass neighbor geometry may drive overlap. Covered padding cannot steal the older message menu, text stays below the seam, and pin notices, reactions, hidden/saved/starred/pinned rows, failure states and bubbleless media break the overlap. Both-theme and narrow/wide geometry tests are part of the native gate. Local full-native execution and current-head app pixels are pending, not claimed passed.
