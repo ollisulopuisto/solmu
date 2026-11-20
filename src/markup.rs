@@ -88,7 +88,10 @@ fn spaced_code_galley(mut galley: Arc<Galley>, kinds: &[RowKind]) -> Arc<Galley>
     }
     let galley_mut = Arc::make_mut(&mut galley);
     let mut shift = 0.0;
-    let mut width = galley_mut.rect.width();
+    let mut width = galley_mut
+        .rect
+        .width()
+        .max(100.0_f32.min(galley_mut.job.wrap.max_width + 20.0));
     let mut previous = RowKind::Normal;
     for (index, row) in galley_mut.rows.iter_mut().enumerate() {
         let kind = kinds[index];
