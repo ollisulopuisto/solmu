@@ -799,3 +799,12 @@ recheck the three existing demo failures, including right-click-beside-message.
 Regression traced to #355, which replaced #246 seam overlap with separated rows. Restore6px overlap using current-pass predecessor geometry, older-edge repaint and covered hit-test clipping. Keep current width bands and every-body top tails. Selection and hard-boundary rows remain separate. Native tests updated for geometry, scroll and covered menus, and both-theme group-stack app captures added to the existing Mac CI smoke path. No real chat sent, no package published. Local native build/check execution remains pending after missing Linux development dependencies and bounded compile-time attempts.
 
 Review follow-up: clip enlarged text-selection targets below the overlap cover, including command-click and double-click gestures. Reserve the full nine-point replay strip as bottom padding in both skins so background repaint cannot erase older content. Added seam gesture and padding regressions. Actual Linux synthetic both-theme group-stack captures inspected: final glyph rows and colored shadows remain readable. Native test linking exceeded the local execution bound; test-target compilation and fresh CI are distinct checks, not a claimed runtime pass.
+
+### 2026-11-20: combined tail and overlap regression fixtures
+
+The macOS failures exposed two obsolete per-message tail assertions and a
+synthetic command-click that omitted egui's held-modifier event. Assert tails
+only on run heads, require tail-less follower shadows, and emit
+ModifiersChanged before the seam click. No production behavior changed.
+All-target, all-feature Clippy passes. Native targeted test compilation timed
+out while rebuilding dependencies; CI must execute the tests before merge.

@@ -5460,6 +5460,9 @@ mod tests {
                 1180.0,
                 2000.0,
                 vec![
+                    // egui tracks held modifiers through this event, independently
+                    // of the per-pointer event metadata.
+                    egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
                     egui::Event::PointerMoved(point),
                     egui::Event::PointerButton {
                         pos: point,
@@ -5545,8 +5548,15 @@ mod tests {
                 let egui::Shape::Rect(body) = &parts[0] else {
                     panic!("body shadow");
                 };
+                if ![0, 2, 5, 8].contains(&index) {
+                    assert!(
+                        !matches!(&parts[1], egui::Shape::Mesh(_)),
+                        "followers have no tail shadow"
+                    );
+                    return body.fill;
+                }
                 let egui::Shape::Mesh(tail) = &parts[1] else {
-                    panic!("tail shadow");
+                    panic!("head tail shadow");
                 };
                 assert!(
                     tail.vertices.iter().any(|vertex| vertex.color == body.fill),
@@ -5900,16 +5910,16 @@ mod tests {
                     let body = rect(index);
                     assert_eq!(painted.top(), body.top(), "tails leave the top edge");
                     assert_eq!(painted.bottom(), body.bottom(), "no tail below the body");
-                    if index < 10 {
-                        assert!(
-                            (body.left() - painted.left() - crate::ui::widgets::TAIL_WIDTH).abs()
-                                < 0.5
-                        );
+                    let head = [0, 2, 5, 8, 10].contains(&index);
+                    let reach = if head {
+                        crate::ui::widgets::TAIL_WIDTH
                     } else {
-                        assert!(
-                            (painted.right() - body.right() - crate::ui::widgets::TAIL_WIDTH).abs()
-                                < 0.5
-                        );
+                        0.0
+                    };
+                    if index < 10 {
+                        assert!((body.left() - painted.left() - reach).abs() < 0.5);
+                    } else {
+                        assert!((painted.right() - body.right() - reach).abs() < 0.5);
                     }
                 }
                 for (first, second) in [(0, 1), (2, 3), (3, 4), (5, 6), (6, 7), (8, 9), (10, 11)] {
