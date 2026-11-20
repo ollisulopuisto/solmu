@@ -2,9 +2,18 @@
 //! source never prevents another linked source from being synchronized.
 use std::collections::HashSet;
 
-#[derive(Default)]
 pub struct ReadSync {
+    connected: bool,
     unavailable: HashSet<String>,
+}
+
+impl Default for ReadSync {
+    fn default() -> Self {
+        Self {
+            unavailable: HashSet::new(),
+            connected: true,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -16,6 +25,13 @@ pub enum Outcome {
 }
 
 impl ReadSync {
+    pub fn connection_state(&mut self, connected: bool) {
+        if connected && !self.connected {
+            self.unavailable.clear();
+        }
+        self.connected = connected;
+    }
+
     pub fn mark(
         &mut self,
         chat: &str,
@@ -54,6 +70,22 @@ mod tests {
         }
         assert_eq!(calls, 1);
         assert_eq!(sync.mark("other", false, || Ok(())), Outcome::Synced);
+    }
+    #[test]
+    fn only_an_actual_recovery_reenables_missing_sources() {
+        let mut sync = ReadSync::default();
+        assert_eq!(
+            sync.mark("chat", false, || Err("returned 404".into())),
+            Outcome::Unavailable
+        );
+        sync.connection_state(true);
+        assert_eq!(
+            sync.mark("chat", false, || panic!("healthy poll must not retry")),
+            Outcome::Skipped
+        );
+        sync.connection_state(false);
+        sync.connection_state(true);
+        assert_eq!(sync.mark("chat", false, || Ok(())), Outcome::Synced);
     }
     #[test]
     fn transient_and_permission_errors_stay_visible_and_retryable() {

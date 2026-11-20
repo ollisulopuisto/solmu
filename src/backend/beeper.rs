@@ -5685,7 +5685,8 @@ pub fn run(
         }
         if last_chat_refresh.elapsed() >= CHAT_REFRESH {
             last_chat_refresh = Instant::now();
-            refresh_inventory(&api, &mut accounts, &emit);
+            let connected = refresh_inventory(&api, &mut accounts, &emit);
+            read_sync.connection_state(connected);
         }
         // Receipt refresh: the forward-only poll never re-returns already
         // loaded messages, so their delivery/read ticks stall. Refetch the
@@ -6094,7 +6095,7 @@ fn emit_message_search(
     }
 }
 
-fn refresh_inventory(api: &Api, accounts: &mut Vec<BeeperAccount>, emit: &dyn Fn(Event)) {
+fn refresh_inventory(api: &Api, accounts: &mut Vec<BeeperAccount>, emit: &dyn Fn(Event)) -> bool {
     let account_error = match api.accounts() {
         Ok(updated) => {
             *accounts = updated;
@@ -6108,6 +6109,7 @@ fn refresh_inventory(api: &Api, accounts: &mut Vec<BeeperAccount>, emit: &dyn Fn
     };
     match api.list_chats() {
         Ok(page) => {
+            let connected = account_error.is_none();
             if let Some(error) = account_error {
                 emit(Event::Link(LinkStatus::Disconnected {
                     reason: format!(
@@ -6121,10 +6123,14 @@ fn refresh_inventory(api: &Api, accounts: &mut Vec<BeeperAccount>, emit: &dyn Fn
             emit(Event::Chats(
                 page.items.iter().map(|c| api.map_chat(c, &label)).collect(),
             ));
+            connected
         }
-        Err(error) => emit(Event::Link(LinkStatus::Disconnected {
-            reason: format!("Beeper chat refresh failed: {error}"),
-        })),
+        Err(error) => {
+            emit(Event::Link(LinkStatus::Disconnected {
+                reason: format!("Beeper chat refresh failed: {error}"),
+            }));
+            false
+        }
     }
 }
 
@@ -12043,6 +12049,42 @@ mod tests {
             );
             assert!(!events.iter().any(|event| matches!(event, Event::Chats(_))));
         }
+    }
+
+    #[test]
+    fn inventory_recovery_reenables_read_endpoint_but_healthy_polls_do_not() {
+        let (api, server) = forward_fixture(vec![
+            ("POST /v1/chats/chat/read ", 404, "{}".into()),
+            ("GET /v1/accounts ", 200, "[]".into()),
+            ("GET /v1/chats?", 200, r#"{"items":[]}"#.into()),
+            ("GET /v1/accounts ", 500, "{}".into()),
+            ("GET /v1/chats?", 500, "{}".into()),
+            ("GET /v1/accounts ", 200, "[]".into()),
+            ("GET /v1/chats?", 200, r#"{"items":[]}"#.into()),
+            ("POST /v1/chats/chat/read ", 200, "{}".into()),
+        ]);
+        let mut sync = crate::read_sync::ReadSync::default();
+        let mut read = || {
+            api.post("/v1/chats/chat/read", serde_json::json!({}))
+                .map(|_| ())
+        };
+        assert_eq!(
+            sync.mark("chat", false, &mut read),
+            crate::read_sync::Outcome::Unavailable
+        );
+        let mut accounts = Vec::new();
+        sync.connection_state(refresh_inventory(&api, &mut accounts, &|_| {}));
+        assert_eq!(
+            sync.mark("chat", false, || panic!("healthy retry")),
+            crate::read_sync::Outcome::Skipped
+        );
+        sync.connection_state(refresh_inventory(&api, &mut accounts, &|_| {}));
+        sync.connection_state(refresh_inventory(&api, &mut accounts, &|_| {}));
+        assert_eq!(
+            sync.mark("chat", false, &mut read),
+            crate::read_sync::Outcome::Synced
+        );
+        server.join().unwrap();
     }
 
     #[test]
