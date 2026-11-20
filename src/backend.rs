@@ -12,7 +12,6 @@ use crate::model::{
 };
 use crate::paths::AccountDirs;
 
-#[cfg(any(test, feature = "demo"))]
 pub(crate) mod picture_edit;
 
 // Re-exported so the picker can detect pasted Signal pack links.
@@ -1776,6 +1775,7 @@ pub struct Backend {
     thread: Option<std::thread::JoinHandle<()>>,
     offline: bool,
     local_events: Option<(std::sync::mpsc::Sender<Event>, Waker)>,
+    local_picture_dir: Option<PathBuf>,
     gif_search: Option<linked_media::SearchQueue>,
     #[cfg(any(test, feature = "demo"))]
     demo_commands: Option<std::sync::Mutex<Vec<Command>>>,
@@ -1788,6 +1788,7 @@ impl Backend {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         let local_events = Some((event_tx.clone(), waker.clone()));
+        let local_picture_dir = Some(dirs.media_cache_dir().join("edited"));
         let gif_search = linked_media::search_queue(event_tx.clone(), waker.clone());
         let thread = std::thread::Builder::new()
             .name("solmu-beeper-backend".to_string())
@@ -1800,6 +1801,7 @@ impl Backend {
             thread: Some(thread),
             offline: false,
             local_events,
+            local_picture_dir,
             gif_search,
             #[cfg(any(test, feature = "demo"))]
             demo_commands: None,
@@ -1818,6 +1820,7 @@ impl Backend {
                 thread: None,
                 offline: true,
                 local_events: None,
+                local_picture_dir: None,
                 gif_search: None,
                 #[cfg(any(test, feature = "demo"))]
                 demo_commands: None,
@@ -1891,12 +1894,18 @@ impl Backend {
         {
             let events = events.clone();
             let waker = waker.clone();
+            let picture_dir = self.local_picture_dir.clone();
+            let failed_target = match &command {
+                Command::InspectPicture { target, .. } => Some((*target, false)),
+                Command::ApplyPictureEdit { target, .. } => Some((*target, true)),
+                _ => None,
+            };
             let failed_events = events.clone();
             let failed_waker = waker.clone();
             if let Err(error) = std::thread::Builder::new()
                 .name("solmu-local-file".into())
                 .spawn(move || {
-                    if let Some(event) = local_files::run(command) {
+                    if let Some(event) = local_files::run(command, picture_dir.as_deref()) {
                         if let Err(error) = events.send(event) {
                             error.0.discard_owned_media();
                         }
@@ -1904,9 +1913,19 @@ impl Backend {
                     }
                 })
             {
-                let _ = failed_events.send(Event::Error(format!(
-                    "Could not start attachment action: {error}"
-                )));
+                let message = format!("Could not start attachment action: {error}");
+                let event = match failed_target {
+                    Some((target, false)) => Event::PictureInspected {
+                        target,
+                        result: Err(message),
+                    },
+                    Some((target, true)) => Event::PictureEdited {
+                        target,
+                        result: Err(message),
+                    },
+                    None => Event::Error(message),
+                };
+                let _ = failed_events.send(event);
                 failed_waker.wake();
             }
             return;
@@ -1972,6 +1991,72 @@ impl Backend {
 #[cfg(test)]
 mod local_file_routing_tests {
     use super::*;
+
+    #[test]
+    fn picture_pencil_inspects_and_applies_offline_without_a_server() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input.png");
+        image::RgbaImage::from_pixel(8, 6, image::Rgba([30, 80, 150, 255]))
+            .save(&source)
+            .unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let (mut backend, events) = Backend::detached();
+        backend.local_events = Some((events, Waker::default()));
+        backend.local_picture_dir = Some(root.path().join("edited"));
+        backend.send(Command::InspectPicture {
+            target: 7,
+            path: source.clone(),
+        });
+        assert!(matches!(
+            backend
+                .events
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            Event::PictureInspected {
+                target: 7,
+                result: Ok((8, 6))
+            }
+        ));
+        backend.send(Command::ApplyPictureEdit {
+            target: 7,
+            source: crate::model::PictureSource::File(source.clone()),
+            width: 8,
+            height: 6,
+            crop: crate::model::PictureCrop {
+                x: 1,
+                y: 1,
+                width: 3,
+                height: 4,
+            },
+            turns: 0,
+        });
+        let Event::PictureEdited {
+            target: 7,
+            result: Ok(output),
+        } = backend
+            .events
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+        else {
+            panic!("crop result missing")
+        };
+        assert_eq!(image::image_dimensions(output).unwrap(), (3, 4));
+        assert_eq!(std::fs::read(source).unwrap(), original);
+        backend.send(Command::InspectPicture {
+            target: 8,
+            path: root.path().join("missing.png"),
+        });
+        assert!(matches!(
+            backend
+                .events
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            Event::PictureInspected {
+                target: 8,
+                result: Err(_)
+            }
+        ));
+    }
 
     #[test]
     fn local_copy_bypasses_the_network_even_when_offline_or_disconnected() {

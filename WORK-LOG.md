@@ -703,3 +703,9 @@ history and search continuation. Tests cover disconnected inventory without a
 Chats replacement event, legitimate empty inventory, malformed history, and
 search retaining results/cursor across refusal and successful retry.
 No real Server query or UI-layout changes; native/live acceptance unverified.
+
+## Attachment-pencil handler,20 November
+
+Production previously neither compiled the picture-edit module nor routed InspectPicture/ApplyPictureEdit. Both now run through the existing local attachment-action worker, independently of Server/offline status, emitting targeted results. Output goes to account media cache/edited, never over the original. Thread-start failures answer the waiting action. Existing attachment-ID checks still reject stale results.
+
+Native library/test-target compile passes.418 portable adapter tests pass, including real routing that inspects an8x6 PNG, applies3x4 crop, verifies output dimensions and untouched source, and receives a missing-file error while disconnected. Harness stages real picture_edit/sticker_store sources. No live Mac pencil/crop/save roundtrip or new UI design claimed. A local disk-cache-full interruption was recovered by clearing disposable build caches before rerunning the suite.
