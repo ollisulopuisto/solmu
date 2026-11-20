@@ -4167,6 +4167,28 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     });
                 }
             }
+            "edit-markdown" | "edit-markdown-before" => {
+                let chat = SAMPLES[0].id;
+                app.open_chat = Some(chat.to_owned());
+                let id = "markdown-edit-fixture";
+                app.conversations
+                    .get_mut(chat)
+                    .unwrap()
+                    .messages
+                    .push(message(
+                        chat,
+                        id,
+                        true,
+                        crate::util::now(),
+                        Content::text("Keep the formatting\n• first item\n• bold second item"),
+                    ));
+                app.composer = crate::rich_edit::markdown("<p>Keep the formatting</p><ul><li>first item</li><li><strong>bold second item</strong></li></ul>").unwrap();
+                if part == "edit-markdown-before" {
+                    app.composer = "Keep the formatting\n• first item\n• bold second item".into();
+                }
+                app.editing = Some(id.into());
+                app.focus_composer = true;
+            }
             "edit" => {
                 let chat = SAMPLES[0].id;
                 app.open_chat = Some(chat.to_owned());

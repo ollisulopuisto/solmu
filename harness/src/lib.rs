@@ -42,6 +42,8 @@ pub mod voice {
     pub fn encode(_: &[f32]) -> Result<Vec<u8>, String> { Err("Opus encoder is not part of the adapter harness".into()) }
 }
 
+pub mod rich_edit;
+
 pub mod audience_queue;
 
 pub mod flat_groups;

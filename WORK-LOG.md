@@ -832,6 +832,39 @@ only on run heads, require tail-less follower shadows, and emit
 ModifiersChanged before the seam click. No production behavior changed.
 All-target, all-feature Clippy passes. Native targeted test compilation timed
 out while rebuilding dependencies; CI must execute the tests before merge.
+## 2026-11-20: Reconstruct Markdown when editing rich messages
+
+Owner requested retaining editable Markdown, then explicitly chose reverse
+conversion rather than duplicate source storage. Prepare edit reads the current
+exact own message, reconstructs Markdown from rich HTML, and verifies a local
+CommonMark semantic round-trip. Unsupported or lossy constructs refuse before
+changing the composer. A request generation, local account, chat, target and
+unchanged draft guard reject late replies. No write occurs until explicit send.
+Both fresh sends and edits pass Markdown in the API text field. Beeper's current
+docs say both use the same rich-text conversion. Retrieval exposes rich text,
+not original marker spelling. No source store or schema migration was added.
+
+412 portable production-source tests pass, including rich reconstruction and
+exact message/account/ownership refusals; native all-target/all-feature Clippy
+passes. Four converter tests include13 markdown-rich-markdown-rich cases with
+byte-identical CommonMark rich output. This is not live Beeper/WhatsApp proof.
+Full native UI tests unrun. Demo compilation was killed by the environment;
+visual capture remains unverified, not waived. No real message/account touched.
+
+Review follow-up: validate every rich element and attribute before conversion,
+including code wrappers and list items. Refuse nested code-block breaks/links,
+styled code/list items and reversed lists. Preparation errors are structured
+Unsupported/Unavailable values, translated with literal gettext at the UI
+boundary; backend detail strings do not reach the toast. 412 portable tests pass
+again and native all-target/all-feature Clippy passes. Private actual app
+before-dark, after-dark and narrow-light pixels now inspected after a reduced
+debug binary build. Composer shows Markdown hyphens and bold markers rather than
+rendered bullets. No screenshots published; per-PR media gate remains held.
+
+Added an executed local HTTP wire regression: fresh POST and edit PUT both
+submit the same Markdown text byte-for-byte in the JSON text field, never
+display bullets/renderer markers. 413 portable tests pass; Clippy passes.
+This verifies Solmu's transport contract, not Beeper's downstream conversion.
 ## Scoped message automation,20 November
 
 Implemented exact account/chat messages:send grants, old-read-token refusal,
@@ -877,3 +910,25 @@ fixture dropped texture deltas. Disable the background composer UI and surrender
 its text focus while results are visible, rather than merely blocking Send.
 Clear the fixture's deltas. Native all-target/all-feature Clippy passes; these
 actual app regressions await CI rerun, not claimed executed locally.
+
+## Preserve ordered rich-text lists, 20 November
+
+Claim: Instinct, branch `fix/preserve-ordered-rich-lists`, worktree
+`/home/sandbox/solmu-ordered-lists`. Reported numbered sends appeared as bullets.
+Root cause is the display adapter: `plain_rich_text` ignored ol/ul context and
+forced every li to a bullet, with an old fixture explicitly blessing that loss.
+Outbound `send_text` already posts the original Markdown without this converter.
+Track nested list counters and numeric start/value attributes, preserve ul
+bullets, and share the existing conservative attribute scanner with href.
+Indentation is capped and counter overflow saturates. No bullet spacing or bold
+layout implementation; those remain sketches awaiting the owner's choice.
+
+Failing-first extracted production-function reproduction: nested ol start=3
+returned bullets before the fix, then passed with numbering. Full portable
+adapter suite passed 422 tests, including a local HTTP wire check that numbered
+Markdown is identical on send POST and edit PUT. Applying this patch to #434's
+current source passed 427 portable tests, including the reverse converter and
+its CommonMark round trips. Full native Clippy hit the execution time limit
+twice, without a diagnostic; not claimed passed. Actual downstream WhatsApp
+receipt was not inspected and no real message was sent. No screenshot waiver
+for this PR assumed; separate ready PR with its missing review media noted.
