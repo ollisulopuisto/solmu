@@ -963,6 +963,23 @@ twice, without a diagnostic; not claimed passed. Actual downstream WhatsApp
 receipt was not inspected and no real message was sent. No screenshot waiver
 for this PR assumed; separate ready PR with its missing review media noted.
 
+## Actor-aware reaction previews,20 November
+
+Preserve original ownership separately from aggregate reaction actors. Incoming reactions to own message say to your message, our reaction to theirs says You reacted ... to the message. Mixed/unknown identities use neutral Reactions wording, never infer latest from array order. Chat inventory and history/poll mapper use account identity; own originals can identify self from their sender. No delivery tick or original group-sender prefix on reaction previews. Owner approved English-only reaction wording now and full i18n as future roadmap work, not implementation. Native compilation passes; tests and app pixels pending CI.
+
+Owner confirmed English-only reaction wording and later full i18n on20November.
+Recorded future i18n in ROADMAP.md only, no locale implementation or catalog edits.
+Each English string has its own literal gettext call for later extraction.
+Exact portable staging passes429 tests, including actor/ownership, unknown/mixed
+identity and reaction-order regressions. Native test-target compilation passes.
+No native app captures are available and no per-PR screenshot waiver assumed.
+No claims of latest reactor from an unordered aggregate, no real messages or release.
+
+#438 review follow-up: both sidebar search predicates now match reaction
+emoji metadata separately from the original summary. Added a native regression
+for emoji-only queries, scoped outside-match counts and locked-chat exclusion.
+Native test-target compilation passes; native execution awaits fresh CI.
+The media-only finding remains open, no waiver assumed.
 ## Markdown fidelity audit completion,20 November
 
 The audit fixes each reported readback loss separately: heading prefixes,
