@@ -3978,6 +3978,9 @@ impl App {
                         || chat.phone().is_some_and(|phone| phone.contains(&needle))
                         || chat.last.as_ref().is_some_and(|last| {
                             crate::util::search_key(&last.summary).contains(&needle)
+                                || last.reaction.as_ref().is_some_and(|reaction| {
+                                    crate::util::search_key(&reaction.emojis).contains(&needle)
+                                })
                         }))
             })
             .count();
@@ -4272,6 +4275,9 @@ impl App {
                     || chat.phone().is_some_and(|phone| phone.contains(&needle))
                     || chat.last.as_ref().is_some_and(|last| {
                         crate::util::search_key(&last.summary).contains(&needle)
+                            || last.reaction.as_ref().is_some_and(|reaction| {
+                                crate::util::search_key(&reaction.emojis).contains(&needle)
+                            })
                     })
             })
             .collect()
@@ -28916,6 +28922,46 @@ mod tests {
         app.switch_account(&first);
         assert_eq!(app.visible_chats()[0].id, "recent");
         assert_eq!(app.composer, "First account only");
+    }
+
+    #[test]
+    fn reaction_emoji_search_matches_chats_and_outside_scope_counts() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        let last = crate::model::LastMessage {
+            reaction: Some(crate::model::ReactionPreview {
+                emojis: "👍".into(),
+                from_me: Some(false),
+            }),
+            from_me: true,
+            sender: "self".into(),
+            sender_name: None,
+            summary: "hello".into(),
+            full: "hello".into(),
+            labelled: false,
+            status: Delivery::Sent,
+        };
+        let mut group = Chat::new("reaction@g.us".into(), "Group".into());
+        group.last = Some(last.clone());
+        let mut direct = Chat::new("reaction@s.whatsapp.net".into(), "Alice".into());
+        direct.last = Some(last);
+        let mut locked = direct.clone();
+        locked.id = "locked@s.whatsapp.net".into();
+        locked.locked = true;
+        app.chats = vec![group, direct, locked];
+        app.search = "👍".into();
+        app.apply(Action::SetChatFilter(ChatFilter::Groups), &ctx);
+        assert_eq!(app.visible_chats().len(), 1);
+        assert_eq!(
+            app.outside_scope_matches(),
+            1,
+            "same emoji predicate outside scope, never locked"
+        );
+        app.clear_chat_scope();
+        assert_eq!(app.visible_chats().len(), 2);
+        assert_eq!(app.outside_scope_matches(), 0);
+        app.search = "👎".into();
+        assert!(app.visible_chats().is_empty());
     }
 
     #[test]

@@ -887,3 +887,9 @@ Exact portable staging passes429 tests, including actor/ownership, unknown/mixed
 identity and reaction-order regressions. Native test-target compilation passes.
 No native app captures are available and no per-PR screenshot waiver assumed.
 No claims of latest reactor from an unordered aggregate, no real messages or release.
+
+#438 review follow-up: both sidebar search predicates now match reaction
+emoji metadata separately from the original summary. Added a native regression
+for emoji-only queries, scoped outside-match counts and locked-chat exclusion.
+Native test-target compilation passes; native execution awaits fresh CI.
+The media-only finding remains open, no waiver assumed.
