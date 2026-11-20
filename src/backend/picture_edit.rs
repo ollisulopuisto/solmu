@@ -48,7 +48,7 @@ pub fn edit_pasted(
 /// Turns and crops a staged picture, writes the result in `dir` beside the
 /// other media, and answers with the file it wrote. The name comes from the
 /// picture's own bytes, so the same crop of the same picture is written once.
-#[cfg(test)]
+#[cfg(any(test, feature = "demo"))]
 pub fn write(
     source: &PictureSource,
     width: u32,
