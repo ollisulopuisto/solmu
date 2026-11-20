@@ -142,6 +142,8 @@ pub fn search_matches(body: &str, query: &str, network: &str, sender: &str) -> b
     if query.is_empty() {
         return true;
     }
+    let body = crate::util::without_literal_hints(body);
+    let body = body.as_ref();
     // Performance optimization:
     // 1. Return immediately when `query.trim()` is empty without lowercase conversion.
     // 2. An ASCII query against ASCII candidates matches with zero allocations;

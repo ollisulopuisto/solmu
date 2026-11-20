@@ -2435,20 +2435,6 @@ fn decode_entities(text: &str) -> String {
     decoded
 }
 
-/// Strip only the mapper's literal-marker hints for label comparison.
-/// Rendering and copy resolve the same hints in markup::inline.
-fn without_literal_hints(text: &str) -> String {
-    let mut out = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        out.push(ch);
-        if matches!(ch, '*' | '_' | '~' | '`') && chars.peek() == Some(&'\u{2063}') {
-            chars.next();
-        }
-    }
-    out
-}
-
 fn plain_rich_text(raw: &str) -> String {
     let lower = raw.to_ascii_lowercase();
     let known = [
@@ -2717,7 +2703,8 @@ fn plain_rich_text(raw: &str) -> String {
                                     // just the text; repeating the address in
                                     // parentheses would show such links twice.
                                     let shows_address = label_start.is_some_and(|start| {
-                                        let label = without_literal_hints(out[start..].trim());
+                                        let label =
+                                            crate::util::without_literal_hints(out[start..].trim());
                                         // The word the label sits in: the renderer
                                         // judges `run_widths.rs` as a whole.
                                         let word_start = out[..start]
@@ -2725,7 +2712,8 @@ fn plain_rich_text(raw: &str) -> String {
                                             .rev()
                                             .find(|(_, c)| c.is_whitespace())
                                             .map_or(0, |(at, c)| at + c.len_utf8());
-                                        let word = without_literal_hints(&out[word_start..]);
+                                        let word =
+                                            crate::util::without_literal_hints(&out[word_start..]);
                                         let bare = url
                                             .strip_prefix("https://")
                                             .or_else(|| url.strip_prefix("http://"))
@@ -8314,6 +8302,27 @@ mod tests {
             ),
             "-9223372036854775808. min\n-9223372036854775808. still min"
         );
+    }
+
+    #[test]
+    fn literal_html_remains_searchable_after_mapping() {
+        for (html, query) in [
+            ("<p>run_widths.rs</p>", "run_widths.rs"),
+            (
+                "<p>https://example.com/a_b_c</p>",
+                "https://example.com/a_b_c",
+            ),
+            ("<p>*literal*</p>", "*literal*"),
+        ] {
+            let mapped = plain_rich_text(html);
+            assert!(crate::merged::search_matches(&mapped, query, "", ""));
+            assert_eq!(
+                crate::model::Content::text(&mapped)
+                    .text_matching(query)
+                    .as_deref(),
+                Some(query)
+            );
+        }
     }
 
     #[test]

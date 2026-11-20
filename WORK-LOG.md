@@ -929,3 +929,13 @@ build caches were removed and the check completed. No native linking retry.
 Review screenshots and actual Beeper/WhatsApp bridge round trips remain absent;
 no new per-PR visual waiver is assumed. Existing #434 and #435 waivers do not
 cover this follow-up. No review media committed/hosted and no real sends.
+
+#437 review follow-up: literal marker hints are now normalized at loaded
+history search, archive SQL matching and result-snippet boundaries, not only
+at painting/copy. A shared borrowed normalizer keeps unhinted loaded search's
+no-allocation path. SQL removes only marker-plus-hint pairs, preserving native
+separators elsewhere. Added mapper-to-loaded-search/snippet regressions and
+native archive global/scoped-search tests. Actual production SQL was executed
+against text, caption, URL and literal-marker rows. Native test-target check
+passes; portable suite with actual parser/search functions passes. Full native
+archive-test execution still awaits CI. Rendering representation is unchanged.
