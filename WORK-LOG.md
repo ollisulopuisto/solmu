@@ -57,6 +57,15 @@ Inspected actual dark wide and light narrow captures: heads meet the avatar at
 the requested height; followers remain tailless. No external image hosting or
 screenshot waiver assumed. Parent has captures and the waiver/audience question.
 
+## 2026-11-20: Maximum audience counted-send regression
+
+Added a full-view regression that selects 50 synthetic distinct recipients,
+checks no queue exists from selection alone, clicks Send to50chats, then checks
+all50 exact destinations are queued in order. This preserves the existing
+explicit counted one-click send design, not an extra confirmation screen.
+All-target/all-feature Clippy passes; test execution awaits native CI, no pass
+claimed locally. No live account or send used.
+
 ## 2026-11-19: Beeper bridge messages show every attachment (fix/beeper-multi-attachment-messages)
 
 Olli reported bridge messages with several attachments showing only the
@@ -808,3 +817,12 @@ only on run heads, require tail-less follower shadows, and emit
 ModifiersChanged before the seam click. No production behavior changed.
 All-target, all-feature Clippy passes. Native targeted test compilation timed
 out while rebuilding dependencies; CI must execute the tests before merge.
+
+## New-message Mac CI follow-up,20 November
+
+Mac CI executed2466 passing tests and found two failures: the background composer
+still inserted Enter while audience results owned shortcuts, and a new viewport
+fixture dropped texture deltas. Disable the background composer UI and surrender
+its text focus while results are visible, rather than merely blocking Send.
+Clear the fixture's deltas. Native all-target/all-feature Clippy passes; these
+actual app regressions await CI rerun, not claimed executed locally.

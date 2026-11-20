@@ -3065,6 +3065,71 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 form.error = Some(crate::app_lock::FormError::TooShort);
                 app.app_lock.form = Some(form);
             }
+            "new-message-selected"
+            | "new-message-many-files"
+            | "new-message-locked"
+            | "audience-results" => {
+                for chat in &mut app.chats {
+                    chat.backend_origin = Some("https://synthetic.invalid".into());
+                    chat.backend_account = Some("demo".into());
+                }
+                let members: Vec<_> = app
+                    .chats
+                    .iter()
+                    .filter(|chat| {
+                        [SAMPLES[0].id, SAMPLES[3].id, SAMPLES[4].id].contains(&chat.id.as_str())
+                    })
+                    .map(|chat| crate::ui::flat_groups::member(app, chat))
+                    .collect();
+                if matches!(
+                    part,
+                    "new-message-selected" | "new-message-many-files" | "new-message-locked"
+                ) {
+                    app.dialog = Some(crate::model::Dialog::NewChat);
+                    app.new_message.members = members[..2].to_vec();
+                    app.new_message.text = "Meet by the entrance at 18:00?".into();
+                    app.new_message.keep = true;
+                    app.new_message.name = "Weekend friends".into();
+                    if part == "new-message-many-files" {
+                        let path = app.dirs.cache.join("demo-attachment.png");
+                        image::RgbaImage::from_pixel(64, 48, image::Rgba([40, 180, 140, 255]))
+                            .save(&path)
+                            .unwrap();
+                        app.new_message.files = vec![path; 12];
+                    }
+                    if part == "new-message-locked" {
+                        let member = app.new_message.members[0].clone();
+                        if let Some(chat) = app.chats.iter_mut().find(|chat| chat.id == member.chat)
+                        {
+                            chat.locked = true;
+                        }
+                    }
+                } else {
+                    let mut queue = crate::audience_queue::Queue::new(
+                        "Weekend friends".into(),
+                        members
+                            .iter()
+                            .map(|m| crate::merged::Member {
+                                origin: m.origin.clone().unwrap(),
+                                account: m.bridge_account.clone().unwrap(),
+                                chat: m.chat.clone(),
+                            })
+                            .collect(),
+                        "Meet by the entrance at 18:00?".into(),
+                        vec![],
+                        std::time::Instant::now(),
+                    )
+                    .unwrap();
+                    queue.rows[0].states[0] = Some(crate::pending_media::State::Confirmed);
+                    queue.rows[1].states[0] = Some(crate::pending_media::State::Accepted {
+                        pending: "fixture".into(),
+                    });
+                    queue.rows[2].states[0] = Some(crate::pending_media::State::NotSubmitted(
+                        "Synthetic offline recipient; no request submitted".into(),
+                    ));
+                    app.audience_queue = Some(queue);
+                }
+            }
             "new-chat" => app.dialog = Some(crate::model::Dialog::NewChat),
             // New group: two people picked and a third being looked for,
             // then the group being named.
@@ -10877,6 +10942,9 @@ mod tests {
         label: &str,
         role: egui::accesskit::Role,
     ) {
+        if label == "New group" {
+            press_labelled(app, ctx, "Other actions", egui::accesskit::Role::Button);
+        }
         let nodes = accessible_nodes(app, ctx, Vec::new());
         let pos = nodes
             .iter()
@@ -10884,6 +10952,154 @@ mod tests {
             .map(|(_, _, pos)| *pos)
             .unwrap_or_else(|| panic!("no {role:?} {label:?} in {nodes:?}"));
         press_at(app, ctx, pos);
+    }
+
+    #[test]
+    fn audience_results_own_escape_and_block_background_composer_enter() {
+        for send_by_enter in [false, true] {
+            let mut app = app();
+            app.settings.enter_sends = send_by_enter;
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            apply_flags(&mut app, Some("audience-results"));
+            app.composer = "background draft".into();
+            ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("composer-text")));
+            for key in [egui::Key::Enter, egui::Key::Tab, egui::Key::Enter] {
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            assert_eq!(app.composer, "background draft");
+            assert!(!app.actions.iter().any(|action| matches!(
+                action,
+                crate::model::Action::SendText { .. } | crate::model::Action::SendPending { .. }
+            )));
+            let chat = app.open_chat.clone();
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            assert!(!app.audience_queue.as_ref().unwrap().visible);
+            assert_eq!(app.open_chat, chat);
+        }
+    }
+
+    #[test]
+    fn explicit_counted_send_starts_audience_without_extra_confirmation() {
+        use egui::accesskit::Role;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("new-message-selected"));
+        for _ in 0..8 {
+            render(&mut app, &ctx);
+        }
+        assert!(app.audience_queue.is_none());
+        press_labelled(&mut app, &ctx, "Send to 2 chats", Role::Button);
+        assert_eq!(app.audience_queue.as_ref().unwrap().rows.len(), 2);
+    }
+
+    #[test]
+    fn counted_send_supports_fifty_explicit_recipients_without_extra_confirmation() {
+        use egui::accesskit::Role;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("new-message-selected"));
+        let source = app.chats[0].clone();
+        app.new_message.members.clear();
+        for index in 0..crate::ghost_groups::MAX_MEMBERS {
+            let mut chat = source.clone();
+            chat.id = format!("synthetic-audience-{index}");
+            chat.name = format!("Recipient {index}");
+            chat.locked = false;
+            let member = crate::ui::flat_groups::member(&app, &chat);
+            app.new_message.members.push(member);
+            app.chats.push(chat);
+        }
+        let selected = app.new_message.members.clone();
+        for _ in 0..8 {
+            render(&mut app, &ctx);
+        }
+        assert!(app.audience_queue.is_none(), "selection alone never sends");
+        press_labelled(&mut app, &ctx, "Send to 50 chats", Role::Button);
+        let queue = app
+            .audience_queue
+            .as_ref()
+            .expect("explicit counted click queues sends");
+        assert_eq!(queue.rows.len(), 50);
+        for (row, member) in queue.rows.iter().zip(&selected) {
+            assert_eq!(
+                row.member.chat, member.chat,
+                "only the selected destinations are queued"
+            );
+        }
+    }
+
+    #[test]
+    fn new_message_many_files_keeps_send_control_inside_view_and_locked_names_hidden() {
+        use egui::accesskit::Role;
+        for (page, size) in [
+            ("new-message-many-files", egui::vec2(1180.0, 780.0)),
+            ("new-message-many-files", egui::vec2(800.0, 600.0)),
+            ("new-message-locked", egui::vec2(1180.0, 780.0)),
+        ] {
+            let mut app = app();
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            app.attach(&ctx);
+            apply_flags(&mut app, Some(page));
+            let mut nodes = Vec::new();
+            for _ in 0..8 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        app.frame_ui(ui);
+                    },
+                );
+                output.textures_delta.clear();
+                if let Some(update) = output.platform_output.accesskit_update {
+                    nodes = update.nodes;
+                }
+            }
+            let labels: Vec<_> = nodes.iter().filter_map(|(_, node)| node.label()).collect();
+            if page == "new-message-locked" {
+                assert!(!labels.iter().any(|label| label.contains("Ada Lovelace")));
+                assert!(
+                    labels
+                        .iter()
+                        .any(|label| label.contains("Unavailable chat"))
+                );
+            }
+            let button = nodes
+                .iter()
+                .find(|(_, node)| {
+                    node.role() == Role::Button && node.label() == Some("Send to 2 chats")
+                })
+                .unwrap();
+            let bounds = button.1.bounds().unwrap();
+            assert!(bounds.y1 <= size.y as f64 && bounds.y0 >= 0.0, "{bounds:?}");
+        }
     }
 
     fn new_group_dialog() -> (App, egui::Context) {
@@ -10929,7 +11145,7 @@ mod tests {
         use egui::accesskit::Role;
         let (mut app, ctx) = new_group_dialog();
         let labels = accessible_labels(&mut app, &ctx);
-        for row in ["New group", "Add contact"] {
+        for row in ["New message", "Other actions"] {
             assert!(labels.iter().any(|label| label == row), "{labels:?}");
         }
         press_labelled(&mut app, &ctx, "New group", Role::Button);

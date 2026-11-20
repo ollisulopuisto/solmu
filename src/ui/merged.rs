@@ -82,6 +82,41 @@ pub(crate) fn cancel_reply(app: &App, ctx: &egui::Context) {
     });
 }
 
+/// Reply-only drafts also own their existing source and quote.
+pub(crate) fn has_reply(app: &App, ctx: &egui::Context, source: &Member) -> bool {
+    app.settings
+        .beeper
+        .people
+        .iter()
+        .find(|p| p.members.contains(source))
+        .is_some_and(|p| {
+            let key = egui::Id::new(("linked-person-state", &p.members));
+            ctx.data(|data| data.get_temp::<State>(key))
+                .is_some_and(|state| state.reply.is_some())
+        })
+}
+
+/// Explicit New message source selection, never a primary-source fallback.
+pub(crate) fn prepare_destination(app: &App, ctx: &egui::Context, source: &Member) {
+    let Some(person) = app
+        .settings
+        .beeper
+        .people
+        .iter()
+        .find(|p| p.members.contains(source))
+    else {
+        return;
+    };
+    let key = egui::Id::new(("linked-person-state", &person.members));
+    ctx.data_mut(|data| {
+        let mut state = data.get_temp::<State>(key).unwrap_or_default();
+        state.destination = Some(source.clone());
+        state.explicit = true;
+        state.reply = None;
+        data.insert_temp(key, state);
+    });
+}
+
 /// Resolve attachments through the same exact source picker as new text.
 /// The visible member is only the draft owner, never an implicit fallback.
 pub(crate) fn attachment_destination(
@@ -2471,6 +2506,51 @@ mod tests {
             },
         );
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn new_message_keeps_linked_reply_only_draft_and_refuses_prepared_replacement() {
+        for prepared in [false, true] {
+            let (wa, tg, person) = ada_pair();
+            let members = person.members.clone();
+            let (_dir, mut app, ctx) =
+                linked_app(vec![wa.clone(), tg.clone()], vec![person.clone()]);
+            app.open_chat = Some(wa.id.clone());
+            let key = egui::Id::new(("linked-person-state", &person.members));
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    key,
+                    State {
+                        destination: Some(members[0].clone()),
+                        reply: Some((members[0].clone(), "quoted".into())),
+                        explicit: true,
+                        ..Default::default()
+                    },
+                )
+            });
+            app.reply_to = Some("quoted".to_owned().into());
+            let member = crate::ui::flat_groups::member(&app, &tg);
+            app.apply(
+                Action::PrepareNewMessage {
+                    member,
+                    text: if prepared {
+                        "replacement".into()
+                    } else {
+                        String::new()
+                    },
+                    files: vec![],
+                },
+                &ctx,
+            );
+            let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+            assert_eq!(state.reply, Some((members[0].clone(), "quoted".into())));
+            assert_eq!(state.destination, Some(members[0].clone()));
+            assert_eq!(app.reply_to, Some("quoted".to_owned().into()));
+            assert!(app.composer.is_empty());
+            if prepared {
+                assert!(app.new_message.notice.is_some());
+            }
+        }
     }
 
     #[test]

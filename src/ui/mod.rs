@@ -83,7 +83,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         keys::handle(app, ctx);
         history_buttons(app, ctx);
     }
-    let main_navigation = app.is_linked()
+    let main_navigation = !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
+        && app.ghost_ui.compose.is_none()
+        && app.is_linked()
         && app.chat_view()
         && app.local_avatar_editor.is_none()
         && app.dialog.is_none()
@@ -1728,3 +1730,5 @@ mod idle_tests {
 pub mod merged;
 
 mod view_once;
+
+pub(crate) mod new_message;
