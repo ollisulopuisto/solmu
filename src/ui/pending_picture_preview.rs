@@ -175,4 +175,62 @@ mod tests {
         show(&mut app, &ctx);
         assert!(app.pending_picture_preview.is_none());
     }
+    #[test]
+    fn full_view_preview_tab_and_send_chords_never_reach_background_composer() {
+        use crate::model::{Chat, Dialog};
+        for enter_sends in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let (mut app, _) = App::headless(
+                crate::paths::AppDirs::under(root.path()),
+                Default::default(),
+            );
+            app.link = crate::backend::LinkStatus::Connected;
+            app.chats.push(Chat::new("target".into(), "Target".into()));
+            app.open_chat = Some("target".into());
+            app.settings.enter_sends = enter_sends;
+            app.composer = "must stay unsent".into();
+            let id = app.stage(Pending::Picture {
+                width: 2,
+                height: 2,
+                rgba: std::sync::Arc::from(vec![255u8; 16]),
+                texture: None,
+            });
+            app.pending_picture_preview = Some(id);
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("composer-text")));
+            for key in std::iter::repeat_n(egui::Key::Tab, 12).chain([egui::Key::Enter]) {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1000.0, 760.0),
+                        )),
+                        events: vec![egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: if key == egui::Key::Enter && !enter_sends {
+                                egui::Modifiers::COMMAND
+                            } else {
+                                egui::Modifiers::NONE
+                            },
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| super::super::show(&mut app, ui),
+                );
+                output.textures_delta.clear();
+                assert!(!app.actions.iter().any(|action| matches!(
+                    action,
+                    Action::SendText { .. }
+                        | Action::SendPending { .. }
+                        | Action::ShowDialog(Dialog::SendLater)
+                )));
+                assert_eq!(app.composer, "must stay unsent");
+                assert_eq!(app.pending.len(), 1);
+            }
+        }
+    }
 }

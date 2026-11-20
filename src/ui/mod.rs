@@ -78,6 +78,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         window_chrome(app, ui);
         return;
     }
+    // The full-window staged preview owns keyboard focus and input. Do not
+    // construct hidden background widgets, especially the independent composer.
+    if app.pending_picture_preview.is_some() {
+        keys::handle(app, ctx);
+        pending_picture_preview::show(app, ctx);
+        focus_ring(app, ctx);
+        announce(app, ctx);
+        return;
+    }
     app.beeper_signin.show(ctx);
     if let Some(cfg) = app.beeper_signin.connect.take() {
         app.connect_beeper_session(cfg);

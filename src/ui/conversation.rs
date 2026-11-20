@@ -1702,6 +1702,7 @@ pub(crate) fn composer_with_capabilities(
                 && app.dialog.is_none()
                 && app.ghost_ui.compose.is_none()
                         && !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
+                && app.pending_picture_preview.is_none()
                 && ui.input_mut(|input| {
                     let mut sent = false;
                     input.events.retain(|event| {
@@ -1729,6 +1730,7 @@ pub(crate) fn composer_with_capabilities(
                 && app.dialog.is_none()
                 && app.ghost_ui.compose.is_none()
                         && !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
+                && app.pending_picture_preview.is_none()
                 && app.editing.is_none()
                 && ui.input_mut(|input| {
                     let mut scheduled = false;
@@ -2203,6 +2205,7 @@ pub(crate) fn composer_with_capabilities(
             ui.ctx()
                 .data_mut(|data| data.insert_temp(composer_pill_id(), pill.response.rect));
             if (send_key || send_click)
+                && app.pending_picture_preview.is_none()
                 && app.scheduling_draft.is_none()
                 && (!app.composer.trim().is_empty() || !app.pending.is_empty())
             {
@@ -2229,7 +2232,7 @@ pub(crate) fn composer_with_capabilities(
                     });
                 }
                 app.focus_composer = true;
-            } else if (send_key || send_click) && unsent_voice.is_some() && app.editing.is_none() {
+            } else if (send_key || send_click) && app.pending_picture_preview.is_none() && unsent_voice.is_some() && app.editing.is_none() {
                 // An empty composer with a refused voice message: Send tries
                 // that message again.
                 app.actions.push(Action::SendRecording);
