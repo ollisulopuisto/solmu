@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub enum Payload {
+    Text(String),
     File {
         path: PathBuf,
         document: bool,

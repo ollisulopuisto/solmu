@@ -2139,8 +2139,28 @@ impl Api {
             Ok(())
         };
         prepare().map_err(State::NotSubmitted)?;
+        if let Payload::Text(text) = &job.payload {
+            if upload_stopped(Some(cancel)) {
+                return Err(State::NotSubmitted(
+                    "Session closed; nothing submitted".into(),
+                ));
+            }
+            let mut accepted = self
+                .send_text(&job.member.chat, text, None, &[])
+                .map_err(State::Unknown)?;
+            if (accepted.chat.is_empty() || accepted.chat == job.member.chat)
+                && !accepted.pending_id.is_empty()
+            {
+                accepted.chat = job.member.chat.clone();
+                return Ok(accepted);
+            }
+            return Err(State::Unknown(
+                "Unexpected acceptance identity; check chat history".into(),
+            ));
+        }
         let temporary;
         let (path, kind) = match &job.payload {
+            Payload::Text(_) => unreachable!("handled before media upload"),
             Payload::File { path, document } => (
                 path.as_path(),
                 if *document {
@@ -2323,7 +2343,7 @@ fn rich_text_mentions(raw: &str) -> Vec<crate::model::MentionRef> {
 /// Conservative rich-text fallback. Never executes markup, loads assets or
 /// interprets CSS. Only an explicitly HTML-looking body is converted; ordinary
 /// angle-bracket text is left alone. Unknown entities remain literal.
-fn safe_html_href(tag: &str) -> Option<String> {
+fn html_attribute<'a>(tag: &'a str, wanted: &str) -> Option<&'a str> {
     let mut attrs = tag
         .split_once(char::is_whitespace)
         .map(|(_, attrs)| attrs)
@@ -2336,6 +2356,9 @@ fn safe_html_href(tag: &str) -> Option<String> {
         let key = &attrs[..key_end];
         attrs = attrs[key_end..].trim_start();
         if !attrs.starts_with('=') {
+            if key.eq_ignore_ascii_case(wanted) {
+                return Some("");
+            }
             if key_end == 0 {
                 attrs = &attrs[1..];
             }
@@ -2352,19 +2375,27 @@ fn safe_html_href(tag: &str) -> Option<String> {
                 (&attrs[..end], &attrs[end..])
             };
         attrs = remaining.trim_start();
-        if key.eq_ignore_ascii_case("href") {
-            let value = value.replace("&amp;", "&");
-            let url = reqwest::Url::parse(&value).ok()?;
-            if matches!(url.scheme(), "https" | "http" | "mailto")
-                && url.username().is_empty()
-                && url.password().is_none()
-            {
-                return Some(value);
-            }
-            return None;
+        if key.eq_ignore_ascii_case(wanted) {
+            return Some(value);
         }
     }
     None
+}
+
+fn safe_html_href(tag: &str) -> Option<String> {
+    let value = html_attribute(tag, "href")?.replace("&amp;", "&");
+    let url = reqwest::Url::parse(&value).ok()?;
+    (matches!(url.scheme(), "https" | "http" | "mailto")
+        && url.username().is_empty()
+        && url.password().is_none())
+    .then_some(value)
+}
+
+fn html_list_number(tag: &str, attribute: &str) -> Option<i64> {
+    decode_entities(html_attribute(tag, attribute)?)
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// The HTML entity decoding both halves of mention handling share, so the
@@ -2430,6 +2461,15 @@ fn plain_rich_text(raw: &str) -> String {
         "h2",
         "h3",
         "tr",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "th",
+        "td",
+        "h4",
+        "h5",
+        "h6",
         "del",
         "s",
         "strike",
@@ -2473,6 +2513,8 @@ fn plain_rich_text(raw: &str) -> String {
     // spans. Raw HTML is never emitted.
     let mut in_pre = false;
     let mut quote_depth: usize = 0;
+    let mut lists: Vec<(bool, i64, bool)> = Vec::new();
+    let mut table_cell = false;
     // Styles covering the current text position, oldest first. Markers
     // materialize lazily, at the first text char they cover, and close at
     // line ends because the renderer parses styles per line. A line or
@@ -2661,7 +2703,9 @@ fn plain_rich_text(raw: &str) -> String {
                                     // just the text; repeating the address in
                                     // parentheses would show such links twice.
                                     let shows_address = label_start.is_some_and(|start| {
-                                        let label = out[start..].trim();
+                                        let label = crate::literal_hints::without_literal_hints(
+                                            out[start..].trim(),
+                                        );
                                         // The word the label sits in: the renderer
                                         // judges `run_widths.rs` as a whole.
                                         let word_start = out[..start]
@@ -2669,7 +2713,9 @@ fn plain_rich_text(raw: &str) -> String {
                                             .rev()
                                             .find(|(_, c)| c.is_whitespace())
                                             .map_or(0, |(at, c)| at + c.len_utf8());
-                                        let word = &out[word_start..];
+                                        let word = crate::literal_hints::without_literal_hints(
+                                            &out[word_start..],
+                                        );
                                         let bare = url
                                             .strip_prefix("https://")
                                             .or_else(|| url.strip_prefix("http://"))
@@ -2686,7 +2732,7 @@ fn plain_rich_text(raw: &str) -> String {
                                         let same_as_bare = label.trim_end_matches('/')
                                             == bare.trim_end_matches('/')
                                             && (!url.starts_with("http://")
-                                                || crate::markup::links(word).is_empty());
+                                                || crate::markup::links(&word).is_empty());
                                         label == url
                                             || label.trim_end_matches('/')
                                                 == url.trim_end_matches('/')
@@ -2712,9 +2758,64 @@ fn plain_rich_text(raw: &str) -> String {
                             link_label = link.as_ref().map(|_| out.len());
                         }
                     }
+                    if !in_pre && matches!(name.as_str(), "ol" | "ul") {
+                        if closing {
+                            if lists
+                                .last()
+                                .is_some_and(|(ordered, _, _)| *ordered == (name == "ol"))
+                            {
+                                lists.pop();
+                            }
+                        } else {
+                            let reversed =
+                                name == "ol" && html_attribute(tag, "reversed").is_some();
+                            let start = html_list_number(tag, "start").unwrap_or_else(|| {
+                                if reversed {
+                                    // HTML's default is the number of this list's direct
+                                    // items, not its nested descendants.
+                                    let fragment = scraper::Html::parse_fragment(rest);
+                                    let selector =
+                                        scraper::Selector::parse("ol").expect("static selector");
+                                    fragment.select(&selector).next().map_or(1, |list| {
+                                        list.children()
+                                            .filter_map(scraper::ElementRef::wrap)
+                                            .filter(|child| child.value().name() == "li")
+                                            .count()
+                                            .min(i64::MAX as usize)
+                                            as i64
+                                    })
+                                } else {
+                                    1
+                                }
+                            });
+                            lists.push((name == "ol", start, reversed));
+                        }
+                    }
+                    if name == "br" && in_pre && !closing {
+                        pre_content.push('\n');
+                    }
+                    if name == "tr" {
+                        table_cell = false;
+                    }
+                    if matches!(name.as_str(), "td" | "th") && !closing {
+                        if table_cell {
+                            out.push_str(" | ");
+                        }
+                        table_cell = true;
+                    }
+                    if matches!(name.as_str(), "p" | "div")
+                        && !in_pre
+                        && lists.is_empty()
+                        && quote_depth == 0
+                        && !out.trim().is_empty()
+                    {
+                        while !out.ends_with("\n\n") {
+                            out.push('\n');
+                        }
+                    }
                     if matches!(
                         name.as_str(),
-                        "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3"
+                        "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
                     ) {
                         let broke = !out.ends_with('\n') && !out.ends_with("> ");
                         if broke {
@@ -2727,8 +2828,25 @@ fn plain_rich_text(raw: &str) -> String {
                         if quote_depth > 0 && !in_pre && !out.ends_with("> ") {
                             out.push_str("> ");
                         }
-                        if name == "li" && !closing {
-                            out.push_str("• ");
+                        if name == "li" && !closing && !in_pre {
+                            out.push_str(&"  ".repeat(lists.len().saturating_sub(1).min(32)));
+                            if let Some((true, next, reversed)) = lists.last_mut() {
+                                let number = html_list_number(tag, "value").unwrap_or(*next);
+                                out.push_str(&format!("{number}. "));
+                                *next = if *reversed {
+                                    number.saturating_sub(1)
+                                } else {
+                                    number.saturating_add(1)
+                                };
+                            } else {
+                                out.push_str("• ");
+                            }
+                        }
+                        if !closing
+                            && matches!(name.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+                        {
+                            out.push_str(&"#".repeat((name.as_bytes()[1] - b'0') as usize));
+                            out.push(' ');
                         }
                     }
                 }
@@ -2748,10 +2866,20 @@ fn plain_rich_text(raw: &str) -> String {
             (end, decode_entities(&rest[..end]))
         };
         rest = &rest[taken..];
-        if blocked.is_some() {
+        let list_source_indent = !in_pre
+            && !lists.is_empty()
+            && run.trim().is_empty()
+            && (out.is_empty()
+                || out.ends_with('\n')
+                || out.ends_with("• ")
+                || ["<li", "</li", "<ul", "</ul", "<ol", "</ol"]
+                    .iter()
+                    .any(|tag| rest.to_ascii_lowercase().starts_with(tag)));
+        if blocked.is_some() || list_source_indent {
             continue;
         }
-        for ch in run.chars() {
+        let chars: Vec<_> = run.chars().collect();
+        for (index, &ch) in chars.iter().enumerate() {
             if in_pre {
                 pre_content.push(ch);
                 continue;
@@ -2792,6 +2920,20 @@ fn plain_rich_text(raw: &str) -> String {
                 out.push('\\');
             }
             out.push(ch);
+            // Literal HTML text is not another layer of WhatsApp markup.
+            // A nonprinting hint after literal markers lets the renderer
+            // distinguish them from the semantic markers emitted above.
+            // Native backslashes are untouched, including the shrug.
+            let shrug_underscore = ch == '_'
+                && (index
+                    .checked_sub(1)
+                    .is_some_and(|i| matches!(chars[i], '\\' | '/'))
+                    || chars
+                        .get(index + 1)
+                        .is_some_and(|c| matches!(c, '\\' | '/')));
+            if !in_code && !shrug_underscore && matches!(ch, '*' | '_' | '~' | '`') {
+                out.push('\u{2063}');
+            }
         }
     }
     // Text runs and URLs decode at emission, so `out` is already decoded:
@@ -2872,6 +3014,26 @@ fn forwardable_text(message: &BeeperMessage) -> bool {
             .text
             .as_ref()
             .is_some_and(|text| !text.trim().is_empty())
+}
+
+fn editable_markdown(
+    wire: &BeeperMessage,
+    chat: &str,
+    id: &str,
+    account: &str,
+) -> Result<String, crate::rich_edit::Error> {
+    if wire.id != id
+        || wire.chat_id != chat
+        || wire.account_id != account
+        || wire.is_sender != Some(true)
+        || wire.is_deleted
+        || wire.is_hidden
+        || !wire.attachments.is_empty()
+        || !rich_text_mentions(wire.text.as_deref().unwrap_or("")).is_empty()
+    {
+        return Err("The current message cannot be safely prepared for editing".into());
+    }
+    crate::rich_edit::markdown(wire.text.as_deref().ok_or("Message has no editable text")?)
 }
 
 fn body_of(m: &BeeperMessage) -> (String, bool) {
@@ -3753,24 +3915,22 @@ pub fn run(
         .spawn(move || {
             while let Ok(job) = pending_media_rx.recv() {
                 let result = pending_api.send_pending_media(&job, &pending_cancel);
+                let accepted = result.as_ref().ok().map(|value| value.pending_id.clone());
                 let state = match result {
-                    Ok(accepted) => {
-                        let _ = pending_media_accepted_tx.send((
-                            job.local.clone(),
-                            job.member.clone(),
-                            accepted.pending_id.clone(),
-                        ));
-                        crate::pending_media::State::Accepted {
-                            pending: accepted.pending_id,
-                        }
-                    }
+                    Ok(value) => crate::pending_media::State::Accepted {
+                        pending: value.pending_id,
+                    },
                     Err(state) => state,
                 };
                 let _ = pending_events.send(Event::BeeperMediaProgress {
-                    local: job.local,
-                    member: job.member,
+                    local: job.local.clone(),
+                    member: job.member.clone(),
                     state,
                 });
+                // Publish acceptance before the control worker can resolve it.
+                if let Some(pending) = accepted {
+                    let _ = pending_media_accepted_tx.send((job.local, job.member, pending));
+                }
                 pending_waker.wake();
             }
         })
@@ -4013,6 +4173,9 @@ pub fn run(
                     Ok(Command::Shutdown) => return,
                     Ok(Command::SendText { chat, text, .. }) => emit(Event::BeeperSendUncertain {
                         chat, text, message: "Beeper is not connected yet. Text restored; nothing was sent or queued for automatic retry.".into(),
+                    }),
+                    Ok(Command::PrepareEdit { chat, id, request, .. }) => emit(Event::BeeperEditPrepared {
+                        chat, id, request, result: Err(crate::rich_edit::Error::Unavailable),
                     }),
                     Ok(Command::EditText { chat, id, text, .. }) => emit(Event::BeeperEditUncertain {
                         chat, id, text, message: "Beeper is not connected yet. Edit retained; nothing was changed.".into(),
@@ -4797,6 +4960,23 @@ pub fn run(
                         }
                     }
                     last_chat_refresh = Instant::now() - CHAT_REFRESH;
+                }
+                Command::PrepareEdit {
+                    chat,
+                    id,
+                    account,
+                    request,
+                } => {
+                    let result = api
+                        .get_message(&chat, &id)
+                        .map_err(|_| crate::rich_edit::Error::Unavailable)
+                        .and_then(|wire| editable_markdown(&wire, &chat, &id, &account));
+                    emit(Event::BeeperEditPrepared {
+                        chat,
+                        id,
+                        request,
+                        result,
+                    });
                 }
                 Command::EditText {
                     chat,
@@ -6929,6 +7109,97 @@ mod tests {
         }
     }
     #[test]
+    fn audience_text_cancellation_during_destination_lookup_never_posts() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            assert!(
+                std::str::from_utf8(&buf[..n])
+                    .unwrap()
+                    .starts_with("GET /v1/chats/target ")
+            );
+            stop.store(true, Ordering::SeqCst);
+            let body = r#"{"id":"target","accountID":"signal"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let mut job = pending_media_job(&api.base_url, std::path::Path::new("unused"));
+        job.payload = crate::pending_media::Payload::Text("hello".into());
+        assert!(matches!(
+            api.send_pending_media(&job, &cancel),
+            Err(crate::pending_media::State::NotSubmitted(_))
+        ));
+        server.join().unwrap();
+    }
+    #[test]
+    fn audience_text_jobs_validate_destination_then_post_once_and_never_retry_ambiguous_response() {
+        for (status, body, expected_unknown) in [
+            (
+                200,
+                r#"{"chatID":"target","pendingMessageID":"pending"}"#,
+                false,
+            ),
+            (503, "{}", true),
+            (200, "not json", true),
+        ] {
+            let (api, server) = pending_media_fixture(vec![
+                (
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ),
+                ("POST /v1/chats/target/messages ", status, body.into()),
+            ]);
+            let mut job = pending_media_job(&api.base_url, std::path::Path::new("unused"));
+            job.payload = crate::pending_media::Payload::Text("hello".into());
+            let result = api.send_pending_media(&job, &AtomicBool::new(false));
+            if expected_unknown {
+                assert!(matches!(
+                    result,
+                    Err(crate::pending_media::State::Unknown(_))
+                ));
+            } else {
+                assert_eq!(result.unwrap().pending_id, "pending");
+            }
+            let requests = server.join().unwrap();
+            assert_eq!(requests.len(), 2);
+            let payload: serde_json::Value =
+                serde_json::from_str(requests[1].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            assert_eq!(payload, serde_json::json!({"text":"hello"}));
+        }
+    }
+    #[test]
+    fn audience_text_foreign_account_is_proven_unsent_without_post() {
+        let (api, server) = pending_media_fixture(vec![(
+            "GET /v1/chats/target ",
+            200,
+            r#"{"id":"target","accountID":"foreign"}"#.into(),
+        )]);
+        let mut job = pending_media_job(&api.base_url, std::path::Path::new("unused"));
+        job.payload = crate::pending_media::Payload::Text("hello".into());
+        assert!(matches!(
+            api.send_pending_media(&job, &AtomicBool::new(false)),
+            Err(crate::pending_media::State::NotSubmitted(_))
+        ));
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
     fn pending_media_submission_boundary_is_not_inferred_from_error_words() {
         for (upload_status, send_status, expected_unknown) in
             [(503, 200, false), (200, 503, true), (200, 200, false)]
@@ -7923,6 +8194,120 @@ mod tests {
         );
     }
 
+    #[test]
+    fn numbered_send_and_edit_keep_original_markdown_on_the_wire() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut captured = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 4096];
+                loop {
+                    let n = stream.read(&mut buffer).unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&buffer[..n]);
+                    if let Some(end) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&bytes[..end]);
+                        let len: usize = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|s| s.trim().parse().ok())
+                            })
+                            .unwrap();
+                        if bytes.len() >= end + 4 + len {
+                            captured.push((
+                                head.lines().next().unwrap().to_owned(),
+                                serde_json::from_slice::<serde_json::Value>(
+                                    &bytes[end + 4..end + 4 + len],
+                                )
+                                .unwrap(),
+                            ));
+                            break;
+                        }
+                    }
+                }
+                let body = r#"{"pendingMessageID":"pending","chatID":"chat"}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            captured
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let source = "Try this:\n\n1. **Open** settings.\n2. Switch to dark style.";
+        api.send_text("chat", source, None, &[]).unwrap();
+        api.mutate(
+            reqwest::Method::PUT,
+            "/v1/chats/chat/messages/message",
+            Some(serde_json::json!({"text":source})),
+        )
+        .unwrap();
+        let requests = server.join().unwrap();
+        assert!(requests[0].0.starts_with("POST /v1/chats/chat/messages "));
+        assert!(
+            requests[1]
+                .0
+                .starts_with("PUT /v1/chats/chat/messages/message ")
+        );
+        assert_eq!(requests[0].1, serde_json::json!({"text":source}));
+        assert_eq!(requests[1].1, requests[0].1);
+    }
+
+    #[test]
+    fn ordered_rich_lists_reject_bad_numbers_and_keep_style_boundaries() {
+        assert_eq!(
+            plain_rich_text(
+                "<ol start='bad'><li value='NaN'><strong>Open</strong> settings</li><li>Next</li></ol>"
+            ),
+            "1. *Open* settings\n2. Next"
+        );
+        assert_eq!(
+            plain_rich_text("<ol start='9223372036854775807'><li>last</li><li>next</li></ol>"),
+            "9223372036854775807. last\n9223372036854775807. next"
+        );
+        assert_eq!(
+            plain_rich_text("<ol start='&#51;'><li>three</li></ol><p>After</p>"),
+            "3. three\n\nAfter"
+        );
+        assert_eq!(plain_rich_text("1. raw\n2. raw"), "1. raw\n2. raw");
+    }
+
+    #[test]
+    fn ordered_rich_lists_keep_start_nested_counters_and_item_values() {
+        assert_eq!(
+            plain_rich_text(
+                "<ol start=3><li>three<ul><li>child</li></ul></li><li value=8>eight</li><li>nine</li></ol>"
+            ),
+            "3. three\n  • child\n8. eight\n9. nine"
+        );
+        assert_eq!(
+            plain_rich_text("<ol><li>outer<ol><li>inner</li></ol></li><li>next</li></ol>"),
+            "1. outer\n  1. inner\n2. next"
+        );
+        assert_eq!(
+            plain_rich_text("<ol><li>one</li></ol><ol><li>new</li></ol>"),
+            "1. one\n1. new"
+        );
+        assert_eq!(
+            plain_rich_text("<ol start='-1'><li>minus</li><li>zero</li></ol>"),
+            "-1. minus\n0. zero"
+        );
+    }
+
     /// Bridge-labelled fixture matrix: the normalized-HTML shapes each
     /// network's bridge is expected to deliver through Beeper's `text`
     /// field, plus the raw/plain/Markdown fallbacks seen when a bridge does
@@ -7930,6 +8315,95 @@ mod tests {
     /// string the renderer (`crate::markup`) turns back into styled spans.
     /// These prove parser behaviour only; only live captures per bridge
     /// prove every bridge really sends these shapes.
+    #[test]
+    fn rich_html_reversed_lists_count_down_from_start_or_direct_item_count() {
+        assert_eq!(
+            plain_rich_text(
+                "<ol reversed start=5><li>five</li><li value=2>two</li><li>one</li></ol>"
+            ),
+            "5. five\n2. two\n1. one"
+        );
+        assert_eq!(
+            plain_rich_text("<ol reversed><li>two<ul><li>nested</li></ul></li><li>one</li></ol>"),
+            "2. two\n  • nested\n1. one"
+        );
+        assert_eq!(
+            plain_rich_text(
+                "<ol reversed start=-9223372036854775808><li>min</li><li>still min</li></ol>"
+            ),
+            "-9223372036854775808. min\n-9223372036854775808. still min"
+        );
+    }
+
+    #[test]
+    fn literal_html_remains_searchable_after_mapping() {
+        for (html, query) in [
+            ("<p>run_widths.rs</p>", "run_widths.rs"),
+            (
+                "<p>https://example.com/a_b_c</p>",
+                "https://example.com/a_b_c",
+            ),
+            ("<p>*literal*</p>", "*literal*"),
+        ] {
+            let mapped = plain_rich_text(html);
+            assert!(crate::merged::search_matches(&mapped, query, "", ""));
+            let content = crate::model::Content::text(&mapped);
+            let snippet = content.text_matching(query).expect("matching snippet");
+            assert_eq!(crate::literal_hints::without_literal_hints(&snippet), query);
+        }
+    }
+
+    #[test]
+    fn rich_html_literal_markers_are_not_reinterpreted_as_styles() {
+        assert_eq!(
+            plain_rich_text("<p>*literal* _literal_ ~literal~ `literal`</p>"),
+            "*\u{2063}literal*\u{2063} _\u{2063}literal_\u{2063} ~\u{2063}literal~\u{2063} `\u{2063}literal`\u{2063}"
+        );
+        assert_eq!(
+            plain_rich_text("<strong>real *literal*</strong>"),
+            "*real *\u{2063}literal*\u{2063}*"
+        );
+        assert_eq!(plain_rich_text("<code>*literal*</code>"), "`*literal*`");
+    }
+
+    #[test]
+    fn rich_html_keeps_explicit_heading_levels() {
+        assert_eq!(plain_rich_text("<h1>Heading</h1>"), "# Heading");
+        assert_eq!(plain_rich_text("<h6>Heading</h6>"), "###### Heading");
+    }
+    #[test]
+    fn rich_html_keeps_paragraphs_distinct_from_hard_breaks() {
+        assert_eq!(plain_rich_text("<p>one</p><p>two</p>"), "one\n\ntwo");
+        assert_eq!(plain_rich_text("<p>one<br>two</p>"), "one\ntwo");
+    }
+    #[test]
+    fn rich_html_keeps_breaks_inside_preformatted_code() {
+        assert_eq!(
+            plain_rich_text("<pre>first<br>second</pre>"),
+            "```\nfirst\nsecond\n```"
+        );
+    }
+    #[test]
+    fn rich_html_table_fallback_keeps_cells_and_rows_without_raw_tags() {
+        assert_eq!(
+            plain_rich_text(
+                "<table><tr><th>Name</th><th>Value</th></tr><tr><td>A</td><td>B</td></tr></table>"
+            ),
+            "Name | Value\nA | B"
+        );
+    }
+    #[test]
+    fn rich_html_list_source_whitespace_is_not_content() {
+        assert_eq!(
+            plain_rich_text("<ul>\n<li>one</li>\n<li>two</li>\n</ul>"),
+            "• one\n• two"
+        );
+        assert_eq!(
+            plain_rich_text("<ul>\n<li><b>one</b> <b>two</b></li>\n<li>next</li>\n</ul>"),
+            "• *one* *two*\n• next"
+        );
+    }
+
     #[test]
     fn rich_text_style_fixture_matrix() {
         let fixtures: &[(&str, &str, &str)] = &[
@@ -7991,9 +8465,9 @@ mod tests {
                 "\u{2022} one\n\u{2022} two",
             ),
             (
-                "numbered list keeps bullets",
+                "numbered list keeps numbers",
                 "<ol><li>one</li><li>two</li></ol>",
-                "\u{2022} one\n\u{2022} two",
+                "1. one\n2. two",
             ),
             (
                 "styled link label",
@@ -8123,7 +8597,7 @@ mod tests {
         let raw = "<p><strong>bold</strong></p><p><em>italics</em></p><p><del>overstrike</del></p><ul><li>one</li><li>two</li></ul>";
         assert_eq!(
             plain_rich_text(raw),
-            "*bold*\n_italics_\n~overstrike~\n\u{2022} one\n\u{2022} two"
+            "*bold*\n\n_italics_\n\n~overstrike~\n\n\u{2022} one\n\u{2022} two"
         );
     }
 
@@ -8134,7 +8608,7 @@ mod tests {
     fn rich_text_styles_stay_safe() {
         assert_eq!(
             plain_rich_text("<p>a</p><script>alert(1)</script><p><strong>b</strong></p>"),
-            "a\n*b*"
+            "a\n\n*b*"
         );
         assert_eq!(
             plain_rich_text("<style>* { color: red }</style><p><em>x</em></p>"),
@@ -9789,7 +10263,7 @@ mod tests {
         // Styles survive as renderer markup; scripts and raw HTML never do.
         assert_eq!(
             plain_rich_text("<p>Hi &amp; welcome</p><br><p>Next <b>bold</b></p>"),
-            "Hi & welcome\nNext *bold*"
+            "Hi & welcome\n\nNext *bold*"
         );
         assert_eq!(
             plain_rich_text(
@@ -10134,6 +10608,106 @@ mod tests {
         tx.send(Command::Shutdown).unwrap();
         worker.join().unwrap();
         stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn fresh_send_and_edit_submit_the_same_markdown_text_without_display_conversion() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut captured = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 4096];
+                loop {
+                    let n = stream.read(&mut buffer).unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&buffer[..n]);
+                    if let Some(end) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&bytes[..end]);
+                        let len: usize = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|s| s.trim().parse().ok())
+                            })
+                            .unwrap();
+                        if bytes.len() >= end + 4 + len {
+                            captured.push((
+                                head.lines().next().unwrap().to_owned(),
+                                serde_json::from_slice::<serde_json::Value>(
+                                    &bytes[end + 4..end + 4 + len],
+                                )
+                                .unwrap(),
+                            ));
+                            break;
+                        }
+                    }
+                }
+                let body = r#"{"pendingMessageID":"pending","chatID":"chat"}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            captured
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let source = "**hello**\n\n- first\n- second";
+        api.send_text("chat", source, None, &[]).unwrap();
+        api.mutate(
+            reqwest::Method::PUT,
+            "/v1/chats/chat/messages/message",
+            Some(serde_json::json!({"text":source})),
+        )
+        .unwrap();
+        let requests = server.join().unwrap();
+        assert!(requests[0].0.starts_with("POST /v1/chats/chat/messages "));
+        assert!(
+            requests[1]
+                .0
+                .starts_with("PUT /v1/chats/chat/messages/message ")
+        );
+        assert_eq!(requests[0].1, serde_json::json!({"text":source}));
+        assert_eq!(requests[1].1, requests[0].1);
+    }
+
+    #[test]
+    fn edit_preparation_preserves_markup_and_requires_the_exact_own_message() {
+        let value = serde_json::json!({"id":"message","chatID":"chat","accountID":"account","isSender":true,
+            "text":"<p>hello</p><ul><li>first</li><li><strong>second</strong></li></ul>"});
+        let wire: BeeperMessage = serde_json::from_value(value.clone()).unwrap();
+        let markdown = editable_markdown(&wire, "chat", "message", "account").unwrap();
+        assert!(markdown.contains("- first\n- **second**"));
+        assert!(!markdown.contains('•'));
+        for (field, bad) in [
+            ("id", serde_json::json!("other")),
+            ("chatID", serde_json::json!("other")),
+            ("accountID", serde_json::json!("other")),
+            ("isSender", serde_json::json!(false)),
+            ("isDeleted", serde_json::json!(true)),
+            ("isHidden", serde_json::json!(true)),
+            ("attachments", serde_json::json!([{"type":"img"}])),
+        ] {
+            let mut changed = value.clone();
+            changed[field] = bad;
+            let wire = serde_json::from_value(changed).unwrap();
+            assert!(
+                editable_markdown(&wire, "chat", "message", "account").is_err(),
+                "{field}"
+            );
+        }
     }
 
     #[test]
@@ -11904,7 +12478,7 @@ mod tests {
             plain_rich_text(
                 r#"<a href="https://yle.fi/a/7-10106742?utm_source=a&amp;utm_medium=b">https://yle.fi/a/7-10106742?utm_source=a&amp;utm_medium=b</a>"#
             ),
-            "https://yle.fi/a/7-10106742?utm_source=a&utm_medium=b"
+            "https://yle.fi/a/7-10106742?utm_\u{2063}source=a&utm_\u{2063}medium=b"
         );
         // A trailing-slash difference still reads as the same address.
         assert_eq!(
@@ -11925,7 +12499,7 @@ mod tests {
         // with a scheme, so the text stays and the renderer decides.
         assert_eq!(
             plain_rich_text(r#"run_<a href="http://widths.rs">widths.rs</a>"#),
-            "run_widths.rs"
+            "run_\u{2063}widths.rs"
         );
         assert_eq!(
             plain_rich_text(r#"<a href="https://example.com">example.com</a>"#),
