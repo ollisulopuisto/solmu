@@ -25,8 +25,11 @@ Attachments use the existing cache limits and a 32 MiB upload limit.
 Retries preserve accepted and unknown rows and re-plan a failed preparation,
 including expanding all attachments. This prevents text-only retries of a failed
 attachment lookup and prevents duplicate sends of already accepted attachments.
-The progress dialog stays open while requests run; it cannot be replaced by a
-second forward batch. There is no batch-cancel control in this first version.
+The progress dialog can be closed while requests run. Closing it hides the
+results, it does not cancel the batch. The sidebar shows Forwarding in progress
+(or Forwarding results when finished); use View forwarding results to reopen
+the same batch. A second forward batch cannot replace an active batch.
+There is no batch-cancel control in this first version.
 Session shutdown stops before the next message POST where possible. In-flight
 POST outcomes can remain unknown.
 
@@ -40,7 +43,7 @@ The adapter fixture suite covers metadata/privacy, literal text, pre-POST source
 identity failure, ambiguous POST responses, exact acceptance, original filenames,
 selected-attachment upload, retry re-planning and accepted-row preservation.
 Native App tests cover duplicate confirmation, stable retry indices and keeping
-active progress visible. Synthetic screenshots do not prove live delivery.
+active progress available through the sidebar reopening control. Synthetic screenshots do not prove live delivery.
 
 Real networks and macOS interaction require manual testing. Do not interpret
 per-network fixture labels as coverage of actual bridge behavior.
