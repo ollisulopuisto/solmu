@@ -703,3 +703,9 @@ history and search continuation. Tests cover disconnected inventory without a
 Chats replacement event, legitimate empty inventory, malformed history, and
 search retaining results/cursor across refusal and successful retry.
 No real Server query or UI-layout changes; native/live acceptance unverified.
+
+## Group-member chat search,20 November
+
+Cmd-K, global/sidebar chat matching and palette include full loaded member display names and bridge-provided names for named groups, without changing the visible group title or fetching metadata from paint. Locked groups stay excluded from switcher/palette. Unknown or unloaded membership cannot match yet. Contact alias editing remains sketch-only.
+
+Production helper regression fails with the previous title-only terms and passes after including members. Native test-target compile passes with app-level regression covering Cmd-K/global/palette/title/locked exclusion. Full native test execution was attempted before the fix but exceeded local build timeout, so no claim that the actual end-to-end regression has run red/green; CI must execute it. No Mac pass.

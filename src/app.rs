@@ -3081,6 +3081,24 @@ impl App {
         self.person_name(&chat.id, None)
     }
 
+    /// Search full loaded group-member names as well as the displayed title.
+    /// Unknown membership stays unknown; this never fetches on a paint pass.
+    pub fn chat_search_names(&self, chat: &Chat) -> String {
+        let members = if chat.is_group() {
+            chat.participants
+                .iter()
+                .flat_map(|id| {
+                    let resolved = self.display_name(id);
+                    let bridge = chat.participant_names.get(id).cloned().unwrap_or_default();
+                    [resolved, bridge]
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        crate::chat_search_names::terms(&self.chat_title(chat), members)
+    }
+
     /// The title of the chat `id`, as the chat list writes it, for places that
     /// hold only the id (a starred message). A chat not loaded falls back to
     /// the person's name.
@@ -3951,7 +3969,7 @@ impl App {
             .filter(|chat| {
                 !chat.locked
                     && !self.chat_scope_matches(chat)
-                    && (crate::util::search_key(&self.chat_title(chat)).contains(&needle)
+                    && (crate::util::search_key(&self.chat_search_names(chat)).contains(&needle)
                         || chat.phone().is_some_and(|phone| phone.contains(&needle))
                         || chat.last.as_ref().is_some_and(|last| {
                             crate::util::search_key(&last.summary).contains(&needle)
@@ -4245,7 +4263,7 @@ impl App {
                 // not a query to match.
                 (self.locked_folder && !self.chat_lock_authenticated())
                     || needle.is_empty()
-                    || crate::util::search_key(&self.chat_title(chat)).contains(&needle)
+                    || crate::util::search_key(&self.chat_search_names(chat)).contains(&needle)
                     || chat.phone().is_some_and(|phone| phone.contains(&needle))
                     || chat.last.as_ref().is_some_and(|last| {
                         crate::util::search_key(&last.summary).contains(&needle)
