@@ -7638,8 +7638,6 @@ fn message_menu_labels(locale: crate::i18n::Locale) -> Vec<String> {
         gettext(locale, "Reply privately"),
         gettext(locale, "Star"),
         gettext(locale, "Unstar"),
-        gettext(locale, "Pin message"),
-        gettext(locale, "Unpin message"),
         gettext(locale, "Forward"),
         gettext(locale, "Save for later"),
         gettext(locale, "Remove from Saved"),

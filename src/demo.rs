@@ -20778,7 +20778,7 @@ mod tests {
     /// pointer: the row opens its message and the pin beside it steps to the
     /// next pin, and both are labelled buttons.
     #[test]
-    fn the_pinned_line_is_one_button_that_names_its_place() {
+    fn unsupported_pinned_header_is_not_offered() {
         let mut app = app();
         apply_flags(&mut app, Some("pinned"));
         let ctx = egui::Context::default();
@@ -20813,10 +20813,9 @@ mod tests {
             .iter()
             .filter(|label| label.starts_with("Pinned message "))
             .collect();
-        assert_eq!(lines.len(), 1, "one line for all the pins: {labels:?}");
         assert!(
-            lines[0].starts_with("Pinned message 1 of 3: "),
-            "it names the newest pin and the count: {lines:?}"
+            lines.is_empty(),
+            "unsupported pinned header must stay hidden: {lines:?}"
         );
     }
 

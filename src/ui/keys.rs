@@ -2260,7 +2260,6 @@ mod tests {
             ),
             ("Ctrl+L", "Forward selected messages, or the latest message"),
             ("Ctrl+Alt+S", "Star or unstar the context-menu message"),
-            ("Ctrl+Alt+P", "Pin or unpin the context-menu message"),
             ("Ctrl+Alt+B", "Save or unsave the context-menu message"),
             (
                 "\u{2191} / \u{2193}, Enter",
