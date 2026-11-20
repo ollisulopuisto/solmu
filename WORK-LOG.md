@@ -775,6 +775,39 @@ fixtures. Native all-target/all-feature Clippy passes; local targeted applicatio
 test execution exceeded120 seconds during compilation and has not run. CI must
 recheck the three existing demo failures, including right-click-beside-message.
 
+## 2026-11-20: Reconstruct Markdown when editing rich messages
+
+Owner requested retaining editable Markdown, then explicitly chose reverse
+conversion rather than duplicate source storage. Prepare edit reads the current
+exact own message, reconstructs Markdown from rich HTML, and verifies a local
+CommonMark semantic round-trip. Unsupported or lossy constructs refuse before
+changing the composer. A request generation, local account, chat, target and
+unchanged draft guard reject late replies. No write occurs until explicit send.
+Both fresh sends and edits pass Markdown in the API text field. Beeper's current
+docs say both use the same rich-text conversion. Retrieval exposes rich text,
+not original marker spelling. No source store or schema migration was added.
+
+412 portable production-source tests pass, including rich reconstruction and
+exact message/account/ownership refusals; native all-target/all-feature Clippy
+passes. Four converter tests include13 markdown-rich-markdown-rich cases with
+byte-identical CommonMark rich output. This is not live Beeper/WhatsApp proof.
+Full native UI tests unrun. Demo compilation was killed by the environment;
+visual capture remains unverified, not waived. No real message/account touched.
+
+Review follow-up: validate every rich element and attribute before conversion,
+including code wrappers and list items. Refuse nested code-block breaks/links,
+styled code/list items and reversed lists. Preparation errors are structured
+Unsupported/Unavailable values, translated with literal gettext at the UI
+boundary; backend detail strings do not reach the toast. 412 portable tests pass
+again and native all-target/all-feature Clippy passes. Private actual app
+before-dark, after-dark and narrow-light pixels now inspected after a reduced
+debug binary build. Composer shows Markdown hyphens and bold markers rather than
+rendered bullets. No screenshots published; per-PR media gate remains held.
+
+Added an executed local HTTP wire regression: fresh POST and edit PUT both
+submit the same Markdown text byte-for-byte in the JSON text field, never
+display bullets/renderer markers. 413 portable tests pass; Clippy passes.
+This verifies Solmu's transport contract, not Beeper's downstream conversion.
 ## Scoped message automation,20 November
 
 Implemented exact account/chat messages:send grants, old-read-token refusal,

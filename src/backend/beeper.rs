@@ -2922,6 +2922,26 @@ fn forwardable_text(message: &BeeperMessage) -> bool {
             .is_some_and(|text| !text.trim().is_empty())
 }
 
+fn editable_markdown(
+    wire: &BeeperMessage,
+    chat: &str,
+    id: &str,
+    account: &str,
+) -> Result<String, crate::rich_edit::Error> {
+    if wire.id != id
+        || wire.chat_id != chat
+        || wire.account_id != account
+        || wire.is_sender != Some(true)
+        || wire.is_deleted
+        || wire.is_hidden
+        || !wire.attachments.is_empty()
+        || !rich_text_mentions(wire.text.as_deref().unwrap_or("")).is_empty()
+    {
+        return Err("The current message cannot be safely prepared for editing".into());
+    }
+    crate::rich_edit::markdown(wire.text.as_deref().ok_or("Message has no editable text")?)
+}
+
 fn body_of(m: &BeeperMessage) -> (String, bool) {
     if let Some(t) = &m.text
         && !t.is_empty()
@@ -4060,6 +4080,9 @@ pub fn run(
                     Ok(Command::SendText { chat, text, .. }) => emit(Event::BeeperSendUncertain {
                         chat, text, message: "Beeper is not connected yet. Text restored; nothing was sent or queued for automatic retry.".into(),
                     }),
+                    Ok(Command::PrepareEdit { chat, id, request, .. }) => emit(Event::BeeperEditPrepared {
+                        chat, id, request, result: Err(crate::rich_edit::Error::Unavailable),
+                    }),
                     Ok(Command::EditText { chat, id, text, .. }) => emit(Event::BeeperEditUncertain {
                         chat, id, text, message: "Beeper is not connected yet. Edit retained; nothing was changed.".into(),
                     }),
@@ -4843,6 +4866,23 @@ pub fn run(
                         }
                     }
                     last_chat_refresh = Instant::now() - CHAT_REFRESH;
+                }
+                Command::PrepareEdit {
+                    chat,
+                    id,
+                    account,
+                    request,
+                } => {
+                    let result = api
+                        .get_message(&chat, &id)
+                        .map_err(|_| crate::rich_edit::Error::Unavailable)
+                        .and_then(|wire| editable_markdown(&wire, &chat, &id, &account));
+                    emit(Event::BeeperEditPrepared {
+                        chat,
+                        id,
+                        request,
+                        result,
+                    });
                 }
                 Command::EditText {
                     chat,
@@ -10356,6 +10396,106 @@ mod tests {
         tx.send(Command::Shutdown).unwrap();
         worker.join().unwrap();
         stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn fresh_send_and_edit_submit_the_same_markdown_text_without_display_conversion() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let mut captured = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 4096];
+                loop {
+                    let n = stream.read(&mut buffer).unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&buffer[..n]);
+                    if let Some(end) = bytes.windows(4).position(|v| v == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&bytes[..end]);
+                        let len: usize = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|s| s.trim().parse().ok())
+                            })
+                            .unwrap();
+                        if bytes.len() >= end + 4 + len {
+                            captured.push((
+                                head.lines().next().unwrap().to_owned(),
+                                serde_json::from_slice::<serde_json::Value>(
+                                    &bytes[end + 4..end + 4 + len],
+                                )
+                                .unwrap(),
+                            ));
+                            break;
+                        }
+                    }
+                }
+                let body = r#"{"pendingMessageID":"pending","chatID":"chat"}"#;
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            captured
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let source = "**hello**\n\n- first\n- second";
+        api.send_text("chat", source, None, &[]).unwrap();
+        api.mutate(
+            reqwest::Method::PUT,
+            "/v1/chats/chat/messages/message",
+            Some(serde_json::json!({"text":source})),
+        )
+        .unwrap();
+        let requests = server.join().unwrap();
+        assert!(requests[0].0.starts_with("POST /v1/chats/chat/messages "));
+        assert!(
+            requests[1]
+                .0
+                .starts_with("PUT /v1/chats/chat/messages/message ")
+        );
+        assert_eq!(requests[0].1, serde_json::json!({"text":source}));
+        assert_eq!(requests[1].1, requests[0].1);
+    }
+
+    #[test]
+    fn edit_preparation_preserves_markup_and_requires_the_exact_own_message() {
+        let value = serde_json::json!({"id":"message","chatID":"chat","accountID":"account","isSender":true,
+            "text":"<p>hello</p><ul><li>first</li><li><strong>second</strong></li></ul>"});
+        let wire: BeeperMessage = serde_json::from_value(value.clone()).unwrap();
+        let markdown = editable_markdown(&wire, "chat", "message", "account").unwrap();
+        assert!(markdown.contains("- first\n- **second**"));
+        assert!(!markdown.contains('•'));
+        for (field, bad) in [
+            ("id", serde_json::json!("other")),
+            ("chatID", serde_json::json!("other")),
+            ("accountID", serde_json::json!("other")),
+            ("isSender", serde_json::json!(false)),
+            ("isDeleted", serde_json::json!(true)),
+            ("isHidden", serde_json::json!(true)),
+            ("attachments", serde_json::json!([{"type":"img"}])),
+        ] {
+            let mut changed = value.clone();
+            changed[field] = bad;
+            let wire = serde_json::from_value(changed).unwrap();
+            assert!(
+                editable_markdown(&wire, "chat", "message", "account").is_err(),
+                "{field}"
+            );
+        }
     }
 
     #[test]

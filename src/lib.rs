@@ -95,6 +95,8 @@ pub mod reply_graph;
 
 pub mod audience_queue;
 pub mod reply_router;
+
+pub mod rich_edit;
 pub mod write_grants;
 
 pub mod write_journal;
