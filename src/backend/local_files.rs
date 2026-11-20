@@ -36,7 +36,7 @@ pub(super) fn run(command: Command, picture_dir: Option<&Path>) -> Option<Event>
             let result = picture_dir
                 .ok_or_else(|| "Picture edit cache is unavailable".to_owned())
                 .and_then(|dir| {
-                    super::picture_edit::write(&source, width, height, crop, turns, dir)
+                    super::picture_edit::write_temporary(&source, width, height, crop, turns, dir)
                 });
             return Some(Event::PictureEdited { target, result });
         }

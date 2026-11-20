@@ -1758,6 +1758,9 @@ impl Event {
                     }
                 }
             }
+            Event::PictureEdited {
+                result: Ok(path), ..
+            } => beeper::discard_temp_upload(&path),
             Event::PreparedMedia {
                 result: Ok(path), ..
             }
@@ -1788,7 +1791,7 @@ impl Backend {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         let local_events = Some((event_tx.clone(), waker.clone()));
-        let local_picture_dir = Some(dirs.media_cache_dir().join("edited"));
+        let local_picture_dir = Some(dirs.media_cache_dir());
         let gif_search = linked_media::search_queue(event_tx.clone(), waker.clone());
         let thread = std::thread::Builder::new()
             .name("solmu-beeper-backend".to_string())

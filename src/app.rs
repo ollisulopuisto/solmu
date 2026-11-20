@@ -6380,12 +6380,18 @@ impl App {
                     // rather than landing on whatever sits in its place now.
                     Ok(path) => match self.staged_at(target) {
                         Some(at) => {
+                            if let Some(previous) =
+                                self.attachment_temporary_paths.insert(target, path.clone())
+                            {
+                                crate::backend::beeper::discard_temp_upload(&previous);
+                            }
                             self.pending[at].item = Pending::File(path);
                             if let Some(origin) = self.picture_applying.remove(&target) {
                                 self.picture_origins.insert(target, origin);
                             }
                         }
                         None => {
+                            crate::backend::beeper::discard_temp_upload(&path);
                             self.picture_applying.remove(&target);
                         }
                     },

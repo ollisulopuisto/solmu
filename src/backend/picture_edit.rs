@@ -69,6 +69,35 @@ pub fn write(
     Ok(path)
 }
 
+/// Production edits are unique private disposable files. They participate in
+/// the existing cache scan and temporary-upload ownership lifecycle.
+pub fn write_temporary(
+    source: &PictureSource,
+    width: u32,
+    height: u32,
+    crop: PictureCrop,
+    turns: u8,
+    dir: &Path,
+) -> Result<PathBuf, String> {
+    use std::io::Write;
+    let picture = match source {
+        PictureSource::File(path) => std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| edit(&bytes, crop, turns)),
+        PictureSource::Pasted(rgba) => edit_pasted(rgba, width, height, crop, turns),
+    }?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let mut file = tempfile::Builder::new()
+        .prefix("beeper-edited-")
+        .suffix(&format!(".{}", picture.extension))
+        .tempfile_in(dir)
+        .map_err(|e| e.to_string())?;
+    file.write_all(&picture.bytes).map_err(|e| e.to_string())?;
+    let (_, path) = file.keep().map_err(|e| e.to_string())?;
+    super::beeper::register_temp_upload(&path);
+    Ok(path)
+}
+
 /// Turns the picture, keeps the region, and writes it out.
 fn turned_and_cropped(
     picture: image::RgbaImage,

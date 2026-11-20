@@ -6227,6 +6227,35 @@ mod tests {
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
 
     #[test]
+    fn edited_picture_copy_is_counted_and_disposable_not_the_original() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = crate::paths::AppDirs::under(root.path()).as_account();
+        let original = root.path().join("original.png");
+        image::RgbaImage::from_pixel(8, 6, image::Rgba([20, 40, 80, 255]))
+            .save(&original)
+            .unwrap();
+        let output = crate::backend::picture_edit::write_temporary(
+            &crate::model::PictureSource::File(original.clone()),
+            8,
+            6,
+            crate::model::PictureCrop::full(8, 6),
+            0,
+            &dirs.media_cache_dir(),
+        )
+        .unwrap();
+        assert!(
+            cache_files(&dirs)
+                .unwrap()
+                .iter()
+                .any(|(_, path, _)| path == &output)
+        );
+        discard_temp_upload(&output);
+        flush_temp_cleanup();
+        assert!(!output.exists());
+        assert!(original.exists());
+    }
+
+    #[test]
     fn supplied_preview_parsing_only_runs_for_text_with_metadata() {
         for (attachment, metadata, expected_parses) in [
             (false, false, 0),
