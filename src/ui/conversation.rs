@@ -1686,6 +1686,7 @@ pub(crate) fn composer_with_capabilities(
             let send_key = has_focus
                 && app.dialog.is_none()
                 && app.ghost_ui.compose.is_none()
+                && app.ghost_ui.confirmation.is_none()
                 && !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
                 && ui.input_mut(|input| {
                     let mut sent = false;
@@ -1713,6 +1714,7 @@ pub(crate) fn composer_with_capabilities(
             let schedule_key = has_focus
                 && app.dialog.is_none()
                 && app.ghost_ui.compose.is_none()
+                && app.ghost_ui.confirmation.is_none()
                 && !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
                 && app.editing.is_none()
                 && ui.input_mut(|input| {

@@ -85,6 +85,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     let main_navigation = !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
         && app.ghost_ui.compose.is_none()
+        && app.ghost_ui.confirmation.is_none()
         && app.is_linked()
         && app.chat_view()
         && app.local_avatar_editor.is_none()
