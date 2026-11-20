@@ -948,3 +948,13 @@ is now a small real module staged by the portable checker instead of a helper
 hidden behind its util stub. The repository's exact portable staging command
 passes438 tests; native test-target compilation passes. Retargeted to main
 after #434 merged; retained all follow-up fixes while reconciling its squash.
+#433 Linux all-features run passed2514 tests and failed the linked-minute
+fixture's first-clock assertion. Its WhatsApp times are fixed at today's18:40,
+while Signal was still relative to wall time; near18:40 those samples
+interleaved and correctly split the source run. The linked-minute fixture now
+places Signal after the replaced WhatsApp run, preserving both sources. The
+regression freezes18:40UTC, the problematic period, without loosening any clock
+assertion. Native test-target compilation passes; full execution awaits CI.
+Production bubble/footer logic is unchanged.
+
+The same linked-minute fixture failure affected #437 Ubuntu (2523 passed, one failed). Reused the identical fixture-only correction from #433; no audit or production code changed. All exact-head CI/review gates restart.

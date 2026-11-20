@@ -2688,6 +2688,19 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "linked-minute-gutter" => {
                 linked_sample(app);
                 minute_gutter_sample(app);
+                // The minute fixture replaces WhatsApp's relative timestamps
+                // with today's18:40 run. Keep Signal after that replacement,
+                // not interleaved when the wall clock approaches18:40.
+                let latest = app
+                    .conversations
+                    .get(SAMPLES[0].id)
+                    .and_then(|c| c.messages.iter().map(|m| m.timestamp).max())
+                    .unwrap_or_default();
+                if let Some(signal) = app.conversations.get_mut("393331234567@signal") {
+                    for (index, message) in signal.messages.iter_mut().enumerate() {
+                        message.timestamp = latest + 60 * (index as i64 + 1);
+                    }
+                }
             }
             "day-separators" => day_separators_sample(app),
             "linked-day-separators" => {
@@ -5408,6 +5421,13 @@ mod tests {
 
     #[test]
     fn linked_messages_style_uses_one_clock_per_run() {
+        // Regression: at18:40 the old relative Signal samples interleaved
+        // with this fixture and legitimately split the WhatsApp run.
+        let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
+            now: 1_773_254_400,
+            zone: jiff::tz::TimeZone::UTC,
+            twelve_hour: false,
+        });
         let mut app = app();
         apply_flags(&mut app, Some("linked-minute-gutter,messages"));
         let ctx = egui::Context::default();
