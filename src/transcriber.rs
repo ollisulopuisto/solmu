@@ -286,12 +286,11 @@ impl Store {
 /// `-_.` stay, every other UTF-8 byte percent-encodes, so walking the store
 /// recovers the real account/chat/message ids a search hit navigates to.
 fn encode(id: &str) -> String {
-    if matches!(id, "" | "." | "..") {
-        return id
-            .bytes()
-            .map(|byte| format!("%{byte:02X}"))
-            .collect::<String>()
-            + if id.is_empty() { "%00" } else { "" };
+    if id.is_empty() {
+        return "%EMPTY".into();
+    }
+    if matches!(id, "." | "..") {
+        return id.bytes().map(|byte| format!("%{byte:02X}")).collect();
     }
     let mut out = String::with_capacity(id.len());
     for &byte in id.as_bytes() {
@@ -307,6 +306,9 @@ fn encode(id: &str) -> String {
 
 /// The inverse of [`encode`]; `None` for names it never produced.
 fn decode(name: &str) -> Option<String> {
+    if name == "%EMPTY" {
+        return Some(String::new());
+    }
     let bytes = name.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut at = 0;
