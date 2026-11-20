@@ -5825,33 +5825,73 @@ fn bubble_frame(
     actions: &mut Vec<Action>,
 ) -> egui::Response {
     if view.hidden.is_some_and(|ids| ids.contains(&message.id)) {
-        return ui
-            .horizontal(|ui| {
-                ui.label(crate::i18n::gettext(view.locale, "Message hidden in Solmu"));
-                let unhide = ui.button(crate::i18n::gettext(view.locale, "Unhide"));
-                // Reveal while the conversation scroll area is still open,
-                // before Tab registration requests its re-layout pass.
-                theme::reveal_focus(&unhide);
-                if unhide.has_focus()
-                    && ui.ctx().data(|data| {
-                        data.get_temp::<bool>(theme::keyboard_focus_id())
-                            .unwrap_or(false)
-                    })
-                {
-                    view.keyboard_navigation.set(true);
+        let id = bubble_id(&view.chat.id, &message.id).with("unhide-placeholder");
+        let (rect, unhide) =
+            ui.allocate_exact_size(vec2(ui.available_width().min(320.0), 32.0), Sense::click());
+        let unhide = unhide.tab_stop(Stop::Unhide(bubble_id(&view.chat.id, &message.id).value()));
+        theme::reveal_focus(&unhide);
+        let active = unhide.hovered() || unhide.has_focus();
+        let centre = rect.center();
+        let ink = if active {
+            view.palette.text
+        } else {
+            view.palette.secondary
+        };
+        ui.painter().line_segment(
+            [
+                pos2(rect.left() + 12.0, centre.y),
+                pos2(centre.x - 26.0, centre.y),
+            ],
+            Stroke::new(1.0, view.palette.dim),
+        );
+        ui.painter().line_segment(
+            [
+                pos2(centre.x + 26.0, centre.y),
+                pos2(rect.right() - 12.0, centre.y),
+            ],
+            Stroke::new(1.0, view.palette.dim),
+        );
+        ui.painter().text(
+            centre,
+            Align2::CENTER_CENTER,
+            "···",
+            theme::semibold(18.0),
+            ink,
+        );
+        if active {
+            let hint = crate::i18n::gettext(view.locale, "Show message");
+            unhide.clone().on_hover_text(hint.as_ref());
+            // Keyboard users get the same visible hint without requiring hover.
+            if unhide.has_focus() {
+                let galley = ui.painter().layout_no_wrap(
+                    hint.into_owned(),
+                    theme::semibold(12.0),
+                    view.palette.text,
+                );
+                let at = pos2(rect.right() + 8.0, rect.center().y - galley.size().y / 2.0);
+                if at.x + galley.size().x < ui.clip_rect().right() {
+                    ui.painter().galley(at, galley, view.palette.text);
                 }
-                if unhide
-                    .tab_stop(Stop::Unhide(bubble_id(&view.chat.id, &message.id).value()))
-                    .clicked()
-                {
-                    actions.push(Action::SetMessageHidden {
-                        chat: view.chat.id.clone(),
-                        message: message.id.clone(),
-                        hidden: false,
-                    });
-                }
-            })
-            .response;
+                view.keyboard_navigation.set(true);
+            }
+        }
+        theme::focus_outline(ui, unhide.id, rect, 8.0);
+        unhide.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                crate::i18n::gettext(view.locale, "Show message").as_ref(),
+            )
+        });
+        ui.ctx().data_mut(|data| data.insert_temp(id, rect));
+        if unhide.clicked() {
+            actions.push(Action::SetMessageHidden {
+                chat: view.chat.id.clone(),
+                message: message.id.clone(),
+                hidden: false,
+            });
+        }
+        return unhide;
     }
     let outside_palette = view.palette;
     let own = message.from_me;
@@ -14886,6 +14926,56 @@ mod tests {
                     .all(|row| (row.pos.x - first_x).abs() < 0.1)
             );
             output.textures_delta.clear();
+        });
+    }
+
+    #[test]
+    fn hidden_placeholder_has_no_permanent_text_label() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let message = crate::archive::tests::message("1@s.whatsapp.net", "hidden", 0, false);
+            let hidden = HashSet::from([message.id.clone()]);
+            let view = View {
+                hidden: Some(&hidden),
+                ..*view
+            };
+            let mut row = Rect::NOTHING;
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                row = bubble_frame(
+                    ui,
+                    &view,
+                    &message,
+                    None,
+                    false,
+                    false,
+                    400.0,
+                    &mut Vec::new(),
+                )
+                .rect;
+            });
+            fn labels(shape: &egui::Shape, texts: &mut Vec<String>) {
+                match shape {
+                    egui::Shape::Text(text) => texts.push(text.galley.text().into()),
+                    egui::Shape::Vec(parts) => {
+                        for part in parts {
+                            labels(part, texts);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut texts = Vec::new();
+            for shape in &output.shapes {
+                labels(&shape.shape, &mut texts);
+            }
+            assert!(texts.iter().any(|text| text == "···"));
+            assert!(
+                !texts
+                    .iter()
+                    .any(|text| text.contains("Message hidden") || text == "Unhide")
+            );
+            assert_eq!(row.height(), 32.0);
         });
     }
 
