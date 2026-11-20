@@ -1,4 +1,4 @@
-//! solmu-reader: a read-only API for other local apps.
+//! solmu-reader: a scoped local API for other apps.
 //!
 //! Runs beside the Beeper Server and serves a small allowlist of GET
 //! endpoints to client apps that each hold their own revocable token. See
@@ -24,10 +24,11 @@
 //! `token add` prints the new token once, on the terminal. It is not
 //! stored anywhere in clear.
 //!
-//! Endpoints (all GET): /v1/accounts, /v1/chats,
+//! Read endpoints (GET): /v1/accounts, /v1/chats,
 //! /v1/chats/{id}/messages, /v1/messages/search?query=, /v1/people and
 //! /v1/people/{id}/messages (needs SOLMU_SETTINGS_FILE)
 //!
+//! Text send: POST /v1/chats/{id}/messages requires messages:send and exact grants.
 //! Requests carrying Origin or Referer are refused, so web pages cannot
 //! drive it. The log holds client name, endpoint family and status only:
 //! never query strings, chat ids or message content.
@@ -91,6 +92,28 @@ fn token_command(args: &[String]) -> i32 {
                 eprintln!("usage: token add NAME --scopes a,b [--accounts x,y] [--days N]");
                 return 2;
             };
+            if !(args.len() - 2).is_multiple_of(2)
+                || args[2..].chunks(2).any(|pair| {
+                    ![
+                        "--scopes",
+                        "--accounts",
+                        "--days",
+                        "--send-destinations-file",
+                    ]
+                    .contains(&pair[0].as_str())
+                })
+                || {
+                    let mut seen = std::collections::HashSet::new();
+                    args[2..].chunks(2).any(|pair| !seen.insert(&pair[0]))
+                }
+            {
+                eprintln!("unknown, duplicate or incomplete token option");
+                return 2;
+            }
+            if flag("--days").is_some_and(|d| d.parse::<i64>().is_err()) {
+                eprintln!("invalid expiry days");
+                return 2;
+            }
             let scopes = list(flag("--scopes"));
             let accounts = list(flag("--accounts"));
             let days = flag("--days").and_then(|d| d.parse::<i64>().ok());
@@ -98,7 +121,31 @@ fn token_command(args: &[String]) -> i32 {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            match registry.add(name, scopes, accounts, expires, now()) {
+            let destinations = match flag("--send-destinations-file") {
+                Some(path) => match solmu::automation_client::bounded_file(
+                    std::path::Path::new(&path),
+                    32 * 1024,
+                )
+                .ok()
+                .and_then(|s| {
+                    serde_json::from_str::<Vec<solmu::write_grants::Destination>>(&s).ok()
+                }) {
+                    Some(d) => d,
+                    None => {
+                        eprintln!("invalid send destination file");
+                        return 2;
+                    }
+                },
+                None => vec![],
+            };
+            match registry.add_with_destinations(
+                name,
+                scopes,
+                accounts,
+                destinations,
+                expires,
+                now(),
+            ) {
                 Ok(token) => match registry.save(&path) {
                     Ok(()) => {
                         println!("client {name} created. Token (shown once):\n{token}");

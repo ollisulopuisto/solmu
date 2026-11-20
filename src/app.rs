@@ -541,6 +541,8 @@ pub struct App {
     pub reply_to: Option<crate::model::ReplyTarget>,
     /// Outgoing message being edited.
     pub editing: Option<String>,
+    pending_edit: Option<(u64, String, ChatId, String, String)>,
+    next_edit_request: u64,
     composing: bool,
     last_keystroke: Option<Instant>,
     /// The search pane beside the open chat: its query, day filter and the
@@ -1632,6 +1634,8 @@ impl App {
             mention_selected: 0,
             reply_to: None,
             editing: None,
+            pending_edit: None,
+            next_edit_request: 0,
             unsent_voice: None,
             unsent_voice_source: None,
             unsent_voice_quote: None,
@@ -3082,6 +3086,24 @@ impl App {
         self.person_name(&chat.id, None)
     }
 
+    /// Search full loaded group-member names as well as the displayed title.
+    /// Unknown membership stays unknown; this never fetches on a paint pass.
+    pub fn chat_search_names(&self, chat: &Chat) -> String {
+        let members = if chat.is_group() {
+            chat.participants
+                .iter()
+                .flat_map(|id| {
+                    let resolved = self.display_name(id);
+                    let bridge = chat.participant_names.get(id).cloned().unwrap_or_default();
+                    [resolved, bridge]
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        crate::chat_search_names::terms(&self.chat_title(chat), members)
+    }
+
     /// The title of the chat `id`, as the chat list writes it, for places that
     /// hold only the id (a starred message). A chat not loaded falls back to
     /// the person's name.
@@ -3952,7 +3974,7 @@ impl App {
             .filter(|chat| {
                 !chat.locked
                     && !self.chat_scope_matches(chat)
-                    && (crate::util::search_key(&self.chat_title(chat)).contains(&needle)
+                    && (crate::util::search_key(&self.chat_search_names(chat)).contains(&needle)
                         || chat.phone().is_some_and(|phone| phone.contains(&needle))
                         || chat.last.as_ref().is_some_and(|last| {
                             crate::util::search_key(&last.summary).contains(&needle)
@@ -4246,7 +4268,7 @@ impl App {
                 // not a query to match.
                 (self.locked_folder && !self.chat_lock_authenticated())
                     || needle.is_empty()
-                    || crate::util::search_key(&self.chat_title(chat)).contains(&needle)
+                    || crate::util::search_key(&self.chat_search_names(chat)).contains(&needle)
                     || chat.phone().is_some_and(|phone| phone.contains(&needle))
                     || chat.last.as_ref().is_some_and(|last| {
                         crate::util::search_key(&last.summary).contains(&needle)
@@ -4767,6 +4789,12 @@ impl App {
                 member,
                 state,
             } => {
+                if self.audience_queue.as_mut().is_some_and(|queue| {
+                    queue.feedback(&local, &member, state.clone(), Instant::now())
+                }) {
+                    return;
+                }
+
                 if let Some(record) = self
                     .pending_media
                     .get_mut(&local)
@@ -4795,6 +4823,19 @@ impl App {
                 message,
                 complete,
             } => {
+                if complete
+                    && self.audience_queue.as_mut().is_some_and(|queue| {
+                        queue.feedback(
+                            &local,
+                            &member,
+                            crate::pending_media::State::Confirmed,
+                            Instant::now(),
+                        )
+                    })
+                {
+                    return;
+                }
+
                 if let Some(record) = self
                     .pending_media
                     .get(&local)
@@ -6576,6 +6617,21 @@ impl App {
             } => {
                 if self.restore_unsent(chat, quoting, Unsent::Voice(samples)) {
                     self.toast_error(message);
+                }
+            }
+            Event::BeeperEditPrepared {
+                chat,
+                id,
+                request,
+                result,
+            } => {
+                if live && !self.events_hidden {
+                    self.actions.push(Action::PreparedEdit {
+                        chat,
+                        id,
+                        request,
+                        result,
+                    });
                 }
             }
             Event::BeeperEditUncertain {
@@ -8541,6 +8597,7 @@ impl App {
 
     /// Opens an eligible chat, parking the previous draft and restoring this chat's composer.
     fn open_chat(&mut self, id: ChatId) {
+        self.pending_edit = None;
         if self.chat(&id).is_some_and(|chat| chat.locked) && !self.locked_folder_open() {
             return;
         }
@@ -8892,6 +8949,20 @@ impl App {
         self.follow_outgoing();
     }
 
+    fn start_edit(&mut self, id: String, text: String, ctx: &egui::Context) {
+        self.pending_edit = None;
+        self.editing = Some(id);
+        self.composer_tools_open = false;
+        self.reply_to = None;
+        let cursor = text.chars().count();
+        self.composer = text;
+        self.composer_mentions.clear();
+        self.emoji_start = None;
+        self.mention_start = None;
+        self.set_composer_cursor(ctx, cursor);
+        self.focus_composer = true;
+    }
+
     /// Dispatches composed text with its explicit quote target and restores it on refusal.
     fn send_text(
         &mut self,
@@ -8899,6 +8970,7 @@ impl App {
         text: String,
         quoting: Option<crate::model::ReplyTarget>,
     ) {
+        self.pending_edit = None;
         let text = text.trim().to_owned();
         if text.is_empty() {
             return;
@@ -9456,6 +9528,28 @@ impl App {
     }
 
     fn tick(&mut self, ctx: &egui::Context) {
+        for account in &mut self.accounts {
+            let Some(queue) = account.audience_queue.as_mut() else {
+                continue;
+            };
+            if queue.pending() {
+                if account.link.is_connected() {
+                    let chats = &account.chats;
+                    if let Some(job) = queue.next(Instant::now(), |member| {
+                        chats.iter().filter(|chat| member.matches(chat)).count() == 1
+                            && chats
+                                .iter()
+                                .any(|chat| member.matches(chat) && chat.can_send() && !chat.locked)
+                    }) {
+                        account.backend.send(Command::BeeperMedia(job));
+                    }
+                }
+                if !queue.paused {
+                    ctx.request_repaint_after(Duration::from_millis(500));
+                }
+            }
+        }
+
         if let Some(result) = self
             .local_whisper_removal
             .as_ref()
@@ -9880,6 +9974,7 @@ impl App {
             // what the lock hides.
             match action {
                 Action::OpenMessage { chat, message } => {
+                    crate::ui::reply_threads::leave_for_navigation(ctx);
                     let account = self.account().id.clone();
                     self.app_lock.defer(crate::app_lock::Deferred::Message(
                         crate::notify::NotificationTarget {
@@ -10004,6 +10099,87 @@ impl App {
             return;
         }
         match action {
+            Action::PrepareNewMessage {
+                member,
+                text,
+                files,
+            } => {
+                if self
+                    .chats
+                    .iter()
+                    .filter(|chat| chat.id == member.chat)
+                    .count()
+                    != 1
+                    || member.origin.is_none()
+                    || member.bridge_account.is_none()
+                    || member.account != self.account().id.0
+                    || !self.chats.iter().any(|chat| {
+                        crate::ui::flat_groups::member(self, chat) == member
+                            && chat.can_send()
+                            && !chat.locked
+                    })
+                {
+                    return;
+                }
+                let source = crate::merged::Member {
+                    origin: member.origin.clone().unwrap(),
+                    account: member.bridge_account.clone().unwrap(),
+                    chat: member.chat.clone(),
+                };
+                let owner = self
+                    .settings
+                    .beeper
+                    .people
+                    .iter()
+                    .find(|p| p.members.contains(&source))
+                    .and_then(|p| {
+                        p.members.iter().find(|m| {
+                            self.chat(&m.chat)
+                                .is_some_and(|chat| m.matches(chat) && !chat.locked)
+                        })
+                    })
+                    .map(|m| m.chat.clone())
+                    .unwrap_or_else(|| member.chat.clone());
+                let has_existing_draft = self.parked_draft(&owner)
+                    || crate::ui::merged::has_reply(self, ctx, &source)
+                    || (self.open_chat.as_deref() == Some(&owner)
+                        && (!self.composer.trim().is_empty()
+                            || !self.pending.is_empty()
+                            || self.reply_to.is_some()));
+                if text.is_empty() && files.is_empty() {
+                    self.apply(Action::OpenChat(member.chat.clone()), ctx);
+                    if self.open_chat.as_deref() == Some(&owner) {
+                        if !has_existing_draft {
+                            crate::ui::merged::prepare_destination(self, ctx, &source);
+                        }
+                        self.new_message = Default::default();
+                        self.dialog = None;
+                        self.focus_composer = true;
+                    }
+                    return;
+                }
+                if self.editing.is_some() || has_existing_draft {
+                    self.new_message.notice = Some(
+                        crate::i18n::gettext(
+                            self.locale,
+                            "This chat has an unsent draft. Nothing was replaced.",
+                        )
+                        .into_owned(),
+                    );
+                    return;
+                }
+                self.apply(Action::OpenChat(member.chat.clone()), ctx);
+                if self.open_chat.as_deref() != Some(&owner) {
+                    return;
+                }
+                crate::ui::merged::prepare_destination(self, ctx, &source);
+                self.composer = text;
+                self.stage_all(files.into_iter().map(Pending::File));
+                self.new_message = Default::default();
+                self.dialog = None;
+                self.focus_composer = true;
+            }
+
             Action::RetryPendingMedia(local) => {
                 let job = self
                     .pending_media
@@ -10177,6 +10353,7 @@ impl App {
                 }
             }
             Action::OpenMessage { chat, message } => {
+                crate::ui::reply_threads::leave_for_navigation(ctx);
                 // A stored cross-chat quote may outlive its locally deleted source.
                 if self.chat(&chat).is_none() {
                     return;
@@ -11099,6 +11276,7 @@ impl App {
                 }
             }
             Action::SelectMessage(id) => {
+                crate::ui::reply_threads::leave_for_navigation(ctx);
                 if let Some(chat) = self.open_chat.clone()
                     && self
                         .conversations
@@ -11210,8 +11388,56 @@ impl App {
                 self.selection = None;
                 self.sweep = None;
             }
+            Action::PreparedEdit {
+                chat,
+                id,
+                request,
+                result,
+            } => {
+                let current = self.pending_edit.as_ref().is_some_and(
+                    |(pending, owner, target, message, draft)| {
+                        *pending == request
+                            && owner == &self.account().id.0
+                            && target == &chat
+                            && message == &id
+                            && draft == &self.composer
+                            && self.open_chat.as_ref() == Some(&chat)
+                    },
+                );
+                if current {
+                    self.pending_edit = None;
+                    match result {
+                        Ok(text) => self.start_edit(id, text, ctx),
+                        Err(error) => self.toast_error(match error {
+                            crate::rich_edit::Error::Unsupported => crate::i18n::gettext(self.locale, "This message has formatting that cannot be safely reconstructed as Markdown. No edit started.").into_owned(),
+                            crate::rich_edit::Error::Unavailable => crate::i18n::gettext(self.locale, "The current message could not be loaded. No edit started.").into_owned(),
+                        }),
+                    }
+                }
+            }
             Action::Edit(id) => {
                 let open = self.open_chat.clone();
+                if let Some(chat) = open.as_deref().and_then(|chat| self.chat(chat))
+                    && let Some(account) = chat.backend_account.clone()
+                {
+                    let chat = chat.id.clone();
+                    self.next_edit_request = self.next_edit_request.wrapping_add(1);
+                    let request = self.next_edit_request;
+                    self.pending_edit = Some((
+                        request,
+                        self.account().id.0.clone(),
+                        chat.clone(),
+                        id.clone(),
+                        self.composer.clone(),
+                    ));
+                    self.backend.send(Command::PrepareEdit {
+                        chat,
+                        id,
+                        account,
+                        request,
+                    });
+                    return;
+                }
                 let text =
                     open.as_deref()
                         .and_then(|chat| self.conversations.get(chat))
@@ -11231,19 +11457,11 @@ impl App {
                             }
                         });
                 if let Some(text) = text {
-                    self.editing = Some(id);
-                    self.composer_tools_open = false;
-                    self.reply_to = None;
-                    let cursor = text.chars().count();
-                    self.composer = text;
-                    self.composer_mentions.clear();
-                    self.emoji_start = None;
-                    self.mention_start = None;
-                    self.set_composer_cursor(ctx, cursor);
-                    self.focus_composer = true;
+                    self.start_edit(id, text, ctx);
                 }
             }
             Action::CancelEdit => {
+                self.pending_edit = None;
                 if self.editing.take().is_some() {
                     self.composer.clear();
                     self.composer_mentions.clear();
@@ -12830,6 +13048,7 @@ impl App {
                 }
             }
             Action::ScrollTo(id) => {
+                crate::ui::reply_threads::leave_for_navigation(ctx);
                 self.scroll_to_bottom = false;
                 let Some(chat) = self.open_chat.clone() else {
                     return;
@@ -15789,6 +16008,70 @@ mod tests {
         assert_eq!(app.settings_search, "Local AI");
         assert_eq!(app.page, Page::Settings);
         assert!(inbox.try_recv().is_err());
+    }
+
+    #[test]
+    fn beeper_edit_preparation_uses_markdown_and_rejects_late_draft_overwrites() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(directory.path()), Settings::default());
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let mut chat = Chat::new("chat".into(), "Fixture".into());
+        chat.backend_account = Some("account".into());
+        app.chats.push(chat);
+        app.open_chat = Some("chat".into());
+        let ctx = egui::Context::default();
+        app.apply(Action::Edit("message".into()), &ctx);
+        assert!(app.editing.is_none());
+        assert!(app.composer.is_empty());
+        let Command::PrepareEdit {
+            chat,
+            id,
+            account,
+            request,
+        } = commands.try_recv().unwrap()
+        else {
+            panic!("read-only preparation");
+        };
+        assert_eq!(
+            (chat.as_str(), id.as_str(), account.as_str()),
+            ("chat", "message", "account")
+        );
+        let source = "- first\n- **second**";
+        app.apply(
+            Action::PreparedEdit {
+                chat: chat.clone(),
+                id: id.clone(),
+                request,
+                result: Ok(source.into()),
+            },
+            &ctx,
+        );
+        assert_eq!(app.composer, source);
+        assert_eq!(app.editing.as_deref(), Some("message"));
+        assert!(
+            commands.try_recv().is_err(),
+            "preparing does not send or edit"
+        );
+        app.apply(Action::CancelEdit, &ctx);
+        app.apply(Action::Edit("message".into()), &ctx);
+        let Command::PrepareEdit { request, .. } = commands.try_recv().unwrap() else {
+            panic!();
+        };
+        app.composer = "newer draft".into();
+        app.apply(
+            Action::PreparedEdit {
+                chat,
+                id,
+                request,
+                result: Ok(source.into()),
+            },
+            &ctx,
+        );
+        assert_eq!(app.composer, "newer draft");
+        assert!(app.editing.is_none());
+        app.apply(Action::CancelEdit, &ctx);
+        assert!(app.pending_edit.is_none());
     }
 
     #[test]
@@ -30394,6 +30677,42 @@ mod name_tests {
     }
 
     /// Checks that mention names and preview tokens resolve consistently in synthetic messages.
+    #[test]
+    fn search_snippets_preserve_literal_markers_through_preview_parsing() {
+        let app = app();
+        for (body, query) in [
+            ("*\u{2063}literal*\u{2063}", "*literal*"),
+            ("`\u{2063}`\u{2063}`\u{2063}", "```"),
+            ("run_\u{2063}widths.rs", "run_widths.rs"),
+        ] {
+            let message = Message {
+                id: "literal-preview".into(),
+                chat: "1@s.whatsapp.net".into(),
+                sender: "1@s.whatsapp.net".into(),
+                sender_name: None,
+                from_me: false,
+                timestamp: 0,
+                content: Content::text(body),
+                status: Delivery::None,
+                delivered_at: None,
+                read_at: None,
+                quoted: None,
+                reactions: Vec::new(),
+                history_order: None,
+                edited: false,
+                mentions: Vec::new(),
+                forwarded: false,
+                thumbnail: None,
+            };
+            let snippet = message.text_matching(query).expect("query matches");
+            assert_eq!(
+                snippet, body,
+                "keep protected source for the preview parser"
+            );
+            assert_eq!(app.preview_line(&snippet, &message), query);
+        }
+    }
+
     #[test]
     fn mentions_use_our_own_name_and_previews_resolve_tokens() {
         let app = app();

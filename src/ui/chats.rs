@@ -2513,6 +2513,7 @@ pub(super) fn self_row(app: &mut App, ui: &mut egui::Ui) {
 /// A row that starts something, drawn like a person's: an icon on the
 /// accent colour where the photo would be. New chat's New group and Add
 /// contact.
+#[allow(dead_code)] // Retained for the legacy New group workflow.
 pub(super) fn action_row(app: &App, ui: &mut egui::Ui, icon: Icon, label: &str) -> egui::Response {
     let palette = app.palette;
     let (rect, response) = ui.allocate_exact_size(

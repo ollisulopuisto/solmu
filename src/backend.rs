@@ -387,6 +387,12 @@ pub enum Command {
         /// Whether the server refusal is permanent.
         permanent: bool,
     },
+    PrepareEdit {
+        chat: ChatId,
+        id: String,
+        account: String,
+        request: u64,
+    },
     EditText {
         chat: ChatId,
         id: String,
@@ -1565,6 +1571,12 @@ pub enum Event {
     /// The account folders were deleted after RemoveAccount.
     AccountRemoved,
     /// The API outcome is uncertain. Restore text without automatically retrying.
+    BeeperEditPrepared {
+        chat: ChatId,
+        id: String,
+        request: u64,
+        result: Result<String, crate::rich_edit::Error>,
+    },
     BeeperEditUncertain {
         chat: ChatId,
         id: String,

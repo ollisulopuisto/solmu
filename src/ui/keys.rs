@@ -25,6 +25,15 @@ pub(crate) fn menu_scroll_reaches_chat(app: &App, ctx: &egui::Context) -> bool {
 
 /// Routes keyboard commands to actions, respecting overlays and text focus.
 pub fn handle(app: &mut App, ctx: &egui::Context) {
+    // Results own keyboard input, even after the new-message dialog closes.
+    if let Some(queue) = app.audience_queue.as_mut().filter(|queue| queue.visible) {
+        if !egui::Popup::is_any_open(ctx)
+            && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape))
+        {
+            queue.visible = false;
+        }
+        return;
+    }
     if super::send_later::keyboard(ctx) {
         return;
     }
@@ -489,6 +498,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             } else {
                 Action::CloseInfo
             });
+        } else if super::reply_threads::owns(app, ctx) {
+            super::reply_threads::close(ctx);
         } else if app.page == Page::Wallpaper {
             actions.push(Action::Open(Page::Settings));
         } else if app.page == Page::Settings && !app.settings_search.is_empty() {
