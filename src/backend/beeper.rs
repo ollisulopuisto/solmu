@@ -2139,8 +2139,28 @@ impl Api {
             Ok(())
         };
         prepare().map_err(State::NotSubmitted)?;
+        if let Payload::Text(text) = &job.payload {
+            if upload_stopped(Some(cancel)) {
+                return Err(State::NotSubmitted(
+                    "Session closed; nothing submitted".into(),
+                ));
+            }
+            let mut accepted = self
+                .send_text(&job.member.chat, text, None, &[])
+                .map_err(State::Unknown)?;
+            if (accepted.chat.is_empty() || accepted.chat == job.member.chat)
+                && !accepted.pending_id.is_empty()
+            {
+                accepted.chat = job.member.chat.clone();
+                return Ok(accepted);
+            }
+            return Err(State::Unknown(
+                "Unexpected acceptance identity; check chat history".into(),
+            ));
+        }
         let temporary;
         let (path, kind) = match &job.payload {
+            Payload::Text(_) => unreachable!("handled before media upload"),
             Payload::File { path, document } => (
                 path.as_path(),
                 if *document {
@@ -3753,24 +3773,22 @@ pub fn run(
         .spawn(move || {
             while let Ok(job) = pending_media_rx.recv() {
                 let result = pending_api.send_pending_media(&job, &pending_cancel);
+                let accepted = result.as_ref().ok().map(|value| value.pending_id.clone());
                 let state = match result {
-                    Ok(accepted) => {
-                        let _ = pending_media_accepted_tx.send((
-                            job.local.clone(),
-                            job.member.clone(),
-                            accepted.pending_id.clone(),
-                        ));
-                        crate::pending_media::State::Accepted {
-                            pending: accepted.pending_id,
-                        }
-                    }
+                    Ok(value) => crate::pending_media::State::Accepted {
+                        pending: value.pending_id,
+                    },
                     Err(state) => state,
                 };
                 let _ = pending_events.send(Event::BeeperMediaProgress {
-                    local: job.local,
-                    member: job.member,
+                    local: job.local.clone(),
+                    member: job.member.clone(),
                     state,
                 });
+                // Publish acceptance before the control worker can resolve it.
+                if let Some(pending) = accepted {
+                    let _ = pending_media_accepted_tx.send((job.local, job.member, pending));
+                }
                 pending_waker.wake();
             }
         })
@@ -6899,6 +6917,97 @@ mod tests {
             quoting: None,
         }
     }
+    #[test]
+    fn audience_text_cancellation_during_destination_lookup_never_posts() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            assert!(
+                std::str::from_utf8(&buf[..n])
+                    .unwrap()
+                    .starts_with("GET /v1/chats/target ")
+            );
+            stop.store(true, Ordering::SeqCst);
+            let body = r#"{"id":"target","accountID":"signal"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let mut job = pending_media_job(&api.base_url, std::path::Path::new("unused"));
+        job.payload = crate::pending_media::Payload::Text("hello".into());
+        assert!(matches!(
+            api.send_pending_media(&job, &cancel),
+            Err(crate::pending_media::State::NotSubmitted(_))
+        ));
+        server.join().unwrap();
+    }
+    #[test]
+    fn audience_text_jobs_validate_destination_then_post_once_and_never_retry_ambiguous_response() {
+        for (status, body, expected_unknown) in [
+            (
+                200,
+                r#"{"chatID":"target","pendingMessageID":"pending"}"#,
+                false,
+            ),
+            (503, "{}", true),
+            (200, "not json", true),
+        ] {
+            let (api, server) = pending_media_fixture(vec![
+                (
+                    "GET /v1/chats/target ",
+                    200,
+                    r#"{"id":"target","accountID":"signal"}"#.into(),
+                ),
+                ("POST /v1/chats/target/messages ", status, body.into()),
+            ]);
+            let mut job = pending_media_job(&api.base_url, std::path::Path::new("unused"));
+            job.payload = crate::pending_media::Payload::Text("hello".into());
+            let result = api.send_pending_media(&job, &AtomicBool::new(false));
+            if expected_unknown {
+                assert!(matches!(
+                    result,
+                    Err(crate::pending_media::State::Unknown(_))
+                ));
+            } else {
+                assert_eq!(result.unwrap().pending_id, "pending");
+            }
+            let requests = server.join().unwrap();
+            assert_eq!(requests.len(), 2);
+            let payload: serde_json::Value =
+                serde_json::from_str(requests[1].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            assert_eq!(payload, serde_json::json!({"text":"hello"}));
+        }
+    }
+    #[test]
+    fn audience_text_foreign_account_is_proven_unsent_without_post() {
+        let (api, server) = pending_media_fixture(vec![(
+            "GET /v1/chats/target ",
+            200,
+            r#"{"id":"target","accountID":"foreign"}"#.into(),
+        )]);
+        let mut job = pending_media_job(&api.base_url, std::path::Path::new("unused"));
+        job.payload = crate::pending_media::Payload::Text("hello".into());
+        assert!(matches!(
+            api.send_pending_media(&job, &AtomicBool::new(false)),
+            Err(crate::pending_media::State::NotSubmitted(_))
+        ));
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
     #[test]
     fn pending_media_submission_boundary_is_not_inferred_from_error_words() {
         for (upload_status, send_status, expected_unknown) in

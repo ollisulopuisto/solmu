@@ -29,6 +29,15 @@ an unauthorized attempt, an authorized send, and an idempotent retry: exactly
 one receipt per request, one retained claim and one synthetic upstream send.
 Native all-target/all-feature Clippy passed. No real credentials or messaging.
 
+## 2026-11-20: Maximum audience counted-send regression
+
+Added a full-view regression that selects 50 synthetic distinct recipients,
+checks no queue exists from selection alone, clicks Send to50chats, then checks
+all50 exact destinations are queued in order. This preserves the existing
+explicit counted one-click send design, not an extra confirmation screen.
+All-target/all-feature Clippy passes; test execution awaits native CI, no pass
+claimed locally. No live account or send used.
+
 ## 2026-11-19: Beeper bridge messages show every attachment (fix/beeper-multi-attachment-messages)
 
 Olli reported bridge messages with several attachments showing only the
@@ -802,3 +811,12 @@ pass, including a killed lock-holder subprocess followed by eight concurrent
 receipt/claim writers proving one retained claim, relative-path restart, denied
 HTTP receipts, and actual-client people/history routes. Native all-target/all-
 feature Clippy passes. Windows runtime and fresh independent CI/review pending.
+
+## New-message Mac CI follow-up,20 November
+
+Mac CI executed2466 passing tests and found two failures: the background composer
+still inserted Enter while audience results owned shortcuts, and a new viewport
+fixture dropped texture deltas. Disable the background composer UI and surrender
+its text focus while results are visible, rather than merely blocking Send.
+Clear the fixture's deltas. Native all-target/all-feature Clippy passes; these
+actual app regressions await CI rerun, not claimed executed locally.
