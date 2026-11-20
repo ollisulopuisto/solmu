@@ -1352,7 +1352,7 @@ fn panel_rect(
     }
     let bottom = clip_height.map_or(bottom, |clip| bottom.min(clip));
     Some(Rect::from_min_max(
-        Pos2::new(body.min.x, origin.y + top - if code { 30.0 } else { PAD }),
+        Pos2::new(body.min.x, origin.y + top - if code { 8.0 } else { PAD }),
         Pos2::new(body.max.x, origin.y + bottom + if code { 8.0 } else { PAD }),
     ))
 }
@@ -1376,18 +1376,18 @@ pub fn code_panel_rects(
         .collect()
 }
 
-/// Dedicated header hit target inside the code panel, above its content rows.
+/// Copy control outside and above the code panel, with a four-point gap.
 pub fn copy_button_rect(panel: Rect) -> Rect {
     Rect::from_min_max(
         Pos2::new(
             (panel.max.x - 82.0).max(panel.min.x + 6.0),
-            panel.min.y + 4.0,
+            panel.min.y - 24.0,
         ),
-        Pos2::new(panel.max.x - 6.0, panel.min.y + 24.0),
+        Pos2::new(panel.max.x - 6.0, panel.min.y - 4.0),
     )
 }
 
-/// Render a real accessible button confined to the20pt header band.
+/// Render a real accessible button in the separate20pt control band.
 pub fn put_copy_button(
     ui: &mut egui::Ui,
     panel: Rect,
@@ -3320,9 +3320,7 @@ mod monospace_tests {
         output.textures_delta.clear();
     }
 
-    /// The Copy code button floats off the panel's bottom right, in the
-    /// blank row the closing fence leaves, so it never covers code text
-    /// even when the panel is exactly as wide as its widest row.
+    /// Copy code sits outside and above the panel, separate from code selection.
     #[test]
     fn code_panels_have_inset_header_bottom_space_and_unchanged_copy() {
         let ctx = egui::Context::default();
@@ -3401,7 +3399,7 @@ mod monospace_tests {
     /// layout target: a themed Button expands to the theme's minimum
     /// interact height under Ui::put and leaks from the reserved band
     /// into the first code row, where it intercepts selection drags.
-    /// The response must stay inside the 14pt band above the panel.
+    /// The response must stay inside the20pt band above the panel.
     #[test]
     fn the_copy_button_response_stays_in_its_band() {
         let ctx = egui::Context::default();
@@ -3419,6 +3417,8 @@ mod monospace_tests {
             for (_, panel) in code_panel_rects(body, Pos2::ZERO, &laid, None) {
                 let response = put_copy_button(ui, panel, "Copy code", Color32::WHITE);
                 let band = copy_button_rect(panel);
+                assert!(band.bottom() <= panel.top() - 3.5);
+                assert!(!band.intersects(panel));
                 assert!(
                     band.contains_rect(response.rect) && response.rect.height() <= 20.0,
                     "copy button response {:?} outgrew its band {band:?}",
