@@ -197,6 +197,7 @@ pub enum Command {
     BeeperForward {
         generation: u64,
         prepared: bool,
+        append_at: usize,
         items: Vec<(usize, crate::composed_forward::Item)>,
     },
     Forward {
@@ -1147,6 +1148,10 @@ pub enum Event {
         member: crate::merged::Member,
         message: Box<Message>,
         complete: bool,
+    },
+    BeeperForwardRetryPrepared {
+        generation: u64,
+        items: Vec<(usize, crate::composed_forward::Item)>,
     },
     BeeperForwardPrepared {
         generation: u64,

@@ -3775,10 +3775,12 @@ pub fn run(
             }
         })
         .expect("pending media worker");
-    let (forward_tx, forward_rx) =
-        std::sync::mpsc::sync_channel::<(u64, bool, Vec<(usize, crate::composed_forward::Item)>)>(
-            1,
-        );
+    let (forward_tx, forward_rx) = std::sync::mpsc::sync_channel::<(
+        u64,
+        bool,
+        usize,
+        Vec<(usize, crate::composed_forward::Item)>,
+    )>(1);
     let (forward_accepted_tx, forward_accepted_rx) =
         std::sync::mpsc::channel::<(String, String, String)>();
     let forward_api = api.clone();
@@ -3790,7 +3792,7 @@ pub fn run(
         .name("beeper-forward".into())
         .spawn(move || {
             use crate::composed_forward::State;
-            while let Ok((generation, prepared, mut items)) = forward_rx.recv() {
+            while let Ok((generation, prepared, append_at, mut items)) = forward_rx.recv() {
                 if !prepared {
                     let expanded = forward_api
                         .plan_forwards(items.into_iter().map(|(_, item)| item).collect());
@@ -3800,6 +3802,15 @@ pub fn run(
                     });
                     forward_waker.wake();
                     items = expanded.into_iter().enumerate().collect();
+                } else {
+                    items = crate::forward_results::expand_retry(items, append_at, |item| {
+                        forward_api.plan_forwards(vec![item])
+                    });
+                    let _ = forward_events.send(Event::BeeperForwardRetryPrepared {
+                        generation,
+                        items: items.clone(),
+                    });
+                    forward_waker.wake();
                 }
                 for (index, item) in items {
                     if !matches!(item.state, State::Waiting) {
@@ -4509,10 +4520,13 @@ pub fn run(
                 Command::BeeperForward {
                     generation,
                     prepared,
+                    append_at,
                     items,
                 } => {
-                    if let Err(error) = forward_tx.try_send((generation, prepared, items)) {
-                        let (generation, _, items) = match error {
+                    if let Err(error) =
+                        forward_tx.try_send((generation, prepared, append_at, items))
+                    {
+                        let (generation, _, _, items) = match error {
                             std::sync::mpsc::TrySendError::Full(value)
                             | std::sync::mpsc::TrySendError::Disconnected(value) => value,
                         };
@@ -7707,14 +7721,20 @@ mod tests {
             pending_id: "previous".into(),
         };
         items.insert(0, accepted.clone());
-        crate::composed_forward::retry_failed(&mut items);
-        let expanded = api.plan_forwards(items);
-        assert_eq!(expanded.len(), 3);
-        assert_eq!(expanded[0], accepted);
-        assert_eq!(expanded[1].attachment, Some(0));
-        assert_eq!(expanded[2].attachment, Some(1));
-        assert_eq!(expanded[2].text.lines().count(), 1);
-        assert!(expanded[1].planned && expanded[2].planned);
+        let retry = crate::composed_forward::prepare_retry(&mut items);
+        assert_eq!(retry.len(), 1);
+        assert_eq!(retry[0].0, 1);
+        let expanded = crate::forward_results::expand_retry(retry, items.len(), |item| {
+            api.plan_forwards(vec![item])
+        });
+        assert_eq!(expanded.len(), 2);
+        assert_eq!(items[0], accepted);
+        assert_eq!(expanded[0].0, 1);
+        assert_eq!(expanded[1].0, 2);
+        assert_eq!(expanded[0].1.attachment, Some(0));
+        assert_eq!(expanded[1].1.attachment, Some(1));
+        assert_eq!(expanded[1].1.text.lines().count(), 1);
+        assert!(expanded[0].1.planned && expanded[1].1.planned);
         server.join().unwrap();
     }
 

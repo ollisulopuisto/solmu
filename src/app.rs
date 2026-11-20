@@ -4850,6 +4850,19 @@ impl App {
                     }
                 }
             }
+            Event::BeeperForwardRetryPrepared { generation, items } => {
+                if generation == self.forward_generation {
+                    for (index, item) in items {
+                        if index == self.forward_items.len() {
+                            self.forward_items.push(item);
+                        } else if let Some(previous) = self.forward_items.get_mut(index)
+                            && matches!(previous.state, crate::composed_forward::State::Waiting)
+                        {
+                            *previous = item;
+                        }
+                    }
+                }
+            }
             Event::BeeperForwardPrepared { generation, items } => {
                 if generation == self.forward_generation {
                     self.forward_items = items;
@@ -10964,6 +10977,7 @@ impl App {
                     self.backend.send(Command::BeeperForward {
                         generation: self.forward_generation,
                         prepared: true,
+                        append_at: self.forward_items.len(),
                         items,
                     });
                 }
@@ -10990,6 +11004,7 @@ impl App {
                 self.backend.send(Command::BeeperForward {
                     generation: self.forward_generation,
                     prepared: true,
+                    append_at: self.forward_items.len(),
                     items,
                 });
             }
@@ -11052,6 +11067,7 @@ impl App {
                             self.backend.send(Command::BeeperForward {
                                 generation: self.forward_generation,
                                 prepared: false,
+                                append_at: 0,
                                 items: self.forward_items.iter().cloned().enumerate().collect(),
                             });
                         }
@@ -17748,7 +17764,10 @@ mod tests {
         else {
             panic!("expected retry");
         };
-        assert!(prepared, "retry must not replan or reindex prior results");
+        assert!(
+            prepared,
+            "retry must not replan or reindex accepted results"
+        );
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].0, 1);
         assert_eq!(items[0].1.state, crate::composed_forward::State::Waiting);

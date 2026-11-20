@@ -71,6 +71,36 @@ pub fn retry_recipient(
         .collect()
 }
 
+/// Replan only incomplete retry rows. The first part keeps its old index;
+/// additional attachments append beyond every retained result.
+pub fn expand_retry(
+    items: Vec<(usize, Item)>,
+    mut append_at: usize,
+    mut plan: impl FnMut(Item) -> Vec<Item>,
+) -> Vec<(usize, Item)> {
+    let mut expanded = Vec::new();
+    for (index, item) in items {
+        if !matches!(item.state, State::Waiting) {
+            continue;
+        }
+        if item.planned {
+            expanded.push((index, item));
+            continue;
+        }
+        for (part, item) in plan(item).into_iter().enumerate() {
+            let target = if part == 0 {
+                index
+            } else {
+                let target = append_at;
+                append_at += 1;
+                target
+            };
+            expanded.push((target, item));
+        }
+    }
+    expanded
+}
+
 /// Feedback is scoped by full destination identity and its exact accepted token.
 /// Failure and timeout stay uncertain, never pre-submit/retryable.
 pub fn feedback(
@@ -199,5 +229,35 @@ mod tests {
             },
         );
         assert!(matches!(items[2].state, State::Confirmed { .. }));
+    }
+    #[test]
+    fn incomplete_retry_expansion_keeps_existing_indices_and_appends_extra_parts() {
+        let mut failed = item("a", "chat", State::Waiting);
+        failed.planned = false;
+        let ready = item("a", "chat", State::Waiting);
+        let accepted = item(
+            "a",
+            "chat",
+            State::Accepted {
+                pending_id: "p".into(),
+            },
+        );
+        let expanded = expand_retry(
+            vec![(1, failed), (4, ready), (5, accepted)],
+            6,
+            |mut row| {
+                row.planned = true;
+                row.attachment = Some(0);
+                let mut second = row.clone();
+                second.attachment = Some(1);
+                vec![row, second]
+            },
+        );
+        assert_eq!(
+            expanded.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            vec![1, 6, 4]
+        );
+        assert_eq!(expanded[0].1.attachment, Some(0));
+        assert_eq!(expanded[1].1.attachment, Some(1));
     }
 }
