@@ -10166,6 +10166,7 @@ impl App {
                 }
             }
             Action::OpenMessage { chat, message } => {
+                crate::ui::reply_threads::leave_for_navigation(ctx);
                 // A stored cross-chat quote may outlive its locally deleted source.
                 if self.chat(&chat).is_none() {
                     return;

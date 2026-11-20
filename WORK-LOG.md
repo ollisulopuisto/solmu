@@ -1,5 +1,18 @@
 # Work log
 
+## 2026-11-20: Thread navigation and visible right-click target
+
+Latest Mac CI passed 2461 tests, failed ordinary OpenMessage thread-exit and the
+existing right-click-beside-document fixture. The normal OpenMessage action now
+leaves the thread; the earlier insertion only covered its locked-app deferral.
+The right-click fixture now scrolls to its tested row before reading the target
+rect, rather than assuming both old rows remain visible after loaded-reply
+controls add transcript height. No production context-menu behavior was relaxed.
+This fixture explanation still needs the new CI run; it is not labeled flaky.
+Local full-test compilation again exceeded the execution window, so these tests
+are not claimed passed locally. The previous album/texture failures are absent
+from the latest Mac result. No screenshot or release change.
+
 ## 2026-11-19: Beeper bridge messages show every attachment (fix/beeper-multi-attachment-messages)
 
 Olli reported bridge messages with several attachments showing only the
