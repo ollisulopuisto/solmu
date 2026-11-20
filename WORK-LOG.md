@@ -703,3 +703,8 @@ history and search continuation. Tests cover disconnected inventory without a
 Chats replacement event, legitimate empty inventory, malformed history, and
 search retaining results/cursor across refusal and successful retry.
 No real Server query or UI-layout changes; native/live acceptance unverified.
+
+
+## Shortcut edit targets,20 November
+
+Owner reports Up selected an older message. Source confirms the shortcut deliberately skips non-text rows (Beeper attachment edits are unsupported), not an index decrement. Conversation merge sorts by timestamp/history order. A separate real gap reproduced: hidden, Pending and Failed own text rows could become shortcut edit targets. Reject unsent rows in can_edit and hidden rows in the shortcut. Failing-first extracted production-method fixture:3fail/1pass before,4pass after. Added native App regression for hidden/pending/failed, latest sent/read and captioned album-member boundaries. The extraction uses simplified model scaffolding, not the full App suite. Full native CI remains required. Original older-target screenshot cause not proven; no cache/off-by-one claim. No editing-highlight UI changed.
