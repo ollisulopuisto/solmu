@@ -703,3 +703,9 @@ history and search continuation. Tests cover disconnected inventory without a
 Chats replacement event, legitimate empty inventory, malformed history, and
 search retaining results/cursor across refusal and successful retry.
 No real Server query or UI-layout changes; native/live acceptance unverified.
+
+## Readable batch-result banner,20 November
+
+Batch archive/delete result notices use resolved chat titles and explicit Archive chat/Delete message for me/Delete message for everyone labels, not raw room/message IDs. Accepted is explicitly not completion confirmation; waiting and failed/uncertain states say not to blindly retry. Technical error details collapse, and dismiss clearly says action results. Previous-connection history never resolves an old identity against the current session. Missing chats say Unavailable chat.
+
+Native test-target compile passes, regression covers labels/states/no raw IDs; execution pending native CI. Actual synthetic Linux dark/light screenshots inspected: wrapped label and dismiss button are readable within the sidebar. No Mac pass.

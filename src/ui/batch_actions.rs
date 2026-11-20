@@ -73,23 +73,12 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
         });
     }
     for item in &app.batch_ui.results {
-        let status = match &item.result {
-            None => gettext(app.locale, "Awaiting result; do not retry").into_owned(),
-            Some(Ok(())) => gettext(app.locale, "Accepted").into_owned(),
-            Some(Err(error)) => gettext(
-                app.locale,
-                "Failed or uncertain: {error}. Check state before any manual retry.",
-            )
-            .replace("{error}", error),
-        };
-        ui.label(format!(
-            "{} {}: {status}",
-            item.chat,
-            item.message
-                .as_deref()
-                .map(str::to_owned)
-                .unwrap_or_else(|| gettext(app.locale, "archive").into_owned())
-        ));
+        ui.add(egui::Label::new(result_line(app, item)).wrap());
+        if let Some(Err(error)) = &item.result {
+            ui.collapsing(gettext(app.locale, "Technical details"), |ui| {
+                ui.add(egui::Label::new(error).wrap());
+            });
+        }
     }
     if !app.batch_ui.previous_session_results.is_empty() {
         ui.label(gettext(
@@ -102,11 +91,13 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
                     app.locale,
                     "{chat} {message}: check the previous connection before retrying",
                 )
-                .replace("{chat}", &item.chat)
-                .replace("{message}", item.message.as_deref().unwrap_or("")),
+                .replace("{chat}", &gettext(app.locale, "Previous connection chat"))
+                .replace("{message}", &result_action(app.locale, item)),
             );
             if let Some(Err(error)) = &item.result {
-                ui.label(error);
+                ui.collapsing(gettext(app.locale, "Technical details"), |ui| {
+                    ui.add(egui::Label::new(error).wrap());
+                });
             }
         }
 
@@ -124,11 +115,39 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
             .iter()
             .all(|item| item.result.is_some())
         && ui
-            .button(crate::i18n::gettext(app.locale, "Dismiss results"))
+            .button(crate::i18n::gettext(app.locale, "Dismiss action results"))
             .clicked()
     {
         app.batch_ui.results.clear();
     }
+}
+
+fn result_chat_name(app: &App, item: &Item) -> String {
+    let title = app.chat(&item.chat).map(|chat| app.chat_title(chat));
+    title
+        .filter(|name| !name.trim().is_empty() && name != &item.chat)
+        .unwrap_or_else(|| gettext(app.locale, "Unavailable chat").into_owned())
+}
+
+fn result_action(locale: Locale, item: &Item) -> std::borrow::Cow<'static, str> {
+    match (item.message.is_some(), item.everyone) {
+        (false, _) => gettext(locale, "Archive chat"),
+        (true, false) => gettext(locale, "Delete message for me"),
+        (true, true) => gettext(locale, "Delete message for everyone"),
+    }
+}
+
+fn result_line(app: &App, item: &Item) -> String {
+    let status = match &item.result {
+        None => gettext(app.locale, "Waiting for confirmation; do not retry"),
+        Some(Ok(())) => gettext(app.locale, "Request accepted, completion not confirmed"),
+        Some(Err(_)) => gettext(
+            app.locale,
+            "Failed or uncertain; check the chat before retrying",
+        ),
+    };
+    let action = result_action(app.locale, item);
+    format!("{}: {action}. {status}", result_chat_name(app, item))
 }
 
 pub fn archive_refusal(chat: &Chat) -> Option<&'static str> {
@@ -275,5 +294,45 @@ pub fn refusal_text(locale: Locale, reason: &str) -> String {
             gettext(locale, "The bridge's delete age limit has passed").into_owned()
         }
         _ => reason.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn result_names_action_and_state_never_internal_identifiers() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        app.chats.push(Chat::new(
+            "!raw:bridge.localhost".into(),
+            "Ada's group".into(),
+        ));
+        app.chats[0].kind = crate::model::ChatKind::Group;
+        let mut item = Item {
+            chat: "!raw:bridge.localhost".into(),
+            message: Some("402555".into()),
+            everyone: false,
+            result: Some(Ok(())),
+        };
+        let line = result_line(&app, &item);
+        assert!(line.contains("Ada's group"));
+        assert!(line.contains("Delete message for me"));
+        assert!(line.contains("completion not confirmed"));
+        assert!(!line.contains("localhost"));
+        assert!(!line.contains("402555"));
+        item.everyone = true;
+        assert!(result_line(&app, &item).contains("for everyone"));
+        item.message = None;
+        assert!(result_line(&app, &item).contains("Archive chat"));
+        item.result = None;
+        assert!(result_line(&app, &item).contains("Waiting for confirmation"));
+        item.result = Some(Err("raw internal failure".into()));
+        assert!(result_line(&app, &item).contains("Failed or uncertain"));
+        item.chat = "gone.internal".into();
+        assert!(result_line(&app, &item).starts_with("Unavailable chat"));
     }
 }
