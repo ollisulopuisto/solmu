@@ -1,5 +1,18 @@
 # Work log
 
+## 2026-11-20: Thread navigation and visible right-click target
+
+Latest Mac CI passed 2461 tests, failed ordinary OpenMessage thread-exit and the
+existing right-click-beside-document fixture. The normal OpenMessage action now
+leaves the thread; the earlier insertion only covered its locked-app deferral.
+The right-click fixture now scrolls to its tested row before reading the target
+rect, rather than assuming both old rows remain visible after loaded-reply
+controls add transcript height. No production context-menu behavior was relaxed.
+This fixture explanation still needs the new CI run; it is not labeled flaky.
+Local full-test compilation again exceeded the execution window, so these tests
+are not claimed passed locally. The previous album/texture failures are absent
+from the latest Mac result. No screenshot or release change.
+
 ## 2026-11-19: Beeper bridge messages show every attachment (fix/beeper-multi-attachment-messages)
 
 Olli reported bridge messages with several attachments showing only the
@@ -716,6 +729,23 @@ Cmd-K, global/sidebar chat matching and palette include full loaded member displ
 
 Production helper regression fails with the previous title-only terms and passes after including members. Native test-target compile passes with app-level regression covering Cmd-K/global/palette/title/locked exclusion. Full native test execution was attempted before the fix but exceeded local build timeout, so no claim that the actual end-to-end regression has run red/green; CI must execute it. No Mac pass.
 
+## Loaded reply threads and routed connectors,20 November
+
+Original messages show their known loaded reply count, opening an in-place thread with Back to full chat. The full-chat scroll state is retained separately. Reply graph identities include source chat and message; hidden/revoked/unloaded sources do not contribute. Shared rendering covers ordinary and linked views. Hover/focus connectors use exact inner-facing bubble-border ports and an orthogonal visibility grid with bend/length costs and padded obstacles; corners are rounded within clearance. No safe route or offscreen endpoints produces no line; Original jump remains available.
+
+Three production graph tests and three production router tests executed directly, all pass. Native library/test-target Clippy passes with warnings denied and actual Linux binary builds. Full native app test execution did not finish within local compilation timeout. Actual synthetic app count/filter/hover/back pixels inspected; no live account use. Review media remains private; maintainer waived the screenshot requirement for this PR only at14:27. No merge or release.
+
 ## Authenticated automation product decision,20 November
 
 Updated PRODUCT.md and CONTRIBUTING.md to permit scoped authenticated API, CLI and MCP read/send access including WhatsApp, replacing the previous blanket exclusion. Read grants do not authorize writes. Revocation, explicit destination limits, loopback default, request validation, metadata-only auditing and remote-transport decisions remain requirements. Documentation only; no server, grant, token, installation or send created.
+
+## Thread CI follow-up,20 November
+
+Mac CI executed the thread changes and found new test texture-delta cleanup
+mistakes plus album accessibility/navigation regressions: using any reply link
+to force every message into a separate row split unrelated media albums. Keep
+the normal album grouping and register each member's exact thread identity on
+the album's shared painted bounds. Clear texture deltas in the new seeded
+fixtures. Native all-target/all-feature Clippy passes; local targeted application
+test execution exceeded120 seconds during compilation and has not run. CI must
+recheck the three existing demo failures, including right-click-beside-message.

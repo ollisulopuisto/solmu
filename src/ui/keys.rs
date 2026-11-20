@@ -489,6 +489,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             } else {
                 Action::CloseInfo
             });
+        } else if super::reply_threads::owns(app, ctx) {
+            super::reply_threads::close(ctx);
         } else if app.page == Page::Wallpaper {
             actions.push(Action::Open(Page::Settings));
         } else if app.page == Page::Settings && !app.settings_search.is_empty() {

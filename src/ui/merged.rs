@@ -273,6 +273,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     }
     let ids: Vec<_> = valid.iter().map(|m| m.chat.clone()).collect();
     app.ensure_person_loaded(&ids);
+    super::reply_threads::begin(app, ui, &ids);
     let key = egui::Id::new(("linked-person-state", &person.members));
     let mut state = ui
         .ctx()
@@ -787,11 +788,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 .and_then(|conv| conv.messages.get(*idx))
         })
         .collect();
-    let filtered = !state.search.trim().is_empty() || state.source_filter.is_some();
+    super::reply_threads::bar(ui);
+    let thread_root = super::reply_threads::current(ui.ctx());
+    let filtered =
+        thread_root.is_some() || !state.search.trim().is_empty() || state.source_filter.is_some();
     let visible: Vec<_> = messages
         .iter()
         .copied()
         .filter(|message| {
+            if !super::reply_threads::includes(ui.ctx(), message) {
+                return false;
+            }
+
             if state
                 .source_filter
                 .as_ref()
@@ -849,7 +857,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     let mut actions = Vec::new();
     let mut refused_action = false;
     let redo = ui.ctx().current_pass_index() > 0;
-    let rows_key = key.with("row-heights");
+    let rows_key = key.with(("row-heights", &thread_root));
     let mut cache = ui
         .ctx()
         .data_mut(|data| data.remove_temp::<RowCache>(rows_key).unwrap_or_default());
@@ -890,8 +898,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             // height is known; everything else is an offset the area can
             // clamp itself.
             if pending_scroll.is_some() || forced_bottom {
-                let scroll_id =
-                    ui.make_persistent_id(egui::IdSalt::new(("person-timeline", &person.members)));
+                let scroll_id = ui.make_persistent_id(if thread_root.is_some() {
+                    egui::IdSalt::new(key.with(("thread", &thread_root)))
+                } else {
+                    egui::IdSalt::new(("person-timeline", &person.members))
+                });
                 let mut state =
                     egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
                 let page = remaining * 0.9;
@@ -906,7 +917,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 state.store(ui.ctx(), scroll_id);
             }
             egui::ScrollArea::vertical()
-                .id_salt(("person-timeline", &person.members))
+                .id_salt(if thread_root.is_some() {
+                    egui::IdSalt::new(key.with(("thread", &thread_root)))
+                } else {
+                    egui::IdSalt::new(("person-timeline", &person.members))
+                })
                 .stick_to_bottom(!filtered)
                 .min_scrolled_height(remaining)
                 .max_height(remaining)
@@ -1202,6 +1217,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 })
         })
         .inner;
+    super::reply_threads::finish(ui, app.conversation_palette().accent);
+    if thread_root.is_none() {
+        super::reply_threads::complete_full_scroll(ui.ctx(), output.id, output.state);
+    }
     let bottom = (output.content_size.y - output.inner_rect.height()).max(0.0);
     if matches!(pending_scroll, Some(crate::model::Scroll::Bottom)) || forced_bottom {
         let mut scroll = output.state;

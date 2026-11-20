@@ -15414,6 +15414,12 @@ mod tests {
             for _ in 0..3 {
                 render(&mut app, &ctx);
             }
+            // Reply controls change transcript height. Jump to the row under
+            // test rather than right-clicking a cached rect behind the header.
+            app.apply(crate::model::Action::ScrollTo(message.into()), &ctx);
+            for _ in 0..3 {
+                render(&mut app, &ctx);
+            }
             let id = crate::ui::conversation::bubble_id(&chat, message);
             let rect = ctx
                 .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
@@ -25184,4 +25190,10 @@ mod card_width_tests {
             }
         }
     }
+}
+
+/// Synthetic thread review fixture.
+#[cfg(feature = "demo")]
+pub(crate) fn reply_thread() -> bool {
+    std::env::args().any(|arg| arg.contains("reply-thread"))
 }

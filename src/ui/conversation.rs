@@ -2935,6 +2935,10 @@ fn sticky_date<R>(
 /// The conversation's messages. `under` is how much of the list's top lies
 /// beneath the header, which a vibrant window lays over it.
 fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
+    super::reply_threads::begin(app, ui, std::slice::from_ref(&chat.id));
+    if super::reply_threads::ordinary(app, ui, chat) {
+        return;
+    }
     let palette = app.conversation_palette();
     // Taken up front: `names_or` below borrows the rest of `app` for the
     // whole function, so a pending scroll must come out before that.
@@ -4213,6 +4217,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                     .interact_pos()
                     .is_some_and(|pos| bar.contains(pos)))
     });
+    super::reply_threads::finish(ui, palette.accent);
+    let restored_thread_scroll =
+        super::reply_threads::complete_full_scroll(ui.ctx(), output.id, output.state);
     let complete = conversation.complete;
     let loading = conversation.loading_older;
     let fetching = conversation.fetching_phone;
@@ -4226,7 +4233,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     // scrolls, rather than pushing the offset away from the top; PgUp/PgDn
     // steps are relative and still get it. The pass is redone at the new
     // offset, so the shift never shows.
-    if grew_above.abs() >= 0.5
+    if !restored_thread_scroll
+        && grew_above.abs() >= 0.5
         && !lay_out_all
         && !scroll_to_bottom
         && !at_bottom
@@ -4983,6 +4991,26 @@ fn bubble(
                 } else {
                     ui.ctx()
                         .data_mut(|data| data.remove::<Rect>(footer_id(&last.chat, &last.id)));
+                }
+            }
+            if let Some(body) = &response {
+                let mut painted = body.clone();
+                painted.rect = ui
+                    .ctx()
+                    .data(|d| {
+                        d.get_temp::<Rect>(
+                            bubble_id(&message.chat, &message.id).with("painted-rect"),
+                        )
+                    })
+                    .unwrap_or(body.rect);
+                // Albums retain their ordinary single-row navigation and accessibility.
+                // Each member keeps its exact message identity for thread entry/jumps.
+                if let Some(items) = album {
+                    for item in items {
+                        super::reply_threads::row(ui, item, &painted, view.palette.accent, actions);
+                    }
+                } else {
+                    super::reply_threads::row(ui, message, &painted, view.palette.accent, actions);
                 }
             }
         },
@@ -7662,8 +7690,8 @@ pub(crate) fn linked_bubble(
         RunPlace {
             sender_hue: None,
             show_timestamp,
-            show_sender: false,
-            show_avatar: false,
+            show_sender: chat.is_group() && !message.from_me,
+            show_avatar: chat.is_group() && !message.from_me,
             tailed: true,
         },
         actions,
