@@ -4788,6 +4788,12 @@ impl App {
                 member,
                 state,
             } => {
+                if self.audience_queue.as_mut().is_some_and(|queue| {
+                    queue.feedback(&local, &member, state.clone(), Instant::now())
+                }) {
+                    return;
+                }
+
                 if let Some(record) = self
                     .pending_media
                     .get_mut(&local)
@@ -4816,6 +4822,19 @@ impl App {
                 message,
                 complete,
             } => {
+                if complete
+                    && self.audience_queue.as_mut().is_some_and(|queue| {
+                        queue.feedback(
+                            &local,
+                            &member,
+                            crate::pending_media::State::Confirmed,
+                            Instant::now(),
+                        )
+                    })
+                {
+                    return;
+                }
+
                 if let Some(record) = self
                     .pending_media
                     .get(&local)
@@ -9479,6 +9498,28 @@ impl App {
     }
 
     fn tick(&mut self, ctx: &egui::Context) {
+        for account in &mut self.accounts {
+            let Some(queue) = account.audience_queue.as_mut() else {
+                continue;
+            };
+            if queue.pending() {
+                if account.link.is_connected() {
+                    let chats = &account.chats;
+                    if let Some(job) = queue.next(Instant::now(), |member| {
+                        chats.iter().filter(|chat| member.matches(chat)).count() == 1
+                            && chats
+                                .iter()
+                                .any(|chat| member.matches(chat) && chat.can_send() && !chat.locked)
+                    }) {
+                        account.backend.send(Command::BeeperMedia(job));
+                    }
+                }
+                if !queue.paused {
+                    ctx.request_repaint_after(Duration::from_millis(500));
+                }
+            }
+        }
+
         if let Some(result) = self
             .local_whisper_removal
             .as_ref()
@@ -10028,6 +10069,87 @@ impl App {
             return;
         }
         match action {
+            Action::PrepareNewMessage {
+                member,
+                text,
+                files,
+            } => {
+                if self
+                    .chats
+                    .iter()
+                    .filter(|chat| chat.id == member.chat)
+                    .count()
+                    != 1
+                    || member.origin.is_none()
+                    || member.bridge_account.is_none()
+                    || member.account != self.account().id.0
+                    || !self.chats.iter().any(|chat| {
+                        crate::ui::flat_groups::member(self, chat) == member
+                            && chat.can_send()
+                            && !chat.locked
+                    })
+                {
+                    return;
+                }
+                let source = crate::merged::Member {
+                    origin: member.origin.clone().unwrap(),
+                    account: member.bridge_account.clone().unwrap(),
+                    chat: member.chat.clone(),
+                };
+                let owner = self
+                    .settings
+                    .beeper
+                    .people
+                    .iter()
+                    .find(|p| p.members.contains(&source))
+                    .and_then(|p| {
+                        p.members.iter().find(|m| {
+                            self.chat(&m.chat)
+                                .is_some_and(|chat| m.matches(chat) && !chat.locked)
+                        })
+                    })
+                    .map(|m| m.chat.clone())
+                    .unwrap_or_else(|| member.chat.clone());
+                let has_existing_draft = self.parked_draft(&owner)
+                    || crate::ui::merged::has_reply(self, ctx, &source)
+                    || (self.open_chat.as_deref() == Some(&owner)
+                        && (!self.composer.trim().is_empty()
+                            || !self.pending.is_empty()
+                            || self.reply_to.is_some()));
+                if text.is_empty() && files.is_empty() {
+                    self.apply(Action::OpenChat(member.chat.clone()), ctx);
+                    if self.open_chat.as_deref() == Some(&owner) {
+                        if !has_existing_draft {
+                            crate::ui::merged::prepare_destination(self, ctx, &source);
+                        }
+                        self.new_message = Default::default();
+                        self.dialog = None;
+                        self.focus_composer = true;
+                    }
+                    return;
+                }
+                if self.editing.is_some() || has_existing_draft {
+                    self.new_message.notice = Some(
+                        crate::i18n::gettext(
+                            self.locale,
+                            "This chat has an unsent draft. Nothing was replaced.",
+                        )
+                        .into_owned(),
+                    );
+                    return;
+                }
+                self.apply(Action::OpenChat(member.chat.clone()), ctx);
+                if self.open_chat.as_deref() != Some(&owner) {
+                    return;
+                }
+                crate::ui::merged::prepare_destination(self, ctx, &source);
+                self.composer = text;
+                self.stage_all(files.into_iter().map(Pending::File));
+                self.new_message = Default::default();
+                self.dialog = None;
+                self.focus_composer = true;
+            }
+
             Action::RetryPendingMedia(local) => {
                 let job = self
                     .pending_media

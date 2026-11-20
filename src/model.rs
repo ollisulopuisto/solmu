@@ -2775,6 +2775,11 @@ pub fn forward_limit(frequently_forwarded: bool) -> usize {
 /// Actions queued by views and applied after drawing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    PrepareNewMessage {
+        member: crate::flat_groups::Member,
+        text: String,
+        files: Vec<PathBuf>,
+    },
     BatchArchive {
         request: u64,
         expected: crate::merged::Member,
