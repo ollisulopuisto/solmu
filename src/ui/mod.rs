@@ -85,6 +85,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         pending_picture_preview::show(app, ctx);
         focus_ring(app, ctx);
         announce(app, ctx);
+        window_chrome(app, ui);
         return;
     }
     app.beeper_signin.show(ctx);
