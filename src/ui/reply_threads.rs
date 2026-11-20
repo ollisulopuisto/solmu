@@ -437,9 +437,7 @@ mod tests {
             },
         );
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| begin(&app, ui, &["a".into()]))
-        });
+        let _ = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["a".into()]));
         let key = scope(&app, &["a".into()]);
         ctx.data_mut(|d| {
             d.insert_temp(
