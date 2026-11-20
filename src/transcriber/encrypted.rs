@@ -38,7 +38,7 @@ impl Encrypted {
         }
         let path = dir.join("archive.db");
         if std::fs::symlink_metadata(&path)
-            .map_or(true, |m| !m.is_file() || m.file_type().is_symlink())
+            .is_ok_and(|m| !m.is_file() || m.file_type().is_symlink())
         {
             return Err(io("Encrypted account archive is unavailable"));
         }
@@ -74,33 +74,16 @@ impl Encrypted {
         max: u64,
     ) -> std::io::Result<()> {
         self.with(account, |c| {
-            let tx = c.transaction().map_err(io)?;
-            tx.execute("INSERT INTO local_transcripts(chat,message,text,modified) VALUES (?1,?2,?3,?4) ON CONFLICT(chat,message) DO UPDATE SET text=excluded.text, modified=excluded.modified", params![chat,message,text,modified]).map_err(io)?;
-            tx.commit().map_err(io)?;
-            Ok(())
+            let tx=c.transaction().map_err(io)?;
+            tx.execute("INSERT INTO local_transcripts(chat,message,text,modified) VALUES (?1,?2,?3,?4) ON CONFLICT(chat,message) DO UPDATE SET text=excluded.text,modified=excluded.modified",params![chat,message,text,modified]).map_err(io)?;
+            let mut total:i64=tx.query_row("SELECT coalesce(sum(length(CAST(text AS BLOB))),0) FROM local_transcripts",[],|r|r.get(0)).map_err(io)?;
+            while total > max as i64 {
+                let oldest:(String,String,i64)=tx.query_row("SELECT chat,message,length(CAST(text AS BLOB)) FROM local_transcripts ORDER BY modified,chat,message LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(io)?;
+                tx.execute("DELETE FROM local_transcripts WHERE chat=?1 AND message=?2",params![oldest.0,oldest.1]).map_err(io)?;
+                total-=oldest.2;
+            }
+            tx.commit().map_err(io)
         })?;
-        // Preserve the existing global byte cap across account archives.
-        let mut rows = Vec::new();
-        let mut total = 0u64;
-        for owner in self.accounts() {
-            let sizes = self.with(&owner, |c| {
-                let mut statement = c.prepare("SELECT chat,message,length(CAST(text AS BLOB)),modified FROM local_transcripts").map_err(io)?;
-                let rows = statement.query_map([], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,i64>(2)? as u64,row.get::<_,i64>(3)?))).map_err(io)?;
-                rows.collect::<Result<Vec<_>,_>>().map_err(io)
-            })?;
-            for (chat, message, size, modified) in sizes {
-                total += size;
-                rows.push((modified, owner.clone(), chat, message, size));
-            }
-        }
-        rows.sort();
-        for (_, owner, chat, message, size) in rows {
-            if total <= max {
-                break;
-            }
-            self.remove(&owner, Some(&chat), Some(&message))?;
-            total = total.saturating_sub(size);
-        }
         Ok(())
     }
     pub fn get(&self, account: &str, chat: &str, message: &str) -> Option<String> {
@@ -343,6 +326,38 @@ mod tests {
         assert!(backend.migrate(&legacy).is_err());
         assert!(store.get("2", "chat", "voice").is_some());
     }
+    #[test]
+    fn fresh_beeper_profile_initializes_only_within_existing_account_and_ignores_unavailable_other_account()
+     {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("accounts/1/beeper-drafts")).unwrap();
+        let backend = Encrypted::new(root.path().into());
+        let path = backend.path("1").unwrap();
+        assert!(!path.exists());
+        // Test key substitutes only OS-keyring retrieval; initializer and SQLCipher are real.
+        let connection = crate::archive::transcript_connection_with_key(&path, &KEY).unwrap();
+        connection.execute_batch("CREATE TABLE local_transcripts(chat TEXT NOT NULL,message TEXT NOT NULL,text TEXT NOT NULL,modified INTEGER NOT NULL,PRIMARY KEY(chat,message));").unwrap();
+        backend
+            .connections
+            .lock()
+            .unwrap()
+            .insert("1".into(), connection);
+        std::fs::create_dir_all(root.path().join("accounts/2")).unwrap();
+        std::fs::write(
+            root.path().join("accounts/2/archive.db"),
+            b"unavailable archive fixture",
+        )
+        .unwrap();
+        backend
+            .put("1", "chat", "voice", "healthy save", 0, 1 << 20)
+            .unwrap();
+        assert_eq!(
+            backend.get("1", "chat", "voice").as_deref(),
+            Some("healthy save")
+        );
+        assert!(!root.path().join("accounts/3").exists());
+    }
+
     #[test]
     fn failed_unlock_never_falls_back_to_plaintext_or_recreates_removed_account() {
         let root = tempfile::tempdir().unwrap();

@@ -2175,9 +2175,9 @@ impl App {
             return;
         };
         if let Some(worker) = self.transcript_reader()
-            && let Err(error) = worker.remove_account(id.0.clone())
+            && let Err(_error) = worker.remove_account(id.0.clone())
         {
-            self.toast_error(error);
+            self.toast_error(crate::i18n::gettext(self.locale, "Could not remove this account's saved transcripts. Its encrypted archive may still contain them.").into_owned());
         }
         if self.accounts.len() <= 1 {
             self.accounts[index].backend.send(Command::Unlink);
@@ -6909,9 +6909,9 @@ impl App {
                 self.new_contact_pending = false;
                 let account = self.account().id.clone();
                 if let Some(worker) = self.transcript_reader()
-                    && let Err(error) = worker.remove_account(account.0.clone())
+                    && let Err(_error) = worker.remove_account(account.0.clone())
                 {
-                    self.toast_error(error);
+                    self.toast_error(crate::i18n::gettext(self.locale, "Could not remove this account's saved transcripts. Its encrypted archive may still contain them.").into_owned());
                 }
                 self.poll_voting.clear();
                 self.interactive_sending.clear();
