@@ -14622,7 +14622,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
     fn ready_transcript_is_quoted_and_left_aligned_in_an_outgoing_layout() {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
@@ -14676,7 +14675,9 @@ mod tests {
             );
             output.textures_delta.clear();
         });
-=======
+    }
+
+    #[test]
     fn overlap_repaint_stays_in_bottom_padding_for_both_skins() {
         let message = crate::archive::tests::message("1@s.whatsapp.net", "padding", 0, false);
         for style in [theme::BubbleStyle::WhatsApp, theme::BubbleStyle::Messages] {
@@ -14686,7 +14687,6 @@ mod tests {
                 f32::from(bubble_margin(&palette, &message, false).bottom) >= STREAK_REPAINT_INSET
             );
         }
->>>>>>> origin/main
     }
 
     #[test]
