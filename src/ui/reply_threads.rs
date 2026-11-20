@@ -14,6 +14,7 @@ use crate::reply_graph::chain;
 #[derive(Clone)]
 struct Frame {
     scope: egui::Id,
+    ids: Vec<String>,
     replies: HashMap<Key, Vec<Key>>,
     parents: HashMap<Key, Key>,
     rects: HashMap<Key, egui::Rect>,
@@ -25,6 +26,7 @@ impl Default for Frame {
     fn default() -> Self {
         Self {
             scope: egui::Id::NULL,
+            ids: vec![],
             replies: HashMap::new(),
             parents: HashMap::new(),
             rects: HashMap::new(),
@@ -99,6 +101,7 @@ pub fn begin(app: &App, ui: &egui::Ui, ids: &[String]) {
             frame_id(),
             std::sync::Arc::new(std::sync::Mutex::new(Frame {
                 scope,
+                ids: ids.to_vec(),
                 replies,
                 parents,
                 active,
@@ -113,6 +116,25 @@ pub fn current(ctx: &egui::Context) -> Option<Key> {
         let f = f.lock().unwrap_or_else(|e| e.into_inner());
         ctx.data(|d| d.get_temp::<Key>(f.scope))
     })
+}
+pub fn owns(app: &App, ctx: &egui::Context) -> bool {
+    frame(ctx).is_some_and(|shared| {
+        let f = shared.lock().unwrap_or_else(|e| e.into_inner());
+        app.chat_view()
+            && app.open_chat.as_ref().is_some_and(|id| f.ids.contains(id))
+            && scope(app, &f.ids) == f.scope
+            && ctx.data(|d| d.get_temp::<Key>(f.scope)).is_some()
+    })
+}
+/// Explicit navigation and selection take over the full transcript, without restoring an old offset over the jump.
+pub fn leave_for_navigation(ctx: &egui::Context) {
+    if let Some(shared) = frame(ctx) {
+        let f = shared.lock().unwrap_or_else(|e| e.into_inner());
+        ctx.data_mut(|d| {
+            d.remove::<Key>(f.scope);
+            d.remove::<bool>(f.scope.with("restore"));
+        });
+    }
 }
 pub fn close(ctx: &egui::Context) {
     if let Some(f) = frame(ctx) {
@@ -399,6 +421,68 @@ mod tests {
             forwarded: false,
             thumbnail: None,
         }
+    }
+    fn seeded() -> (tempfile::TempDir, App, egui::Context) {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _) =
+            App::headless(crate::paths::AppDirs::under(dir.path()), Default::default());
+        let chat = crate::model::Chat::new("a".into(), "Group".into());
+        app.chats.push(chat);
+        app.open_chat = Some("a".into());
+        app.conversations.insert(
+            "a".into(),
+            crate::app::Conversation {
+                messages: vec![m("a", "1", None), m("a", "2", Some(("a", "1")))],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| begin(&app, ui, &["a".into()]))
+        });
+        let key = scope(&app, &["a".into()]);
+        ctx.data_mut(|d| {
+            d.insert_temp(
+                key,
+                Key {
+                    chat: "a".into(),
+                    id: "1".into(),
+                },
+            )
+        });
+        (dir, app, ctx)
+    }
+    #[test]
+    fn explicit_quote_search_and_selection_actions_leave_thread_without_scroll_restore() {
+        for action in [
+            crate::model::Action::ScrollTo("1".into()),
+            crate::model::Action::OpenMessage {
+                chat: "a".into(),
+                message: "1".into(),
+            },
+            crate::model::Action::SelectMessage("1".into()),
+        ] {
+            let (_dir, mut app, ctx) = seeded();
+            assert!(active(&ctx));
+            app.apply(action, &ctx);
+            assert!(!active(&ctx));
+            let f = frame(&ctx).unwrap();
+            let f = f.lock().unwrap();
+            assert!(
+                ctx.data(|d| d.get_temp::<bool>(f.scope.with("restore")))
+                    .is_none()
+            );
+        }
+    }
+    #[test]
+    fn stale_thread_frame_does_not_own_settings_or_another_chat() {
+        let (_dir, mut app, ctx) = seeded();
+        assert!(owns(&app, &ctx));
+        app.page = crate::model::Page::Settings;
+        assert!(!owns(&app, &ctx));
+        app.page = crate::model::Page::Chats;
+        app.open_chat = Some("other".into());
+        assert!(!owns(&app, &ctx));
     }
     #[test]
     fn index_requires_loaded_exact_chat_and_deduplicates() {

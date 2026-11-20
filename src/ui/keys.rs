@@ -25,13 +25,6 @@ pub(crate) fn menu_scroll_reaches_chat(app: &App, ctx: &egui::Context) -> bool {
 
 /// Routes keyboard commands to actions, respecting overlays and text focus.
 pub fn handle(app: &mut App, ctx: &egui::Context) {
-    if super::reply_threads::active(ctx) {
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-            super::reply_threads::close(ctx);
-        }
-        return;
-    }
-
     if super::send_later::keyboard(ctx) {
         return;
     }
@@ -496,6 +489,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             } else {
                 Action::CloseInfo
             });
+        } else if super::reply_threads::owns(app, ctx) {
+            super::reply_threads::close(ctx);
         } else if app.page == Page::Wallpaper {
             actions.push(Action::Open(Page::Settings));
         } else if app.page == Page::Settings && !app.settings_search.is_empty() {

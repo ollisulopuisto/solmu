@@ -9868,6 +9868,7 @@ impl App {
             // what the lock hides.
             match action {
                 Action::OpenMessage { chat, message } => {
+                    crate::ui::reply_threads::leave_for_navigation(ctx);
                     let account = self.account().id.clone();
                     self.app_lock.defer(crate::app_lock::Deferred::Message(
                         crate::notify::NotificationTarget {
@@ -11034,6 +11035,7 @@ impl App {
                 }
             }
             Action::SelectMessage(id) => {
+                crate::ui::reply_threads::leave_for_navigation(ctx);
                 if let Some(chat) = self.open_chat.clone()
                     && self
                         .conversations
@@ -12760,6 +12762,7 @@ impl App {
                 }
             }
             Action::ScrollTo(id) => {
+                crate::ui::reply_threads::leave_for_navigation(ctx);
                 self.scroll_to_bottom = false;
                 let Some(chat) = self.open_chat.clone() else {
                     return;

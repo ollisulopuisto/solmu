@@ -7682,8 +7682,8 @@ pub(crate) fn linked_bubble(
         RunPlace {
             sender_hue: None,
             show_timestamp,
-            show_sender: false,
-            show_avatar: false,
+            show_sender: chat.is_group() && !message.from_me,
+            show_avatar: chat.is_group() && !message.from_me,
             tailed: true,
         },
         actions,
