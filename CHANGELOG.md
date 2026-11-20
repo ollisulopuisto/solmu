@@ -5,8 +5,6 @@ Newest first. One `## <version>` section per release, bullets under it;
 the app shows the sections newer than the version the user last
 acknowledged, and the latest sections when opened from Help. The
 `## Unreleased` section collects notes for the next release and is never
-
-- Preserve rich-text headings, paragraphs, code breaks, table fallback, compact HTML lists, literal markers and reversed numbering; safely reconstruct nested-list and hard-break edits.
 shown automatically; move its bullets under the release version when the
 version in Cargo.toml is bumped.
 
@@ -16,6 +14,8 @@ Cargo, the Mac bundle and the Windows installer need three numeric parts, so
 this is the whole scheme. Older releases (`v0.24.21` and before) keep their numbers.
 
 ## Unreleased
+
+- Preserve rich-text headings, paragraphs, code breaks, table fallback, compact HTML lists, literal markers and reversed numbering; safely reconstruct nested-list and hard-break edits.
 
 - Ordered lists in Beeper rich-text messages keep their numbers after sending, including nested lists and non-default starting numbers, instead of appearing as bullets. Outbound Markdown stays unchanged.
 
