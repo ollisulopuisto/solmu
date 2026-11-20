@@ -210,20 +210,31 @@ impl Store {
         text: &str,
     ) -> std::io::Result<()> {
         let file = self.file_for(account_id, chat_id, message_id);
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent)?;
+        use std::io::Write;
+        for dir in [
+            self.root.clone(),
+            self.root.join(encode(account_id)),
+            file.parent().unwrap().to_path_buf(),
+        ] {
+            if std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Transcript directory must not be a symlink",
+                ));
+            }
+            std::fs::create_dir_all(&dir)?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
             }
         }
-        std::fs::write(&file, text)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
-        }
+        // tempfile creates a new private0600 file before any text is written.
+        // Atomic replacement never follows a planted destination symlink.
+        let mut temporary = tempfile::NamedTempFile::new_in(file.parent().unwrap())?;
+        temporary.write_all(text.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(&file).map_err(|error| error.error)?;
         self.evict()?;
         self.bump();
         Ok(())
@@ -275,6 +286,13 @@ impl Store {
 /// `-_.` stay, every other UTF-8 byte percent-encodes, so walking the store
 /// recovers the real account/chat/message ids a search hit navigates to.
 fn encode(id: &str) -> String {
+    if matches!(id, "" | "." | "..") {
+        return id
+            .bytes()
+            .map(|byte| format!("%{byte:02X}"))
+            .collect::<String>()
+            + if id.is_empty() { "%00" } else { "" };
+    }
     let mut out = String::with_capacity(id.len());
     for &byte in id.as_bytes() {
         match byte {
@@ -601,6 +619,49 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn private_atomic_writes_harden_parents_and_never_follow_file_links() {
+        use std::os::unix::{fs::PermissionsExt, fs::symlink};
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().join("store"), 1 << 20).unwrap();
+        store
+            .put("account", "chat", "message", "private words")
+            .unwrap();
+        let file = store.file_for("account", "chat", "message");
+        for dir in [
+            root.path().join("store"),
+            root.path().join("store/account"),
+            file.parent().unwrap().into(),
+        ] {
+            assert_eq!(
+                std::fs::metadata(dir).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let outside = root.path().join("outside");
+        std::fs::write(&outside, "untouched").unwrap();
+        std::fs::remove_file(&file).unwrap();
+        symlink(&outside, &file).unwrap();
+        store
+            .put("account", "chat", "message", "replacement")
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "untouched");
+        let link = root.path().join("store/linked");
+        symlink(root.path(), link).unwrap();
+        assert!(store.put("linked", "chat", "message", "no").is_err());
+        assert!(
+            !store
+                .file_for("..", ".", "message")
+                .to_string_lossy()
+                .contains("/../")
+        );
+    }
+
     #[test]
     fn scoped_snapshot_bounds_text_and_hits_and_searches_before_caps() {
         let root = tempfile::tempdir().unwrap();
