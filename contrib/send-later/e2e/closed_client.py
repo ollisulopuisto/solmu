@@ -117,8 +117,32 @@ def main():
             assert items[0]['account_id'] == 'fixture-whatsapp'
             assert items[0]['sent_message_id'] == 'fixture-sent'
             assert [send['text'] for send in sends] == [payload['text']]
+            # Read the durable file, not just the daemon's in-memory HTTP view.
+            saved = json.loads(pathlib.Path(env['SOLMU_QUEUE_PATH']).read_text())
+            durable = next(row for row in saved['items'] if row['id'] == item_id)
+            assert durable['state'] == 'Sent'
+            assert durable['sent_message_id'] == 'fixture-sent'
+            assert durable['account_id'] == 'fixture-whatsapp'
+            # A clean restart must reload Sent and must not dispatch it again.
+            daemon.terminate()
+            daemon.communicate(timeout=5)
+            daemon = subprocess.Popen([os.path.abspath(args.binary)], env=env,
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    restored = request('/v1/scheduled')
+                    break
+                except (OSError, urllib.error.URLError):
+                    if time.monotonic() >= deadline or daemon.poll() is not None:
+                        raise RuntimeError('restarted fixture daemon did not become ready')
+                    time.sleep(0.05)
+            row = next(row for row in restored if row['id'] == item_id)
+            assert row['state'] == 'Sent'
+            assert row['sent_message_id'] == 'fixture-sent'
+            assert row['account_id'] == 'fixture-whatsapp'
             time.sleep(2)
-            assert len(sends) == 1, 'message was sent more than once'
+            assert len(sends) == 1, 'message was sent more than once after restart'
             print('PASS: wrong account rejected; separate enqueue client exited before due time; daemon sent exact text once and persisted Sent.')
     finally:
         if daemon is not None:
