@@ -93,5 +93,5 @@ pub mod whisper_runtime;
 
 pub mod reply_graph;
 
-pub mod reply_router;
 pub mod audience_queue;
+pub mod reply_router;
