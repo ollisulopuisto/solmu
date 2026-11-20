@@ -3825,14 +3825,16 @@ pub fn run(
                                 chat: item.destination.clone(),
                                 message: accepted.pending_id.clone(),
                             });
+                            // Progress must enter the UI event queue before the
+                            // pending identity can resolve on the worker loop.
+                            send_state(State::Accepted {
+                                pending_id: accepted.pending_id.clone(),
+                            });
                             let _ = forward_accepted_tx.send((
                                 item.destination.clone(),
-                                accepted.pending_id.clone(),
+                                accepted.pending_id,
                                 item.destination_account.clone(),
                             ));
-                            send_state(State::Accepted {
-                                pending_id: accepted.pending_id,
-                            });
                         }
                         Err(state) => send_state(state),
                     }
@@ -5986,6 +5988,23 @@ fn poll_forward_mark(
                 chat: chat.clone(),
             });
         }
+        if confirmed || failed {
+            emit(Event::BeeperForwardFeedback {
+                origin: api.base_url.clone(),
+                account: account.into(),
+                chat: chat.clone(),
+                pending: pending.into(),
+                state: if confirmed {
+                    crate::composed_forward::State::Confirmed {
+                        message_id: wire.id.clone(),
+                    }
+                } else {
+                    crate::composed_forward::State::Uncertain(
+                        "Bridge reports failure; check chat history before sending again".into(),
+                    )
+                },
+            });
+        }
         if (confirmed || failed) && !wire.id.is_empty() {
             emit(Event::BeeperForwardResolved {
                 origin: api.base_url.clone(),
@@ -6012,6 +6031,15 @@ fn poll_forward_mark(
     }
     // Timeout never prunes persisted identity: a later startup resolves it.
     if elapsed >= Duration::from_secs(60) {
+        emit(Event::BeeperForwardFeedback {
+            origin: api.base_url.clone(),
+            account: account.into(),
+            chat: chat.clone(),
+            pending: pending.into(),
+            state: crate::composed_forward::State::Uncertain(
+                "Confirmation timed out; check chat history before sending again".into(),
+            ),
+        });
         emit(Event::Info(
             "Beeper forward confirmation timed out; check history before retrying".into(),
         ));
@@ -7528,6 +7556,28 @@ mod tests {
                 "{status}"
             );
             assert_eq!(
+                events.iter().any(|e| matches!(
+                    e,
+                    Event::BeeperForwardFeedback {
+                        state: crate::composed_forward::State::Confirmed { .. },
+                        ..
+                    }
+                )),
+                confirmed,
+                "{status}"
+            );
+            assert_eq!(
+                events.iter().any(|e| matches!(
+                    e,
+                    Event::BeeperForwardFeedback {
+                        state: crate::composed_forward::State::Uncertain(_),
+                        ..
+                    }
+                )),
+                failed,
+                "{status}"
+            );
+            assert_eq!(
                 events
                     .iter()
                     .any(|e| matches!(e, Event::BeeperForwardResolved { .. })),
@@ -7536,6 +7586,31 @@ mod tests {
             );
             server.join().unwrap();
         }
+    }
+
+    #[test]
+    fn composed_forward_timeout_is_unknown_and_never_confirmed() {
+        let (api, server) = forward_fixture(vec![(
+            "GET /v1/chats/target/messages/pending ",
+            404,
+            "{}".into(),
+        )]);
+        let events = Mutex::new(Vec::new());
+        assert!(!poll_forward_mark(
+            &api,
+            &"target".into(),
+            "pending",
+            "signal",
+            Duration::from_secs(61),
+            &|e| events.lock().unwrap().push(e)
+        ));
+        let events = events.into_inner().unwrap();
+        assert!(events.iter().any(|e|matches!(e,Event::BeeperForwardFeedback{pending,state:crate::composed_forward::State::Uncertain(_),..} if pending=="pending")));
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            Event::BeeperForwardResolved { .. } | Event::BeeperSendConfirmed { .. }
+        )));
+        server.join().unwrap();
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub mod emoji;
 pub mod energy;
 pub mod face_detect;
 pub mod flat_groups;
+pub mod forward_results;
 pub mod geo;
 pub mod ghost_groups;
 pub mod group_admin;

@@ -264,6 +264,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             bookmarks_switch(app, ui);
         }
         super::batch_actions::archive_bar(app, ui);
+        super::dialogs::forward_status(app, ui);
         return;
     }
     Frame::new()
@@ -287,6 +288,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             }
             search_field(app, ui);
             super::batch_actions::archive_bar(app, ui);
+            super::dialogs::forward_status(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
                 let gap = ui.spacing().item_spacing.x;

@@ -1163,6 +1163,13 @@ pub enum Event {
         index: usize,
         state: crate::composed_forward::State,
     },
+    BeeperForwardFeedback {
+        origin: String,
+        account: String,
+        chat: ChatId,
+        pending: String,
+        state: crate::composed_forward::State,
+    },
     BeeperForwardResolved {
         origin: String,
         account: String,
