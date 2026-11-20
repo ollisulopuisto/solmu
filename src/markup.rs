@@ -243,12 +243,25 @@ fn finish(
 /// position of its newline against the block's content bounds: the blank
 /// lines between a fence's content lines fall inside, the dropped markers'
 /// rows fall outside and stay Normal.
-fn list_indent(ui: &egui::Ui, text: &str, size: f32, cap: f32) -> f32 {
+fn list_indent(ui: &egui::Ui, job: &LayoutJob, size: f32, cap: f32) -> f32 {
+    let text = &job.text;
     if crate::bidi::message_rtl(text) {
         return 0.0;
     }
-    text.lines()
-        .filter_map(|line| crate::list_layout::prefix_end(line).map(|end| &line[..end]))
+    text.split_inclusive('\n')
+        .scan(0, |start, line| {
+            let at = *start;
+            *start += line.len();
+            Some((at, line))
+        })
+        .filter(|(start, _)| {
+            !job.sections.iter().any(|section| {
+                section.byte_range.start.0 as usize <= *start
+                    && *start < section.byte_range.end.0 as usize
+                    && section.format.font_id.family == egui::FontFamily::Monospace
+            })
+        })
+        .filter_map(|(_, line)| crate::list_layout::prefix_end(line).map(|end| &line[..end]))
         .map(|prefix| {
             ui.painter()
                 .layout_no_wrap(prefix.into(), theme::regular(size), Color32::WHITE)
@@ -405,7 +418,7 @@ fn build(
             TextFormat::simple(theme::regular(size), style.color),
         );
     }
-    let list_indent = list_indent(ui, &job.text, size, max_width);
+    let list_indent = list_indent(ui, &job, size, max_width);
     job.wrap.max_width = (max_width - list_indent).max(1.0);
     Built {
         job,
@@ -3569,12 +3582,68 @@ mod compact_list_tests {
         output.textures_delta.clear();
     }
     #[test]
+    fn fenced_code_markers_do_not_reserve_prose_indentation() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::BLUE,
+                mention: Color32::GREEN,
+            };
+            for source in [
+                "```\n- option long enough to wrap over multiple rows\n```",
+                "```\n12. option\n```\nordinary prose",
+            ] {
+                let built = build(ui, source, &[], &style, 180.0, false);
+                assert_eq!(built.list_indent, 0.0, "{source}");
+                assert_eq!(built.job.wrap.max_width, 180.0);
+            }
+            let built = build(
+                ui,
+                "```\n- option\n```\n•  prose item long enough to wrap",
+                &[],
+                &style,
+                180.0,
+                false,
+            );
+            assert!(built.list_indent > 0.0, "real prose lists still hang");
+        });
+        output.textures_delta.clear();
+    }
+    #[test]
     fn hanging_does_not_change_ordinary_or_rtl_text_layout() {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
         let mut output = ctx.run_ui(Default::default(), |ui| {
-            assert_eq!(list_indent(ui, "ordinary prose", 16.0, 250.0), 0.0);
-            assert_eq!(list_indent(ui, "•  שלום עולם", 16.0, 250.0), 0.0);
+            assert_eq!(
+                list_indent(
+                    ui,
+                    &LayoutJob::simple_singleline(
+                        "ordinary prose".into(),
+                        theme::regular(16.0),
+                        Color32::WHITE
+                    ),
+                    16.0,
+                    250.0
+                ),
+                0.0
+            );
+            assert_eq!(
+                list_indent(
+                    ui,
+                    &LayoutJob::simple_singleline(
+                        "•  שלום עולם".into(),
+                        theme::regular(16.0),
+                        Color32::WHITE
+                    ),
+                    16.0,
+                    250.0
+                ),
+                0.0
+            );
         });
         output.textures_delta.clear();
     }
