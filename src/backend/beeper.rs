@@ -1319,7 +1319,7 @@ impl Api {
             && let Some(real) = self.real_last_message(&wire.id, &preview.id)
         {
             let (body, labelled) = body_of(&real);
-            chat.last = Some(Chat::last_preview(&real, body, labelled));
+            chat.last = Some(Chat::last_preview(&real, body, labelled, own.as_deref()));
         }
         chat
     }
@@ -1343,6 +1343,13 @@ impl Api {
             cache.insert(key, found.clone());
         }
         found
+    }
+
+    fn preview_of(&self, chat: &ChatId, items: &[BeeperMessage]) -> Option<Event> {
+        let own = items
+            .first()
+            .and_then(|m| self.own_ids.lock().ok()?.get(&m.account_id).cloned());
+        chat_preview_of(chat, items, own.as_deref())
     }
 
     fn map_message(&self, wire: &BeeperMessage, chat: &str) -> Message {
@@ -2997,13 +3004,13 @@ fn newest_content_message(items: Vec<BeeperMessage>) -> Option<BeeperMessage> {
 
 /// The chat row's preview event for a page of messages: the newest one the
 /// inventory would also show. None when the page has nothing previewable.
-fn chat_preview_of(chat: &ChatId, items: &[BeeperMessage]) -> Option<Event> {
+fn chat_preview_of(chat: &ChatId, items: &[BeeperMessage], own: Option<&str>) -> Option<Event> {
     newest_content_message(items.to_vec()).map(|p| {
         let (body, labelled) = body_of(&p);
         Event::ChatPreview {
             chat: chat.clone(),
             activity: unix(&Some(p.timestamp.clone())),
-            last: Chat::last_preview(&p, body, labelled),
+            last: Chat::last_preview(&p, body, labelled, own),
         }
     })
 }
@@ -3517,7 +3524,7 @@ fn map_chat_for(
         })
         .map(|p| {
             let (body, labelled) = body_of(p);
-            Chat::last_preview(p, body, labelled)
+            Chat::last_preview(p, body, labelled, own)
         });
     chat
 }
@@ -3533,19 +3540,37 @@ fn preview_status(p: &BeeperMessage) -> Delivery {
 }
 
 impl Chat {
-    fn last_preview(p: &BeeperMessage, body: String, labelled: bool) -> LastMessage {
-        // Emoji reactions on the newest message lead the row's text, so a
-        // reaction is visible without opening the chat.
-        let reactions = reaction_run(&p.reactions);
-        let (summary, full) = if reactions.is_empty() {
-            (body.lines().next().unwrap_or("").to_string(), body)
+    fn last_preview(
+        p: &BeeperMessage,
+        body: String,
+        labelled: bool,
+        own: Option<&str>,
+    ) -> LastMessage {
+        let emojis = reaction_run(&p.reactions);
+        let own = own.or_else(|| {
+            p.is_sender
+                .filter(|value| *value)
+                .map(|_| p.sender_id.as_str())
+        });
+        let actors: std::collections::HashSet<bool> = p
+            .reactions
+            .iter()
+            .filter(|r| r.emoji)
+            .filter_map(|r| own.map(|id| r.participant_id == id))
+            .collect();
+        let actor = if actors.len() == 1 {
+            actors.iter().next().copied()
         } else {
-            (
-                format!("{reactions} {}", body.lines().next().unwrap_or("")),
-                format!("{reactions} {body}"),
-            )
+            None
         };
+        let reaction = (!emojis.is_empty()).then_some(crate::model::ReactionPreview {
+            emojis,
+            from_me: actor,
+        });
+        let summary = body.lines().next().unwrap_or("").to_owned();
+        let full = body;
         LastMessage {
+            reaction,
             from_me: p.is_sender.unwrap_or(false),
             sender: p.sender_id.clone(),
             sender_name: readable_name(&p.sender_name),
@@ -4533,7 +4558,7 @@ pub fn run(
                             // Opening a chat moves its forward cursor past this
                             // page, so the poll never reports these messages as
                             // new; the row must hear about them here.
-                            if !older && let Some(event) = chat_preview_of(&chat, &page.items) {
+                            if !older && let Some(event) = api.preview_of(&chat, &page.items) {
                                 emit(event);
                             }
                             emit(Event::Messages {
@@ -6322,7 +6347,7 @@ fn poll_newer(
                 // Eligibility is decided here on the wire type, exactly as the
                 // inventory does, so reactions, system notices and empty
                 // events never become the chat row's preview.
-                let preview = chat_preview_of(chat, &page.items);
+                let preview = api.preview_of(chat, &page.items);
                 let mut messages: Vec<Message> = page
                     .items
                     .iter()
@@ -12508,13 +12533,14 @@ mod tests {
              "timestamp":"2026-11-03T09:48:00Z","isSender":false,"type":"REACTION"}
         ]))
         .unwrap();
-        let Some(Event::ChatPreview { chat, last, .. }) = chat_preview_of(&"c1".into(), &page)
+        let Some(Event::ChatPreview { chat, last, .. }) =
+            chat_preview_of(&"c1".into(), &page, None)
         else {
             panic!("expected a preview");
         };
         assert_eq!(chat, "c1");
         assert_eq!(last.summary, "kerro lisää");
-        assert!(chat_preview_of(&"c1".into(), &[]).is_none());
+        assert!(chat_preview_of(&"c1".into(), &[], None).is_none());
     }
 
     #[test]
@@ -12546,6 +12572,44 @@ mod tests {
     }
 
     #[test]
+    fn reaction_preview_separates_actor_from_original_message_ownership() {
+        let mut message: BeeperMessage = serde_json::from_value(serde_json::json!({
+            "id":"m", "senderID":"other", "isSender":false, "text":"hello",
+            "reactions":[{"participantID":"self", "reactionKey":"❤️", "emoji":true}]
+        }))
+        .unwrap();
+        let render =
+            |message: &BeeperMessage, own| Chat::last_preview(message, "hello".into(), false, own);
+        let mine = render(&message, Some("self"));
+        assert!(!mine.from_me, "original remains incoming");
+        assert_eq!(
+            mine.summary_in(crate::i18n::Locale::English),
+            "You reacted ❤️ to the message \"hello\""
+        );
+        assert!(
+            render(&message, None)
+                .summary_in(crate::i18n::Locale::English)
+                .starts_with("Reactions ")
+        );
+        message.reactions.push(BeeperReaction {
+            participant_id: "other".into(),
+            reaction_key: "👍".into(),
+            emoji: true,
+        });
+        assert!(
+            render(&message, Some("self"))
+                .summary_in(crate::i18n::Locale::English)
+                .starts_with("Reactions ")
+        );
+        message.reactions.reverse();
+        assert_eq!(
+            render(&message, Some("self")).reaction.unwrap().from_me,
+            None,
+            "list order is not chronology"
+        );
+    }
+
+    #[test]
     fn a_reaction_on_the_newest_message_leads_the_list_preview() {
         let preview = |reactions: serde_json::Value| {
             let chat: BeeperChat = serde_json::from_value(serde_json::json!({
@@ -12558,7 +12622,10 @@ mod tests {
         let one = preview(serde_json::json!([
             {"participantID":"p","reactionKey":"🤝","emoji":true}
         ]));
-        assert_eq!(one.summary, "🤝 joo, kunhan saan sen rakennettua");
+        assert_eq!(
+            one.summary_in(crate::i18n::Locale::English),
+            "🤝 to your message \"joo, kunhan saan sen rakennettua\""
+        );
         assert_eq!(one.full, one.summary);
         assert!(one.from_me, "the sent message keeps its ownership");
         let many = preview(serde_json::json!([
@@ -12567,7 +12634,10 @@ mod tests {
             {"participantID":"r","reactionKey":"👍","emoji":true},
             {"participantID":"s","reactionKey":"sticker-id","emoji":false}
         ]));
-        assert_eq!(many.summary, "👍2 🤝 joo, kunhan saan sen rakennettua");
+        assert_eq!(
+            many.summary_in(crate::i18n::Locale::English),
+            "👍2 🤝 to your message \"joo, kunhan saan sen rakennettua\""
+        );
         // A removed reaction leaves the plain text again.
         let none = preview(serde_json::json!([]));
         assert_eq!(none.summary, "joo, kunhan saan sen rakennettua");
