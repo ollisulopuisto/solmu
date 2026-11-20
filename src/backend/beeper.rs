@@ -2876,7 +2876,16 @@ fn plain_rich_text(raw: &str) -> String {
             (end, decode_entities(&rest[..end]))
         };
         rest = &rest[taken..];
-        if blocked.is_some() || (!in_pre && !lists.is_empty() && run.trim().is_empty()) {
+        let list_source_indent = !in_pre
+            && !lists.is_empty()
+            && run.trim().is_empty()
+            && (out.is_empty()
+                || out.ends_with('\n')
+                || out.ends_with("• ")
+                || ["<li", "</li", "<ul", "</ul", "<ol", "</ol"]
+                    .iter()
+                    .any(|tag| rest.to_ascii_lowercase().starts_with(tag)));
+        if blocked.is_some() || list_source_indent {
             continue;
         }
         let chars: Vec<_> = run.chars().collect();
@@ -8351,6 +8360,10 @@ mod tests {
         assert_eq!(
             plain_rich_text("<ul>\n<li>one</li>\n<li>two</li>\n</ul>"),
             "• one\n• two"
+        );
+        assert_eq!(
+            plain_rich_text("<ul>\n<li><b>one</b> <b>two</b></li>\n<li>next</li>\n</ul>"),
+            "• *one* *two*\n• next"
         );
     }
 
