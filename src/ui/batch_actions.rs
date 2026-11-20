@@ -7,6 +7,20 @@ use crate::{
 
 pub use crate::model::{BatchItem as Item, BatchState as State};
 
+fn technical_details(
+    ui: &mut egui::Ui,
+    label: &str,
+    section: &str,
+    index: usize,
+    error: &str,
+) -> egui::collapsing_header::CollapsingResponse<()> {
+    egui::CollapsingHeader::new(label)
+        .id_salt((section, index))
+        .show(ui, |ui| {
+            ui.add(egui::Label::new(error).wrap());
+        })
+}
+
 pub fn next_request() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -75,11 +89,13 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
     for (index, item) in app.batch_ui.results.iter().enumerate() {
         ui.add(egui::Label::new(result_line(app, item)).wrap());
         if let Some(Err(error)) = &item.result {
-            egui::CollapsingHeader::new(gettext(app.locale, "Technical details"))
-                .id_salt(("batch-current", index))
-                .show(ui, |ui| {
-                    ui.add(egui::Label::new(error).wrap());
-                });
+            technical_details(
+                ui,
+                &gettext(app.locale, "Technical details"),
+                "batch-current",
+                index,
+                error,
+            );
         }
     }
     if !app.batch_ui.previous_session_results.is_empty() {
@@ -97,11 +113,13 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
                 .replace("{message}", &result_action(app.locale, item)),
             );
             if let Some(Err(error)) = &item.result {
-                egui::CollapsingHeader::new(gettext(app.locale, "Technical details"))
-                    .id_salt(("batch-previous", index))
-                    .show(ui, |ui| {
-                        ui.add(egui::Label::new(error).wrap());
-                    });
+                technical_details(
+                    ui,
+                    &gettext(app.locale, "Technical details"),
+                    "batch-previous",
+                    index,
+                    error,
+                );
             }
         }
 
@@ -314,11 +332,8 @@ mod tests {
                 ui.vertical(|ui| {
                     for scope in ["batch-current", "batch-previous"] {
                         for index in 0..2 {
-                            let response = egui::CollapsingHeader::new("Technical details")
-                                .id_salt((scope, index))
-                                .show(ui, |ui| {
-                                    ui.label("error");
-                                });
+                            let response =
+                                technical_details(ui, "Technical details", scope, index, "error");
                             ids.push(response.header_response.id);
                             open.push(response.body_returned.is_some());
                         }
