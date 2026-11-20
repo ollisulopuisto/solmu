@@ -10942,7 +10942,7 @@ mod tests {
             apply_flags(&mut app, Some(page));
             let mut nodes = Vec::new();
             for _ in 0..8 {
-                let output = ctx.run_ui(
+                let mut output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         ..Default::default()
@@ -10951,6 +10951,7 @@ mod tests {
                         app.frame_ui(ui);
                     },
                 );
+                output.textures_delta.clear();
                 if let Some(update) = output.platform_output.accesskit_update {
                     nodes = update.nodes;
                 }

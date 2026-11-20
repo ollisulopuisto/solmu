@@ -1532,6 +1532,13 @@ pub(crate) fn composer_with_capabilities(
                 }),
         )
         .show(ui, |ui| {
+            // Results own input. Returning from shortcut dispatch alone does not
+            // stop the background TextEdit from inserting Enter or typed text.
+            if app.audience_queue.as_ref().is_some_and(|queue|queue.visible){
+                ui.disable();
+                ui.memory_mut(|memory|memory.surrender_focus(egui::Id::new("composer-text")));
+            }
+
             if let Some((selected_chat, selected)) = app.selection.clone()
                 && selected_chat == chat.id
             {

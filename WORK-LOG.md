@@ -749,3 +749,12 @@ the album's shared painted bounds. Clear texture deltas in the new seeded
 fixtures. Native all-target/all-feature Clippy passes; local targeted application
 test execution exceeded120 seconds during compilation and has not run. CI must
 recheck the three existing demo failures, including right-click-beside-message.
+
+## New-message Mac CI follow-up,20 November
+
+Mac CI executed2466 passing tests and found two failures: the background composer
+still inserted Enter while audience results owned shortcuts, and a new viewport
+fixture dropped texture deltas. Disable the background composer UI and surrender
+its text focus while results are visible, rather than merely blocking Send.
+Clear the fixture's deltas. Native all-target/all-feature Clippy passes; these
+actual app regressions await CI rerun, not claimed executed locally.
