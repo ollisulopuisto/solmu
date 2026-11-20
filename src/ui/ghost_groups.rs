@@ -642,6 +642,66 @@ mod tests {
     }
 
     #[test]
+    fn linked_secondary_selection_preserves_exact_destination_and_checks_canonical_draft() {
+        for prepared in [false, true] {
+            let (mut app, _root) = app_with(&["a", "b"]);
+            let members: Vec<_> = app
+                .chats
+                .iter()
+                .filter_map(crate::merged::Member::of)
+                .collect();
+            app.settings.beeper.people.push(crate::merged::Person {
+                name: "Linked".into(),
+                members: members.clone(),
+                primary: None,
+            });
+            let member = super::super::flat_groups::member(&app, &app.chats[1]);
+            let ctx = egui::Context::default();
+            app.apply(
+                Action::PrepareNewMessage {
+                    member,
+                    text: if prepared {
+                        "hello".into()
+                    } else {
+                        String::new()
+                    },
+                    files: vec![],
+                },
+                &ctx,
+            );
+            assert_eq!(app.open_chat.as_deref(), Some("a"));
+            assert!(app.dialog.is_none());
+            assert_eq!(app.composer, if prepared { "hello" } else { "" });
+            assert_eq!(
+                super::super::merged::attachment_destination(&app, &ctx).unwrap(),
+                Some("b".into())
+            );
+        }
+        let (mut app, _root) = app_with(&["a", "b"]);
+        let members = app
+            .chats
+            .iter()
+            .filter_map(crate::merged::Member::of)
+            .collect();
+        app.settings.beeper.people.push(crate::merged::Person {
+            name: "Linked".into(),
+            members,
+            primary: None,
+        });
+        app.drafts.insert("a".into(), "canonical draft".into());
+        let member = super::super::flat_groups::member(&app, &app.chats[1]);
+        app.apply(
+            Action::PrepareNewMessage {
+                member,
+                text: "replacement".into(),
+                files: vec![],
+            },
+            &egui::Context::default(),
+        );
+        assert_eq!(app.drafts.get("a").unwrap(), "canonical draft");
+        assert!(app.new_message.notice.is_some());
+    }
+    #[test]
     fn one_recipient_without_prepared_content_opens_existing_draft_unchanged() {
         let (mut app, _root) = app_with(&["a"]);
         let member = super::super::flat_groups::member(&app, &app.chats[0]);

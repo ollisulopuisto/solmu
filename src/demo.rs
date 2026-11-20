@@ -3065,7 +3065,10 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 form.error = Some(crate::app_lock::FormError::TooShort);
                 app.app_lock.form = Some(form);
             }
-            "new-message-selected" | "audience-results" => {
+            "new-message-selected"
+            | "new-message-many-files"
+            | "new-message-locked"
+            | "audience-results" => {
                 for chat in &mut app.chats {
                     chat.backend_origin = Some("https://synthetic.invalid".into());
                     chat.backend_account = Some("demo".into());
@@ -3078,12 +3081,29 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     })
                     .map(|chat| crate::ui::flat_groups::member(app, chat))
                     .collect();
-                if part == "new-message-selected" {
+                if matches!(
+                    part,
+                    "new-message-selected" | "new-message-many-files" | "new-message-locked"
+                ) {
                     app.dialog = Some(crate::model::Dialog::NewChat);
                     app.new_message.members = members[..2].to_vec();
                     app.new_message.text = "Meet by the entrance at 18:00?".into();
                     app.new_message.keep = true;
                     app.new_message.name = "Weekend friends".into();
+                    if part == "new-message-many-files" {
+                        let path = app.dirs.cache.join("demo-attachment.png");
+                        image::RgbaImage::from_pixel(64, 48, image::Rgba([40, 180, 140, 255]))
+                            .save(&path)
+                            .unwrap();
+                        app.new_message.files = vec![path; 12];
+                    }
+                    if part == "new-message-locked" {
+                        let member = app.new_message.members[0].clone();
+                        if let Some(chat) = app.chats.iter_mut().find(|chat| chat.id == member.chat)
+                        {
+                            chat.locked = true;
+                        }
+                    }
                 } else {
                     let mut queue = crate::audience_queue::Queue::new(
                         "Weekend friends".into(),
@@ -10933,6 +10953,54 @@ mod tests {
         press_labelled(&mut app, &ctx, "Confirm send to 2 chats", Role::Button);
         assert_eq!(app.audience_queue.as_ref().unwrap().rows.len(), 2);
         assert!(app.ghost_ui.confirmation.is_none());
+    }
+
+    #[test]
+    fn new_message_many_files_keeps_send_control_inside_view_and_locked_names_hidden() {
+        use egui::accesskit::Role;
+        for (page, size) in [
+            ("new-message-many-files", egui::vec2(1180.0, 780.0)),
+            ("new-message-many-files", egui::vec2(800.0, 600.0)),
+            ("new-message-locked", egui::vec2(1180.0, 780.0)),
+        ] {
+            let mut app = app();
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            app.attach(&ctx);
+            apply_flags(&mut app, Some(page));
+            let mut nodes = Vec::new();
+            for _ in 0..8 {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| crate::ui::show(&mut app, ui));
+                    },
+                );
+                if let Some(update) = output.platform_output.accesskit_update {
+                    nodes = update.nodes;
+                }
+            }
+            let labels: Vec<_> = nodes.iter().filter_map(|(_, node)| node.label()).collect();
+            if page == "new-message-locked" {
+                assert!(!labels.iter().any(|label| label.contains("Ada Lovelace")));
+                assert!(
+                    labels
+                        .iter()
+                        .any(|label| label.contains("Unavailable chat"))
+                );
+            }
+            let button = nodes
+                .iter()
+                .find(|(_, node)| {
+                    node.role() == Role::Button && node.label() == Some("Send to 2 chats")
+                })
+                .unwrap();
+            let bounds = button.1.bounds().unwrap();
+            assert!(bounds.y1 <= size.y as f64 && bounds.y0 >= 0.0, "{bounds:?}");
+        }
     }
 
     fn new_group_dialog() -> (App, egui::Context) {

@@ -25,155 +25,165 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             .hint_text(gettext(locale, "Search contacts or groups"))
             .desired_width(f32::INFINITY),
     );
-    let needle = crate::util::search_key(&app.new_chat_search);
-    let mut choices: Vec<_> = app
-        .chats
-        .iter()
-        .filter(|chat| {
-            chat.can_send()
-                && !chat.locked
-                && chat.backend_origin.is_some()
-                && chat.backend_account.is_some()
-                && (needle.is_empty()
-                    || crate::util::search_key(&app.chat_title(chat)).contains(&needle))
-        })
-        .map(|chat| {
-            (
-                super::flat_groups::member(app, chat),
-                chat.network
-                    .as_ref()
-                    .filter(|name| !name.is_empty())
-                    .map_or_else(
-                        || app.chat_title(chat),
-                        |network| format!("{} · {network}", app.chat_title(chat)),
-                    ),
-            )
-        })
-        .collect();
-    choices.sort_by(|a, b| a.1.cmp(&b.1));
     egui::ScrollArea::vertical()
-        .id_salt("new-message-recipients")
-        .max_height(190.0)
+        .id_salt("new-message-body")
+        .max_height((ui.ctx().content_rect().height() - 260.0).max(120.0))
         .show(ui, |ui| {
-            for (member, title) in choices {
-                let mut selected = draft.members.contains(&member);
-                if ui.checkbox(&mut selected, title).changed() {
-                    if selected {
-                        if draft.members.len() < 50 {
-                            draft.members.push(member);
-                        }
-                    } else {
-                        draft.members.retain(|known| known != &member);
-                    }
-                }
-            }
-        });
-    // Keep the original single-contact/self route, including contacts without
-    // an existing bridge chat. It never discards a prepared audience draft.
-    if draft.members.is_empty() && draft.text.is_empty() && draft.files.is_empty() {
-        ui.collapsing(gettext(locale, "Open a contact chat"), |ui| {
-            if app.offers_self(&needle) {
-                super::chats::self_row(app, ui);
-            }
-            for contact in super::dialogs::contact_choices(app, &needle) {
-                ui.push_id(&contact.id, |ui| {
-                    super::chats::contact_row(app, ui, &contact)
-                });
-            }
-        });
-    }
-    let mut remove_member = None;
-    ui.horizontal_wrapped(|ui| {
-        for (index, member) in draft.members.iter().enumerate() {
-            let name = app
+            let needle = crate::util::search_key(&app.new_chat_search);
+            let mut choices: Vec<_> = app
                 .chats
                 .iter()
-                .find(|chat| super::flat_groups::member(app, chat) == *member)
-                .map(|chat| app.chat_title(chat))
-                .unwrap_or_else(|| gettext(locale, "Unavailable chat").into_owned());
+                .filter(|chat| {
+                    chat.can_send()
+                        && !chat.locked
+                        && chat.backend_origin.is_some()
+                        && chat.backend_account.is_some()
+                        && (needle.is_empty()
+                            || crate::util::search_key(&app.chat_title(chat)).contains(&needle))
+                })
+                .map(|chat| {
+                    (
+                        super::flat_groups::member(app, chat),
+                        chat.network
+                            .as_ref()
+                            .filter(|name| !name.is_empty())
+                            .map_or_else(
+                                || app.chat_title(chat),
+                                |network| format!("{} · {network}", app.chat_title(chat)),
+                            ),
+                    )
+                })
+                .collect();
+            choices.sort_by(|a, b| a.1.cmp(&b.1));
+            egui::ScrollArea::vertical()
+                .id_salt("new-message-recipients")
+                .max_height(190.0)
+                .show(ui, |ui| {
+                    for (member, title) in choices {
+                        let mut selected = draft.members.contains(&member);
+                        if ui.checkbox(&mut selected, title).changed() {
+                            if selected {
+                                if draft.members.len() < 50 {
+                                    draft.members.push(member);
+                                }
+                            } else {
+                                draft.members.retain(|known| known != &member);
+                            }
+                        }
+                    }
+                });
+            // Keep the original single-contact/self route, including contacts without
+            // an existing bridge chat. It never discards a prepared audience draft.
+            if draft.members.is_empty() && draft.text.is_empty() && draft.files.is_empty() {
+                ui.collapsing(gettext(locale, "Open a contact chat"), |ui| {
+                    if app.offers_self(&needle) {
+                        super::chats::self_row(app, ui);
+                    }
+                    for contact in super::dialogs::contact_choices(app, &needle) {
+                        ui.push_id(&contact.id, |ui| {
+                            super::chats::contact_row(app, ui, &contact)
+                        });
+                    }
+                });
+            }
+            let mut remove_member = None;
+            ui.horizontal_wrapped(|ui| {
+                for (index, member) in draft.members.iter().enumerate() {
+                    let name = app
+                        .chats
+                        .iter()
+                        .find(|chat| {
+                            !chat.locked && super::flat_groups::member(app, chat) == *member
+                        })
+                        .map(|chat| app.chat_title(chat))
+                        .unwrap_or_else(|| gettext(locale, "Unavailable chat").into_owned());
+                    if ui
+                        .button(format!("{name} ×"))
+                        .on_hover_text(gettext(locale, "Remove recipient"))
+                        .clicked()
+                    {
+                        remove_member = Some(index);
+                    }
+                }
+            });
+            if let Some(index) = remove_member {
+                draft.members.remove(index);
+            }
+            ui.label(
+                ngettext(
+                    locale,
+                    "{count} recipient selected",
+                    "{count} recipients selected",
+                    draft.members.len() as u32,
+                )
+                .replace("{count}", &draft.members.len().to_string()),
+            );
+            ui.add(
+                egui::TextEdit::multiline(&mut draft.text)
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(gettext(locale, "Write a message…")),
+            );
+            let mut remove = None;
+            for (index, path) in draft.files.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    if crate::app::Pending::is_picture_file(path) {
+                        let image = super::widgets::file_image(ui, path);
+                        ui.add(image.fit_to_exact_size(egui::vec2(64.0, 48.0)));
+                    }
+                    ui.add(
+                        egui::Label::new(path.file_name().unwrap_or_default().to_string_lossy())
+                            .wrap(),
+                    );
+                    if ui.button(gettext(locale, "Remove")).clicked() {
+                        remove = Some(index);
+                    }
+                });
+            }
+            if let Some(index) = remove {
+                draft.files.remove(index);
+            }
             if ui
-                .button(format!("{name} ×"))
-                .on_hover_text(gettext(locale, "Remove recipient"))
+                .add_enabled(
+                    draft.picker.is_none(),
+                    egui::Button::new(gettext(locale, "Add attachments…")),
+                )
                 .clicked()
             {
-                remove_member = Some(index);
+                let (tx, rx) = mpsc::channel();
+                let ctx = ui.ctx().clone();
+                let title = gettext(locale, "Choose attachments").into_owned();
+                if std::thread::Builder::new()
+                    .name("audience-file-picker".into())
+                    .spawn(move || {
+                        let paths = rfd::FileDialog::new()
+                            .set_title(title)
+                            .pick_files()
+                            .unwrap_or_default();
+                        let _ = tx.send(paths);
+                        ctx.request_repaint();
+                    })
+                    .is_ok()
+                {
+                    draft.picker = Some(rx);
+                }
             }
-        }
-    });
-    if let Some(index) = remove_member {
-        draft.members.remove(index);
-    }
-    ui.label(
-        ngettext(
-            locale,
-            "{count} recipient selected",
-            "{count} recipients selected",
-            draft.members.len() as u32,
-        )
-        .replace("{count}", &draft.members.len().to_string()),
-    );
-    ui.add(
-        egui::TextEdit::multiline(&mut draft.text)
-            .desired_rows(3)
-            .desired_width(f32::INFINITY)
-            .hint_text(gettext(locale, "Write a message…")),
-    );
-    let mut remove = None;
-    for (index, path) in draft.files.iter().enumerate() {
-        ui.horizontal(|ui| {
-            if crate::app::Pending::is_picture_file(path) {
-                let image = super::widgets::file_image(ui, path);
-                ui.add(image.fit_to_exact_size(egui::vec2(64.0, 48.0)));
+            if draft.members.len() > 1 {
+                ui.checkbox(
+                    &mut draft.keep,
+                    gettext(locale, "Save this audience for 7 days without use"),
+                );
+                if draft.keep {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut draft.name)
+                            .hint_text(gettext(locale, "Audience name")),
+                    );
+                }
             }
-            ui.add(egui::Label::new(path.file_name().unwrap_or_default().to_string_lossy()).wrap());
-            if ui.button(gettext(locale, "Remove")).clicked() {
-                remove = Some(index);
+            if let Some(notice) = &draft.notice {
+                ui.colored_label(ui.visuals().warn_fg_color, notice);
             }
         });
-    }
-    if let Some(index) = remove {
-        draft.files.remove(index);
-    }
-    if ui
-        .add_enabled(
-            draft.picker.is_none(),
-            egui::Button::new(gettext(locale, "Add attachments…")),
-        )
-        .clicked()
-    {
-        let (tx, rx) = mpsc::channel();
-        let ctx = ui.ctx().clone();
-        let title = gettext(locale, "Choose attachments").into_owned();
-        if std::thread::Builder::new()
-            .name("audience-file-picker".into())
-            .spawn(move || {
-                let paths = rfd::FileDialog::new()
-                    .set_title(title)
-                    .pick_files()
-                    .unwrap_or_default();
-                let _ = tx.send(paths);
-                ctx.request_repaint();
-            })
-            .is_ok()
-        {
-            draft.picker = Some(rx);
-        }
-    }
-    if draft.members.len() > 1 {
-        ui.checkbox(
-            &mut draft.keep,
-            gettext(locale, "Save this audience for 7 days without use"),
-        );
-        if draft.keep {
-            ui.add(
-                egui::TextEdit::singleline(&mut draft.name)
-                    .hint_text(gettext(locale, "Audience name")),
-            );
-        }
-    }
-    if let Some(notice) = &draft.notice {
-        ui.colored_label(ui.visuals().warn_fg_color, notice);
-    }
     let mut done = false;
     ui.horizontal_wrapped(|ui| {
         let label = if draft.members.is_empty() {

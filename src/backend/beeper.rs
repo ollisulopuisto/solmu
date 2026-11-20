@@ -2140,6 +2140,11 @@ impl Api {
         };
         prepare().map_err(State::NotSubmitted)?;
         if let Payload::Text(text) = &job.payload {
+            if upload_stopped(Some(cancel)) {
+                return Err(State::NotSubmitted(
+                    "Session closed; nothing submitted".into(),
+                ));
+            }
             let mut accepted = self
                 .send_text(&job.member.chat, text, None, &[])
                 .map_err(State::Unknown)?;
@@ -6911,6 +6916,44 @@ mod tests {
             caption: None,
             quoting: None,
         }
+    }
+    #[test]
+    fn audience_text_cancellation_during_destination_lookup_never_posts() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            assert!(
+                std::str::from_utf8(&buf[..n])
+                    .unwrap()
+                    .starts_with("GET /v1/chats/target ")
+            );
+            stop.store(true, Ordering::SeqCst);
+            let body = r#"{"id":"target","accountID":"signal"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url,
+            token: "fixture".into(),
+        })
+        .unwrap();
+        let mut job = pending_media_job(&api.base_url, std::path::Path::new("unused"));
+        job.payload = crate::pending_media::Payload::Text("hello".into());
+        assert!(matches!(
+            api.send_pending_media(&job, &cancel),
+            Err(crate::pending_media::State::NotSubmitted(_))
+        ));
+        server.join().unwrap();
     }
     #[test]
     fn audience_text_jobs_validate_destination_then_post_once_and_never_retry_ambiguous_response() {

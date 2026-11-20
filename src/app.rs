@@ -10045,6 +10045,8 @@ impl App {
                     .filter(|chat| chat.id == member.chat)
                     .count()
                     != 1
+                    || member.origin.is_none()
+                    || member.bridge_account.is_none()
                     || member.account != self.account().id.0
                     || !self.chats.iter().any(|chat| {
                         crate::ui::flat_groups::member(self, chat) == member
@@ -10054,10 +10056,29 @@ impl App {
                 {
                     return;
                 }
+                let source = crate::merged::Member {
+                    origin: member.origin.clone().unwrap(),
+                    account: member.bridge_account.clone().unwrap(),
+                    chat: member.chat.clone(),
+                };
+                let owner = self
+                    .settings
+                    .beeper
+                    .people
+                    .iter()
+                    .find(|p| p.members.contains(&source))
+                    .and_then(|p| {
+                        p.members.iter().find(|m| {
+                            self.chat(&m.chat)
+                                .is_some_and(|chat| m.matches(chat) && !chat.locked)
+                        })
+                    })
+                    .map(|m| m.chat.clone())
+                    .unwrap_or_else(|| member.chat.clone());
                 if text.is_empty() && files.is_empty() {
-                    // Navigating to an existing chat must keep its draft.
                     self.apply(Action::OpenChat(member.chat.clone()), ctx);
-                    if self.open_chat.as_deref() == Some(&member.chat) {
+                    if self.open_chat.as_deref() == Some(&owner) {
+                        crate::ui::merged::prepare_destination(self, ctx, &source);
                         self.new_message = Default::default();
                         self.dialog = None;
                         self.focus_composer = true;
@@ -10065,8 +10086,8 @@ impl App {
                     return;
                 }
                 if self.editing.is_some()
-                    || self.parked_draft(&member.chat)
-                    || (self.open_chat.as_deref() == Some(&member.chat)
+                    || self.parked_draft(&owner)
+                    || (self.open_chat.as_deref() == Some(&owner)
                         && (!self.composer.trim().is_empty() || !self.pending.is_empty()))
                 {
                     self.new_message.notice = Some(
@@ -10079,9 +10100,10 @@ impl App {
                     return;
                 }
                 self.apply(Action::OpenChat(member.chat.clone()), ctx);
-                if self.open_chat.as_deref() != Some(&member.chat) {
+                if self.open_chat.as_deref() != Some(&owner) {
                     return;
                 }
+                crate::ui::merged::prepare_destination(self, ctx, &source);
                 self.composer = text;
                 self.stage_all(files.into_iter().map(Pending::File));
                 self.new_message = Default::default();

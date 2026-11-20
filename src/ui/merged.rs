@@ -82,6 +82,27 @@ pub(crate) fn cancel_reply(app: &App, ctx: &egui::Context) {
     });
 }
 
+/// Explicit New message source selection, never a primary-source fallback.
+pub(crate) fn prepare_destination(app: &App, ctx: &egui::Context, source: &Member) {
+    let Some(person) = app
+        .settings
+        .beeper
+        .people
+        .iter()
+        .find(|p| p.members.contains(source))
+    else {
+        return;
+    };
+    let key = egui::Id::new(("linked-person-state", &person.members));
+    ctx.data_mut(|data| {
+        let mut state = data.get_temp::<State>(key).unwrap_or_default();
+        state.destination = Some(source.clone());
+        state.explicit = true;
+        state.reply = None;
+        data.insert_temp(key, state);
+    });
+}
+
 /// Resolve attachments through the same exact source picker as new text.
 /// The visible member is only the draft owner, never an implicit fallback.
 pub(crate) fn attachment_destination(
