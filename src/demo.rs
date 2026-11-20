@@ -4602,6 +4602,11 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             }
             // Opens the cropper on a sample picture. The demo has no worker
             // to read a picture's size, so it is read here instead.
+            "pending-picture-preview" => {
+                apply_flags(app, Some("crop"));
+                let target = app.picture_edit.take().unwrap().target;
+                app.pending_picture_preview = Some(target);
+            }
             "crop" => {
                 let (photo, _) = sample_files(app);
                 let (width, height) = image::image_dimensions(&photo).unwrap_or((4, 3));

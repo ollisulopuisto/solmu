@@ -3611,6 +3611,8 @@ pub enum Action {
     RemovePending(usize),
     /// Sends the one eligible staged photo as a WhatsApp view-once message.
     SetPendingViewOnce(bool),
+    /// Inspects a staged picture without changing or sending it.
+    PreviewPendingPicture(crate::app::AttachmentId),
     /// Opens the cropper on a staged picture.
     EditPicture(crate::app::AttachmentId),
     /// Keeps the crop and the turn, replacing the staged picture.

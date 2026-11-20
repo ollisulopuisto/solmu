@@ -769,6 +769,7 @@ pub struct App {
     pub sticker_draft: Option<crate::model::StickerDraft>,
     /// The staged picture being cropped, while the cropper is open.
     pub picture_edit: Option<crate::model::PictureEdit>,
+    pub pending_picture_preview: Option<AttachmentId>,
     /// The staged picture whose size was asked for, and whose cropper that
     /// answer may still open. A size that arrives for anything else has been
     /// overtaken by a cancellation or by another picture, and opening the
@@ -1770,6 +1771,7 @@ impl App {
             sticker_preview_pending: false,
             sticker_draft: None,
             picture_edit: None,
+            pending_picture_preview: None,
             picture_inspecting: None,
             picture_applying: Default::default(),
             picture_origins: Default::default(),
@@ -11663,6 +11665,13 @@ impl App {
             Action::SetPendingViewOnce(view_once) => {
                 self.set_pending_view_once(view_once);
             }
+            Action::PreviewPendingPicture(target) => {
+                if self.staged_at(target).is_some_and(|at| {
+                    crate::ui::pending_picture_preview::is_picture(&self.pending[at].item)
+                }) {
+                    self.pending_picture_preview = Some(target);
+                }
+            }
             Action::EditPicture(target) => {
                 // A crop still being written owns the attachment: each apply
                 // runs on its own thread and answers by attachment alone, so
@@ -11678,6 +11687,7 @@ impl App {
                     );
                     return;
                 }
+                self.pending_picture_preview = None;
                 // Whatever was being waited for is not what is wanted now.
                 self.picture_inspecting = None;
                 // Read out before anything is written back, so the borrow of

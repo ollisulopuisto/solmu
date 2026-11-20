@@ -49,6 +49,12 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
         return;
     }
+    if app.pending_picture_preview.is_some() {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            app.pending_picture_preview = None;
+        }
+        return;
+    }
     if app.picture_edit.is_some() {
         editor_keys(app, ctx);
         return;
@@ -1959,7 +1965,8 @@ pub(crate) fn route_native_actions(ctx: &egui::Context, actions: Vec<Action>) ->
 pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
     use super::rail::Destination;
     use crate::model::ListMode;
-    if app.picture_edit.is_some()
+    if app.pending_picture_preview.is_some()
+        || app.picture_edit.is_some()
         || app.image_preview.is_some()
         || app.sticker_view.is_some()
         || app.recording.is_some()

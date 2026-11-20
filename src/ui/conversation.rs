@@ -16408,7 +16408,7 @@ mod reaction_tests {
         assert!(labels.iter().any(|label| label == "Markierung entfernen"));
         assert!(labels.iter().any(|label| label == "Markieren"));
     }
-    /// The pencil on a staged picture means the tile opens the cropper, the
+    /// A staged picture opens a large preview, the
     /// corner cross only removes, and a document's tile does neither.
     #[test]
     fn clicking_a_staged_picture_opens_it_and_the_cross_only_removes() {
@@ -16477,16 +16477,16 @@ mod reaction_tests {
         assert!(
             actions
                 .iter()
-                .any(|action| matches!(action, Action::EditPicture(id) if *id == pasted)),
-            "clicking the picture tile opens it for editing: {actions:?}"
+                .any(|action| matches!(action, Action::PreviewPendingPicture(id) if *id == pasted)),
+            "clicking the picture tile opens a large preview: {actions:?}"
         );
         // A picture staged as a file opens the same way, through its size read.
         let actions = opened(&mut app, start + egui::vec2(72.0 + 8.0 + 36.0, 36.0));
         assert!(
             actions
                 .iter()
-                .any(|action| matches!(action, Action::EditPicture(id) if *id == file)),
-            "clicking the picture file tile opens it for editing: {actions:?}"
+                .any(|action| matches!(action, Action::PreviewPendingPicture(id) if *id == file)),
+            "clicking the picture file tile opens a large preview: {actions:?}"
         );
         // A document cannot be edited, so its tile does not pretend to open.
         let actions = opened(
@@ -16496,7 +16496,7 @@ mod reaction_tests {
         assert!(
             actions
                 .iter()
-                .all(|action| !matches!(action, Action::EditPicture(_))),
+                .all(|action| !matches!(action, Action::PreviewPendingPicture(_))),
             "a document tile opens nothing: {actions:?}"
         );
         // The corner cross removes its picture instead of opening it.
@@ -16510,7 +16510,7 @@ mod reaction_tests {
         assert!(
             actions
                 .iter()
-                .all(|action| !matches!(action, Action::EditPicture(_))),
+                .all(|action| !matches!(action, Action::PreviewPendingPicture(_))),
             "the cross does not open the editor: {actions:?}"
         );
     }
@@ -16744,7 +16744,7 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
                     ui.painter().rect_filled(rect, radius, dim);
                     theme::paint_icon(
                         ui,
-                        Icon::Pencil,
+                        Icon::Eye,
                         Rect::from_center_size(rect.center(), Vec2::splat(22.0)),
                         20.0,
                         palette.text,
@@ -16773,7 +16773,7 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
         app.actions.push(Action::RemovePending(index));
     }
     if let Some(target) = open {
-        app.actions.push(Action::EditPicture(target));
+        app.actions.push(Action::PreviewPendingPicture(target));
     }
     ui.add_space(4.0);
 }
