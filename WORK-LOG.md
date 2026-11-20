@@ -13,6 +13,22 @@ Local full-test compilation again exceeded the execution window, so these tests
 are not claimed passed locally. The previous album/texture failures are absent
 from the latest Mac result. No screenshot or release change.
 
+## 2026-11-20: One receipt per automation request, bounded receipt history
+
+The follow-on review found HTTP and the shared write handler both recording a
+receipt, and denied traffic exhausting the receipt cap. HTTP now calls an
+internal already-recorded handler; direct callers keep the audited entry point.
+The metadata receipt history retains the latest 10,000 receipts plus a saturating
+lifetime count. It does not evict durable idempotency claims, whose separate
+10,000-entry cap still fails closed. This prevents unauthenticated receipt traffic
+from consuming claim capacity. Rotation is explicit here, not an automatic purge
+of send outcomes. Existing old journals load with a default receipt counter.
+
+Executed 114 production-module acceptance tests, including a full receipt window,
+an unauthorized attempt, an authorized send, and an idempotent retry: exactly
+one receipt per request, one retained claim and one synthetic upstream send.
+Native all-target/all-feature Clippy passed. No real credentials or messaging.
+
 ## 2026-11-20: Maximum audience counted-send regression
 
 Added a full-view regression that selects 50 synthetic distinct recipients,
@@ -792,6 +808,42 @@ Added an executed local HTTP wire regression: fresh POST and edit PUT both
 submit the same Markdown text byte-for-byte in the JSON text field, never
 display bullets/renderer markers. 413 portable tests pass; Clippy passes.
 This verifies Solmu's transport contract, not Beeper's downstream conversion.
+## Scoped message automation,20 November
+
+Implemented exact account/chat messages:send grants, old-read-token refusal,
+bounded authenticated loopback POST, metadata-only durable claim/outcome audit,
+revocation rechecks after identity lookup and disk claim, and no automatic retry.
+Added solmu-control text-file CLI and stdio solmu-mcp using the same API. Modern
+MCP2026-07-28 per-request metadata/discovery plus2025-11-25 compatibility; no
+remote MCP listener. Clients disable redirects, proxy routing and transport retries.
+Current app code constructs only the Beeper backend, so this serves the configured
+network connections including WhatsApp through Beeper. Earlier inherited native
+WhatsApp-mode notes do not describe a second live backend in this fork. Multiple
+origins and direct/standalone protocol login remain out of scope for this slice.
+
+Executed109 tests in an isolated build using actual production modules (only
+merged Person/Member data shapes stubbed):85 unit tests,16 existing readHTTP,
+4 writeHTTP/actualCLI,4 MCP/CLI protocol tests. Native lib/bins/test-target Clippy
+passed. Own review found and fixed POST pagination leakage, unbounded total socket
+read time, stale-grant check after disk claim, invalid token options, and Windows
+directory-sync incompatibility. Final all-target/all-feature native Clippy, formatting and diff checks pass;407 existing portable adapter tests also pass. Own adversarial review found no remaining issue in these paths.
+No real token, service, account query, live send, media upload or release created.
+Full application tests and native Mac execution not run locally.
+
+## Automation independent-review fixes,20 November
+
+Devin found five real issues on8b46654: stale PID-lock recovery could delete a
+new owner's lock and lose send claims, Windows PID locks never recover after a
+crash, empty relative parent broke Unix directory sync, local people paths were
+rewritten to the upstream root, and early denied HTTP sends missed receipt audit.
+Journal transactions now hold a cross-platform OS file lock, never unlink it,
+and release automatically on process exit. Local people paths stay local, empty
+parents mean current directory, HTTP POST receipts precede denial paths and
+unclassifiable malformed heads get anonymous receipts.113 production-module tests
+pass, including a killed lock-holder subprocess followed by eight concurrent
+receipt/claim writers proving one retained claim, relative-path restart, denied
+HTTP receipts, and actual-client people/history routes. Native all-target/all-
+feature Clippy passes. Windows runtime and fresh independent CI/review pending.
 
 ## New-message Mac CI follow-up,20 November
 

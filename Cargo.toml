@@ -26,6 +26,14 @@ path = "src/bin/solmu-scheduler.rs"
 name = "solmu-reader"
 path = "src/bin/solmu-reader.rs"
 
+[[bin]]
+name = "solmu-control"
+path = "src/bin/solmu-control.rs"
+
+[[bin]]
+name = "solmu-mcp"
+path = "src/bin/solmu-mcp.rs"
+
 [dependencies]
 # Private temporary audio and verified atomic model installation. Already in lockfile.
 tempfile = "3"
