@@ -5206,14 +5206,6 @@ mod tests {
                     egui::Pos2::ZERO,
                     egui::vec2(width, height),
                 )),
-                modifiers: events
-                    .iter()
-                    .rev()
-                    .find_map(|event| match event {
-                        egui::Event::PointerButton { modifiers, .. } => Some(*modifiers),
-                        _ => None,
-                    })
-                    .unwrap_or_default(),
                 events,
                 ..Default::default()
             },
