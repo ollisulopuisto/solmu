@@ -197,6 +197,7 @@ pub enum Command {
     BeeperForward {
         generation: u64,
         prepared: bool,
+        append_at: usize,
         items: Vec<(usize, crate::composed_forward::Item)>,
     },
     Forward {
@@ -1154,6 +1155,10 @@ pub enum Event {
         message: Box<Message>,
         complete: bool,
     },
+    BeeperForwardRetryPrepared {
+        generation: u64,
+        items: Vec<(usize, crate::composed_forward::Item)>,
+    },
     BeeperForwardPrepared {
         generation: u64,
         items: Vec<crate::composed_forward::Item>,
@@ -1167,6 +1172,13 @@ pub enum Event {
     BeeperForwardProgress {
         generation: u64,
         index: usize,
+        state: crate::composed_forward::State,
+    },
+    BeeperForwardFeedback {
+        origin: String,
+        account: String,
+        chat: ChatId,
+        pending: String,
         state: crate::composed_forward::State,
     },
     BeeperForwardResolved {

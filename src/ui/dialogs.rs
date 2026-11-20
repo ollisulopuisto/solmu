@@ -549,7 +549,13 @@ fn forward(app: &mut App, ui: &mut egui::Ui, messages: &[String]) {
             .clamp(300.0, 800.0)
             .min((height - 48.0).max(1.0)),
     );
-    let heading = if messages.len() == 1 {
+    let heading = if !app.forward_items.is_empty() {
+        if app.composed_forward_running() {
+            crate::i18n::gettext(app.locale, "Forwarding messages").into_owned()
+        } else {
+            crate::i18n::gettext(app.locale, "Forwarding results").into_owned()
+        }
+    } else if messages.len() == 1 {
         crate::i18n::gettext(app.locale, "Forward message").into_owned()
     } else {
         crate::i18n::ngettext(
@@ -562,76 +568,7 @@ fn forward(app: &mut App, ui: &mut egui::Ui, messages: &[String]) {
     };
     title(ui, app, &heading);
     if !app.forward_items.is_empty() {
-        ui.label(crate::i18n::gettext(
-            app.locale,
-            "Accepted means queued, not delivered. Unknown outcomes are not retried.",
-        ));
-        egui::ScrollArea::vertical()
-            .max_height(450.0)
-            .show(ui, |ui| {
-                for (index, item) in app.forward_items.iter().enumerate() {
-                    let destination = app
-                        .chat(&item.destination)
-                        .map(|chat| app.chat_title(chat))
-                        .unwrap_or_else(|| item.destination.clone());
-                    let status = match &item.state {
-                        crate::composed_forward::State::Waiting => {
-                            crate::i18n::gettext(app.locale, "Waiting").into_owned()
-                        }
-                        crate::composed_forward::State::Sending => {
-                            crate::i18n::gettext(app.locale, "Sending").into_owned()
-                        }
-                        crate::composed_forward::State::Accepted { .. } => {
-                            crate::i18n::gettext(app.locale, "Accepted by Beeper").into_owned()
-                        }
-                        crate::composed_forward::State::FailedBeforeSend(error) => format!(
-                            "{}: {error}",
-                            crate::i18n::gettext(app.locale, "Not submitted")
-                        ),
-                        crate::composed_forward::State::Uncertain(error) => format!(
-                            "{}: {error}",
-                            crate::i18n::gettext(app.locale, "Outcome unknown. Check history")
-                        ),
-                    };
-                    ui.label(format!("{}. {destination}: {status}", index + 1));
-                    if let Some(attachment) = item.attachment {
-                        ui.small(format!("Attachment {}", attachment + 1));
-                    }
-                }
-            });
-        let running = app.forward_items.iter().any(|item| {
-            matches!(
-                item.state,
-                crate::composed_forward::State::Waiting | crate::composed_forward::State::Sending
-            )
-        });
-        let retryable = app.forward_items.iter().any(|item| {
-            matches!(
-                item.state,
-                crate::composed_forward::State::FailedBeforeSend(_)
-            )
-        });
-        if ui
-            .add_enabled(
-                !running && retryable,
-                egui::Button::new(crate::i18n::gettext(
-                    app.locale,
-                    "Retry items not submitted",
-                )),
-            )
-            .clicked()
-        {
-            app.actions.push(Action::RetryComposedForward);
-        }
-        if ui
-            .add_enabled(
-                !running,
-                egui::Button::new(crate::i18n::gettext(app.locale, "Close")),
-            )
-            .clicked()
-        {
-            app.actions.push(Action::CloseDialog);
-        }
+        forward_results(app, ui);
         return;
     }
     if let Some(Dialog::Forward { chat, .. }) = &app.dialog
@@ -702,7 +639,7 @@ fn forward(app: &mut App, ui: &mut egui::Ui, messages: &[String]) {
         &palette,
         egui::Id::new("forward-search"),
         &mut app.forward_search,
-        "Search chats",
+        &crate::i18n::gettext(app.locale, "Search name or group"),
         width,
     );
     if ui.memory(|memory| memory.focused().is_none()) {
@@ -829,6 +766,57 @@ fn forward(app: &mut App, ui: &mut egui::Ui, messages: &[String]) {
     let _ = list;
 }
 
+/// Remains available after the results view closes, including while sending.
+pub fn forward_status(app: &mut App, ui: &mut egui::Ui) {
+    if app.forward_items.is_empty() {
+        return;
+    }
+    let label = if app.composed_forward_running() {
+        crate::i18n::gettext(app.locale, "Forwarding in progress")
+    } else {
+        crate::i18n::gettext(app.locale, "Forwarding results")
+    };
+    ui.label(label);
+    if ui
+        .add(egui::Button::new(crate::i18n::gettext(app.locale, "View forwarding results")).wrap())
+        .clicked()
+    {
+        app.actions.push(Action::ShowForwardResults);
+    }
+}
+
+fn forward_results(app: &mut App, ui: &mut egui::Ui) {
+    use crate::i18n::gettext;
+    let locale = app.locale;
+    let running = app.composed_forward_running();
+    ui.label(gettext(locale,"You may close this view. Results stay available. Accepted is not confirmed; unknown outcomes are never retried."));
+    egui::ScrollArea::vertical().id_salt("forward-results").max_height((ui.available_height()-70.0).max(40.0)).show(ui,|ui|{
+        for group in crate::forward_results::recipients(&app.forward_items) {
+            let title=app.chats.iter().filter(|chat|chat.id==group.chat).find(|chat|crate::merged::Member::of(chat).is_some_and(|member|member.origin==group.origin&&member.account==group.account)).map(|chat|if chat.locked {gettext(locale,"Locked chat").into_owned()}else{app.chat_title(chat)}).unwrap_or_else(||gettext(locale,"Unavailable chat").into_owned());
+            ui.group(|ui|{
+                ui.strong(title);
+                if group.confirmed==group.total {ui.label(gettext(locale,"Confirmed in chat"));} else {
+                    for (count,label) in [(group.waiting,gettext(locale,"Waiting")),(group.sending,gettext(locale,"Sending")),(group.accepted,gettext(locale,"Submitted, waiting for echo")),(group.confirmed,gettext(locale,"Confirmed in chat")),(group.unsent,gettext(locale,"Not submitted")),(group.unknown,gettext(locale,"Outcome unknown. Check chat before retrying"))] {if count>0 {ui.label(format!("{label}: {count} / {}",group.total));}}
+                }
+                if group.unsent>0 {
+                    ui.add_enabled_ui(!running,|ui|{ui.menu_button(gettext(locale,"Review unsent messages"),|ui|{
+                        ui.set_max_width(360.0);
+                        ui.label(gettext(locale,"Only messages known not to have been submitted will be retried. Successful and unknown outcomes will not be sent again."));
+                        let label=crate::i18n::ngettext(locale,"Retry {count} unsent message","Retry {count} unsent messages",group.unsent as u32).replace("{count}",&group.unsent.to_string());
+                        if ui.button(label).clicked(){app.actions.push(Action::RetryForwardRecipient{origin:group.origin.clone(),account:group.account.clone(),chat:group.chat.clone()});ui.close();}
+                    });});
+                }
+                let errors:Vec<_>=group.indices.iter().filter_map(|index|match &app.forward_items[*index].state {crate::composed_forward::State::FailedBeforeSend(error)|crate::composed_forward::State::Uncertain(error)=>Some(error),_=>None}).collect();
+                if !errors.is_empty() {ui.push_id((&group.origin,&group.account,&group.chat),|ui|{ui.collapsing(gettext(locale,"Technical details"),|ui|{for error in errors {ui.add(egui::Label::new(error).wrap());}});});}
+            });ui.add_space(8.0);
+        }
+    });
+    ui.label(gettext(locale, "Original messages stay selected."));
+    if ui.button(gettext(locale, "Close view")).clicked() {
+        app.actions.push(Action::HideForwardResults);
+    }
+}
+
 fn forward_footer(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     if app.forward_reviewing {
@@ -857,18 +845,15 @@ fn forward_footer(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let count = app.forward_recipients.len();
-    // Keep the action visible even when the translated count needs truncation.
-    let (label, action) = if count > 1 {
-        (
-            crate::i18n::gettext(app.locale, "Review recipients"),
-            Action::ReviewForward,
-        )
-    } else {
-        (
-            crate::i18n::gettext(app.locale, "Forward"),
-            Action::ConfirmForward,
-        )
-    };
+    // The recipient count is explicit on the send action; no second picker.
+    let label = crate::i18n::ngettext(
+        app.locale,
+        "Forward to {count} chat",
+        "Forward to {count} chats",
+        count as u32,
+    )
+    .replace("{count}", &count.to_string());
+    let action = Action::ForwardToSelected;
     ui.horizontal(|ui| {
         let button_width = ui
             .painter()
