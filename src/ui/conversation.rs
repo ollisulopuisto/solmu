@@ -3601,19 +3601,11 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                     }
                                     ui.add_space(4.0);
                                 }
-                                let show_sender = shows_sender_pictures(chat)
-                                    && !message.from_me
-                                    && (new_day
-                                        || previous.is_none_or(|previous| {
-                                            previous.sender != message.sender || previous.from_me
-                                        }));
-                                // The first message of a run from one side, as the
-                                // phone draws it: a little apart, with a tail.
+                                // One tail belongs to the run, never each follower.
                                 let first_in_run = new_day
                                     || previous.is_none_or(|previous| !same_run(previous, message));
-                                // All skins use an outer-top tail on every bubble.
-                                // The sender's picture: beside the first message of a
-                                // run in WhatsApp's style, beside the last in Messages.
+                                let show_sender =
+                                    shows_sender_pictures(chat) && !message.from_me && first_in_run;
                                 let show_avatar = if palette.bubbles == theme::BubbleStyle::Messages
                                 {
                                     shows_sender_pictures(chat)
@@ -3625,7 +3617,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                 let tailed = if shows_sender_pictures(chat) && !message.from_me {
                                     show_avatar
                                 } else {
-                                    true
+                                    first_in_run
                                 };
                                 if first_in_run && !new_day && previous.is_some() {
                                     ui.add_space(RUN_GAP);
@@ -4874,6 +4866,30 @@ fn bubble(
         covered_top: overlap.as_ref().map(|(rect, _)| rect.bottom()),
         ..*view
     };
+    if let (Some(previous_id), Some((previous, _))) = (overlap_previous, &overlap) {
+        let seam = Rect::from_min_max(
+            pos2(previous.left(), previous.bottom() - STREAK_OVERLAP),
+            previous.right_bottom(),
+        );
+        let hit = ui.interact(seam, previous_id.with("overlap-seam"), Sense::click());
+        if hit.double_clicked() {
+            if let Some(id) = ui
+                .ctx()
+                .data(|d| d.get_temp::<String>(previous_id.with("message-id")))
+            {
+                actions.push(Action::Reply(id));
+            }
+        } else if hit.clicked() && ui.input(|i| i.modifiers.command) {
+            // Resolve from the predecessor's stable UI id, without guessing
+            // another chat's same-named message.
+            if let Some(id) = ui
+                .ctx()
+                .data(|d| d.get_temp::<String>(previous_id.with("message-id")))
+            {
+                actions.push(Action::SelectMessage(id));
+            }
+        }
+    }
     if overlap.is_some() {
         ui.add_space(-STREAK_OVERLAP - ui.spacing().item_spacing.y);
     }
@@ -4974,7 +4990,13 @@ fn bubble(
                 let seam = Rect::from_min_max(
                     pos2(
                         previous.left() - widgets::TAIL_WIDTH - 4.0,
-                        previous.bottom() - STREAK_REPAINT_INSET,
+                        previous.bottom()
+                            - overlap_previous
+                                .and_then(|id| {
+                                    ui.ctx()
+                                        .data(|d| d.get_temp::<f32>(id.with("repaint-inset")))
+                                })
+                                .unwrap_or(0.0),
                     ),
                     pos2(
                         previous.right() + widgets::TAIL_WIDTH + 4.0,
@@ -5744,7 +5766,9 @@ fn bubble_margin(palette: &Palette, message: &Message, over_picture: bool) -> Ma
     };
     // The older edge is replayed above a later overlapping background. Keep
     // that whole strip inside padding, never over glyphs, highlights or media.
-    margin.bottom = margin.bottom.max(STREAK_REPAINT_INSET as i8);
+    if matches!(&message.content, Content::Text { .. }) {
+        margin.bottom = margin.bottom.max(STREAK_REPAINT_INSET as i8);
+    }
     margin
 }
 
@@ -5809,6 +5833,8 @@ fn bubble_frame(
     // Register the bubble from its previous rect before its contents so inner
     // links, quotes, and attachments win clicks. The bubble handles right-click.
     let bubble_id = bubble_id(&view.chat.id, &message.id);
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(bubble_id.with("message-id"), message.id.clone()));
     // Hit evidence belongs to this frame, never the previous layout.
     ui.ctx()
         .data_mut(|data| data.remove::<Vec<(Rect, String)>>(bubble_id.with("web-link-hits")));
@@ -5830,6 +5856,12 @@ fn bubble_frame(
     });
     let mut tiles: Vec<(Rect, String)> = Vec::new();
     let mut margin = bubble_margin(&palette, message, false);
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            bubble_id.with("repaint-inset"),
+            f32::from(margin.bottom).min(STREAK_REPAINT_INSET),
+        )
+    });
     if view.covered_top.is_some() {
         margin.top += STREAK_OVERLAP as i8;
     }
@@ -6048,13 +6080,16 @@ fn bubble_frame(
             ui.clip_rect().y_range(),
             widgets::BubbleEffects {
                 sender_shadow,
-                flat_edge: sender_shadow.is_some() || view.hide_grouped_status || view.covered_top.is_some(),
+                flat_edge: sender_shadow.is_some()
+                    || view.hide_grouped_status
+                    || view.covered_top.is_some(),
                 tail_tip_y: (!own && tail.is_some())
                     .then(|| {
                         ui.ctx()
                             .data(|d| d.get_temp::<f32>(bubble_id.with("avatar-tail-y")))
                     })
-                    .flatten(),            },
+                    .flatten(),
+            },
         );
         ui.painter().set(backdrop, shape.clone());
         ui.ctx()
@@ -7800,7 +7835,7 @@ pub(crate) fn linked_bubble(
             show_timestamp,
             show_sender: chat.is_group() && !message.from_me,
             show_avatar: chat.is_group() && !message.from_me,
-            tailed: true,
+            tailed: previous.is_none_or(|previous| !same_run(previous, message)),
             overlap_previous: previous
                 .filter(|previous| stack_pair(&view, previous, message))
                 .map(|previous| bubble_id(&previous.chat, &previous.id)),

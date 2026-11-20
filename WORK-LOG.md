@@ -13,6 +13,31 @@ Local full-test compilation again exceeded the execution window, so these tests
 are not claimed passed locally. The previous album/texture failures are absent
 from the latest Mac result. No screenshot or release change.
 
+## 2026-11-20: Combine approved one-tail groups with restored overlap
+
+Olli confirmed15:30: one tail per grouped bubbles, with the older overlap back.
+Integrated the four overlap-restoration commits from PR407 on the avatar-tail
+branch, retaining current main and its newer hidden-message handling. The tail
+rule now applies to ordinary outgoing/direct runs and linked runs too. Incoming
+Messages avatars remain bottom-aligned with their existing tail geometry; the
+WhatsApp-style head has the approved one-third mouth-height rule.
+
+Own review of407's failed CI found global bottom-padding inflation changing
+isolated voice/image geometry and a seam command-click without a dedicated
+owner. Non-text padding stays unchanged; replay is clipped to each older row's
+actual safe bottom inset. Added stable older-seam primary gesture ownership
+(command-click selection and double-click reply); newer body targets remain
+clipped below the covered seam. Updated the old every-bubble-tail assertion to
+the requested one-tail-per-run behavior. These repaired interaction regressions
+still require full CI execution; they are not claimed passed locally.
+
+Native all-target/all-feature Clippy and demo build pass. Inspected actual dark
+wide, light narrow, group-stacks WhatsApp and Messages captures. Overlapping
+steps are visible; text is readable; followers have no separate tail. Existing
+geometry unit helper ran1pass earlier. New screenshots remain private; no
+waiver assumed, PR not opened.407 is not closed until the combined PR supersedes
+it with validated CI and review. No release.
+
 ## 2026-11-20: Avatar-aligned incoming tail (feat/avatar-mouth-tail)
 
 Build option1 from the approved synthetic sketch: retain the existing downward

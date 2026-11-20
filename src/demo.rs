@@ -24048,12 +24048,11 @@ mod bubble_detail_tests {
     }
 
     /// The `bubbles` page in both Messages palettes: every message of the
-    /// sample is drawn, with the same top-corner tail on every body as the
-    /// other skins. Free emoji and bare pictures keep their own geometry.
+    /// sample is drawn, with one top-corner tail per run as the other skins. Free emoji and bare pictures keep their own geometry.
     /// All of it fits a 1280
     /// by 1000 window.
     #[test]
-    fn messages_balloons_tail_every_body() {
+    fn messages_balloons_tail_only_the_run_head() {
         // These runs belong to one day. Near midnight a real clock puts a
         // day boundary between them, correctly giving another bubble a tail.
         let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
@@ -24119,10 +24118,10 @@ mod bubble_detail_tests {
             );
             for (id, own, tailed) in [
                 ("bubbles-in-1", false, true),
-                ("bubbles-in-2", false, true),
+                ("bubbles-in-2", false, false),
                 ("bubbles-out-1", true, true),
-                ("bubbles-out-3", true, true),
-                ("bubbles-in-4", false, true),
+                ("bubbles-out-3", true, false),
+                ("bubbles-in-4", false, false),
                 ("bubbles-out-4", true, true),
             ] {
                 let past = out_past(id, own);
