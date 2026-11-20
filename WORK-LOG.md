@@ -853,3 +853,19 @@ fixture dropped texture deltas. Disable the background composer UI and surrender
 its text focus while results are visible, rather than merely blocking Send.
 Clear the fixture's deltas. Native all-target/all-feature Clippy passes; these
 actual app regressions await CI rerun, not claimed executed locally.
+
+## Markdown fidelity audit follow-up,20 November
+
+Claim: Instinct, branch `fix/markdown-fidelity-audit`, worktree
+`/home/sandbox/solmu-markdown-fidelity`. Owner approved fixing the audited
+losses as one separate PR. This branch is based on #434 pending its merge;
+not part of #434, #435, or the separately approved compact list layout.
+
+First failing-first regression reproduces hard-break and mixed nested-list
+edit refusal. Source signatures were counting CommonMark serialization
+newlines after br and before nested lists as inline spaces. Normalize those
+boundaries only, retaining actual inline spaces. Both fixtures now pass,
+with all six reverse-converter tests passing in the production-source
+portable harness, including the original13 CommonMark round-trip cases and
+unsafe-markup refusals. No display-adapter audit fixes yet. Full native
+CI/review and broader audit regression suite still required.

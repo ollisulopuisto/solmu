@@ -111,6 +111,33 @@ fn signature(e: ElementRef<'_>, depth: usize) -> Result<String, Error> {
                 if text.trim().is_empty() && text.contains('\n') {
                     continue;
                 }
+                // CommonMark serializes a newline after <br> and before
+                // nested block lists. Those are formatting whitespace, not
+                // extra inline spaces. Do not drop spaces between words.
+                let after_break = child
+                    .prev_sibling()
+                    .and_then(ElementRef::wrap)
+                    .is_some_and(|e| e.value().name() == "br");
+                let before_block =
+                    child
+                        .next_sibling()
+                        .and_then(ElementRef::wrap)
+                        .is_some_and(|e| {
+                            matches!(
+                                e.value().name(),
+                                "ul" | "ol" | "blockquote" | "p" | "div" | "pre"
+                            )
+                        });
+                let text = if after_break {
+                    text.trim_start_matches(['\n', '\r'])
+                } else {
+                    text.as_ref()
+                };
+                let text = if before_block {
+                    text.trim_end_matches(['\n', '\r', ' ', '\t'])
+                } else {
+                    text
+                };
                 let mut space = false;
                 for ch in text.chars() {
                     if matches!(ch, ' ' | '\n' | '\r' | '\t' | '\u{c}') {
@@ -303,6 +330,22 @@ fn element_markdown(e: ElementRef<'_>, depth: usize) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ordinary_hard_break_and_mixed_nested_list_are_editable() {
+        assert_eq!(markdown("<p>one<br>two</p>").unwrap(), "one  \ntwo");
+        assert_eq!(
+            markdown("<ol start=3><li>outer<ul><li>inner</li></ul></li><li>next</li></ol>")
+                .unwrap(),
+            "3. outer\n   - inner\n4. next"
+        );
+    }
+    #[test]
+    fn inline_spaces_are_not_all_discarded_by_signature() {
+        assert_ne!(
+            signature(Html::parse_fragment("<p>one two</p>").root_element(), 0).unwrap(),
+            signature(Html::parse_fragment("<p>onetwo</p>").root_element(), 0).unwrap()
+        );
+    }
     #[test]
     fn commonmark_rich_round_trips_are_identical() {
         fn rich(source: &str) -> String {
