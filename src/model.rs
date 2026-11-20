@@ -1426,7 +1426,11 @@ impl Content {
         self.searchable_fields()
             .into_iter()
             .flat_map(str::lines)
-            .find(|line| line.to_lowercase().contains(&needle))
+            .find(|line| {
+                crate::literal_hints::without_literal_hints(line)
+                    .to_lowercase()
+                    .contains(&needle)
+            })
             .map(|line| line.trim().to_owned())
     }
 
@@ -3121,6 +3125,12 @@ pub enum Action {
     CancelSelection,
     /// Loads an outgoing message into the composer for editing.
     Edit(String),
+    PreparedEdit {
+        chat: ChatId,
+        id: String,
+        request: u64,
+        result: Result<String, crate::rich_edit::Error>,
+    },
     CancelEdit,
     /// Revokes an outgoing message for everyone. The chat travels with the
     /// message because the reader may switch chats before confirming.

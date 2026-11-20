@@ -13,6 +13,49 @@ Local full-test compilation again exceeded the execution window, so these tests
 are not claimed passed locally. The previous album/texture failures are absent
 from the latest Mac result. No screenshot or release change.
 
+## 2026-11-20: Combine approved one-tail groups with restored overlap
+
+This branch combines one tail per grouped bubbles with restored overlap.
+Integrated the four overlap-restoration commits from PR407 on the avatar-tail
+branch, retaining current main and its newer hidden-message handling. The tail
+rule now applies to ordinary outgoing/direct runs and linked runs too. Incoming
+Messages avatars remain bottom-aligned with their existing tail geometry; the
+WhatsApp-style head has the approved one-third mouth-height rule.
+
+Own review of407's failed CI found global bottom-padding inflation changing
+isolated voice/image geometry and a seam command-click without a dedicated
+owner. Non-text padding stays unchanged; replay is clipped to each older row's
+actual safe bottom inset. Added stable older-seam primary gesture ownership
+(command-click selection and double-click reply); newer body targets remain
+clipped below the covered seam. Updated the old every-bubble-tail assertion to
+the requested one-tail-per-run behavior. These repaired interaction regressions
+still require full CI execution; they are not claimed passed locally.
+
+Native all-target/all-feature Clippy and demo build pass. Inspected actual dark
+wide, light narrow, group-stacks WhatsApp and Messages captures. Overlapping
+steps are visible; text is readable; followers have no separate tail. Existing
+geometry unit helper ran1pass earlier. New screenshots remain private; no
+waiver assumed, PR not opened.407 is not closed until the combined PR supersedes
+it with validated CI and review. No release.
+
+## 2026-11-20: Avatar-aligned incoming tail (feat/avatar-mouth-tail)
+
+Build option1 from the approved synthetic sketch: retain the existing downward
+nub, with tip y = avatar bottom minus avatar height/3. Incoming ordinary group
+heads use the actual top-aligned avatar allocation; same-sender followers have no
+tail. Outgoing and direct-chat tails are unchanged. Messages skin retains its
+existing head-tail geometry because it bottom-aligns avatars; moving this
+same downward nub there would extend below short bubbles. Linked-view avatars
+are not changed by this ordinary-conversation patch.
+
+Added a geometry unit test with translated/resized avatar rectangles. Executed
+the exact helper and exact unit test against the built egui dependency:1 pass.
+Full native test compilation exceeded the command window; no full-suite pass
+claimed. Native demo build and all-target/all-feature Clippy pass. Added an
+avatar-tail synthetic demo page with short and tall heads plus two followers.
+Inspected actual dark wide and light narrow captures: heads meet the avatar at
+the requested height; followers remain tailless. No external image hosting or
+screenshot waiver assumed. Parent has captures and the waiver/audience question.
 ## 2026-11-20: One receipt per automation request, bounded receipt history
 
 The follow-on review found HTTP and the shared write handler both recording a
@@ -775,6 +818,53 @@ fixtures. Native all-target/all-feature Clippy passes; local targeted applicatio
 test execution exceeded120 seconds during compilation and has not run. CI must
 recheck the three existing demo failures, including right-click-beside-message.
 
+## Restore overlapping consecutive bubbles,20 November
+
+Regression traced to #355, which replaced #246 seam overlap with separated rows. Restore6px overlap using current-pass predecessor geometry, older-edge repaint and covered hit-test clipping. Keep current width bands and every-body top tails. Selection and hard-boundary rows remain separate. Native tests updated for geometry, scroll and covered menus, and both-theme group-stack app captures added to the existing Mac CI smoke path. No real chat sent, no package published. Local native build/check execution remains pending after missing Linux development dependencies and bounded compile-time attempts.
+
+Review follow-up: clip enlarged text-selection targets below the overlap cover, including command-click and double-click gestures. Reserve the full nine-point replay strip as bottom padding in both skins so background repaint cannot erase older content. Added seam gesture and padding regressions. Actual Linux synthetic both-theme group-stack captures inspected: final glyph rows and colored shadows remain readable. Native test linking exceeded the local execution bound; test-target compilation and fresh CI are distinct checks, not a claimed runtime pass.
+
+### 2026-11-20: combined tail and overlap regression fixtures
+
+The macOS failures exposed two obsolete per-message tail assertions and a
+synthetic command-click that omitted egui's held-modifier event. Assert tails
+only on run heads, require tail-less follower shadows, and emit
+ModifiersChanged before the seam click. No production behavior changed.
+All-target, all-feature Clippy passes. Native targeted test compilation timed
+out while rebuilding dependencies; CI must execute the tests before merge.
+## 2026-11-20: Reconstruct Markdown when editing rich messages
+
+Owner requested retaining editable Markdown, then explicitly chose reverse
+conversion rather than duplicate source storage. Prepare edit reads the current
+exact own message, reconstructs Markdown from rich HTML, and verifies a local
+CommonMark semantic round-trip. Unsupported or lossy constructs refuse before
+changing the composer. A request generation, local account, chat, target and
+unchanged draft guard reject late replies. No write occurs until explicit send.
+Both fresh sends and edits pass Markdown in the API text field. Beeper's current
+docs say both use the same rich-text conversion. Retrieval exposes rich text,
+not original marker spelling. No source store or schema migration was added.
+
+412 portable production-source tests pass, including rich reconstruction and
+exact message/account/ownership refusals; native all-target/all-feature Clippy
+passes. Four converter tests include13 markdown-rich-markdown-rich cases with
+byte-identical CommonMark rich output. This is not live Beeper/WhatsApp proof.
+Full native UI tests unrun. Demo compilation was killed by the environment;
+visual capture remains unverified, not waived. No real message/account touched.
+
+Review follow-up: validate every rich element and attribute before conversion,
+including code wrappers and list items. Refuse nested code-block breaks/links,
+styled code/list items and reversed lists. Preparation errors are structured
+Unsupported/Unavailable values, translated with literal gettext at the UI
+boundary; backend detail strings do not reach the toast. 412 portable tests pass
+again and native all-target/all-feature Clippy passes. Private actual app
+before-dark, after-dark and narrow-light pixels now inspected after a reduced
+debug binary build. Composer shows Markdown hyphens and bold markers rather than
+rendered bullets. No screenshots published; per-PR media gate remains held.
+
+Added an executed local HTTP wire regression: fresh POST and edit PUT both
+submit the same Markdown text byte-for-byte in the JSON text field, never
+display bullets/renderer markers. 413 portable tests pass; Clippy passes.
+This verifies Solmu's transport contract, not Beeper's downstream conversion.
 ## Scoped message automation,20 November
 
 Implemented exact account/chat messages:send grants, old-read-token refusal,
@@ -846,6 +936,31 @@ assertions because it used the default context without installing the app's
 named Inter bold font. Both new fixtures now call `theme::install`, matching
 the existing prepared-layout tests. No production fallback or assertion was
 removed. All selected CI jobs and Devin must pass again on the new head.
+## Markdown fidelity audit follow-up,20 November
+
+Claim: Instinct, branch `fix/markdown-fidelity-audit`, worktree
+`/home/sandbox/solmu-markdown-fidelity`. Owner approved fixing the audited
+losses as one separate PR. This branch is based on #434 pending its merge;
+not part of #434, #435, or the separately approved compact list layout.
+
+First failing-first regression reproduces hard-break and mixed nested-list
+edit refusal. Source signatures were counting CommonMark serialization
+newlines after br and before nested lists as inline spaces. Normalize those
+boundaries only, retaining actual inline spaces. Both fixtures now pass,
+with all six reverse-converter tests passing in the production-source
+portable harness, including the original13 CommonMark round-trip cases and
+unsafe-markup refusals. No display-adapter audit fixes yet. Full native
+CI/review and broader audit regression suite still required.
+
+Display-audit progress: failing-first tests reproduce heading-level loss and
+pretty-list blank lines. Preserve heading level as explicit # prefixes,
+paragraphs as blank-line-separated blocks versus a single br, nested br in
+pre as code newlines, table cells as a readable delimiter-separated fallback
+without leaked HTML tags, and ignore whitespace-only HTML list source runs.
+Updated three existing paragraph fixtures for the intentional separation.
+429 portable production-source tests pass with this in-progress branch.
+Escaped-literal markers and reversed ordered lists are still unresolved; no
+claim that the full audit is fixed and no PR opened before that work is ready.
 ## Preserve ordered rich-text lists, 20 November
 
 Claim: Instinct, branch `fix/preserve-ordered-rich-lists`, worktree
@@ -867,3 +982,61 @@ its CommonMark round trips. Full native Clippy hit the execution time limit
 twice, without a diagnostic; not claimed passed. Actual downstream WhatsApp
 receipt was not inspected and no real message was sent. No screenshot waiver
 for this PR assumed; separate ready PR with its missing review media noted.
+
+## Markdown fidelity audit completion,20 November
+
+The audit fixes each reported readback loss separately: heading prefixes,
+paragraph separation versus a hard break, breaks within preformatted text,
+table cells/rows without leaked HTML tags, source-whitespace-only list runs,
+reversed ordered counters (including direct-item-count defaults and minimum
+integer saturation), and literal HTML style markers. Literal characters carry
+a nonprinting renderer hint distinct from emitted semantic styles; inline
+parsing removes the hint for rendering, copy and link detection. Native
+backslashes and the shrug's slash-adjacent underscores stay untouched. Link
+label comparison strips only those marker hints before comparing destinations.
+
+Nested mixed lists and single hard breaks now reconstruct safely for editing.
+Each refusal change has a failing-first regression and safe/unsafe round-trip
+checks. Unsupported semantics still fail closed. Exact source spelling is not
+recovered; original HTML remains the source, not a second stored Markdown copy.
+
+Validation: 437 portable adapter/reverse-edit tests pass. Replacing the harness's
+markup leaf stub with extracted, unchanged production text-parser functions and
+actual mention-token helpers, plus one mapper-to-parser acceptance test, passes
+463 tests, including 25 text-parser tests. This is not a whole-app test run.
+The reverse-list and literal-marker new tests failed before their fixes. Native
+`cargo check --locked --tests -j1` passes with incremental disabled; native tests
+are compiled, not run. A preliminary check exhausted disk space; old local
+build caches were removed and the check completed. No native linking retry.
+Review screenshots and actual Beeper/WhatsApp bridge round trips remain absent;
+no new per-PR visual waiver is assumed. Existing #434 and #435 waivers do not
+cover this follow-up. No review media committed/hosted and no real sends.
+
+#437 review follow-up: literal marker hints are now normalized at loaded
+history search, archive SQL matching and result-snippet boundaries, not only
+at painting/copy. A shared borrowed normalizer keeps unhinted loaded search's
+no-allocation path. SQL removes only marker-plus-hint pairs, preserving native
+separators elsewhere. Added mapper-to-loaded-search/snippet regressions and
+native archive global/scoped-search tests. Actual production SQL was executed
+against text, caption, URL and literal-marker rows. Native test-target check
+passes; portable suite with actual parser/search functions passes. Full native
+archive-test execution still awaits CI. Rendering representation is unchanged.
+
+#437 second review follow-up: text_matching now normalizes only its matching
+predicate and retains the protected source line for preview_line's one parse.
+Added a native application regression through text_matching and preview_line
+for literal stars, standalone backticks and filenames. The shared normalizer
+is now a small real module staged by the portable checker instead of a helper
+hidden behind its util stub. The repository's exact portable staging command
+passes438 tests; native test-target compilation passes. Retargeted to main
+after #434 merged; retained all follow-up fixes while reconciling its squash.
+#433 Linux all-features run passed2514 tests and failed the linked-minute
+fixture's first-clock assertion. Its WhatsApp times are fixed at today's18:40,
+while Signal was still relative to wall time; near18:40 those samples
+interleaved and correctly split the source run. The linked-minute fixture now
+places Signal after the replaced WhatsApp run, preserving both sources. The
+regression freezes18:40UTC, the problematic period, without loosening any clock
+assertion. Native test-target compilation passes; full execution awaits CI.
+Production bubble/footer logic is unchanged.
+
+The same linked-minute fixture failure affected #437 Ubuntu (2523 passed, one failed). Reused the identical fixture-only correction from #433; no audit or production code changed. All exact-head CI/review gates restart.

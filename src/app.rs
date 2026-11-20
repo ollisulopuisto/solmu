@@ -541,6 +541,8 @@ pub struct App {
     pub reply_to: Option<crate::model::ReplyTarget>,
     /// Outgoing message being edited.
     pub editing: Option<String>,
+    pending_edit: Option<(u64, String, ChatId, String, String)>,
+    next_edit_request: u64,
     composing: bool,
     last_keystroke: Option<Instant>,
     /// The search pane beside the open chat: its query, day filter and the
@@ -1632,6 +1634,8 @@ impl App {
             mention_selected: 0,
             reply_to: None,
             editing: None,
+            pending_edit: None,
+            next_edit_request: 0,
             unsent_voice: None,
             unsent_voice_source: None,
             unsent_voice_quote: None,
@@ -6585,6 +6589,21 @@ impl App {
                     self.toast_error(message);
                 }
             }
+            Event::BeeperEditPrepared {
+                chat,
+                id,
+                request,
+                result,
+            } => {
+                if live && !self.events_hidden {
+                    self.actions.push(Action::PreparedEdit {
+                        chat,
+                        id,
+                        request,
+                        result,
+                    });
+                }
+            }
             Event::BeeperEditUncertain {
                 chat,
                 id,
@@ -8548,6 +8567,7 @@ impl App {
 
     /// Opens an eligible chat, parking the previous draft and restoring this chat's composer.
     fn open_chat(&mut self, id: ChatId) {
+        self.pending_edit = None;
         if self.chat(&id).is_some_and(|chat| chat.locked) && !self.locked_folder_open() {
             return;
         }
@@ -8899,6 +8919,20 @@ impl App {
         self.follow_outgoing();
     }
 
+    fn start_edit(&mut self, id: String, text: String, ctx: &egui::Context) {
+        self.pending_edit = None;
+        self.editing = Some(id);
+        self.composer_tools_open = false;
+        self.reply_to = None;
+        let cursor = text.chars().count();
+        self.composer = text;
+        self.composer_mentions.clear();
+        self.emoji_start = None;
+        self.mention_start = None;
+        self.set_composer_cursor(ctx, cursor);
+        self.focus_composer = true;
+    }
+
     /// Dispatches composed text with its explicit quote target and restores it on refusal.
     fn send_text(
         &mut self,
@@ -8906,6 +8940,7 @@ impl App {
         text: String,
         quoting: Option<crate::model::ReplyTarget>,
     ) {
+        self.pending_edit = None;
         let text = text.trim().to_owned();
         if text.is_empty() {
             return;
@@ -11270,8 +11305,56 @@ impl App {
                 self.selection = None;
                 self.sweep = None;
             }
+            Action::PreparedEdit {
+                chat,
+                id,
+                request,
+                result,
+            } => {
+                let current = self.pending_edit.as_ref().is_some_and(
+                    |(pending, owner, target, message, draft)| {
+                        *pending == request
+                            && owner == &self.account().id.0
+                            && target == &chat
+                            && message == &id
+                            && draft == &self.composer
+                            && self.open_chat.as_ref() == Some(&chat)
+                    },
+                );
+                if current {
+                    self.pending_edit = None;
+                    match result {
+                        Ok(text) => self.start_edit(id, text, ctx),
+                        Err(error) => self.toast_error(match error {
+                            crate::rich_edit::Error::Unsupported => crate::i18n::gettext(self.locale, "This message has formatting that cannot be safely reconstructed as Markdown. No edit started.").into_owned(),
+                            crate::rich_edit::Error::Unavailable => crate::i18n::gettext(self.locale, "The current message could not be loaded. No edit started.").into_owned(),
+                        }),
+                    }
+                }
+            }
             Action::Edit(id) => {
                 let open = self.open_chat.clone();
+                if let Some(chat) = open.as_deref().and_then(|chat| self.chat(chat))
+                    && let Some(account) = chat.backend_account.clone()
+                {
+                    let chat = chat.id.clone();
+                    self.next_edit_request = self.next_edit_request.wrapping_add(1);
+                    let request = self.next_edit_request;
+                    self.pending_edit = Some((
+                        request,
+                        self.account().id.0.clone(),
+                        chat.clone(),
+                        id.clone(),
+                        self.composer.clone(),
+                    ));
+                    self.backend.send(Command::PrepareEdit {
+                        chat,
+                        id,
+                        account,
+                        request,
+                    });
+                    return;
+                }
                 let text =
                     open.as_deref()
                         .and_then(|chat| self.conversations.get(chat))
@@ -11291,19 +11374,11 @@ impl App {
                             }
                         });
                 if let Some(text) = text {
-                    self.editing = Some(id);
-                    self.composer_tools_open = false;
-                    self.reply_to = None;
-                    let cursor = text.chars().count();
-                    self.composer = text;
-                    self.composer_mentions.clear();
-                    self.emoji_start = None;
-                    self.mention_start = None;
-                    self.set_composer_cursor(ctx, cursor);
-                    self.focus_composer = true;
+                    self.start_edit(id, text, ctx);
                 }
             }
             Action::CancelEdit => {
+                self.pending_edit = None;
                 if self.editing.take().is_some() {
                     self.composer.clear();
                     self.composer_mentions.clear();
@@ -15845,6 +15920,70 @@ mod tests {
         assert_eq!(app.settings_search, "Local AI");
         assert_eq!(app.page, Page::Settings);
         assert!(inbox.try_recv().is_err());
+    }
+
+    #[test]
+    fn beeper_edit_preparation_uses_markdown_and_rejects_late_draft_overwrites() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(directory.path()), Settings::default());
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let mut chat = Chat::new("chat".into(), "Fixture".into());
+        chat.backend_account = Some("account".into());
+        app.chats.push(chat);
+        app.open_chat = Some("chat".into());
+        let ctx = egui::Context::default();
+        app.apply(Action::Edit("message".into()), &ctx);
+        assert!(app.editing.is_none());
+        assert!(app.composer.is_empty());
+        let Command::PrepareEdit {
+            chat,
+            id,
+            account,
+            request,
+        } = commands.try_recv().unwrap()
+        else {
+            panic!("read-only preparation");
+        };
+        assert_eq!(
+            (chat.as_str(), id.as_str(), account.as_str()),
+            ("chat", "message", "account")
+        );
+        let source = "- first\n- **second**";
+        app.apply(
+            Action::PreparedEdit {
+                chat: chat.clone(),
+                id: id.clone(),
+                request,
+                result: Ok(source.into()),
+            },
+            &ctx,
+        );
+        assert_eq!(app.composer, source);
+        assert_eq!(app.editing.as_deref(), Some("message"));
+        assert!(
+            commands.try_recv().is_err(),
+            "preparing does not send or edit"
+        );
+        app.apply(Action::CancelEdit, &ctx);
+        app.apply(Action::Edit("message".into()), &ctx);
+        let Command::PrepareEdit { request, .. } = commands.try_recv().unwrap() else {
+            panic!();
+        };
+        app.composer = "newer draft".into();
+        app.apply(
+            Action::PreparedEdit {
+                chat,
+                id,
+                request,
+                result: Ok(source.into()),
+            },
+            &ctx,
+        );
+        assert_eq!(app.composer, "newer draft");
+        assert!(app.editing.is_none());
+        app.apply(Action::CancelEdit, &ctx);
+        assert!(app.pending_edit.is_none());
     }
 
     #[test]
@@ -30439,6 +30578,42 @@ mod name_tests {
     }
 
     /// Checks that mention names and preview tokens resolve consistently in synthetic messages.
+    #[test]
+    fn search_snippets_preserve_literal_markers_through_preview_parsing() {
+        let app = app();
+        for (body, query) in [
+            ("*\u{2063}literal*\u{2063}", "*literal*"),
+            ("`\u{2063}`\u{2063}`\u{2063}", "```"),
+            ("run_\u{2063}widths.rs", "run_widths.rs"),
+        ] {
+            let message = Message {
+                id: "literal-preview".into(),
+                chat: "1@s.whatsapp.net".into(),
+                sender: "1@s.whatsapp.net".into(),
+                sender_name: None,
+                from_me: false,
+                timestamp: 0,
+                content: Content::text(body),
+                status: Delivery::None,
+                delivered_at: None,
+                read_at: None,
+                quoted: None,
+                reactions: Vec::new(),
+                history_order: None,
+                edited: false,
+                mentions: Vec::new(),
+                forwarded: false,
+                thumbnail: None,
+            };
+            let snippet = message.text_matching(query).expect("query matches");
+            assert_eq!(
+                snippet, body,
+                "keep protected source for the preview parser"
+            );
+            assert_eq!(app.preview_line(&snippet, &message), query);
+        }
+    }
+
     #[test]
     fn mentions_use_our_own_name_and_previews_resolve_tokens() {
         let app = app();
