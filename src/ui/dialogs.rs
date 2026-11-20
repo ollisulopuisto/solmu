@@ -38,7 +38,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Dialog::ConfirmClearMediaCache(_) => 380.0,
                 Dialog::ConfirmLeaveGroup(_) => 380.0,
                 Dialog::NewContact => 380.0,
-                Dialog::NewChat => 420.0,
+                Dialog::NewChat => 500.0,
                 Dialog::Palette => 480.0,
                 Dialog::JumpToChat => 480.0,
                 Dialog::WhatsNew => 480.0,
@@ -489,56 +489,7 @@ fn new_chat(app: &mut App, ui: &mut egui::Ui) {
         super::new_group::show(app, ui);
         return;
     }
-    let palette = app.palette;
-    title(ui, app, &crate::i18n::gettext(app.locale, "New chat"));
-    let width = ui.available_width();
-    let search_hint = crate::i18n::gettext(app.locale, "Search contacts");
-    let search = super::widgets::search_field(
-        ui,
-        &palette,
-        egui::Id::new("new-chat-search"),
-        &mut app.new_chat_search,
-        &search_hint,
-        width,
-    );
-    if ui.memory(|memory| memory.focused().is_none()) {
-        search.request_focus();
-    }
-    let needle = crate::util::search_key(app.new_chat_search.trim());
-    let contacts = contact_choices(app, &needle);
-    egui::ScrollArea::vertical()
-        .id_salt("new-chat-contacts")
-        .max_height((ui.ctx().content_rect().height() - 280.0).clamp(100.0, 420.0))
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            // New group and Add contact head the list, then "Message
-            // yourself", as on the phone.
-            let new_group = crate::i18n::gettext(app.locale, "New group");
-            if super::chats::action_row(app, ui, Icon::Users, &new_group).clicked() {
-                app.actions.push(Action::StartNewGroup);
-            }
-            let add_contact = crate::i18n::gettext(app.locale, "Add contact");
-            if super::chats::action_row(app, ui, Icon::Plus, &add_contact).clicked() {
-                app.actions.push(Action::ShowDialog(Dialog::NewContact));
-            }
-            let offer_self = app.offers_self(&needle);
-            if offer_self {
-                super::chats::self_row(app, ui);
-            }
-            if contacts.is_empty() && !offer_self {
-                theme::text(
-                    ui,
-                    crate::i18n::gettext(app.locale, "No matching contacts"),
-                    theme::regular(13.0),
-                    palette.secondary,
-                );
-            }
-            for contact in contacts {
-                ui.push_id(&contact.id, |ui| {
-                    super::chats::contact_row(app, ui, &contact)
-                });
-            }
-        });
+    super::new_message::show(app, ui);
 }
 
 /// The people New chat and New call offer, by name: the contacts and the

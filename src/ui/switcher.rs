@@ -1,5 +1,5 @@
 //! Ctrl+K: recent chats without a query; matching chat names first, then
-//! chat names only when typing.
+//! chat titles and loaded group-member names when typing.
 
 use egui::{Key, Modifiers, Sense, vec2};
 
@@ -42,7 +42,7 @@ pub fn entries(app: &App, query: &str) -> Vec<SwitcherEntry> {
             continue;
         }
         let title = app.chat_title(chat);
-        if !needle.is_empty() && !keyword_match(&title, &needle) {
+        if !needle.is_empty() && !keyword_match(&app.chat_search_names(chat), &needle) {
             continue;
         }
         let current = app.open_chat.as_ref() == Some(id);
@@ -255,6 +255,38 @@ mod tests {
         chat.network = Some(network.to_string());
         app.chats.push(chat);
         app.open_tabs.push(id.to_string());
+    }
+
+    #[test]
+    fn group_member_names_match_switcher_global_search_and_palette_without_renaming() {
+        let (_root, mut app) = app();
+        let mut group = crate::model::Chat::new("weekend@g.us".into(), "Weekend plans".into());
+        group.participants = vec!["hanna@lid".into(), "lauri@lid".into()];
+        group
+            .participant_names
+            .insert("hanna@lid".into(), "Hanna Mäkinen".into());
+        group
+            .participant_names
+            .insert("lauri@lid".into(), "Lauri Ojanen".into());
+        app.chats.push(group);
+        let matches = entries(&app, "lauri ojanen");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].title, "Weekend plans");
+        app.search = "Hanna Mäkinen".into();
+        app.global_search = true;
+        assert!(
+            app.visible_chats()
+                .iter()
+                .any(|chat| chat.id == "weekend@g.us")
+        );
+        assert!(super::super::palette::entries(&app,"Lauri Ojanen").iter().any(|entry|matches!(&entry.row,super::super::palette::PaletteRow::Chat(id) if id=="weekend@g.us")));
+        app.chats[0].locked = true;
+        assert!(entries(&app, "lauri").is_empty());
+        assert!(
+            !super::super::palette::entries(&app, "lauri")
+                .iter()
+                .any(|entry| matches!(&entry.row, super::super::palette::PaletteRow::Chat(_)))
+        );
     }
 
     #[test]
