@@ -16,6 +16,8 @@ pub enum Stop {
     PhoneLink(u32),
     /// Stable session key for a message's Show more/Show less control.
     BodyToggle(u64),
+    /// Transcript expansion, copy and language, keyed by account/chat/message.
+    Transcript(u64, u8),
     /// Per-message local display restoration.
     Unhide(u64),
     /// The chat header's Search, then the search pane's controls in reading
