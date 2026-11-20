@@ -4311,6 +4311,7 @@ pub fn run(
     // Chats the Server answered 404 for: permanent per id, so polling and
     // history stop instead of retrying forever.
     let mut dead_chats: HashSet<ChatId> = HashSet::new();
+    let mut read_sync = crate::read_sync::ReadSync::default();
     let mut last_chat_refresh = Instant::now() - CHAT_REFRESH;
     let mut last_msg_poll = Instant::now();
     // Push feed: an event makes the next tick poll at once. Skipped in tests,
@@ -5202,10 +5203,20 @@ pub fn run(
                     if !receipts {
                         continue;
                     }
-                    if let Err(e) = api.mark_read(&chat)
-                        && !api.read_only
-                    {
-                        emit(Event::Info(format!("Beeper read-state update failed: {e}")));
+                    match read_sync.mark(&chat, api.read_only, || api.mark_read(&chat)) {
+                        crate::read_sync::Outcome::Failed(error) => {
+                            emit(Event::Info(format!(
+                                "Beeper read-state update failed: {error}"
+                            )));
+                        }
+                        crate::read_sync::Outcome::Unavailable => {
+                            // Do not expose source identifiers or call this a
+                            // delivered receipt. Reconnect starts a fresh scope.
+                            log::warn!(
+                                "Beeper read synchronization unavailable for one source until reconnect"
+                            );
+                        }
+                        crate::read_sync::Outcome::Synced | crate::read_sync::Outcome::Skipped => {}
                     }
                 }
                 Command::MarkUnread(chat) => {
