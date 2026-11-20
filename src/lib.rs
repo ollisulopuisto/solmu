@@ -25,6 +25,7 @@ pub mod emoji;
 pub mod energy;
 pub mod face_detect;
 pub mod flat_groups;
+pub mod forward_results;
 pub mod geo;
 pub mod ghost_groups;
 pub mod group_admin;
@@ -91,6 +92,7 @@ pub mod suggest;
 
 pub mod whisper_runtime;
 
+pub mod media_tools;
 pub mod reply_graph;
 
 pub mod audience_queue;
@@ -107,4 +109,5 @@ pub mod automation_client;
 
 pub mod automation_mcp;
 
+pub mod list_layout;
 pub mod literal_hints;

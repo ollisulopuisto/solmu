@@ -790,6 +790,9 @@ No real Server query or UI-layout changes; native/live acceptance unverified.
 Production previously neither compiled the picture-edit module nor routed InspectPicture/ApplyPictureEdit. Both now run through the existing local attachment-action worker, independently of Server/offline status, emitting targeted results. Output goes to account media cache/edited, never over the original. Thread-start failures answer the waiting action. Existing attachment-ID checks still reject stale results.
 
 Native library/test-target compile passes.418 portable adapter tests pass, including real routing that inspects an8x6 PNG, applies3x4 crop, verifies output dimensions and untouched source, and receives a missing-file error while disconnected. Harness stages real picture_edit/sticker_store sources. No live Mac pencil/crop/save roundtrip or new UI design claimed. A local disk-cache-full interruption was recovered by clearing disposable build caches before rerunning the suite.
+## Finder media-tool resolution,20 November
+
+Video transcription invoked ffmpeg by bare name; Finder-launched macOS apps may lack Homebrew in PATH even when the tool is installed. Resolve executable absolute paths from PATH then macOS Homebrew Intel/ARM and MacPorts bin directories. Use the same resolver for animation ffmpeg and ffprobe. Missing transcription tool errors list searched directories. No existing ffmpeg override was found. Focused resolver tests pass with fake install directories, precedence, missing-tool diagnostics and relative-directory rejection; the fallback discovery test failed before resolution was implemented. Native library/test-target compilation passes. Real attached MP4 audio extraction passed with the same ffmpeg arguments separately; packaged Mac acceptance is unverified. No new UI or package publication.
 ## Readable batch-result banner,20 November
 
 Batch archive/delete result notices use resolved chat titles and explicit Archive chat/Delete message for me/Delete message for everyone labels, not raw room/message IDs. Accepted is explicitly not completion confirmation; waiting and failed/uncertain states say not to blindly retry. Technical error details collapse, and dismiss clearly says action results. Previous-connection history never resolves an old identity against the current session. Missing chats say Unavailable chat.
@@ -916,6 +919,31 @@ its text focus while results are visible, rather than merely blocking Send.
 Clear the fixture's deltas. Native all-target/all-feature Clippy passes; these
 actual app regressions await CI rerun, not claimed executed locally.
 
+## Compact list layout,20 November
+
+Claim: Instinct, branch `feat/compact-list-layout`, worktree
+`/home/sandbox/solmu-compact-lists`. Owner chose sketch1. Wrapped list rows now
+hang under their content rather than the bullet. Marker width is measured once
+per prepared body and retained with its cached metadata. The balanced and
+greedy paths reserve the indent; inserted break bytes still map to unchanged
+copy text. Ordinary/RTL text is unchanged; monospaced rows are not shifted.
+The separate Markdown fidelity PR owns source HTML's doubled list newlines,
+not this branch. No invented spaces inserted into the message or bold spans.
+
+Four helper tests executed against actual egui galleys: prefix identification,
+non-list refusals, greedy continuation rows, balanced inserted-newline handling.
+Native library and test-target compilation passed; new complete markup tests
+compiled but not executed locally. Private before/after pixels from a smaller
+synthetic egui renderer fixture were inspected: continuation rows align with
+content. These are not native app captures; whole-app layout, interactions and
+PR-media requirement remain unverified. No screenshot waiver assumed for this
+new PR; no committed or externally hosted review images. No native link retry.
+
+#436 first macOS run: 2496 tests passed, one new fixture failed before its
+assertions because it used the default context without installing the app's
+named Inter bold font. Both new fixtures now call `theme::install`, matching
+the existing prepared-layout tests. No production fallback or assertion was
+removed. All selected CI jobs and Devin must pass again on the new head.
 ## Markdown fidelity audit follow-up,20 November
 
 Claim: Instinct, branch `fix/markdown-fidelity-audit`, worktree

@@ -3126,7 +3126,15 @@ pub enum Action {
     /// Forwards to the chosen recipients: one at once, several after
     /// their confirmation.
     ConfirmForward,
+    ForwardToSelected,
     RetryComposedForward,
+    RetryForwardRecipient {
+        origin: String,
+        account: String,
+        chat: String,
+    },
+    ShowForwardResults,
+    HideForwardResults,
     /// Starts selecting messages in the open chat, beginning with this one.
     SelectMessage(String),
     /// Adds a message to the selection or removes it.
