@@ -289,6 +289,7 @@ fn append(app: &mut App, row: Message) {
     if let Some(chat) = app.chats.iter_mut().find(|chat| chat.id == row.chat) {
         chat.last_activity = row.timestamp;
         chat.last = Some(LastMessage {
+            reaction: None,
             labelled: row.content.labelled(),
             from_me: row.from_me,
             sender: row.sender.clone(),
