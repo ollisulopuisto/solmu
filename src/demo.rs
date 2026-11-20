@@ -10970,13 +10970,13 @@ mod tests {
             apply_flags(&mut app, Some(page));
             let mut nodes = Vec::new();
             for _ in 0..8 {
-                let output = ctx.run(
+                let output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         ..Default::default()
                     },
-                    |ctx| {
-                        egui::CentralPanel::default().show(ctx, |ui| crate::ui::show(&mut app, ui));
+                    |ui| {
+                        app.frame_ui(ui);
                     },
                 );
                 if let Some(update) = output.platform_output.accesskit_update {
