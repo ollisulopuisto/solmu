@@ -12,6 +12,67 @@ inventory = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(inventory)
 
 class InventoryTests(unittest.TestCase):
+    def test_malformed_pages_never_pass_as_an_empty_healthy_inventory(self):
+        class Response(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *args): self.close()
+        cases = [
+            ([{}], None),
+            ([{'accountID': 'fixture'}], {}),
+            ([], {'error': 'private server failure'}),
+            ([], {'items': [None]}),
+            ([], {'items': [{'accountID': 'fixture'}]}),
+            ([], {'items': [], 'hasMore': 'false'}),
+            ([], {'items': [], 'hasMore': True, 'oldestCursor': ['bad']}),
+        ]
+        for accounts, page in cases:
+            with self.subTest(accounts=accounts, page=page):
+                opener = mock.Mock()
+                payloads = [accounts] if page is None else [accounts, page]
+                opener.open.side_effect = [Response(json.dumps(p).encode()) for p in payloads]
+                with mock.patch.object(inventory.urllib.request, 'build_opener', return_value=opener):
+                    with self.assertRaises(ValueError) as failure:
+                        inventory.check('http://127.0.0.1:3000', 'fixture')
+                self.assertNotIn('private server failure', str(failure.exception))
+
+    def test_missing_history_items_never_report_zero_messages(self):
+        class Response(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *args): self.close()
+        opener = mock.Mock()
+        payloads = [[], {'items': [{'id': 'fixture-chat', 'accountID': 'fixture'}]}, {}]
+        opener.open.side_effect = [Response(json.dumps(p).encode()) for p in payloads]
+        with mock.patch.object(inventory.urllib.request, 'build_opener', return_value=opener):
+            with self.assertRaisesRegex(ValueError, 'history'):
+                inventory.check('http://127.0.0.1:3000', 'fixture', True)
+
+    def test_invalid_inventory_exits_without_a_success_summary_or_private_payload(self):
+        class Response(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *args): self.close()
+        opener = mock.Mock()
+        opener.open.side_effect = [Response(b'[]'), Response(b'{"error":"private payload"}')]
+        output, errors = io.StringIO(), io.StringIO()
+        with mock.patch('sys.argv', ['check_endpoint.py', '--base-url', 'http://127.0.0.1:3000']), \
+             mock.patch.dict(os.environ, {'BEEPER_ACCESS_TOKEN': 'fixture-secret'}), \
+             mock.patch.object(inventory.urllib.request, 'build_opener', return_value=opener), \
+             contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            self.assertEqual(inventory.main(), 1)
+        self.assertEqual(output.getvalue(), '')
+        self.assertNotIn('private payload', errors.getvalue())
+        self.assertNotIn('fixture-secret', errors.getvalue())
+
+    def test_empty_valid_inventory_is_not_confused_with_a_malformed_page(self):
+        class Response(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *args): self.close()
+        opener = mock.Mock()
+        opener.open.side_effect = [Response(b'[]'), Response(b'{"items":[],"hasMore":false}')]
+        with mock.patch.object(inventory.urllib.request, 'build_opener', return_value=opener):
+            result = inventory.check('http://127.0.0.1:3000', 'fixture')
+        self.assertEqual(result['chat_count'], 0)
+        self.assertEqual(result['accounts'], [])
+
     def test_endpoint_validation_happens_before_prompt(self):
         with mock.patch('sys.argv', ['check_endpoint.py', '--base-url', 'http://127.0.0.1?token=secret']), mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(inventory.getpass, 'getpass') as prompt, contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(inventory.main(), 1)
@@ -108,7 +169,7 @@ class InventoryTests(unittest.TestCase):
         payloads = [
             [{'accountID': 'private-account', 'user': {'fullName': 'Private Name'}, 'bridge': {'type': 'signal', 'provider': 'local'}, 'status': 'connected'}],
             {'items': [{'id': 'private-chat', 'accountID': 'private-account', 'title': 'Private title'}]},
-            {'items': [{'text': 'Private message'}], 'hasMore': True},
+            {'items': [{'text': 'Private message'}], 'hasMore': True, 'oldestCursor': 'private-cursor'},
         ]
         class Response(io.BytesIO):
             def __enter__(self): return self
