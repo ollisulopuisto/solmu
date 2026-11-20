@@ -13,6 +13,25 @@ Local full-test compilation again exceeded the execution window, so these tests
 are not claimed passed locally. The previous album/texture failures are absent
 from the latest Mac result. No screenshot or release change.
 
+## 2026-11-20: Avatar-aligned incoming tail (feat/avatar-mouth-tail)
+
+Build option1 from the approved synthetic sketch: retain the existing downward
+nub, with tip y = avatar bottom minus avatar height/3. Incoming ordinary group
+heads use the actual top-aligned avatar allocation; same-sender followers have no
+tail. Outgoing and direct-chat tails are unchanged. Messages skin retains its
+existing head-tail geometry because it bottom-aligns avatars; moving this
+same downward nub there would extend below short bubbles. Linked-view avatars
+are not changed by this ordinary-conversation patch.
+
+Added a geometry unit test with translated/resized avatar rectangles. Executed
+the exact helper and exact unit test against the built egui dependency:1 pass.
+Full native test compilation exceeded the command window; no full-suite pass
+claimed. Native demo build and all-target/all-feature Clippy pass. Added an
+avatar-tail synthetic demo page with short and tall heads plus two followers.
+Inspected actual dark wide and light narrow captures: heads meet the avatar at
+the requested height; followers remain tailless. No external image hosting or
+screenshot waiver assumed. Parent has captures and the waiver/audience question.
+
 ## 2026-11-19: Beeper bridge messages show every attachment (fix/beeper-multi-attachment-messages)
 
 Olli reported bridge messages with several attachments showing only the

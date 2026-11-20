@@ -4217,7 +4217,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.category_filter = Some(crate::model::ChatFilter::Groups);
                 app.chat_filter = crate::model::ChatFilter::Unread;
             }
-            "grid" => {
+            "grid" | "avatar-tail" => {
                 let id = app
                     .chats
                     .iter()
@@ -4238,14 +4238,16 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     "First message from this sender",
                     "A follow-up from the same sender",
                     "A third message",
+                    if part == "avatar-tail" { "A taller first message wraps across several lines. This synthetic message checks that the tail stays tied to the avatar instead of moving with the bottom of the message bubble. A second sentence keeps the paragraph tall in a narrow window." } else { "A third message" },
                 ]
                 .iter()
+                .take(if part == "avatar-tail" { 4 } else { 3 })
                 .enumerate()
                 {
                     let mut m = source.clone();
                     m.id = format!("grid-{i}");
-                    m.sender = sender.into();
-                    m.sender_name = Some("Ada Example".into());
+                    m.sender = if part == "avatar-tail" && i == 3 { "tail-tall@example.invalid" } else { sender }.into();
+                    m.sender_name = Some(if part == "avatar-tail" && i == 3 { "Tall Example" } else { "Ada Example" }.into());
                     m.content = Content::text(*text);
                     m.timestamp += i as i64;
                     m.quoted = None;

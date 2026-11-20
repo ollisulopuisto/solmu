@@ -3619,7 +3619,11 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                 } else {
                                     show_sender
                                 };
-                                let tailed = true;
+                                let tailed = if shows_sender_pictures(chat) && !message.from_me {
+                                    show_avatar
+                                } else {
+                                    true
+                                };
                                 if first_in_run && !new_day && previous.is_some() {
                                     ui.add_space(RUN_GAP);
                                 }
@@ -4842,6 +4846,15 @@ fn bubble(
                     ui.spacing_mut().item_spacing.x = 8.0;
                     let (space, _) =
                         ui.allocate_exact_size(Vec2::splat(SENDER_AVATAR), Sense::hover());
+                    let mouth_tail = (show_avatar
+                        && view.palette.bubbles != theme::BubbleStyle::Messages)
+                        .then(|| widgets::avatar_tail_tip_y(space));
+                    ui.ctx().data_mut(|d| {
+                        d.remove::<f32>(id.with("avatar-tail-y"));
+                        if let Some(y) = mouth_tail {
+                            d.insert_temp(id.with("avatar-tail-y"), y);
+                        }
+                    });
                     // Keep bubble content vertically laid out inside the row.
                     ui.vertical(|ui| {
                         response = Some(bubble_frame(
@@ -5949,6 +5962,12 @@ fn bubble_frame(
             widgets::BubbleEffects {
                 sender_shadow,
                 flat_edge: sender_shadow.is_some() || view.hide_grouped_status,
+                tail_tip_y: (!own && tail.is_some())
+                    .then(|| {
+                        ui.ctx()
+                            .data(|d| d.get_temp::<f32>(bubble_id.with("avatar-tail-y")))
+                    })
+                    .flatten(),
             },
         );
         ui.painter().set(backdrop, shape.clone());
