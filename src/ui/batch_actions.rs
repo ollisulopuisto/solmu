@@ -72,12 +72,14 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
             }
         });
     }
-    for item in &app.batch_ui.results {
+    for (index, item) in app.batch_ui.results.iter().enumerate() {
         ui.add(egui::Label::new(result_line(app, item)).wrap());
         if let Some(Err(error)) = &item.result {
-            ui.collapsing(gettext(app.locale, "Technical details"), |ui| {
-                ui.add(egui::Label::new(error).wrap());
-            });
+            egui::CollapsingHeader::new(gettext(app.locale, "Technical details"))
+                .id_salt(("batch-current", index))
+                .show(ui, |ui| {
+                    ui.add(egui::Label::new(error).wrap());
+                });
         }
     }
     if !app.batch_ui.previous_session_results.is_empty() {
@@ -85,7 +87,7 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
             app.locale,
             "Unconfirmed or failed outcomes from a previous connection (not the current session)",
         ));
-        for item in &app.batch_ui.previous_session_results {
+        for (index, item) in app.batch_ui.previous_session_results.iter().enumerate() {
             ui.label(
                 gettext(
                     app.locale,
@@ -95,9 +97,11 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
                 .replace("{message}", &result_action(app.locale, item)),
             );
             if let Some(Err(error)) = &item.result {
-                ui.collapsing(gettext(app.locale, "Technical details"), |ui| {
-                    ui.add(egui::Label::new(error).wrap());
-                });
+                egui::CollapsingHeader::new(gettext(app.locale, "Technical details"))
+                    .id_salt(("batch-previous", index))
+                    .show(ui, |ui| {
+                        ui.add(egui::Label::new(error).wrap());
+                    });
             }
         }
 
