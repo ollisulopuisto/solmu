@@ -932,3 +932,12 @@ its CommonMark round trips. Full native Clippy hit the execution time limit
 twice, without a diagnostic; not claimed passed. Actual downstream WhatsApp
 receipt was not inspected and no real message was sent. No screenshot waiver
 for this PR assumed; separate ready PR with its missing review media noted.
+
+#433 Linux all-features run passed2514 tests and failed the linked-minute
+fixture's first-clock assertion. Its WhatsApp times are fixed at today's18:40,
+while Signal was still relative to wall time; near18:40 those samples
+interleaved and correctly split the source run. The linked-minute fixture now
+places Signal after the replaced WhatsApp run, preserving both sources. The
+regression freezes18:40UTC, the problematic period, without loosening any clock
+assertion. Native test-target compilation passes; full execution awaits CI.
+Production bubble/footer logic is unchanged.
