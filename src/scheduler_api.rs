@@ -27,7 +27,7 @@ pub struct ServerSender {
 
 #[derive(serde::Deserialize)]
 struct SearchPage {
-    #[serde(default)]
+    // An error-shaped response is not evidence that a sent copy is absent.
     items: Vec<SearchMessage>,
 }
 
@@ -993,6 +993,22 @@ mod tests {
             {"chatID":"chat 9/4","accountID":"wa-main","text":"hello later","is_sender":true,"timestamp":"2025-11-01T11:00:00Z"}
         ]}"#;
         let stub = stub(vec![ok_json(body)]);
+        let mut sender = sender(&stub.base_url);
+        assert_eq!(sender.reconcile(&item()), Reconcile::NotFound);
+    }
+
+    #[test]
+    fn malformed_reconciliation_never_reports_that_no_copy_exists() {
+        for body in ["{}", r#"{"error":"private response"}"#, r#"{"items":null}"#] {
+            let stub = stub(vec![ok_json(body)]);
+            let mut sender = sender(&stub.base_url);
+            assert_eq!(sender.reconcile(&item()), Reconcile::Unknown);
+        }
+    }
+
+    #[test]
+    fn valid_empty_reconciliation_reports_not_found() {
+        let stub = stub(vec![ok_json(r#"{"items":[]}"#)]);
         let mut sender = sender(&stub.base_url);
         assert_eq!(sender.reconcile(&item()), Reconcile::NotFound);
     }
