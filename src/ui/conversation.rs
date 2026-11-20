@@ -5084,7 +5084,7 @@ fn bubble(
                                     width -= 19.0;
                                 }
                                 let (slot, _) = ui.allocate_exact_size(
-                                    vec2(width.max(1.0), if reacted { 22.0 } else { 15.0 }),
+                                    vec2(width.max(1.0), if reacted { 26.0 } else { 15.0 }),
                                     Sense::hover(),
                                 );
                                 footer(ui, view, last, Some(slot), starred, pinned, saved, actions);
@@ -7497,21 +7497,10 @@ fn reaction_row_width(ui: &egui::Ui, view: &View<'_>, message: &Message) -> f32 
     counts
         .into_iter()
         .map(|(emoji, count)| {
-            let label = if count > 1 {
-                format!("{emoji} {count}")
-            } else {
-                emoji.clone()
-            };
-            widgets::line(
-                ui,
-                &label,
-                theme::regular(13.0),
-                view.palette.text,
-                200.0,
-                1,
-            )
-            .size()
-            .x + 17.0
+            widgets::reaction_line(ui, emoji, count, view.palette.text)
+                .size()
+                .x
+                + 17.0
         })
         .sum()
 }
@@ -7539,12 +7528,7 @@ fn reactions(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: &mu
     }
     ui.spacing_mut().item_spacing.x = 3.0;
     for (emoji, count, mine, names) in counts {
-        let label = if count > 1 {
-            format!("{emoji} {count}")
-        } else {
-            emoji.clone()
-        };
-        let line = widgets::line(ui, &label, theme::regular(13.0), palette.text, 200.0, 1);
+        let line = widgets::reaction_line(ui, &emoji, count as usize, palette.text);
         let size = line.size() + vec2(12.0, 6.0);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         ui.ctx().data_mut(|data| {
@@ -15761,6 +15745,26 @@ mod reaction_tests {
         let quick = quick_reactions(&message, &[]);
         assert_eq!(quick.len(), QUICK_REACTIONS.len() + 1);
         assert_eq!(quick.last(), Some(&"🦀"));
+    }
+
+    #[test]
+    fn reaction_chip_uses_larger_emoji_but_keeps_small_counts() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let line = widgets::reaction_line(ui, "❤️", 12, Color32::WHITE);
+            let sizes: Vec<_> = line
+                .galley
+                .job
+                .sections
+                .iter()
+                .map(|section| section.format.font_id.size)
+                .collect();
+            assert_eq!(sizes.first(), Some(&17.0));
+            assert_eq!(sizes.last(), Some(&13.0));
+            assert!(line.size().y >= 17.0);
+        });
+        output.textures_delta.clear();
     }
 
     #[test]
