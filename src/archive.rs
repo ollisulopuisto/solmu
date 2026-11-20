@@ -312,14 +312,14 @@ const BARE_COLUMNS: &str = "chat, id, sender, sender_name, from_me, timestamp, c
 /// The lowercased text a search matches: text, captions, file names, poll
 /// questions, contact names and places, one per line.
 /// `Content::text_matching` previews from the same fields.
-const SEARCHED_TEXT: &str = "lower(
+const SEARCHED_TEXT: &str = "lower(replace(replace(replace(replace(
     coalesce(json_extract(content, '$.text'), '') || char(10) ||
     coalesce(json_extract(content, '$.caption'), '') || char(10) ||
     coalesce(json_extract(content, '$.file_name'), '') || char(10) ||
     coalesce(json_extract(content, '$.question'), '') || char(10) ||
     coalesce(json_extract(content, '$.display_name'), '') || char(10) ||
     coalesce(json_extract(content, '$.name'), '')
-)";
+, '*' || char(8291), '*'), '_' || char(8291), '_'), '~' || char(8291), '~'), '`' || char(8291), '`'))";
 
 /// A `LIKE` pattern that finds `needle` anywhere, with its wildcards taken
 /// as text, or `None` for a blank needle.
@@ -3403,6 +3403,35 @@ pub(crate) mod tests {
     }
 
     /// Checks that archive search indexes fixture text, attachment captions and file names.
+    #[test]
+    fn archive_search_and_snippets_ignore_only_literal_marker_hints() {
+        let archive = Archive::in_memory().expect("opens");
+        let chat = "1@s.whatsapp.net";
+        archive.ensure_chat(chat, "Ada").expect("chat");
+        let body =
+            "run_\u{2063}widths.rs https://example.com/a_\u{2063}b *\u{2063}literal*\u{2063}";
+        let mut row = message(chat, "literal-hints", 10, false);
+        row.content = Content::text(body);
+        archive.insert_message(&row, None).expect("insert");
+        for query in ["run_widths.rs", "https://example.com/a_b", "*literal*"] {
+            let all = archive.search_messages(query, 10).expect("all search");
+            assert_eq!(all.len(), 1, "{query}");
+            assert_eq!(
+                archive
+                    .search_chat_messages(chat, query, None, None, 10)
+                    .expect("chat search")
+                    .len(),
+                1
+            );
+            let snippet = all[0].content.text_matching(query).unwrap();
+            assert!(crate::markup::plain(&snippet, &[]).contains(query));
+        }
+        assert_eq!(
+            crate::literal_hints::without_literal_hints("a\u{2063}b"),
+            "a\u{2063}b"
+        );
+    }
+
     #[test]
     fn search_finds_text_captions_and_file_names() {
         let archive = Archive::in_memory().expect("opens");

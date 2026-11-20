@@ -911,6 +911,31 @@ its text focus while results are visible, rather than merely blocking Send.
 Clear the fixture's deltas. Native all-target/all-feature Clippy passes; these
 actual app regressions await CI rerun, not claimed executed locally.
 
+## Markdown fidelity audit follow-up,20 November
+
+Claim: Instinct, branch `fix/markdown-fidelity-audit`, worktree
+`/home/sandbox/solmu-markdown-fidelity`. Owner approved fixing the audited
+losses as one separate PR. This branch is based on #434 pending its merge;
+not part of #434, #435, or the separately approved compact list layout.
+
+First failing-first regression reproduces hard-break and mixed nested-list
+edit refusal. Source signatures were counting CommonMark serialization
+newlines after br and before nested lists as inline spaces. Normalize those
+boundaries only, retaining actual inline spaces. Both fixtures now pass,
+with all six reverse-converter tests passing in the production-source
+portable harness, including the original13 CommonMark round-trip cases and
+unsafe-markup refusals. No display-adapter audit fixes yet. Full native
+CI/review and broader audit regression suite still required.
+
+Display-audit progress: failing-first tests reproduce heading-level loss and
+pretty-list blank lines. Preserve heading level as explicit # prefixes,
+paragraphs as blank-line-separated blocks versus a single br, nested br in
+pre as code newlines, table cells as a readable delimiter-separated fallback
+without leaked HTML tags, and ignore whitespace-only HTML list source runs.
+Updated three existing paragraph fixtures for the intentional separation.
+429 portable production-source tests pass with this in-progress branch.
+Escaped-literal markers and reversed ordered lists are still unresolved; no
+claim that the full audit is fixed and no PR opened before that work is ready.
 ## Preserve ordered rich-text lists, 20 November
 
 Claim: Instinct, branch `fix/preserve-ordered-rich-lists`, worktree
@@ -950,6 +975,53 @@ emoji metadata separately from the original summary. Added a native regression
 for emoji-only queries, scoped outside-match counts and locked-chat exclusion.
 Native test-target compilation passes; native execution awaits fresh CI.
 The media-only finding remains open, no waiver assumed.
+## Markdown fidelity audit completion,20 November
+
+The audit fixes each reported readback loss separately: heading prefixes,
+paragraph separation versus a hard break, breaks within preformatted text,
+table cells/rows without leaked HTML tags, source-whitespace-only list runs,
+reversed ordered counters (including direct-item-count defaults and minimum
+integer saturation), and literal HTML style markers. Literal characters carry
+a nonprinting renderer hint distinct from emitted semantic styles; inline
+parsing removes the hint for rendering, copy and link detection. Native
+backslashes and the shrug's slash-adjacent underscores stay untouched. Link
+label comparison strips only those marker hints before comparing destinations.
+
+Nested mixed lists and single hard breaks now reconstruct safely for editing.
+Each refusal change has a failing-first regression and safe/unsafe round-trip
+checks. Unsupported semantics still fail closed. Exact source spelling is not
+recovered; original HTML remains the source, not a second stored Markdown copy.
+
+Validation: 437 portable adapter/reverse-edit tests pass. Replacing the harness's
+markup leaf stub with extracted, unchanged production text-parser functions and
+actual mention-token helpers, plus one mapper-to-parser acceptance test, passes
+463 tests, including 25 text-parser tests. This is not a whole-app test run.
+The reverse-list and literal-marker new tests failed before their fixes. Native
+`cargo check --locked --tests -j1` passes with incremental disabled; native tests
+are compiled, not run. A preliminary check exhausted disk space; old local
+build caches were removed and the check completed. No native linking retry.
+Review screenshots and actual Beeper/WhatsApp bridge round trips remain absent;
+no new per-PR visual waiver is assumed. Existing #434 and #435 waivers do not
+cover this follow-up. No review media committed/hosted and no real sends.
+
+#437 review follow-up: literal marker hints are now normalized at loaded
+history search, archive SQL matching and result-snippet boundaries, not only
+at painting/copy. A shared borrowed normalizer keeps unhinted loaded search's
+no-allocation path. SQL removes only marker-plus-hint pairs, preserving native
+separators elsewhere. Added mapper-to-loaded-search/snippet regressions and
+native archive global/scoped-search tests. Actual production SQL was executed
+against text, caption, URL and literal-marker rows. Native test-target check
+passes; portable suite with actual parser/search functions passes. Full native
+archive-test execution still awaits CI. Rendering representation is unchanged.
+
+#437 second review follow-up: text_matching now normalizes only its matching
+predicate and retains the protected source line for preview_line's one parse.
+Added a native application regression through text_matching and preview_line
+for literal stars, standalone backticks and filenames. The shared normalizer
+is now a small real module staged by the portable checker instead of a helper
+hidden behind its util stub. The repository's exact portable staging command
+passes438 tests; native test-target compilation passes. Retargeted to main
+after #434 merged; retained all follow-up fixes while reconciling its squash.
 #433 Linux all-features run passed2514 tests and failed the linked-minute
 fixture's first-clock assertion. Its WhatsApp times are fixed at today's18:40,
 while Signal was still relative to wall time; near18:40 those samples
@@ -958,3 +1030,5 @@ places Signal after the replaced WhatsApp run, preserving both sources. The
 regression freezes18:40UTC, the problematic period, without loosening any clock
 assertion. Native test-target compilation passes; full execution awaits CI.
 Production bubble/footer logic is unchanged.
+
+The same linked-minute fixture failure affected #437 Ubuntu (2523 passed, one failed). Reused the identical fixture-only correction from #433; no audit or production code changed. All exact-head CI/review gates restart.

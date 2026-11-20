@@ -2363,6 +2363,9 @@ fn html_attribute<'a>(tag: &'a str, wanted: &str) -> Option<&'a str> {
         let key = &attrs[..key_end];
         attrs = attrs[key_end..].trim_start();
         if !attrs.starts_with('=') {
+            if key.eq_ignore_ascii_case(wanted) {
+                return Some("");
+            }
             if key_end == 0 {
                 attrs = &attrs[1..];
             }
@@ -2465,6 +2468,15 @@ fn plain_rich_text(raw: &str) -> String {
         "h2",
         "h3",
         "tr",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "th",
+        "td",
+        "h4",
+        "h5",
+        "h6",
         "del",
         "s",
         "strike",
@@ -2508,7 +2520,8 @@ fn plain_rich_text(raw: &str) -> String {
     // spans. Raw HTML is never emitted.
     let mut in_pre = false;
     let mut quote_depth: usize = 0;
-    let mut lists: Vec<(bool, i64)> = Vec::new();
+    let mut lists: Vec<(bool, i64, bool)> = Vec::new();
+    let mut table_cell = false;
     // Styles covering the current text position, oldest first. Markers
     // materialize lazily, at the first text char they cover, and close at
     // line ends because the renderer parses styles per line. A line or
@@ -2697,7 +2710,9 @@ fn plain_rich_text(raw: &str) -> String {
                                     // just the text; repeating the address in
                                     // parentheses would show such links twice.
                                     let shows_address = label_start.is_some_and(|start| {
-                                        let label = out[start..].trim();
+                                        let label = crate::literal_hints::without_literal_hints(
+                                            out[start..].trim(),
+                                        );
                                         // The word the label sits in: the renderer
                                         // judges `run_widths.rs` as a whole.
                                         let word_start = out[..start]
@@ -2705,7 +2720,9 @@ fn plain_rich_text(raw: &str) -> String {
                                             .rev()
                                             .find(|(_, c)| c.is_whitespace())
                                             .map_or(0, |(at, c)| at + c.len_utf8());
-                                        let word = &out[word_start..];
+                                        let word = crate::literal_hints::without_literal_hints(
+                                            &out[word_start..],
+                                        );
                                         let bare = url
                                             .strip_prefix("https://")
                                             .or_else(|| url.strip_prefix("http://"))
@@ -2722,7 +2739,7 @@ fn plain_rich_text(raw: &str) -> String {
                                         let same_as_bare = label.trim_end_matches('/')
                                             == bare.trim_end_matches('/')
                                             && (!url.starts_with("http://")
-                                                || crate::markup::links(word).is_empty());
+                                                || crate::markup::links(&word).is_empty());
                                         label == url
                                             || label.trim_end_matches('/')
                                                 == url.trim_end_matches('/')
@@ -2752,17 +2769,60 @@ fn plain_rich_text(raw: &str) -> String {
                         if closing {
                             if lists
                                 .last()
-                                .is_some_and(|(ordered, _)| *ordered == (name == "ol"))
+                                .is_some_and(|(ordered, _, _)| *ordered == (name == "ol"))
                             {
                                 lists.pop();
                             }
                         } else {
-                            lists.push((name == "ol", html_list_number(tag, "start").unwrap_or(1)));
+                            let reversed =
+                                name == "ol" && html_attribute(tag, "reversed").is_some();
+                            let start = html_list_number(tag, "start").unwrap_or_else(|| {
+                                if reversed {
+                                    // HTML's default is the number of this list's direct
+                                    // items, not its nested descendants.
+                                    let fragment = scraper::Html::parse_fragment(rest);
+                                    let selector =
+                                        scraper::Selector::parse("ol").expect("static selector");
+                                    fragment.select(&selector).next().map_or(1, |list| {
+                                        list.children()
+                                            .filter_map(scraper::ElementRef::wrap)
+                                            .filter(|child| child.value().name() == "li")
+                                            .count()
+                                            .min(i64::MAX as usize)
+                                            as i64
+                                    })
+                                } else {
+                                    1
+                                }
+                            });
+                            lists.push((name == "ol", start, reversed));
+                        }
+                    }
+                    if name == "br" && in_pre && !closing {
+                        pre_content.push('\n');
+                    }
+                    if name == "tr" {
+                        table_cell = false;
+                    }
+                    if matches!(name.as_str(), "td" | "th") && !closing {
+                        if table_cell {
+                            out.push_str(" | ");
+                        }
+                        table_cell = true;
+                    }
+                    if matches!(name.as_str(), "p" | "div")
+                        && !in_pre
+                        && lists.is_empty()
+                        && quote_depth == 0
+                        && !out.trim().is_empty()
+                    {
+                        while !out.ends_with("\n\n") {
+                            out.push('\n');
                         }
                     }
                     if matches!(
                         name.as_str(),
-                        "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3"
+                        "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
                     ) {
                         let broke = !out.ends_with('\n') && !out.ends_with("> ");
                         if broke {
@@ -2777,13 +2837,23 @@ fn plain_rich_text(raw: &str) -> String {
                         }
                         if name == "li" && !closing && !in_pre {
                             out.push_str(&"  ".repeat(lists.len().saturating_sub(1).min(32)));
-                            if let Some((true, next)) = lists.last_mut() {
+                            if let Some((true, next, reversed)) = lists.last_mut() {
                                 let number = html_list_number(tag, "value").unwrap_or(*next);
                                 out.push_str(&format!("{number}. "));
-                                *next = number.saturating_add(1);
+                                *next = if *reversed {
+                                    number.saturating_sub(1)
+                                } else {
+                                    number.saturating_add(1)
+                                };
                             } else {
                                 out.push_str("• ");
                             }
+                        }
+                        if !closing
+                            && matches!(name.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+                        {
+                            out.push_str(&"#".repeat((name.as_bytes()[1] - b'0') as usize));
+                            out.push(' ');
                         }
                     }
                 }
@@ -2803,10 +2873,20 @@ fn plain_rich_text(raw: &str) -> String {
             (end, decode_entities(&rest[..end]))
         };
         rest = &rest[taken..];
-        if blocked.is_some() {
+        let list_source_indent = !in_pre
+            && !lists.is_empty()
+            && run.trim().is_empty()
+            && (out.is_empty()
+                || out.ends_with('\n')
+                || out.ends_with("• ")
+                || ["<li", "</li", "<ul", "</ul", "<ol", "</ol"]
+                    .iter()
+                    .any(|tag| rest.to_ascii_lowercase().starts_with(tag)));
+        if blocked.is_some() || list_source_indent {
             continue;
         }
-        for ch in run.chars() {
+        let chars: Vec<_> = run.chars().collect();
+        for (index, &ch) in chars.iter().enumerate() {
             if in_pre {
                 pre_content.push(ch);
                 continue;
@@ -2847,6 +2927,20 @@ fn plain_rich_text(raw: &str) -> String {
                 out.push('\\');
             }
             out.push(ch);
+            // Literal HTML text is not another layer of WhatsApp markup.
+            // A nonprinting hint after literal markers lets the renderer
+            // distinguish them from the semantic markers emitted above.
+            // Native backslashes are untouched, including the shrug.
+            let shrug_underscore = ch == '_'
+                && (index
+                    .checked_sub(1)
+                    .is_some_and(|i| matches!(chars[i], '\\' | '/'))
+                    || chars
+                        .get(index + 1)
+                        .is_some_and(|c| matches!(c, '\\' | '/')));
+            if !in_code && !shrug_underscore && matches!(ch, '*' | '_' | '~' | '`') {
+                out.push('\u{2063}');
+            }
         }
     }
     // Text runs and URLs decode at emission, so `out` is already decoded:
@@ -8183,7 +8277,7 @@ mod tests {
         );
         assert_eq!(
             plain_rich_text("<ol start='&#51;'><li>three</li></ol><p>After</p>"),
-            "3. three\nAfter"
+            "3. three\n\nAfter"
         );
         assert_eq!(plain_rich_text("1. raw\n2. raw"), "1. raw\n2. raw");
     }
@@ -8217,6 +8311,95 @@ mod tests {
     /// string the renderer (`crate::markup`) turns back into styled spans.
     /// These prove parser behaviour only; only live captures per bridge
     /// prove every bridge really sends these shapes.
+    #[test]
+    fn rich_html_reversed_lists_count_down_from_start_or_direct_item_count() {
+        assert_eq!(
+            plain_rich_text(
+                "<ol reversed start=5><li>five</li><li value=2>two</li><li>one</li></ol>"
+            ),
+            "5. five\n2. two\n1. one"
+        );
+        assert_eq!(
+            plain_rich_text("<ol reversed><li>two<ul><li>nested</li></ul></li><li>one</li></ol>"),
+            "2. two\n  • nested\n1. one"
+        );
+        assert_eq!(
+            plain_rich_text(
+                "<ol reversed start=-9223372036854775808><li>min</li><li>still min</li></ol>"
+            ),
+            "-9223372036854775808. min\n-9223372036854775808. still min"
+        );
+    }
+
+    #[test]
+    fn literal_html_remains_searchable_after_mapping() {
+        for (html, query) in [
+            ("<p>run_widths.rs</p>", "run_widths.rs"),
+            (
+                "<p>https://example.com/a_b_c</p>",
+                "https://example.com/a_b_c",
+            ),
+            ("<p>*literal*</p>", "*literal*"),
+        ] {
+            let mapped = plain_rich_text(html);
+            assert!(crate::merged::search_matches(&mapped, query, "", ""));
+            let content = crate::model::Content::text(&mapped);
+            let snippet = content.text_matching(query).expect("matching snippet");
+            assert_eq!(crate::literal_hints::without_literal_hints(&snippet), query);
+        }
+    }
+
+    #[test]
+    fn rich_html_literal_markers_are_not_reinterpreted_as_styles() {
+        assert_eq!(
+            plain_rich_text("<p>*literal* _literal_ ~literal~ `literal`</p>"),
+            "*\u{2063}literal*\u{2063} _\u{2063}literal_\u{2063} ~\u{2063}literal~\u{2063} `\u{2063}literal`\u{2063}"
+        );
+        assert_eq!(
+            plain_rich_text("<strong>real *literal*</strong>"),
+            "*real *\u{2063}literal*\u{2063}*"
+        );
+        assert_eq!(plain_rich_text("<code>*literal*</code>"), "`*literal*`");
+    }
+
+    #[test]
+    fn rich_html_keeps_explicit_heading_levels() {
+        assert_eq!(plain_rich_text("<h1>Heading</h1>"), "# Heading");
+        assert_eq!(plain_rich_text("<h6>Heading</h6>"), "###### Heading");
+    }
+    #[test]
+    fn rich_html_keeps_paragraphs_distinct_from_hard_breaks() {
+        assert_eq!(plain_rich_text("<p>one</p><p>two</p>"), "one\n\ntwo");
+        assert_eq!(plain_rich_text("<p>one<br>two</p>"), "one\ntwo");
+    }
+    #[test]
+    fn rich_html_keeps_breaks_inside_preformatted_code() {
+        assert_eq!(
+            plain_rich_text("<pre>first<br>second</pre>"),
+            "```\nfirst\nsecond\n```"
+        );
+    }
+    #[test]
+    fn rich_html_table_fallback_keeps_cells_and_rows_without_raw_tags() {
+        assert_eq!(
+            plain_rich_text(
+                "<table><tr><th>Name</th><th>Value</th></tr><tr><td>A</td><td>B</td></tr></table>"
+            ),
+            "Name | Value\nA | B"
+        );
+    }
+    #[test]
+    fn rich_html_list_source_whitespace_is_not_content() {
+        assert_eq!(
+            plain_rich_text("<ul>\n<li>one</li>\n<li>two</li>\n</ul>"),
+            "• one\n• two"
+        );
+        assert_eq!(
+            plain_rich_text("<ul>\n<li><b>one</b> <b>two</b></li>\n<li>next</li>\n</ul>"),
+            "• *one* *two*\n• next"
+        );
+    }
+
     #[test]
     fn rich_text_style_fixture_matrix() {
         let fixtures: &[(&str, &str, &str)] = &[
@@ -8410,7 +8593,7 @@ mod tests {
         let raw = "<p><strong>bold</strong></p><p><em>italics</em></p><p><del>overstrike</del></p><ul><li>one</li><li>two</li></ul>";
         assert_eq!(
             plain_rich_text(raw),
-            "*bold*\n_italics_\n~overstrike~\n\u{2022} one\n\u{2022} two"
+            "*bold*\n\n_italics_\n\n~overstrike~\n\n\u{2022} one\n\u{2022} two"
         );
     }
 
@@ -8421,7 +8604,7 @@ mod tests {
     fn rich_text_styles_stay_safe() {
         assert_eq!(
             plain_rich_text("<p>a</p><script>alert(1)</script><p><strong>b</strong></p>"),
-            "a\n*b*"
+            "a\n\n*b*"
         );
         assert_eq!(
             plain_rich_text("<style>* { color: red }</style><p><em>x</em></p>"),
@@ -10076,7 +10259,7 @@ mod tests {
         // Styles survive as renderer markup; scripts and raw HTML never do.
         assert_eq!(
             plain_rich_text("<p>Hi &amp; welcome</p><br><p>Next <b>bold</b></p>"),
-            "Hi & welcome\nNext *bold*"
+            "Hi & welcome\n\nNext *bold*"
         );
         assert_eq!(
             plain_rich_text(
@@ -12291,7 +12474,7 @@ mod tests {
             plain_rich_text(
                 r#"<a href="https://yle.fi/a/7-10106742?utm_source=a&amp;utm_medium=b">https://yle.fi/a/7-10106742?utm_source=a&amp;utm_medium=b</a>"#
             ),
-            "https://yle.fi/a/7-10106742?utm_source=a&utm_medium=b"
+            "https://yle.fi/a/7-10106742?utm_\u{2063}source=a&utm_\u{2063}medium=b"
         );
         // A trailing-slash difference still reads as the same address.
         assert_eq!(
@@ -12312,7 +12495,7 @@ mod tests {
         // with a scheme, so the text stays and the renderer decides.
         assert_eq!(
             plain_rich_text(r#"run_<a href="http://widths.rs">widths.rs</a>"#),
-            "run_widths.rs"
+            "run_\u{2063}widths.rs"
         );
         assert_eq!(
             plain_rich_text(r#"<a href="https://example.com">example.com</a>"#),
