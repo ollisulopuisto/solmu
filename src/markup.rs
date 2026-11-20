@@ -256,8 +256,8 @@ fn list_indent(ui: &egui::Ui, job: &LayoutJob, size: f32, cap: f32) -> f32 {
         })
         .filter(|(start, _)| {
             !job.sections.iter().any(|section| {
-                section.byte_range.start.0 as usize <= *start
-                    && *start < section.byte_range.end.0 as usize
+                section.byte_range.start.0 <= *start
+                    && *start < section.byte_range.end.0
                     && section.format.font_id.family == egui::FontFamily::Monospace
             })
         })
