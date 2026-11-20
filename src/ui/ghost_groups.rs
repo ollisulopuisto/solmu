@@ -533,6 +533,69 @@ mod tests {
     }
 
     #[test]
+    fn one_recipient_opens_with_prepared_text_and_file_without_sending() {
+        let (mut app, _root) = app_with(&["a"]);
+        let member = super::super::flat_groups::member(&app, &app.chats[0]);
+        let ctx = egui::Context::default();
+        app.dialog = Some(crate::model::Dialog::NewChat);
+        app.apply(
+            Action::PrepareNewMessage {
+                member,
+                text: "prepared".into(),
+                files: vec!["attachment.pdf".into()],
+            },
+            &ctx,
+        );
+        assert_eq!(app.open_chat.as_deref(), Some("a"));
+        assert_eq!(app.composer, "prepared");
+        assert_eq!(app.pending.len(), 1);
+        assert!(app.dialog.is_none());
+        assert!(app.audience_queue.is_none());
+        assert!(
+            !app.actions
+                .iter()
+                .any(|a| matches!(a, Action::SendText { .. } | Action::SendPending { .. }))
+        );
+    }
+    #[test]
+    fn one_recipient_never_replaces_an_existing_draft_or_opens_ambiguous_identity() {
+        for duplicate in [false, true] {
+            let (mut app, _root) = app_with(&["a"]);
+            let member = super::super::flat_groups::member(&app, &app.chats[0]);
+            if duplicate {
+                let mut other = app.chats[0].clone();
+                other.backend_origin = Some("foreign".into());
+                app.chats.push(other);
+            } else {
+                app.open_chat = Some("a".into());
+                app.composer = "existing".into();
+            }
+            app.apply(
+                Action::PrepareNewMessage {
+                    member,
+                    text: "replacement".into(),
+                    files: vec![],
+                },
+                &egui::Context::default(),
+            );
+            assert_ne!(app.composer, "replacement");
+            assert!(app.audience_queue.is_none());
+            if !duplicate {
+                assert_eq!(app.composer, "existing");
+                assert!(app.new_message.notice.is_some());
+            }
+        }
+    }
+    #[test]
+    fn empty_audience_text_is_refused_before_saving_anything() {
+        let (mut app, _root) = app_with(&["a", "b"]);
+        let mut compose = compose_for(&app, &["a", "b"], true);
+        compose.text = "  ".into();
+        assert!(!submit(&mut app, &mut compose));
+        assert_refused(&app, &compose);
+        assert!(app.audience_queue.is_none());
+    }
+    #[test]
     fn a_saved_draft_in_a_target_chat_refuses_and_stays_untouched() {
         let (mut app, _root) = app_with(&["a", "b"]);
         app.drafts.insert("a".into(), "half written".into());
