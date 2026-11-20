@@ -3505,6 +3505,7 @@ mod compact_list_tests {
     #[test]
     fn compact_list_balancing_keeps_copy_and_link_targets() {
         let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
         let mut output = ctx.run_ui(Default::default(), |ui| {
             let style = Style { size: 16.0, color: Color32::WHITE, secondary: Color32::GRAY, link: Color32::BLUE, mention: Color32::GREEN };
             let source = "•  *Open settings.* Follow the longer instructions at https://example.test/ before closing the app.\n•  Second item.";
@@ -3523,6 +3524,7 @@ mod compact_list_tests {
     #[test]
     fn hanging_does_not_change_ordinary_or_rtl_text_layout() {
         let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
         let mut output = ctx.run_ui(Default::default(), |ui| {
             assert_eq!(list_indent(ui, "ordinary prose", 16.0, 250.0), 0.0);
             assert_eq!(list_indent(ui, "•  שלום עולם", 16.0, 250.0), 0.0);

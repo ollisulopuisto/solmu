@@ -840,3 +840,9 @@ synthetic egui renderer fixture were inspected: continuation rows align with
 content. These are not native app captures; whole-app layout, interactions and
 PR-media requirement remain unverified. No screenshot waiver assumed for this
 new PR; no committed or externally hosted review images. No native link retry.
+
+#436 first macOS run: 2496 tests passed, one new fixture failed before its
+assertions because it used the default context without installing the app's
+named Inter bold font. Both new fixtures now call `theme::install`, matching
+the existing prepared-layout tests. No production fallback or assertion was
+removed. All selected CI jobs and Devin must pass again on the new head.
