@@ -125,8 +125,14 @@ pub fn entries(app: &App, query: &str) -> Vec<PaletteEntry> {
     let needle = query.trim().to_lowercase();
     let mut out = Vec::new();
     for chat in &app.chats {
+        if chat.locked {
+            continue;
+        }
         let title = app.chat_title(chat);
-        if !needle.is_empty() && !title.to_lowercase().contains(&needle) {
+        if !needle.is_empty()
+            && !crate::util::search_key(&app.chat_search_names(chat))
+                .contains(&crate::util::search_key(&needle))
+        {
             continue;
         }
         let detail = chat.network.clone().unwrap_or_default();

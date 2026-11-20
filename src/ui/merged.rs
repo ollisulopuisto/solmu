@@ -82,6 +82,41 @@ pub(crate) fn cancel_reply(app: &App, ctx: &egui::Context) {
     });
 }
 
+/// Reply-only drafts also own their existing source and quote.
+pub(crate) fn has_reply(app: &App, ctx: &egui::Context, source: &Member) -> bool {
+    app.settings
+        .beeper
+        .people
+        .iter()
+        .find(|p| p.members.contains(source))
+        .is_some_and(|p| {
+            let key = egui::Id::new(("linked-person-state", &p.members));
+            ctx.data(|data| data.get_temp::<State>(key))
+                .is_some_and(|state| state.reply.is_some())
+        })
+}
+
+/// Explicit New message source selection, never a primary-source fallback.
+pub(crate) fn prepare_destination(app: &App, ctx: &egui::Context, source: &Member) {
+    let Some(person) = app
+        .settings
+        .beeper
+        .people
+        .iter()
+        .find(|p| p.members.contains(source))
+    else {
+        return;
+    };
+    let key = egui::Id::new(("linked-person-state", &person.members));
+    ctx.data_mut(|data| {
+        let mut state = data.get_temp::<State>(key).unwrap_or_default();
+        state.destination = Some(source.clone());
+        state.explicit = true;
+        state.reply = None;
+        data.insert_temp(key, state);
+    });
+}
+
 /// Resolve attachments through the same exact source picker as new text.
 /// The visible member is only the draft owner, never an implicit fallback.
 pub(crate) fn attachment_destination(
@@ -273,6 +308,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     }
     let ids: Vec<_> = valid.iter().map(|m| m.chat.clone()).collect();
     app.ensure_person_loaded(&ids);
+    super::reply_threads::begin(app, ui, &ids);
     let key = egui::Id::new(("linked-person-state", &person.members));
     let mut state = ui
         .ctx()
@@ -787,11 +823,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 .and_then(|conv| conv.messages.get(*idx))
         })
         .collect();
-    let filtered = !state.search.trim().is_empty() || state.source_filter.is_some();
+    super::reply_threads::bar(ui);
+    let thread_root = super::reply_threads::current(ui.ctx());
+    let filtered =
+        thread_root.is_some() || !state.search.trim().is_empty() || state.source_filter.is_some();
     let visible: Vec<_> = messages
         .iter()
         .copied()
         .filter(|message| {
+            if !super::reply_threads::includes(ui.ctx(), message) {
+                return false;
+            }
+
             if state
                 .source_filter
                 .as_ref()
@@ -849,7 +892,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     let mut actions = Vec::new();
     let mut refused_action = false;
     let redo = ui.ctx().current_pass_index() > 0;
-    let rows_key = key.with("row-heights");
+    let rows_key = key.with(("row-heights", &thread_root));
     let mut cache = ui
         .ctx()
         .data_mut(|data| data.remove_temp::<RowCache>(rows_key).unwrap_or_default());
@@ -890,8 +933,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             // height is known; everything else is an offset the area can
             // clamp itself.
             if pending_scroll.is_some() || forced_bottom {
-                let scroll_id =
-                    ui.make_persistent_id(egui::IdSalt::new(("person-timeline", &person.members)));
+                let scroll_id = ui.make_persistent_id(if thread_root.is_some() {
+                    egui::IdSalt::new(key.with(("thread", &thread_root)))
+                } else {
+                    egui::IdSalt::new(("person-timeline", &person.members))
+                });
                 let mut state =
                     egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
                 let page = remaining * 0.9;
@@ -906,7 +952,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 state.store(ui.ctx(), scroll_id);
             }
             egui::ScrollArea::vertical()
-                .id_salt(("person-timeline", &person.members))
+                .id_salt(if thread_root.is_some() {
+                    egui::IdSalt::new(key.with(("thread", &thread_root)))
+                } else {
+                    egui::IdSalt::new(("person-timeline", &person.members))
+                })
                 .stick_to_bottom(!filtered)
                 .min_scrolled_height(remaining)
                 .max_height(remaining)
@@ -1105,6 +1155,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                             ui,
                                             &source_chat,
                                             message,
+                                            visible_index
+                                                .checked_sub(1)
+                                                .and_then(|i| visible.get(i).copied()),
                                             super::conversation::last_minute_in_run(
                                                 original_message,
                                                 visible.get(visible_index + 1).copied(),
@@ -1202,6 +1255,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 })
         })
         .inner;
+    super::reply_threads::finish(ui, app.conversation_palette().accent);
+    if thread_root.is_none() {
+        super::reply_threads::complete_full_scroll(ui.ctx(), output.id, output.state);
+    }
     let bottom = (output.content_size.y - output.inner_rect.height()).max(0.0);
     if matches!(pending_scroll, Some(crate::model::Scroll::Bottom)) || forced_bottom {
         let mut scroll = output.state;
@@ -2449,6 +2506,51 @@ mod tests {
             },
         );
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn new_message_keeps_linked_reply_only_draft_and_refuses_prepared_replacement() {
+        for prepared in [false, true] {
+            let (wa, tg, person) = ada_pair();
+            let members = person.members.clone();
+            let (_dir, mut app, ctx) =
+                linked_app(vec![wa.clone(), tg.clone()], vec![person.clone()]);
+            app.open_chat = Some(wa.id.clone());
+            let key = egui::Id::new(("linked-person-state", &person.members));
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    key,
+                    State {
+                        destination: Some(members[0].clone()),
+                        reply: Some((members[0].clone(), "quoted".into())),
+                        explicit: true,
+                        ..Default::default()
+                    },
+                )
+            });
+            app.reply_to = Some("quoted".to_owned().into());
+            let member = crate::ui::flat_groups::member(&app, &tg);
+            app.apply(
+                Action::PrepareNewMessage {
+                    member,
+                    text: if prepared {
+                        "replacement".into()
+                    } else {
+                        String::new()
+                    },
+                    files: vec![],
+                },
+                &ctx,
+            );
+            let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+            assert_eq!(state.reply, Some((members[0].clone(), "quoted".into())));
+            assert_eq!(state.destination, Some(members[0].clone()));
+            assert_eq!(app.reply_to, Some("quoted".to_owned().into()));
+            assert!(app.composer.is_empty());
+            if prepared {
+                assert!(app.new_message.notice.is_some());
+            }
+        }
     }
 
     #[test]
