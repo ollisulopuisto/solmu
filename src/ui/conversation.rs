@@ -1798,7 +1798,7 @@ pub(crate) fn composer_with_capabilities(
             // The send (or record) circle is smaller than the row by a gap on
             // each side, so it never touches the field's border, even grown on
             // hover; the same gap is left to its right.
-            let button_width = (line - 2.0 * SEND_BUTTON_GAP).max(0.0);
+            let button_width = if app.editing.is_some() { 100.0 } else { (line - 2.0 * SEND_BUTTON_GAP).max(0.0) };
             let view_once = super::view_once::visible(
                 app.editing.is_some(),
                 chat.backend_account.is_some() || chat.backend_origin.is_some(),
@@ -2164,7 +2164,9 @@ pub(crate) fn composer_with_capabilities(
                         };
                         let send_response = ui
                             .add_enabled_ui(ready, |ui| {
-                                theme::circle_button(ui, icon_kind, button_width, fill, hover, icon, "Send (right-click or hold: send later)")
+                                if app.editing.is_some() {
+                                    ui.add_sized(vec2(button_width, line - 2.0 * SEND_BUTTON_GAP), egui::Button::new(egui::RichText::new(crate::i18n::gettext(app.locale, "Save edit")).color(if ready { palette.on_accent } else { palette.dim })).fill(fill))
+                                } else { theme::circle_button(ui, icon_kind, button_width, fill, hover, icon, "Send (right-click or hold: send later)") }
                                     .tab_stop(Stop::Send)
                             })
                             .inner;
@@ -2567,20 +2569,32 @@ fn edit_strip(app: &mut App, ui: &mut egui::Ui) {
             theme::icon(ui, Icon::Pencil, 16.0, palette.accent);
             theme::text(ui, "Editing message", theme::semibold(12.5), palette.accent);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if theme::icon_button(
-                    ui,
-                    Icon::X,
-                    16.0,
-                    palette.secondary,
-                    palette.text,
-                    "Stop editing (Esc)",
-                )
-                .clicked()
+                if ui
+                    .button(crate::i18n::gettext(app.locale, "Cancel"))
+                    .on_hover_text("Stop editing (Esc)")
+                    .clicked()
                 {
                     app.actions.push(Action::CancelEdit);
                 }
             });
         });
+        let original = app
+            .open_chat
+            .as_ref()
+            .and_then(|chat| app.conversations.get(chat))
+            .and_then(|conversation| app.editing.as_ref().and_then(|id| conversation.message(id)))
+            .map(|message| message.summary_in(app.locale))
+            .unwrap_or_default();
+        let preview = widgets::line(
+            ui,
+            &original,
+            theme::regular(12.5),
+            palette.text,
+            ui.available_width(),
+            1,
+        );
+        let (rect, _) = ui.allocate_exact_size(preview.size(), Sense::hover());
+        preview.paint(ui, rect.min, palette.text);
     });
     strip_gap(ui);
 }
@@ -5903,6 +5917,15 @@ fn bubble_frame(
                 actions.push(Action::OpenInfo(message.sender.clone()));
             }
         }
+        if view.editing == Some(message.id.as_str()) {
+            let edge = theme::readable_on(fill, palette.accent, palette.text, 4.5);
+            theme::text(
+                ui,
+                crate::i18n::gettext(view.locale, "EDITING"),
+                theme::semibold(12.0),
+                edge,
+            );
+        }
         // Reserve the label's line now and paint it once the contents
         // are measured, at their start: an own bubble lays out from the
         // right, and its width is known only then.
@@ -6115,7 +6138,10 @@ fn bubble_frame(
         ui.painter().rect_stroke(
             inner.response.rect.expand(1.5),
             widgets::BUBBLE_RADIUS + 2,
-            Stroke::new(2.0, palette.accent),
+            Stroke::new(
+                3.0,
+                theme::readable_on(fill, palette.accent, palette.text, 4.5),
+            ),
             egui::StrokeKind::Outside,
         );
     }
@@ -15030,6 +15056,18 @@ mod tests {
                     )
                 });
                 assert_eq!(marked, Some(expected), "editing {editing:?}: outline flag");
+                fn has_tag(shape: &egui::Shape) -> bool {
+                    match shape {
+                        egui::Shape::Text(text) => text.galley.text() == "EDITING",
+                        egui::Shape::Vec(parts) => parts.iter().any(has_tag),
+                        _ => false,
+                    }
+                }
+                assert_eq!(
+                    output.shapes.iter().any(|shape| has_tag(&shape.shape)),
+                    expected,
+                    "the visible EDITING tag belongs only to the target"
+                );
             }
         });
     }
