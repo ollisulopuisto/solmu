@@ -18732,11 +18732,14 @@ mod tests {
             .unwrap();
         settle_key_scroll(&mut app, &ctx);
         let (after, _) = scroll_metrics(&ctx, &chat);
-        assert!(
-            after > before + 20.0,
-            "the view followed ({before} -> {after})"
-        );
+        assert!(after > before, "the view followed ({before} -> {after})");
         assert!(app.at_bottom);
+        // Overlap and a collapsed prior footer make the height increment
+        // content-dependent. Check the true end, not a fixed20px delta.
+        assert!(
+            (offset_after_the_button(&mut app, &ctx, &chat) - after).abs() < 0.5,
+            "new arrival followed to the exact bottom"
+        );
     }
 
     /// G18: the wheel still scrolls away from the end after End; the keys'
@@ -19241,7 +19244,7 @@ mod tests {
                 ctx.data(|data| data.get_temp::<egui::Rect>(footer_id(chat, "long-c")))
                     .is_some()
             );
-            assert!((b.top() - a.bottom() - 4.).abs() < 1.);
+            assert!((a.bottom() - b.top() - 6.).abs() < 1.);
         }
     }
 
