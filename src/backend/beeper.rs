@@ -2356,6 +2356,9 @@ fn html_attribute<'a>(tag: &'a str, wanted: &str) -> Option<&'a str> {
         let key = &attrs[..key_end];
         attrs = attrs[key_end..].trim_start();
         if !attrs.starts_with('=') {
+            if key.eq_ignore_ascii_case(wanted) {
+                return Some("");
+            }
             if key_end == 0 {
                 attrs = &attrs[1..];
             }
@@ -2510,7 +2513,7 @@ fn plain_rich_text(raw: &str) -> String {
     // spans. Raw HTML is never emitted.
     let mut in_pre = false;
     let mut quote_depth: usize = 0;
-    let mut lists: Vec<(bool, i64)> = Vec::new();
+    let mut lists: Vec<(bool, i64, bool)> = Vec::new();
     let mut table_cell = false;
     // Styles covering the current text position, oldest first. Markers
     // materialize lazily, at the first text char they cover, and close at
@@ -2755,12 +2758,33 @@ fn plain_rich_text(raw: &str) -> String {
                         if closing {
                             if lists
                                 .last()
-                                .is_some_and(|(ordered, _)| *ordered == (name == "ol"))
+                                .is_some_and(|(ordered, _, _)| *ordered == (name == "ol"))
                             {
                                 lists.pop();
                             }
                         } else {
-                            lists.push((name == "ol", html_list_number(tag, "start").unwrap_or(1)));
+                            let reversed =
+                                name == "ol" && html_attribute(tag, "reversed").is_some();
+                            let start = html_list_number(tag, "start").unwrap_or_else(|| {
+                                if reversed {
+                                    // HTML's default is the number of this list's direct
+                                    // items, not its nested descendants.
+                                    let fragment = scraper::Html::parse_fragment(rest);
+                                    let selector =
+                                        scraper::Selector::parse("ol").expect("static selector");
+                                    fragment.select(&selector).next().map_or(1, |list| {
+                                        list.children()
+                                            .filter_map(scraper::ElementRef::wrap)
+                                            .filter(|child| child.value().name() == "li")
+                                            .count()
+                                            .min(i64::MAX as usize)
+                                            as i64
+                                    })
+                                } else {
+                                    1
+                                }
+                            });
+                            lists.push((name == "ol", start, reversed));
                         }
                     }
                     if name == "br" && in_pre && !closing {
@@ -2802,10 +2826,14 @@ fn plain_rich_text(raw: &str) -> String {
                         }
                         if name == "li" && !closing && !in_pre {
                             out.push_str(&"  ".repeat(lists.len().saturating_sub(1).min(32)));
-                            if let Some((true, next)) = lists.last_mut() {
+                            if let Some((true, next, reversed)) = lists.last_mut() {
                                 let number = html_list_number(tag, "value").unwrap_or(*next);
                                 out.push_str(&format!("{number}. "));
-                                *next = number.saturating_add(1);
+                                *next = if *reversed {
+                                    number.saturating_sub(1)
+                                } else {
+                                    number.saturating_add(1)
+                                };
                             } else {
                                 out.push_str("• ");
                             }
@@ -8196,7 +8224,7 @@ mod tests {
         );
         assert_eq!(
             plain_rich_text("<ol start='&#51;'><li>three</li></ol><p>After</p>"),
-            "3. three\nAfter"
+            "3. three\n\nAfter"
         );
         assert_eq!(plain_rich_text("1. raw\n2. raw"), "1. raw\n2. raw");
     }
@@ -8230,6 +8258,26 @@ mod tests {
     /// string the renderer (`crate::markup`) turns back into styled spans.
     /// These prove parser behaviour only; only live captures per bridge
     /// prove every bridge really sends these shapes.
+    #[test]
+    fn rich_html_reversed_lists_count_down_from_start_or_direct_item_count() {
+        assert_eq!(
+            plain_rich_text(
+                "<ol reversed start=5><li>five</li><li value=2>two</li><li>one</li></ol>"
+            ),
+            "5. five\n2. two\n1. one"
+        );
+        assert_eq!(
+            plain_rich_text("<ol reversed><li>two<ul><li>nested</li></ul></li><li>one</li></ol>"),
+            "2. two\n  • nested\n1. one"
+        );
+        assert_eq!(
+            plain_rich_text(
+                "<ol reversed start=-9223372036854775808><li>min</li><li>still min</li></ol>"
+            ),
+            "-9223372036854775808. min\n-9223372036854775808. still min"
+        );
+    }
+
     #[test]
     fn rich_html_keeps_explicit_heading_levels() {
         assert_eq!(plain_rich_text("<h1>Heading</h1>"), "# Heading");
