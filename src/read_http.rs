@@ -23,6 +23,9 @@ impl Upstream for ServerSender {
     fn get(&mut self, target: &str) -> Result<(u16, String), String> {
         self.get_bounded(target)
     }
+    fn send_text(&mut self, chat: &str, text: &str) -> crate::write_journal::Outcome {
+        self.send_api_text(chat, text)
+    }
 }
 
 /// Hands each request its own upstream handle, so a slow Server call
@@ -148,6 +151,7 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str) {
         403 => "403 Forbidden",
         404 => "404 Not Found",
         405 => "405 Method Not Allowed",
+        409 => "409 Conflict",
         429 => "429 Too Many Requests",
         _ => "502 Bad Gateway",
     };
@@ -160,21 +164,35 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str) {
 
 fn read_head(stream: &mut TcpStream) -> Option<String> {
     let mut buf = Vec::new();
-    let mut chunk = [0u8; 2048];
+    let mut byte = [0u8; 1];
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
     loop {
-        let n = stream.read(&mut chunk).ok()?;
-        if n == 0 {
+        if stream.read(&mut byte).ok()? != 1 {
             return None;
         }
-        buf.extend_from_slice(&chunk[..n]);
-        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
-            return Some(String::from_utf8_lossy(&buf).into_owned());
-        }
+        buf.push(byte[0]);
         if buf.len() > MAX_REQUEST {
             return None;
         }
+        if buf.ends_with(b"\r\n\r\n") {
+            return String::from_utf8(buf).ok();
+        }
     }
+}
+fn write_allowed(key: &str, at: i64) -> bool {
+    static LIMIT: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (i64, u32)>>> =
+        std::sync::OnceLock::new();
+    let mut entries = LIMIT
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    entries.retain(|_, (minute, _)| *minute == at / 60);
+    let entry = entries.entry(key.into()).or_insert((at / 60, 0));
+    if entry.1 >= 10 {
+        return false;
+    }
+    entry.1 += 1;
+    true
 }
 
 fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
@@ -195,6 +213,22 @@ pub fn serve_connection(stream: &mut TcpStream, path: &Path, shared: &Shared) {
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
         return respond(stream, 400, r#"{"error":"bad request"}"#);
     };
+    let headers: Vec<_> = head
+        .lines()
+        .skip(1)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let mut names = std::collections::HashSet::new();
+    for line in headers {
+        let Some((name, _)) = line.split_once(':') else {
+            return respond(stream, 400, r#"{"error":"bad header"}"#);
+        };
+        if !names.insert(name.to_ascii_lowercase())
+            || name.eq_ignore_ascii_case("transfer-encoding")
+        {
+            return respond(stream, 400, r#"{"error":"ambiguous request"}"#);
+        }
+    }
     let registry = match shared
         .registry_cache
         .lock()
@@ -218,6 +252,68 @@ pub fn serve_connection(stream: &mut TcpStream, path: &Path, shared: &Shared) {
     };
     if !allowed {
         return respond(stream, 429, r#"{"error":"rate limited"}"#);
+    }
+    if method == "POST" {
+        let Some(client) = bearer.and_then(|t| registry.authenticate(t, at)) else {
+            return respond(stream, 401, r#"{"error":"unauthorized"}"#);
+        };
+        let chat = match crate::read_api::route("GET", target) {
+            Ok((crate::read_api::Route::Messages(chat), _)) if !target.contains('?') => chat,
+            _ => return respond(stream, 404, r#"{"error":"unknown write route"}"#),
+        };
+        if header(&head, "content-type")
+            .and_then(|v| v.split(';').next())
+            .map(str::trim)
+            != Some("application/json")
+        {
+            return respond(stream, 400, r#"{"error":"JSON required"}"#);
+        }
+        let Some(length) = header(&head, "content-length")
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0 && *n <= 20 * 1024)
+        else {
+            return respond(
+                stream,
+                400,
+                r#"{"error":"bounded content length required"}"#,
+            );
+        };
+        if !write_allowed(&key, at) {
+            return respond(stream, 429, r#"{"error":"send rate limited"}"#);
+        }
+        let mut body = vec![0; length];
+        if stream.read_exact(&mut body).is_err() {
+            return respond(stream, 400, r#"{"error":"incomplete body"}"#);
+        }
+        let mut upstream = shared.source.open();
+        let journal = crate::write_journal::WriteJournal::new(path.with_extension("writes.json"));
+        let (status, body) = crate::write_api::handle(
+            &registry,
+            &mut *upstream,
+            &journal,
+            bearer,
+            &chat,
+            &body,
+            at,
+            || {
+                shared
+                    .registry_cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .registry(path)
+                    .ok()
+                    .and_then(|r| {
+                        r.authenticate(bearer.unwrap_or(""), now())
+                            .map(|c| c == client)
+                    })
+                    .unwrap_or(false)
+            },
+        );
+        eprintln!(
+            "solmu-reader: client={} route=send status={status}",
+            client.name
+        );
+        return respond(stream, status, &body);
     }
     let people = if target.starts_with("/v1/people") {
         load_people(&shared.settings)

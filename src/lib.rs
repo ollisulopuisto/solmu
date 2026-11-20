@@ -95,3 +95,7 @@ pub mod reply_graph;
 
 pub mod reply_router;
 pub mod write_grants;
+
+pub mod write_journal;
+
+pub mod write_api;

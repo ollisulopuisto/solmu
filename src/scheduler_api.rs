@@ -67,6 +67,50 @@ impl ServerSender {
         })
     }
 
+    /// Narrow text send for authenticated API. Never forward upstream bodies or retry.
+    pub fn send_api_text(&mut self, chat: &str, text: &str) -> crate::write_journal::Outcome {
+        use crate::write_journal::Outcome;
+        let result = self
+            .http
+            .post(format!(
+                "{}/v1/chats/{}/messages",
+                self.base_url,
+                encode_segment(chat)
+            ))
+            .json(&serde_json::json!({"text":text}))
+            .send();
+        let Ok(response) = result else {
+            return Outcome::Unknown;
+        };
+        if response.status().is_redirection() {
+            return Outcome::Rejected;
+        }
+        if !response.status().is_success() {
+            return if response.status().is_client_error() {
+                Outcome::Rejected
+            } else {
+                Outcome::Unknown
+            };
+        }
+        let Ok(body) = Self::bounded_body(response) else {
+            return Outcome::Unknown;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
+            return Outcome::Unknown;
+        };
+        match value
+            .get("pendingMessageID")
+            .or_else(|| value.get("id"))
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty() && v.len() <= 512 && !v.chars().any(char::is_control))
+        {
+            Some(id) => Outcome::Accepted {
+                message_id: id.into(),
+            },
+            None => Outcome::Unknown,
+        }
+    }
+
     /// Reads at most MAX_BODY_BYTES so a misbehaving local server cannot
     /// exhaust memory; the cap applies while streaming, not after the whole
     /// body is already in memory.

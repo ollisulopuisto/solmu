@@ -98,7 +98,26 @@ fn token_command(args: &[String]) -> i32 {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            match registry.add(name, scopes, accounts, expires, now()) {
+            let destinations = match flag("--send-destinations-file") {
+                Some(path) => match std::fs::read_to_string(path).ok().and_then(|s| {
+                    serde_json::from_str::<Vec<solmu::write_grants::Destination>>(&s).ok()
+                }) {
+                    Some(d) => d,
+                    None => {
+                        eprintln!("invalid send destination file");
+                        return 2;
+                    }
+                },
+                None => vec![],
+            };
+            match registry.add_with_destinations(
+                name,
+                scopes,
+                accounts,
+                destinations,
+                expires,
+                now(),
+            ) {
                 Ok(token) => match registry.save(&path) {
                     Ok(()) => {
                         println!("client {name} created. Token (shown once):\n{token}");
