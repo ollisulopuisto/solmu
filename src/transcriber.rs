@@ -621,6 +621,24 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reserved_identifiers_roundtrip_without_filename_collisions() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().into(), 1 << 20).unwrap();
+        let ids = ["", "\0", ".", "..", "%EMPTY", "%00", "ordinary"];
+        let mut names = std::collections::HashSet::new();
+        for id in ids {
+            assert_eq!(decode(&encode(id)).as_deref(), Some(id));
+            assert!(names.insert(encode(id)));
+            store.put("acc", "chat", id, "identity marker").unwrap();
+        }
+        let hits = store.snapshot("identity", "acc", "chat").hits;
+        assert_eq!(hits.len(), ids.len());
+        for id in ids {
+            assert!(hits.iter().any(|hit| hit.message_id == id));
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn private_atomic_writes_harden_parents_and_never_follow_file_links() {
