@@ -14700,12 +14700,14 @@ impl App {
     }
 
     pub fn check_media_tools(&mut self, request: crate::media_tool_setup::Request) {
-        self.media_tool_setup.start(request, self.waker.clone());
+        self.media_tool_setup
+            .start(request, self.waker.clone(), self.locale);
     }
 
     pub fn frame_ui(&mut self, ui: &mut egui::Ui) {
         if let Some(choice) = self.media_tool_setup.poll() {
             crate::media_tools::configure(choice.clone());
+            crate::animation::media_tools_changed(ui.ctx());
             self.settings.ffmpeg_path = choice;
             self.mark_settings_dirty();
         }

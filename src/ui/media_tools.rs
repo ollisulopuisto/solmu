@@ -29,7 +29,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 if let Some(error) = &tool.error {
                     ui.push_id(name, |ui| {
                         ui.collapsing(gettext(locale, "Technical details"), |ui| {
-                            ui.add(egui::Label::new(error).wrap());
+                            ui.add(
+                                egui::Label::new(crate::media_tool_setup::error_text(
+                                    locale, error,
+                                ))
+                                .wrap(),
+                            );
                         });
                     });
                 }
@@ -45,7 +50,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ui.label(gettext(locale, "Detected automatically"));
     }
     if let Some(error) = &app.media_tool_setup.error {
-        ui.add(egui::Label::new(error).wrap());
+        ui.add(egui::Label::new(crate::media_tool_setup::error_text(locale, error)).wrap());
     }
     let busy = app.media_tool_setup.busy();
     ui.add_enabled_ui(!busy, |ui| {

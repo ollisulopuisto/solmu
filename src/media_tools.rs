@@ -12,19 +12,30 @@ pub fn configured() -> Option<PathBuf> {
 }
 
 pub fn resolve(tool: &str) -> Result<PathBuf, String> {
-    if let Some(path) = configured() {
+    resolve_for(tool, configured().as_deref())
+}
+
+/// The setup check and playback resolve the same proposed preference.
+pub fn resolve_for(tool: &str, selected: Option<&Path>) -> Result<PathBuf, String> {
+    resolve_preference(tool, selected, || detect(tool))
+}
+fn resolve_preference(
+    tool: &str,
+    selected: Option<&Path>,
+    fallback: impl FnOnce() -> Result<PathBuf, String>,
+) -> Result<PathBuf, String> {
+    if let Some(path) = selected {
         if tool == "ffmpeg" {
-            return executable(&path).then_some(path).ok_or_else(||"The selected ffmpeg is no longer executable. Choose another in Settings > Media tools.".into());
+            return executable(path).then(||path.to_path_buf()).ok_or_else(||"The selected ffmpeg is no longer executable. Choose another in Settings > Media tools.".into());
         }
-        if tool == "ffprobe" {
-            if let Some(parent) = path.parent() {
-                if let Ok(sibling) = resolve_in(tool, &[parent.to_path_buf()]) {
-                    return Ok(sibling);
-                }
-            }
+        if tool == "ffprobe"
+            && let Some(parent) = path.parent()
+            && let Ok(sibling) = resolve_in(tool, &[parent.to_path_buf()])
+        {
+            return Ok(sibling);
         }
     }
-    detect(tool)
+    fallback()
 }
 
 /// Automatic lookup never uses the explicit preference.
@@ -240,6 +251,31 @@ mod executable_checks {
         std::fs::remove_file(&ffmpeg).unwrap();
         assert!(resolve("ffmpeg").is_err());
         configure(None);
+    }
+    #[test]
+    fn non_executable_sibling_uses_the_same_automatic_fallback_as_playback() {
+        let root = tempfile::tempdir().unwrap();
+        let custom = root.path().join("custom");
+        let auto = root.path().join("auto");
+        std::fs::create_dir_all(&custom).unwrap();
+        std::fs::create_dir_all(&auto).unwrap();
+        let ffmpeg = script(
+            &custom,
+            "ffmpeg",
+            "#!/bin/sh\nprintf 'ffmpeg version fixture\n'\n",
+        );
+        let sibling = custom.join("ffprobe");
+        std::fs::write(&sibling, b"not executable").unwrap();
+        let fallback = script(
+            &auto,
+            "ffprobe",
+            "#!/bin/sh\nprintf 'ffprobe version fixture\n'\n",
+        );
+        assert_eq!(
+            resolve_preference("ffprobe", Some(&ffmpeg), || resolve_in("ffprobe", &[auto]))
+                .unwrap(),
+            fallback
+        );
     }
     #[test]
     fn rejects_wrong_non_executable_and_hung_files() {
