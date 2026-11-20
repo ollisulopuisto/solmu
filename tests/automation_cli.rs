@@ -66,6 +66,11 @@ fn malformed_and_oversized_stdio_never_echo_input() {
     let output = mcp(b"SYNTHETIC-SECRET not json\n");
     assert!(output.status.success());
     assert!(!String::from_utf8_lossy(&output.stdout).contains("SYNTHETIC-SECRET"));
+    for malformed in [b"null\n".as_slice(), b"[]\n", b"{}\n"] {
+        let output = mcp(malformed);
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["code"], -32600);
+    }
     let mut large = vec![b'x'; 24 * 1024 + 1];
     large.push(b'\n');
     let output = mcp(&large);

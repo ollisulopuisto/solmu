@@ -58,6 +58,12 @@ impl Session {
         input: Value,
         mut call: impl FnMut(&str, &str, Option<&Value>) -> Result<(u16, String), String>,
     ) -> Option<Value> {
+        if !input.is_object()
+            || input.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+            || !input.get("method").is_some_and(Value::is_string)
+        {
+            return Some(err(Value::Null, -32600, "Invalid request"));
+        }
         let id = input.get("id").cloned();
         let method = input.get("method").and_then(Value::as_str).unwrap_or("");
         if id.is_none() {
