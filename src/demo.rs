@@ -5206,6 +5206,14 @@ mod tests {
                     egui::Pos2::ZERO,
                     egui::vec2(width, height),
                 )),
+                modifiers: events
+                    .iter()
+                    .rev()
+                    .find_map(|event| match event {
+                        egui::Event::PointerButton { modifiers, .. } => Some(*modifiers),
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
                 events,
                 ..Default::default()
             },
@@ -5422,6 +5430,82 @@ mod tests {
         assert!(
             rect(3).top() >= rect(2).bottom(),
             "selection gives each bubble its own full target"
+        );
+    }
+
+    #[test]
+    fn overlap_seam_command_click_selects_the_older_message() {
+        let mut app = app();
+        group_stacks_sample(&mut app);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..4 {
+            streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+        }
+        let id = crate::ui::conversation::bubble_id(SAMPLES[0].id, "group-stack-2");
+        let older = ctx
+            .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
+            .unwrap();
+        let point = egui::pos2(older.left() + 20.0, older.bottom() - 2.0);
+        for pressed in [true, false] {
+            streak_test_frame(
+                &mut app,
+                &ctx,
+                1180.0,
+                2000.0,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::COMMAND,
+                    },
+                ],
+            );
+        }
+        assert_eq!(
+            app.selection.as_ref().map(|(_, ids)| ids.as_slice()),
+            Some(["group-stack-2".to_owned()].as_slice())
+        );
+    }
+
+    #[test]
+    fn overlap_seam_double_click_replies_to_the_older_message() {
+        let mut app = app();
+        group_stacks_sample(&mut app);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..4 {
+            streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+        }
+        let id = crate::ui::conversation::bubble_id(SAMPLES[0].id, "group-stack-2");
+        let older = ctx
+            .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
+            .unwrap();
+        let point = egui::pos2(older.left() + 20.0, older.bottom() - 2.0);
+        for _ in 0..2 {
+            for pressed in [true, false] {
+                streak_test_frame(
+                    &mut app,
+                    &ctx,
+                    1180.0,
+                    2000.0,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+        }
+        assert_eq!(
+            app.reply_to.as_ref().map(|reply| reply.id.as_str()),
+            Some("group-stack-2")
         );
     }
 

@@ -4953,7 +4953,7 @@ fn bubble(
                 let seam = Rect::from_min_max(
                     pos2(
                         previous.left() - widgets::TAIL_WIDTH - 4.0,
-                        previous.bottom() - STREAK_OVERLAP - 3.0,
+                        previous.bottom() - STREAK_REPAINT_INSET,
                     ),
                     pos2(
                         previous.right() + widgets::TAIL_WIDTH + 4.0,
@@ -5684,12 +5684,13 @@ fn stack_pair(view: &View<'_>, previous: &Message, next: &Message) -> bool {
 }
 
 const STREAK_OVERLAP: f32 = 6.0;
+const STREAK_REPAINT_INSET: f32 = STREAK_OVERLAP + 3.0;
 
 /// Room around a bubble's contents: none around a picture that stands
 /// without one, Messages' insets in its style, WhatsApp's otherwise.
 fn bubble_margin(palette: &Palette, message: &Message, over_picture: bool) -> Margin {
-    if bare_picture(palette, message) {
-        Margin::ZERO
+    let mut margin = if bare_picture(palette, message) {
+        return Margin::ZERO;
     } else if palette.bubbles == theme::BubbleStyle::Messages {
         MESSAGES_BUBBLE_MARGIN
     } else {
@@ -5699,7 +5700,11 @@ fn bubble_margin(palette: &Palette, message: &Message, over_picture: bool) -> Ma
             top: 6,
             bottom: if over_picture { 6 } else { 5 },
         }
-    }
+    };
+    // The older edge is replayed above a later overlapping background. Keep
+    // that whole strip inside padding, never over glyphs, highlights or media.
+    margin.bottom = margin.bottom.max(STREAK_REPAINT_INSET as i8);
+    margin
 }
 
 /// Draws a message bubble and its menu.
@@ -10334,6 +10339,11 @@ fn rich_body_full(
             }
         })
         .unwrap_or(rect);
+    let selection_rect = selection_rect.with_min_y(
+        view.covered_top
+            .unwrap_or(selection_rect.top())
+            .max(selection_rect.top()),
+    );
     let response = ui.interact(
         selection_rect,
         id.with("body-text"),
@@ -14506,6 +14516,18 @@ mod tests {
                 );
             }
         });
+    }
+
+    #[test]
+    fn overlap_repaint_stays_in_bottom_padding_for_both_skins() {
+        let message = crate::archive::tests::message("1@s.whatsapp.net", "padding", 0, false);
+        for style in [theme::BubbleStyle::WhatsApp, theme::BubbleStyle::Messages] {
+            let mut palette = theme::Palette::dark();
+            palette.bubbles = style;
+            assert!(
+                f32::from(bubble_margin(&palette, &message, false).bottom) >= STREAK_REPAINT_INSET
+            );
+        }
     }
 
     #[test]
