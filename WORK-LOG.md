@@ -785,13 +785,11 @@ Chats replacement event, legitimate empty inventory, malformed history, and
 search retaining results/cursor across refusal and successful retry.
 No real Server query or UI-layout changes; native/live acceptance unverified.
 
-<<<<<<< HEAD
 ## Attachment-pencil handler,20 November
 
 Production previously neither compiled the picture-edit module nor routed InspectPicture/ApplyPictureEdit. Both now run through the existing local attachment-action worker, independently of Server/offline status, emitting targeted results. Output goes to account media cache/edited, never over the original. Thread-start failures answer the waiting action. Existing attachment-ID checks still reject stale results.
 
 Native library/test-target compile passes.418 portable adapter tests pass, including real routing that inspects an8x6 PNG, applies3x4 crop, verifies output dimensions and untouched source, and receives a missing-file error while disconnected. Harness stages real picture_edit/sticker_store sources. No live Mac pencil/crop/save roundtrip or new UI design claimed. A local disk-cache-full interruption was recovered by clearing disposable build caches before rerunning the suite.
-=======
 ## Readable batch-result banner,20 November
 
 Batch archive/delete result notices use resolved chat titles and explicit Archive chat/Delete message for me/Delete message for everyone labels, not raw room/message IDs. Accepted is explicitly not completion confirmation; waiting and failed/uncertain states say not to blindly retry. Technical error details collapse, and dismiss clearly says action results. Previous-connection history never resolves an old identity against the current session. Missing chats say Unavailable chat.
@@ -1022,4 +1020,3 @@ assertion. Native test-target compilation passes; full execution awaits CI.
 Production bubble/footer logic is unchanged.
 
 The same linked-minute fixture failure affected #437 Ubuntu (2523 passed, one failed). Reused the identical fixture-only correction from #433; no audit or production code changed. All exact-head CI/review gates restart.
->>>>>>> origin/main
