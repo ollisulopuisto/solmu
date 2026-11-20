@@ -109,4 +109,5 @@ pub mod automation_client;
 
 pub mod automation_mcp;
 
+pub mod list_layout;
 pub mod literal_hints;

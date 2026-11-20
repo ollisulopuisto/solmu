@@ -914,6 +914,31 @@ its text focus while results are visible, rather than merely blocking Send.
 Clear the fixture's deltas. Native all-target/all-feature Clippy passes; these
 actual app regressions await CI rerun, not claimed executed locally.
 
+## Compact list layout,20 November
+
+Claim: Instinct, branch `feat/compact-list-layout`, worktree
+`/home/sandbox/solmu-compact-lists`. Owner chose sketch1. Wrapped list rows now
+hang under their content rather than the bullet. Marker width is measured once
+per prepared body and retained with its cached metadata. The balanced and
+greedy paths reserve the indent; inserted break bytes still map to unchanged
+copy text. Ordinary/RTL text is unchanged; monospaced rows are not shifted.
+The separate Markdown fidelity PR owns source HTML's doubled list newlines,
+not this branch. No invented spaces inserted into the message or bold spans.
+
+Four helper tests executed against actual egui galleys: prefix identification,
+non-list refusals, greedy continuation rows, balanced inserted-newline handling.
+Native library and test-target compilation passed; new complete markup tests
+compiled but not executed locally. Private before/after pixels from a smaller
+synthetic egui renderer fixture were inspected: continuation rows align with
+content. These are not native app captures; whole-app layout, interactions and
+PR-media requirement remain unverified. No screenshot waiver assumed for this
+new PR; no committed or externally hosted review images. No native link retry.
+
+#436 first macOS run: 2496 tests passed, one new fixture failed before its
+assertions because it used the default context without installing the app's
+named Inter bold font. Both new fixtures now call `theme::install`, matching
+the existing prepared-layout tests. No production fallback or assertion was
+removed. All selected CI jobs and Devin must pass again on the new head.
 ## Markdown fidelity audit follow-up,20 November
 
 Claim: Instinct, branch `fix/markdown-fidelity-audit`, worktree
