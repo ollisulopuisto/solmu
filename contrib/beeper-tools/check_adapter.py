@@ -11,13 +11,7 @@ import tempfile
 # These are real modules, not harness-specific leaf stubs. Always stage them
 # from src/ so a copied harness snapshot cannot hide an active-source regression.
 LIVE_MODULES = (
-<<<<<<< HEAD
-    'account.rs', 'categories.rs', 'backend.rs', 'backend/beeper.rs', 'backend/beeper/gallery.rs', 'backend/beeper/shared.rs', 'backend/beeper/ws.rs', 'backend/local_ai.rs', 'backend/local_files.rs', 'backend/linked_media.rs',
-    'forward_results.rs', 'composed_forward.rs', 'group_admin.rs', 'i18n.rs', 'mentions.rs', 'merged.rs', 'model.rs', 'suggest.rs', 'pending_media.rs',
-=======
-    'flat_groups.rs', 'audience_queue.rs', 'account.rs', 'categories.rs', 'backend.rs', 'backend/beeper.rs', 'backend/beeper/gallery.rs', 'backend/beeper/shared.rs', 'backend/beeper/ws.rs', 'backend/local_ai.rs', 'backend/local_files.rs', 'backend/linked_media.rs',
-    'composed_forward.rs', 'group_admin.rs', 'i18n.rs', 'mentions.rs', 'merged.rs', 'model.rs', 'suggest.rs', 'pending_media.rs',
->>>>>>> origin/main
+    'account.rs', 'categories.rs', 'backend.rs', 'backend/beeper.rs', 'backend/beeper/gallery.rs', 'backend/beeper/shared.rs', 'backend/beeper/ws.rs', 'backend/local_ai.rs', 'backend/local_files.rs', 'backend/linked_media.rs', 'forward_results.rs', 'composed_forward.rs', 'group_admin.rs', 'i18n.rs', 'mentions.rs', 'merged.rs', 'model.rs', 'suggest.rs', 'pending_media.rs', 'flat_groups.rs', 'audience_queue.rs',
     'new_group.rs', 'paths.rs', 'recurrence.rs', 'run_widths.rs', 'safety.rs', 'saved.rs', 'scheduler.rs',
     'text_replace.rs', 'rich_edit.rs', 'literal_hints.rs',
     'scheduler_client.rs',
