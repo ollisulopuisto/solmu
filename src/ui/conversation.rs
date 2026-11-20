@@ -5837,43 +5837,38 @@ fn bubble_frame(
         } else {
             view.palette.secondary
         };
-        ui.painter().line_segment(
-            [
-                pos2(rect.left() + 12.0, centre.y),
-                pos2(centre.x - 26.0, centre.y),
-            ],
-            Stroke::new(1.0, view.palette.dim),
-        );
-        ui.painter().line_segment(
-            [
-                pos2(centre.x + 26.0, centre.y),
-                pos2(rect.right() - 12.0, centre.y),
-            ],
-            Stroke::new(1.0, view.palette.dim),
-        );
-        ui.painter().text(
-            centre,
-            Align2::CENTER_CENTER,
-            "···",
-            theme::semibold(18.0),
+        let hint = crate::i18n::gettext(view.locale, "Show message");
+        let label = if unhide.has_focus() {
+            hint.as_ref()
+        } else {
+            "···"
+        };
+        let line = widgets::line(
+            ui,
+            label,
+            theme::semibold(if unhide.has_focus() { 12.0 } else { 18.0 }),
             ink,
+            (rect.width() - 24.0).max(1.0),
+            1,
         );
-        if active {
-            let hint = crate::i18n::gettext(view.locale, "Show message");
-            unhide.clone().on_hover_text(hint.as_ref());
-            // Keyboard users get the same visible hint without requiring hover.
-            if unhide.has_focus() {
-                let galley = ui.painter().layout_no_wrap(
-                    hint.into_owned(),
-                    theme::semibold(12.0),
-                    view.palette.text,
+        let half_label = line.size().x / 2.0 + 10.0;
+        for (left, right) in [
+            (rect.left() + 12.0, centre.x - half_label),
+            (centre.x + half_label, rect.right() - 12.0),
+        ] {
+            if right > left {
+                ui.painter().line_segment(
+                    [pos2(left, centre.y), pos2(right, centre.y)],
+                    Stroke::new(1.0, view.palette.dim),
                 );
-                let at = pos2(rect.right() + 8.0, rect.center().y - galley.size().y / 2.0);
-                if at.x + galley.size().x < ui.clip_rect().right() {
-                    ui.painter().galley(at, galley, view.palette.text);
-                }
-                view.keyboard_navigation.set(true);
             }
+        }
+        line.paint(ui, centre - line.size() / 2.0, ink);
+        if active {
+            unhide.clone().on_hover_text(hint.as_ref());
+        }
+        if unhide.has_focus() {
+            view.keyboard_navigation.set(true);
         }
         theme::focus_outline(ui, unhide.id, rect, 8.0);
         unhide.widget_info(|| {
@@ -14989,6 +14984,83 @@ mod tests {
             assert!(
                 f32::from(bubble_margin(&palette, &message, false).bottom) >= STREAK_REPAINT_INSET
             );
+        }
+    }
+
+    #[test]
+    fn focused_hidden_hint_stays_inside_narrow_incoming_and_outgoing_rows() {
+        for own in [false, true] {
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            with_still_view(|view| {
+                let message = crate::archive::tests::message("1@s.whatsapp.net", "hidden", 0, own);
+                let hidden = HashSet::from([message.id.clone()]);
+                let view = View {
+                    hidden: Some(&hidden),
+                    ..*view
+                };
+                let mut final_hint_count = 0;
+                for _ in 0..3 {
+                    let mut row = Rect::NOTHING;
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(190.0, 100.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            ui.with_layout(
+                                if own {
+                                    egui::Layout::right_to_left(egui::Align::TOP)
+                                } else {
+                                    egui::Layout::left_to_right(egui::Align::TOP)
+                                },
+                                |ui| {
+                                    let response = bubble_frame(
+                                        ui,
+                                        &view,
+                                        &message,
+                                        None,
+                                        false,
+                                        false,
+                                        160.0,
+                                        &mut Vec::new(),
+                                    );
+                                    row = response.rect;
+                                    response.request_focus();
+                                },
+                            );
+                        },
+                    );
+                    fn hints(shape: &egui::Shape, rects: &mut Vec<Rect>) {
+                        match shape {
+                            egui::Shape::Text(text) if text.galley.text() == "Show message" => {
+                                rects.push(Rect::from_min_size(text.pos, text.galley.size()))
+                            }
+                            egui::Shape::Vec(parts) => {
+                                for part in parts {
+                                    hints(part, rects);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let mut rects = Vec::new();
+                    for shape in &output.shapes {
+                        hints(&shape.shape, &mut rects);
+                    }
+                    final_hint_count = rects.len();
+                    if ctx.memory(|memory| memory.focused()).is_some() && !rects.is_empty() {
+                        assert!(rects.iter().all(|hint| row.contains_rect(*hint)));
+                    }
+                    output.textures_delta.clear();
+                }
+                // The focus frame must paint the readable hint, not suppress it.
+                assert_eq!(final_hint_count, 1);
+                assert!(view.keyboard_navigation.get());
+            });
         }
     }
 
