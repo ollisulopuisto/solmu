@@ -1155,6 +1155,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                             ui,
                                             &source_chat,
                                             message,
+                                            visible_index
+                                                .checked_sub(1)
+                                                .and_then(|i| visible.get(i).copied()),
                                             super::conversation::last_minute_in_run(
                                                 original_message,
                                                 visible.get(visible_index + 1).copied(),

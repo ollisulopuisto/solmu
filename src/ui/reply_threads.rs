@@ -371,6 +371,7 @@ pub fn ordinary(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat) -> 
                     ui,
                     chat,
                     &m,
+                    None,
                     true,
                     right,
                     None,
