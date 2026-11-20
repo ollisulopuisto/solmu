@@ -749,3 +749,22 @@ the album's shared painted bounds. Clear texture deltas in the new seeded
 fixtures. Native all-target/all-feature Clippy passes; local targeted application
 test execution exceeded120 seconds during compilation and has not run. CI must
 recheck the three existing demo failures, including right-click-beside-message.
+
+## 2026-11-20: Reconstruct Markdown when editing rich messages
+
+Owner requested retaining editable Markdown, then explicitly chose reverse
+conversion rather than duplicate source storage. Prepare edit reads the current
+exact own message, reconstructs Markdown from rich HTML, and verifies a local
+CommonMark semantic round-trip. Unsupported or lossy constructs refuse before
+changing the composer. A request generation, local account, chat, target and
+unchanged draft guard reject late replies. No write occurs until explicit send.
+Both fresh sends and edits pass Markdown in the API text field. Beeper's current
+docs say both use the same rich-text conversion. Retrieval exposes rich text,
+not original marker spelling. No source store or schema migration was added.
+
+412 portable production-source tests pass, including rich reconstruction and
+exact message/account/ownership refusals; native all-target/all-feature Clippy
+passes. Four converter tests include13 markdown-rich-markdown-rich cases with
+byte-identical CommonMark rich output. This is not live Beeper/WhatsApp proof.
+Full native UI tests unrun. Demo compilation was killed by the environment;
+visual capture remains unverified, not waived. No real message/account touched.

@@ -94,3 +94,5 @@ pub mod whisper_runtime;
 pub mod reply_graph;
 
 pub mod reply_router;
+
+pub mod rich_edit;

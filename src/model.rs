@@ -3116,6 +3116,12 @@ pub enum Action {
     CancelSelection,
     /// Loads an outgoing message into the composer for editing.
     Edit(String),
+    PreparedEdit {
+        chat: ChatId,
+        id: String,
+        request: u64,
+        result: Result<String, String>,
+    },
     CancelEdit,
     /// Revokes an outgoing message for everyone. The chat travels with the
     /// message because the reader may switch chats before confirming.

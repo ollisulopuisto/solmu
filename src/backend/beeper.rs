@@ -2874,6 +2874,26 @@ fn forwardable_text(message: &BeeperMessage) -> bool {
             .is_some_and(|text| !text.trim().is_empty())
 }
 
+fn editable_markdown(
+    wire: &BeeperMessage,
+    chat: &str,
+    id: &str,
+    account: &str,
+) -> Result<String, String> {
+    if wire.id != id
+        || wire.chat_id != chat
+        || wire.account_id != account
+        || wire.is_sender != Some(true)
+        || wire.is_deleted
+        || wire.is_hidden
+        || !wire.attachments.is_empty()
+        || !rich_text_mentions(wire.text.as_deref().unwrap_or("")).is_empty()
+    {
+        return Err("The current message cannot be safely prepared for editing".into());
+    }
+    crate::rich_edit::markdown(wire.text.as_deref().ok_or("Message has no editable text")?)
+}
+
 fn body_of(m: &BeeperMessage) -> (String, bool) {
     if let Some(t) = &m.text
         && !t.is_empty()
@@ -4014,6 +4034,9 @@ pub fn run(
                     Ok(Command::SendText { chat, text, .. }) => emit(Event::BeeperSendUncertain {
                         chat, text, message: "Beeper is not connected yet. Text restored; nothing was sent or queued for automatic retry.".into(),
                     }),
+                    Ok(Command::PrepareEdit { chat, id, request, .. }) => emit(Event::BeeperEditPrepared {
+                        chat, id, request, result: Err("Beeper is not connected; no edit started".into()),
+                    }),
                     Ok(Command::EditText { chat, id, text, .. }) => emit(Event::BeeperEditUncertain {
                         chat, id, text, message: "Beeper is not connected yet. Edit retained; nothing was changed.".into(),
                     }),
@@ -4797,6 +4820,22 @@ pub fn run(
                         }
                     }
                     last_chat_refresh = Instant::now() - CHAT_REFRESH;
+                }
+                Command::PrepareEdit {
+                    chat,
+                    id,
+                    account,
+                    request,
+                } => {
+                    let result = api
+                        .get_message(&chat, &id)
+                        .and_then(|wire| editable_markdown(&wire, &chat, &id, &account));
+                    emit(Event::BeeperEditPrepared {
+                        chat,
+                        id,
+                        request,
+                        result,
+                    });
                 }
                 Command::EditText {
                     chat,
@@ -10105,6 +10144,33 @@ mod tests {
         tx.send(Command::Shutdown).unwrap();
         worker.join().unwrap();
         stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn edit_preparation_preserves_markup_and_requires_the_exact_own_message() {
+        let value = serde_json::json!({"id":"message","chatID":"chat","accountID":"account","isSender":true,
+            "text":"<p>hello</p><ul><li>first</li><li><strong>second</strong></li></ul>"});
+        let wire: BeeperMessage = serde_json::from_value(value.clone()).unwrap();
+        let markdown = editable_markdown(&wire, "chat", "message", "account").unwrap();
+        assert!(markdown.contains("- first\n- **second**"));
+        assert!(!markdown.contains('•'));
+        for (field, bad) in [
+            ("id", serde_json::json!("other")),
+            ("chatID", serde_json::json!("other")),
+            ("accountID", serde_json::json!("other")),
+            ("isSender", serde_json::json!(false)),
+            ("isDeleted", serde_json::json!(true)),
+            ("isHidden", serde_json::json!(true)),
+            ("attachments", serde_json::json!([{"type":"img"}])),
+        ] {
+            let mut changed = value.clone();
+            changed[field] = bad;
+            let wire = serde_json::from_value(changed).unwrap();
+            assert!(
+                editable_markdown(&wire, "chat", "message", "account").is_err(),
+                "{field}"
+            );
+        }
     }
 
     #[test]
