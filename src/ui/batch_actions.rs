@@ -310,7 +310,7 @@ mod tests {
         let mut ids = Vec::new();
         let mut open = Vec::new();
         let frame = |ctx: &egui::Context, ids: &mut Vec<egui::Id>, open: &mut Vec<bool>| {
-            let _ = ctx.run_ui(Default::default(), |ui| {
+            let mut output = ctx.run_ui(Default::default(), |ui| {
                 ui.vertical(|ui| {
                     for scope in ["batch-current", "batch-previous"] {
                         for index in 0..2 {
@@ -325,6 +325,7 @@ mod tests {
                     }
                 });
             });
+            output.textures_delta.clear();
         };
         frame(&ctx, &mut ids, &mut open);
         let unique: std::collections::HashSet<_> = ids.iter().copied().collect();
