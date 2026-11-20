@@ -645,6 +645,7 @@ pub fn populate(app: &mut App) {
             .messages
             .last()
             .map(|last| crate::model::LastMessage {
+                reaction: None,
                 labelled: last.content.labelled(),
                 from_me: last.from_me,
                 sender: last.sender.clone(),
@@ -1047,6 +1048,7 @@ pub fn populate(app: &mut App) {
                         chat.id.clone(),
                         last.timestamp,
                         crate::model::LastMessage {
+                            reaction: None,
                             labelled: last.content.labelled(),
                             from_me: last.from_me,
                             sender: last.sender.clone(),
@@ -1304,6 +1306,7 @@ fn meta_ai_sample(app: &mut App) {
     let mut chat = Chat::new(id.into(), "Meta AI".into());
     chat.last_activity = now;
     chat.last = Some(crate::model::LastMessage {
+        reaction: None,
         labelled: reply.content.labelled(),
         from_me: false,
         sender: reply.sender.clone(),
@@ -1436,6 +1439,7 @@ fn interactive_sample(app: &mut App, with_image: bool) {
         let last = messages.last().unwrap();
         chat.last_activity = last.timestamp;
         chat.last = Some(crate::model::LastMessage {
+            reaction: None,
             labelled: last.content.labelled(),
             from_me: last.from_me,
             sender: last.sender.clone(),
@@ -3413,6 +3417,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 let mut chat = Chat::new(ME.into(), "You".into());
                 chat.last_activity = now;
                 chat.last = messages.last().map(|last| crate::model::LastMessage {
+                    reaction: None,
                     labelled: last.content.labelled(),
                     from_me: true,
                     sender: last.sender.clone(),
@@ -4070,6 +4075,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 let mut chat = Chat::new(ME.into(), "You".into());
                 chat.last_activity = now;
                 chat.last = messages.last().map(|last| crate::model::LastMessage {
+                    reaction: None,
                     labelled: last.content.labelled(),
                     from_me: true,
                     sender: last.sender.clone(),
@@ -11350,6 +11356,7 @@ mod tests {
         for chat in app.chats.iter_mut() {
             if chat.id == group || chat.id == typing {
                 chat.last = Some(crate::model::LastMessage {
+                    reaction: None,
                     labelled: false,
                     from_me: false,
                     sender: sender.into(),
@@ -11360,6 +11367,7 @@ mod tests {
                 });
             } else if chat.id == direct {
                 chat.last = Some(crate::model::LastMessage {
+                    reaction: None,
                     labelled: false,
                     from_me: false,
                     sender: direct.into(),
