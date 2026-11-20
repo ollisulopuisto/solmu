@@ -80,6 +80,42 @@ struct Shared {
     row_kinds: Vec<RowKind>,
 }
 
+/// Reserve an explicit code header and inset without adding copyable spaces or
+/// blank lines. Both cached and fresh layouts use these same row coordinates.
+fn spaced_code_galley(mut galley: Arc<Galley>, kinds: &[RowKind]) -> Arc<Galley> {
+    if !kinds.iter().any(|kind| matches!(kind, RowKind::Code(_))) {
+        return galley;
+    }
+    let galley_mut = Arc::make_mut(&mut galley);
+    let mut shift = 0.0;
+    let mut width = galley_mut.rect.width();
+    let mut previous = RowKind::Normal;
+    for (index, row) in galley_mut.rows.iter_mut().enumerate() {
+        let kind = kinds[index];
+        if matches!(previous, RowKind::Code(_)) && kind != previous {
+            shift += 10.0;
+        }
+        if matches!(kind, RowKind::Code(_)) && kind != previous {
+            shift += 20.0;
+        }
+        row.pos.y += shift;
+        if matches!(kind, RowKind::Code(_)) {
+            row.pos.x += 10.0;
+            width = width.max(row.pos.x + row.row.size.x + 10.0);
+        }
+        previous = kind;
+    }
+    if matches!(previous, RowKind::Code(_)) {
+        shift += 10.0;
+    }
+    galley_mut.rect.max.y += shift;
+    galley_mut.rect.max.x = galley_mut.rect.min.x + width;
+    galley_mut.mesh_bounds = galley_mut.rows.iter().fold(Rect::NOTHING, |bounds, row| {
+        bounds.union(row.row.visuals.mesh_bounds.translate(row.pos.to_vec2()))
+    });
+    galley
+}
+
 impl Text {
     /// Emoji sequences represented by placeholder glyphs.
     pub fn placements(&self) -> &[String] {
@@ -212,6 +248,7 @@ fn finish(
     // byte ranges, so convert with the final job text.
     let galley = bidi::layout_job(ui, built.job);
     let row_kinds = row_kinds(&galley, &built.blocks, &built.quotes);
+    let galley = spaced_code_galley(galley, &row_kinds);
     let copy_links = copy_links.unwrap_or_else(|| built.links.clone());
     Text {
         galley,
@@ -319,7 +356,11 @@ fn build(
     let big = scale > 1.0;
     let size = style.size * scale;
     let mut job = LayoutJob::default();
-    job.wrap.max_width = max_width;
+    job.wrap.max_width = if text.contains("```") {
+        (max_width - 20.0).max(1.0)
+    } else {
+        max_width
+    };
     let mut placements = Vec::new();
     let mut links = Vec::new();
     let mut blocks = Vec::new();
@@ -344,6 +385,7 @@ fn build(
         };
         let format = TextFormat {
             font_id,
+            line_height: span.block.then_some(size * 1.4),
             color,
             italics: span.italic,
             underline: if span.link.is_some() {
@@ -701,7 +743,10 @@ impl Prepared {
     /// when the atlas changes, so a font reload never paints stale glyphs.
     fn draw(&self, ui: &egui::Ui) -> Text {
         Text {
-            galley: bidi::layout_job(ui, self.job.clone()),
+            galley: spaced_code_galley(
+                bidi::layout_job(ui, self.job.clone()),
+                &self.shared.row_kinds,
+            ),
             links: self.links.clone(),
             big: self.big,
             shared: self.shared.clone(),
@@ -1296,6 +1341,7 @@ fn panel_rect(
 ) -> Option<Rect> {
     const PAD: f32 = 3.0;
     let rows = &laid.galley.rows;
+    let code = matches!(laid.row_kinds()[start], RowKind::Code(_));
     let top = rows[start].pos.y;
     let bottom = rows[end - 1].pos.y + rows[end - 1].row.size.y;
     if clip_height.is_some_and(|clip| top >= clip) {
@@ -1303,8 +1349,8 @@ fn panel_rect(
     }
     let bottom = clip_height.map_or(bottom, |clip| bottom.min(clip));
     Some(Rect::from_min_max(
-        Pos2::new(body.min.x, origin.y + top - PAD),
-        Pos2::new(body.max.x, origin.y + bottom + PAD),
+        Pos2::new(body.min.x, origin.y + top - if code { 30.0 } else { PAD }),
+        Pos2::new(body.max.x, origin.y + bottom + if code { 8.0 } else { PAD }),
     ))
 }
 
@@ -1327,43 +1373,32 @@ pub fn code_panel_rects(
         .collect()
 }
 
-/// The Copy code button hangs off the panel's top right: the opening
-/// fence's dropped marker leaves a blank row above the block, so the
-/// button sits in empty space and can never cover code, however narrow
-/// the panel. Top placement keeps it visible when a collapse clip cuts
-/// the block mid-panel: the clamped panel bottom lands at or below the
-/// clip, but the top stays on screen.
+/// Dedicated header hit target inside the code panel, above its content rows.
 pub fn copy_button_rect(panel: Rect) -> Rect {
     Rect::from_min_max(
-        Pos2::new(panel.max.x - 68.0, panel.min.y - 16.0),
-        Pos2::new(panel.max.x - 4.0, panel.min.y - 2.0),
+        Pos2::new(
+            (panel.max.x - 82.0).max(panel.min.x + 6.0),
+            panel.min.y + 4.0,
+        ),
+        Pos2::new(panel.max.x - 6.0, panel.min.y + 24.0),
     )
 }
 
-/// Renders one panel's Copy code label and returns its response. The
-/// response rect must stay inside the 14pt band [`copy_button_rect`]
-/// reserves: a button that outgrows the band reaches into the first
-/// code row and intercepts selection drags there.
+/// Render a real accessible button confined to the20pt header band.
 pub fn put_copy_button(
     ui: &mut egui::Ui,
     panel: Rect,
     label: &str,
     color: Color32,
 ) -> egui::Response {
-    // A real Button in a style-overridden child UI: a plain Ui::put
-    // expands the button to the theme's 28pt minimum interact height and
-    // the overflow reaches into the first code row, where it intercepts
-    // selection drags; a bare allocate_rect plus painted text keeps the
-    // geometry but has no accessible label. The child UI caps the
-    // interact height at the 14pt band, and the Button supplies its own
-    // accessibility label.
+    // Limit the themed minimum height so selection stays clear of the header.
     let rect = copy_button_rect(panel);
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(rect)
             .layout(egui::Layout::right_to_left(egui::Align::Center)),
     );
-    child.spacing_mut().interact_size.y = 14.0;
+    child.spacing_mut().interact_size.y = 20.0;
     child.spacing_mut().button_padding = egui::vec2(4.0, 0.0);
     child.add(egui::Button::new(egui::RichText::new(label).small().color(color)).frame(false))
 }
@@ -3286,6 +3321,47 @@ mod monospace_tests {
     /// blank row the closing fence leaves, so it never covers code text
     /// even when the panel is exactly as wide as its widest row.
     #[test]
+    fn code_panels_have_inset_header_bottom_space_and_unchanged_copy() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "```\nfirst line\nsecond line\n```";
+            for laid in [
+                Arc::new(layout(ui, text, &[], &style, 220.0, false)),
+                layout_balanced(ui, text, &[], &style, 220.0, false),
+            ] {
+                let body = Rect::from_min_size(Pos2::ZERO, laid.galley.size());
+                let (_, panel) = code_panel_rects(body, Pos2::ZERO, &laid, None)[0];
+                let rows: Vec<_> = laid
+                    .galley
+                    .rows
+                    .iter()
+                    .zip(laid.row_kinds())
+                    .filter(|(_, kind)| matches!(kind, RowKind::Code(_)))
+                    .map(|(row, _)| row)
+                    .collect();
+                assert!(rows[0].pos.x - panel.left() >= 9.5);
+                assert!(rows[0].pos.y - copy_button_rect(panel).bottom() >= 5.5);
+                let last = rows.last().unwrap();
+                assert!(panel.bottom() - last.pos.y - last.row.size.y >= 7.5);
+                assert!(rows[1].pos.y - rows[0].pos.y >= 21.0);
+                assert_eq!(code_blocks(text), vec!["first line\nsecond line"]);
+                assert!(
+                    panel.top() >= 0.0,
+                    "header must fit inside allocated text body"
+                );
+            }
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn the_copy_button_never_covers_code_text() {
         let ctx = egui::Context::default();
         let mut output = ctx.run_ui(Default::default(), |ui| {
@@ -3341,7 +3417,7 @@ mod monospace_tests {
                 let response = put_copy_button(ui, panel, "Copy code", Color32::WHITE);
                 let band = copy_button_rect(panel);
                 assert!(
-                    band.contains_rect(response.rect) && response.rect.height() <= 14.0,
+                    band.contains_rect(response.rect) && response.rect.height() <= 20.0,
                     "copy button response {:?} outgrew its band {band:?}",
                     response.rect
                 );
