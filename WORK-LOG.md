@@ -13,6 +13,49 @@ Local full-test compilation again exceeded the execution window, so these tests
 are not claimed passed locally. The previous album/texture failures are absent
 from the latest Mac result. No screenshot or release change.
 
+## 2026-11-20: Combine approved one-tail groups with restored overlap
+
+This branch combines one tail per grouped bubbles with restored overlap.
+Integrated the four overlap-restoration commits from PR407 on the avatar-tail
+branch, retaining current main and its newer hidden-message handling. The tail
+rule now applies to ordinary outgoing/direct runs and linked runs too. Incoming
+Messages avatars remain bottom-aligned with their existing tail geometry; the
+WhatsApp-style head has the approved one-third mouth-height rule.
+
+Own review of407's failed CI found global bottom-padding inflation changing
+isolated voice/image geometry and a seam command-click without a dedicated
+owner. Non-text padding stays unchanged; replay is clipped to each older row's
+actual safe bottom inset. Added stable older-seam primary gesture ownership
+(command-click selection and double-click reply); newer body targets remain
+clipped below the covered seam. Updated the old every-bubble-tail assertion to
+the requested one-tail-per-run behavior. These repaired interaction regressions
+still require full CI execution; they are not claimed passed locally.
+
+Native all-target/all-feature Clippy and demo build pass. Inspected actual dark
+wide, light narrow, group-stacks WhatsApp and Messages captures. Overlapping
+steps are visible; text is readable; followers have no separate tail. Existing
+geometry unit helper ran1pass earlier. New screenshots remain private; no
+waiver assumed, PR not opened.407 is not closed until the combined PR supersedes
+it with validated CI and review. No release.
+
+## 2026-11-20: Avatar-aligned incoming tail (feat/avatar-mouth-tail)
+
+Build option1 from the approved synthetic sketch: retain the existing downward
+nub, with tip y = avatar bottom minus avatar height/3. Incoming ordinary group
+heads use the actual top-aligned avatar allocation; same-sender followers have no
+tail. Outgoing and direct-chat tails are unchanged. Messages skin retains its
+existing head-tail geometry because it bottom-aligns avatars; moving this
+same downward nub there would extend below short bubbles. Linked-view avatars
+are not changed by this ordinary-conversation patch.
+
+Added a geometry unit test with translated/resized avatar rectangles. Executed
+the exact helper and exact unit test against the built egui dependency:1 pass.
+Full native test compilation exceeded the command window; no full-suite pass
+claimed. Native demo build and all-target/all-feature Clippy pass. Added an
+avatar-tail synthetic demo page with short and tall heads plus two followers.
+Inspected actual dark wide and light narrow captures: heads meet the avatar at
+the requested height; followers remain tailless. No external image hosting or
+screenshot waiver assumed. Parent has captures and the waiver/audience question.
 ## 2026-11-20: One receipt per automation request, bounded receipt history
 
 The follow-on review found HTTP and the shared write handler both recording a
@@ -775,6 +818,20 @@ fixtures. Native all-target/all-feature Clippy passes; local targeted applicatio
 test execution exceeded120 seconds during compilation and has not run. CI must
 recheck the three existing demo failures, including right-click-beside-message.
 
+## Restore overlapping consecutive bubbles,20 November
+
+Regression traced to #355, which replaced #246 seam overlap with separated rows. Restore6px overlap using current-pass predecessor geometry, older-edge repaint and covered hit-test clipping. Keep current width bands and every-body top tails. Selection and hard-boundary rows remain separate. Native tests updated for geometry, scroll and covered menus, and both-theme group-stack app captures added to the existing Mac CI smoke path. No real chat sent, no package published. Local native build/check execution remains pending after missing Linux development dependencies and bounded compile-time attempts.
+
+Review follow-up: clip enlarged text-selection targets below the overlap cover, including command-click and double-click gestures. Reserve the full nine-point replay strip as bottom padding in both skins so background repaint cannot erase older content. Added seam gesture and padding regressions. Actual Linux synthetic both-theme group-stack captures inspected: final glyph rows and colored shadows remain readable. Native test linking exceeded the local execution bound; test-target compilation and fresh CI are distinct checks, not a claimed runtime pass.
+
+### 2026-11-20: combined tail and overlap regression fixtures
+
+The macOS failures exposed two obsolete per-message tail assertions and a
+synthetic command-click that omitted egui's held-modifier event. Assert tails
+only on run heads, require tail-less follower shadows, and emit
+ModifiersChanged before the seam click. No production behavior changed.
+All-target, all-feature Clippy passes. Native targeted test compilation timed
+out while rebuilding dependencies; CI must execute the tests before merge.
 ## 2026-11-20: Reconstruct Markdown when editing rich messages
 
 Owner requested retaining editable Markdown, then explicitly chose reverse
@@ -875,3 +932,12 @@ its CommonMark round trips. Full native Clippy hit the execution time limit
 twice, without a diagnostic; not claimed passed. Actual downstream WhatsApp
 receipt was not inspected and no real message was sent. No screenshot waiver
 for this PR assumed; separate ready PR with its missing review media noted.
+
+#433 Linux all-features run passed2514 tests and failed the linked-minute
+fixture's first-clock assertion. Its WhatsApp times are fixed at today's18:40,
+while Signal was still relative to wall time; near18:40 those samples
+interleaved and correctly split the source run. The linked-minute fixture now
+places Signal after the replaced WhatsApp run, preserving both sources. The
+regression freezes18:40UTC, the problematic period, without loosening any clock
+assertion. Native test-target compilation passes; full execution awaits CI.
+Production bubble/footer logic is unchanged.

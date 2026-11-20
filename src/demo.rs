@@ -2688,6 +2688,19 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "linked-minute-gutter" => {
                 linked_sample(app);
                 minute_gutter_sample(app);
+                // The minute fixture replaces WhatsApp's relative timestamps
+                // with today's18:40 run. Keep Signal after that replacement,
+                // not interleaved when the wall clock approaches18:40.
+                let latest = app
+                    .conversations
+                    .get(SAMPLES[0].id)
+                    .and_then(|c| c.messages.iter().map(|m| m.timestamp).max())
+                    .unwrap_or_default();
+                if let Some(signal) = app.conversations.get_mut("393331234567@signal") {
+                    for (index, message) in signal.messages.iter_mut().enumerate() {
+                        message.timestamp = latest + 60 * (index as i64 + 1);
+                    }
+                }
             }
             "day-separators" => day_separators_sample(app),
             "linked-day-separators" => {
@@ -4304,7 +4317,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.category_filter = Some(crate::model::ChatFilter::Groups);
                 app.chat_filter = crate::model::ChatFilter::Unread;
             }
-            "grid" => {
+            "grid" | "avatar-tail" => {
                 let id = app
                     .chats
                     .iter()
@@ -4325,14 +4338,16 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     "First message from this sender",
                     "A follow-up from the same sender",
                     "A third message",
+                    if part == "avatar-tail" { "A taller first message wraps across several lines. This synthetic message checks that the tail stays tied to the avatar instead of moving with the bottom of the message bubble. A second sentence keeps the paragraph tall in a narrow window." } else { "A third message" },
                 ]
                 .iter()
+                .take(if part == "avatar-tail" { 4 } else { 3 })
                 .enumerate()
                 {
                     let mut m = source.clone();
                     m.id = format!("grid-{i}");
-                    m.sender = sender.into();
-                    m.sender_name = Some("Ada Example".into());
+                    m.sender = if part == "avatar-tail" && i == 3 { "tail-tall@example.invalid" } else { sender }.into();
+                    m.sender_name = Some(if part == "avatar-tail" && i == 3 { "Tall Example" } else { "Ada Example" }.into());
                     m.content = Content::text(*text);
                     m.timestamp += i as i64;
                     m.quoted = None;
@@ -5408,6 +5423,13 @@ mod tests {
 
     #[test]
     fn linked_messages_style_uses_one_clock_per_run() {
+        // Regression: at18:40 the old relative Signal samples interleaved
+        // with this fixture and legitimately split the WhatsApp run.
+        let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
+            now: 1_773_254_400,
+            zone: jiff::tz::TimeZone::UTC,
+            twelve_hour: false,
+        });
         let mut app = app();
         apply_flags(&mut app, Some("linked-minute-gutter,messages"));
         let ctx = egui::Context::default();
@@ -5438,7 +5460,7 @@ mod tests {
     }
 
     #[test]
-    fn separated_bubbles_keep_their_own_menu_and_selection_targets() {
+    fn overlapping_bubbles_keep_their_own_menu_and_selection_targets() {
         let mut app = app();
         group_stacks_sample(&mut app);
         let ctx = egui::Context::default();
@@ -5457,10 +5479,10 @@ mod tests {
         let newer = rect(3);
         let point = egui::pos2(older.left() + 20.0, older.bottom() - 2.0);
         assert!(
-            !newer.contains(point),
-            "four-point row gap leaves no overlap"
+            newer.contains(point),
+            "the older lower edge sits in front of the next bubble"
         );
-        assert!((newer.top() - older.bottom() - 4.).abs() < 1.);
+        assert!((older.bottom() - newer.top() - 6.).abs() < 1.);
         for pressed in [true, false] {
             streak_test_frame(
                 &mut app,
@@ -5487,7 +5509,7 @@ mod tests {
             "newer bubble must not steal seam clicks"
         );
         egui::Popup::close_all(&ctx);
-        let point = egui::pos2(newer.left() + 20., newer.top() + 2.);
+        let point = egui::pos2(newer.left() + 20., older.bottom() + 2.);
         for pressed in [true, false] {
             streak_test_frame(
                 &mut app,
@@ -5525,6 +5547,85 @@ mod tests {
     }
 
     #[test]
+    fn overlap_seam_command_click_selects_the_older_message() {
+        let mut app = app();
+        group_stacks_sample(&mut app);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..4 {
+            streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+        }
+        let id = crate::ui::conversation::bubble_id(SAMPLES[0].id, "group-stack-2");
+        let older = ctx
+            .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
+            .unwrap();
+        let point = egui::pos2(older.left() + 20.0, older.bottom() - 2.0);
+        for pressed in [true, false] {
+            streak_test_frame(
+                &mut app,
+                &ctx,
+                1180.0,
+                2000.0,
+                vec![
+                    // egui tracks held modifiers through this event, independently
+                    // of the per-pointer event metadata.
+                    egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::COMMAND,
+                    },
+                ],
+            );
+        }
+        assert_eq!(
+            app.selection.as_ref().map(|(_, ids)| ids.as_slice()),
+            Some(["group-stack-2".to_owned()].as_slice())
+        );
+    }
+
+    #[test]
+    fn overlap_seam_double_click_replies_to_the_older_message() {
+        let mut app = app();
+        group_stacks_sample(&mut app);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..4 {
+            streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+        }
+        let id = crate::ui::conversation::bubble_id(SAMPLES[0].id, "group-stack-2");
+        let older = ctx
+            .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
+            .unwrap();
+        let point = egui::pos2(older.left() + 20.0, older.bottom() - 2.0);
+        for _ in 0..2 {
+            for pressed in [true, false] {
+                streak_test_frame(
+                    &mut app,
+                    &ctx,
+                    1180.0,
+                    2000.0,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+        }
+        assert_eq!(
+            app.reply_to.as_ref().map(|reply| reply.id.as_str()),
+            Some("group-stack-2")
+        );
+    }
+
+    #[test]
     fn group_shadow_colours_the_body_and_tail_without_a_stripe() {
         for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
             let mut app = app();
@@ -5554,8 +5655,15 @@ mod tests {
                 let egui::Shape::Rect(body) = &parts[0] else {
                     panic!("body shadow");
                 };
+                if ![0, 2, 5, 8].contains(&index) {
+                    assert!(
+                        !matches!(&parts[1], egui::Shape::Mesh(_)),
+                        "followers have no tail shadow"
+                    );
+                    return body.fill;
+                }
                 let egui::Shape::Mesh(tail) = &parts[1] else {
-                    panic!("tail shadow");
+                    panic!("head tail shadow");
                 };
                 assert!(
                     tail.vertices.iter().any(|vertex| vertex.color == body.fill),
@@ -5633,8 +5741,8 @@ mod tests {
                     };
                     if let (Some(first), Some(next)) = (live(first), live(next)) {
                         assert!(
-                            (next.top() - first.bottom() - 4.0).abs() < 1.0,
-                            "scrolling retains the live four-point row gap"
+                            (first.bottom() - next.top() - 6.0).abs() < 1.0,
+                            "scrolling retains six-point overlap with current-pass geometry"
                         );
                     }
                 }
@@ -5909,30 +6017,30 @@ mod tests {
                     let body = rect(index);
                     assert_eq!(painted.top(), body.top(), "tails leave the top edge");
                     assert_eq!(painted.bottom(), body.bottom(), "no tail below the body");
-                    if index < 10 {
-                        assert!(
-                            (body.left() - painted.left() - crate::ui::widgets::TAIL_WIDTH).abs()
-                                < 0.5
-                        );
+                    let head = [0, 2, 5, 8, 10].contains(&index);
+                    let reach = if head {
+                        crate::ui::widgets::TAIL_WIDTH
                     } else {
-                        assert!(
-                            (painted.right() - body.right() - crate::ui::widgets::TAIL_WIDTH).abs()
-                                < 0.5
-                        );
+                        0.0
+                    };
+                    if index < 10 {
+                        assert!((body.left() - painted.left() - reach).abs() < 0.5);
+                    } else {
+                        assert!((painted.right() - body.right() - reach).abs() < 0.5);
                     }
                 }
                 for (first, second) in [(0, 1), (2, 3), (3, 4), (5, 6), (6, 7), (8, 9), (10, 11)] {
                     assert!(
-                        rect(second).top() >= rect(first).bottom() + 3.5,
-                        "same-run bodies must not overlap"
+                        (rect(first).bottom() - rect(second).top() - 6.0).abs() < 1.0,
+                        "eligible same-sender bodies overlap by six points"
                     );
                     let id = bubble_id(SAMPLES[0].id, &format!("group-stack-{second}"));
                     let text = ctx
                         .data(|data| data.get_temp::<egui::Rect>(id.with("body")))
                         .unwrap();
                     assert!(
-                        text.top() >= rect(second).top(),
-                        "text stays inside its bubble"
+                        text.top() >= rect(first).bottom(),
+                        "text stays below the older bubble covering its top"
                     );
                 }
                 for (first, second) in [(1, 2), (4, 5), (7, 8), (9, 10)] {
@@ -18988,11 +19096,14 @@ mod tests {
             .unwrap();
         settle_key_scroll(&mut app, &ctx);
         let (after, _) = scroll_metrics(&ctx, &chat);
-        assert!(
-            after > before + 20.0,
-            "the view followed ({before} -> {after})"
-        );
+        assert!(after > before, "the view followed ({before} -> {after})");
         assert!(app.at_bottom);
+        // Overlap and a collapsed prior footer make the height increment
+        // content-dependent. Check the true end, not a fixed20px delta.
+        assert!(
+            (offset_after_the_button(&mut app, &ctx, &chat) - after).abs() < 0.5,
+            "new arrival followed to the exact bottom"
+        );
     }
 
     /// G18: the wheel still scrolls away from the end after End; the keys'
@@ -19497,7 +19608,7 @@ mod tests {
                 ctx.data(|data| data.get_temp::<egui::Rect>(footer_id(chat, "long-c")))
                     .is_some()
             );
-            assert!((b.top() - a.bottom() - 4.).abs() < 1.);
+            assert!((a.bottom() - b.top() - 6.).abs() < 1.);
         }
     }
 
@@ -24205,12 +24316,11 @@ mod bubble_detail_tests {
     }
 
     /// The `bubbles` page in both Messages palettes: every message of the
-    /// sample is drawn, with the same top-corner tail on every body as the
-    /// other skins. Free emoji and bare pictures keep their own geometry.
+    /// sample is drawn, with one top-corner tail per run as the other skins. Free emoji and bare pictures keep their own geometry.
     /// All of it fits a 1280
     /// by 1000 window.
     #[test]
-    fn messages_balloons_tail_every_body() {
+    fn messages_balloons_tail_only_the_run_head() {
         // These runs belong to one day. Near midnight a real clock puts a
         // day boundary between them, correctly giving another bubble a tail.
         let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
@@ -24276,10 +24386,10 @@ mod bubble_detail_tests {
             );
             for (id, own, tailed) in [
                 ("bubbles-in-1", false, true),
-                ("bubbles-in-2", false, true),
+                ("bubbles-in-2", false, false),
                 ("bubbles-out-1", true, true),
-                ("bubbles-out-3", true, true),
-                ("bubbles-in-4", false, true),
+                ("bubbles-out-3", true, false),
+                ("bubbles-in-4", false, false),
                 ("bubbles-out-4", true, true),
             ] {
                 let past = out_past(id, own);
