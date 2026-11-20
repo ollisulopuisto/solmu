@@ -703,3 +703,7 @@ history and search continuation. Tests cover disconnected inventory without a
 Chats replacement event, legitimate empty inventory, malformed history, and
 search retaining results/cursor across refusal and successful retry.
 No real Server query or UI-layout changes; native/live acceptance unverified.
+
+## Transcript reading alignment,20 November
+
+Ready voice/video transcript text now forces left alignment independently of outgoing bubble placement and has plain double quotation marks. New layout regression checks quoted multiline text has a common left edge under an outgoing layout. Both-theme actual synthetic Linux outgoing voice captures inspected. Native test-target compile passes; native test execution and Mac pixels remain gates. Richer transcript styling/collapse and moving the action outside the bubble remain sketch-only.
