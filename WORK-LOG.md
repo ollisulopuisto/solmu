@@ -1098,3 +1098,8 @@ App regressions cover routing, quote/replacement preservation, and refusal.
 A real-daemon fixture test verifies a separate enqueue client exits before
 due time and the daemon still delivers once and persists Sent. This does not
 verify the user's live Studio installation or real-network delivery.
+
+
+## Scheduler persistence failure,20 November
+
+Daemon now exits nonzero on any queue.save failure, before dispatch proceeds or control HTTP success is sent. Durable Sending recovers as Uncertain, no retry. Subprocess regression verifies save failure cannot return to caller. Existing closed-client acceptance verifies direct queue.json and restart/no-duplicate. Runtime test execution pending focused harness.
