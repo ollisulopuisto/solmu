@@ -7887,14 +7887,14 @@ mod tests {
         app.attach(&ctx);
         let mut at = None;
         let mut drawn_now = Vec::new();
-        settle(&mut app, &ctx, &mut at, &mut drawn_now, "Transcribe");
+        settle(&mut app, &ctx, &mut at, &mut drawn_now, "Transcribe on this device");
         assert!(
-            at.is_none() && !drawn_now.iter().any(|text| text == "Transcribe"),
+            at.is_none() && !drawn_now.iter().any(|text| text == "Transcribe on this device"),
             "no configured service, no transcription offer"
         );
 
         app.transcriber = Some(crate::transcribe_worker::Worker::stub([]));
-        settle(&mut app, &ctx, &mut at, &mut drawn_now, "Transcribe");
+        settle(&mut app, &ctx, &mut at, &mut drawn_now, "Transcribe on this device");
         let at = at.expect("the configured service offers Transcribe");
         frame_with(&mut app, &ctx, click(at));
         // frame_ui applies queued actions at the end of the frame, so the
