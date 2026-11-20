@@ -310,8 +310,8 @@ mod tests {
         let mut ids = Vec::new();
         let mut open = Vec::new();
         let frame = |ctx: &egui::Context, ids: &mut Vec<egui::Id>, open: &mut Vec<bool>| {
-            let _ = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = ctx.run_ui(Default::default(), |ui| {
+                ui.vertical(|ui| {
                     for scope in ["batch-current", "batch-previous"] {
                         for index in 0..2 {
                             let response = egui::CollapsingHeader::new("Technical details")
@@ -327,12 +327,8 @@ mod tests {
             });
         };
         frame(&ctx, &mut ids, &mut open);
-        let mut unique = ids.clone();
-        unique.sort();
-        unique.dedup();
+        let unique: std::collections::HashSet<_> = ids.iter().copied().collect();
         assert_eq!(unique.len(), 4);
-        egui::collapsing_header::CollapsingState::load_with_default_open(&ctx, ids[0], false)
-            .set_open(true);
         // Store the explicit state exactly as clicking the first header does.
         let mut state =
             egui::collapsing_header::CollapsingState::load_with_default_open(&ctx, ids[0], false);
