@@ -6,6 +6,7 @@ pub enum State {
     Waiting,
     Sending,
     Accepted { pending_id: String },
+    Confirmed { message_id: String },
     FailedBeforeSend(String),
     Uncertain(String),
 }
@@ -31,6 +32,22 @@ pub fn retry_failed(items: &mut [Item]) {
             item.state = State::Waiting;
         }
     }
+}
+
+/// Retry only pre-submit failures, retaining the original event indices.
+/// Never pass accepted/uncertain rows through queue admission or replanning.
+pub fn prepare_retry(items: &mut [Item]) -> Vec<(usize, Item)> {
+    items
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            if !matches!(item.state, State::FailedBeforeSend(_)) {
+                return None;
+            }
+            item.state = State::Waiting;
+            Some((index, item.clone()))
+        })
+        .collect()
 }
 
 /// Header fields are metadata, not new lines, mentions or Markdown directives.
@@ -162,4 +179,50 @@ pub fn unresolved_marks(marks: Vec<ForwardedMessage>, origin: &str) -> Vec<Forwa
                 && !m.message.is_empty()
         })
         .collect()
+}
+
+#[cfg(test)]
+mod retry_selection_tests {
+    use super::*;
+    #[test]
+    fn only_known_unsent_rows_can_be_rejected_by_a_retry_queue() {
+        let make = |state| Item {
+            origin: "origin".into(),
+            planned: true,
+            source_chat: "source".into(),
+            source_message: "m".into(),
+            source_account: "a".into(),
+            destination_account: "b".into(),
+            attachment: None,
+            destination: "dest".into(),
+            text: "body".into(),
+            state,
+        };
+        let mut items = vec![
+            make(State::Accepted {
+                pending_id: "pending".into(),
+            }),
+            make(State::FailedBeforeSend("download".into())),
+            make(State::Uncertain("timeout".into())),
+            make(State::Confirmed {
+                message_id: "final".into(),
+            }),
+        ];
+        let jobs = prepare_retry(&mut items);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].0, 1);
+        for (index, _) in jobs {
+            items[index].state = State::FailedBeforeSend("queue full".into());
+        }
+        assert!(matches!(items[0].state, State::Accepted { .. }));
+        assert!(matches!(items[2].state, State::Uncertain(_)));
+        assert!(matches!(items[3].state, State::Confirmed { .. }));
+        assert_eq!(
+            prepare_retry(&mut items)
+                .iter()
+                .map(|(index, _)| *index)
+                .collect::<Vec<_>>(),
+            [1]
+        );
+    }
 }

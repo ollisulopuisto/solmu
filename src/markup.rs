@@ -61,6 +61,7 @@ pub struct Text {
 /// the galley, which egui re-shapes from the job every pass.
 struct Shared {
     placements: Vec<String>,
+    list_indent: f32,
     /// The link ranges in `unbroken_text` coordinates: what copy should
     /// read. Equals `links` for a greedy layout.
     copy_links: Vec<(Range<usize>, String)>,
@@ -167,6 +168,7 @@ fn emoji_scale(text: &str) -> f32 {
 /// The parts of a laid-out message before the galley.
 struct Built {
     job: LayoutJob,
+    list_indent: f32,
     placements: Vec<String>,
     links: Vec<(Range<usize>, String)>,
     big: bool,
@@ -210,7 +212,8 @@ fn finish(
 ) -> Text {
     // The block and quote ranges are character-indexed; galley sections use
     // byte ranges, so convert with the final job text.
-    let galley = bidi::layout_job(ui, built.job);
+    let mut galley = bidi::layout_job(ui, built.job);
+    crate::list_layout::hanging(&mut galley, &inserted, built.list_indent);
     let row_kinds = row_kinds(&galley, &built.blocks, &built.quotes);
     let copy_links = copy_links.unwrap_or_else(|| built.links.clone());
     Text {
@@ -219,6 +222,7 @@ fn finish(
         big: built.big,
         shared: Arc::new(Shared {
             placements: built.placements,
+            list_indent: built.list_indent,
             copy_links,
             accessible_text: built.accessible_text,
             unbroken,
@@ -239,6 +243,35 @@ fn finish(
 /// position of its newline against the block's content bounds: the blank
 /// lines between a fence's content lines fall inside, the dropped markers'
 /// rows fall outside and stay Normal.
+fn list_indent(ui: &egui::Ui, job: &LayoutJob, size: f32, cap: f32) -> f32 {
+    let text = &job.text;
+    if crate::bidi::message_rtl(text) {
+        return 0.0;
+    }
+    text.split_inclusive('\n')
+        .scan(0, |start, line| {
+            let at = *start;
+            *start += line.len();
+            Some((at, line))
+        })
+        .filter(|(start, _)| {
+            !job.sections.iter().any(|section| {
+                section.byte_range.start.0 <= *start
+                    && *start < section.byte_range.end.0
+                    && section.format.font_id.family == egui::FontFamily::Monospace
+            })
+        })
+        .filter_map(|(_, line)| crate::list_layout::prefix_end(line).map(|end| &line[..end]))
+        .map(|prefix| {
+            ui.painter()
+                .layout_no_wrap(prefix.into(), theme::regular(size), Color32::WHITE)
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max)
+        .min(cap.max(0.0) / 3.0)
+}
+
 fn row_kinds(
     galley: &Galley,
     blocks: &[(usize, Range<usize>)],
@@ -385,8 +418,11 @@ fn build(
             TextFormat::simple(theme::regular(size), style.color),
         );
     }
+    let list_indent = list_indent(ui, &job, size, max_width);
+    job.wrap.max_width = (max_width - list_indent).max(1.0);
     Built {
         job,
+        list_indent,
         placements,
         links,
         big,
@@ -650,6 +686,7 @@ impl Prepared {
                 big: built.big,
                 shared: Arc::new(Shared {
                     placements: built.placements,
+                    list_indent: built.list_indent,
                     copy_links: built.links,
                     accessible_text: built.accessible_text,
                     unbroken: None,
@@ -662,7 +699,8 @@ impl Prepared {
             // Emoji-only text never balances; a zero cap leaves nothing to do.
             return whole(built);
         }
-        let breaks = balanced_breaks(ui, &built, style.size, max_width);
+        let cap = built.job.wrap.max_width;
+        let breaks = balanced_breaks(ui, &built, style.size, cap);
         if breaks.is_empty() {
             return whole(built);
         }
@@ -688,6 +726,7 @@ impl Prepared {
             big: built.big,
             shared: Arc::new(Shared {
                 placements: built.placements,
+                list_indent: built.list_indent,
                 copy_links,
                 accessible_text: built.accessible_text,
                 unbroken: Some(unbroken),
@@ -701,7 +740,15 @@ impl Prepared {
     /// when the atlas changes, so a font reload never paints stale glyphs.
     fn draw(&self, ui: &egui::Ui) -> Text {
         Text {
-            galley: bidi::layout_job(ui, self.job.clone()),
+            galley: {
+                let mut galley = bidi::layout_job(ui, self.job.clone());
+                crate::list_layout::hanging(
+                    &mut galley,
+                    &self.shared.inserted,
+                    self.shared.list_indent,
+                );
+                galley
+            },
             links: self.links.clone(),
             big: self.big,
             shared: self.shared.clone(),
@@ -3506,6 +3553,96 @@ mod monospace_tests {
                     RowKind::Normal,
                 ],
                 "content and the in-fence blank are code, markers are not: {kinds:?}"
+            );
+        });
+        output.textures_delta.clear();
+    }
+}
+
+#[cfg(test)]
+mod compact_list_tests {
+    use super::*;
+    #[test]
+    fn compact_list_balancing_keeps_copy_and_link_targets() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style { size: 16.0, color: Color32::WHITE, secondary: Color32::GRAY, link: Color32::BLUE, mention: Color32::GREEN };
+            let source = "•  *Open settings.* Follow the longer instructions at https://example.test/ before closing the app.\n•  Second item.";
+            let laid = layout_balanced(ui, source, &[], &style, 250.0, false);
+            assert_eq!(laid.unbroken_text(), plain(source, &[]));
+            assert!(laid.galley.rows.iter().skip(1).any(|row| row.pos.x > 0.0));
+            assert!(laid.shared.list_indent > 0.0);
+            assert!(laid.links.iter().any(|(_,url)| url == "https://example.test/"));
+            let cached = layout_balanced(ui, source, &[], &style, 250.0, false);
+            assert_eq!(laid.galley.rect, cached.galley.rect);
+            assert_eq!(laid.inserted(), cached.inserted());
+            assert_eq!(laid.shared.list_indent, cached.shared.list_indent);
+        });
+        output.textures_delta.clear();
+    }
+    #[test]
+    fn fenced_code_markers_do_not_reserve_prose_indentation() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::BLUE,
+                mention: Color32::GREEN,
+            };
+            for source in [
+                "```\n- option long enough to wrap over multiple rows\n```",
+                "```\n12. option\n```\nordinary prose",
+            ] {
+                let built = build(ui, source, &[], &style, 180.0, false);
+                assert_eq!(built.list_indent, 0.0, "{source}");
+                assert_eq!(built.job.wrap.max_width, 180.0);
+            }
+            let built = build(
+                ui,
+                "```\n- option\n```\n•  prose item long enough to wrap",
+                &[],
+                &style,
+                180.0,
+                false,
+            );
+            assert!(built.list_indent > 0.0, "real prose lists still hang");
+        });
+        output.textures_delta.clear();
+    }
+    #[test]
+    fn hanging_does_not_change_ordinary_or_rtl_text_layout() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            assert_eq!(
+                list_indent(
+                    ui,
+                    &LayoutJob::simple_singleline(
+                        "ordinary prose".into(),
+                        theme::regular(16.0),
+                        Color32::WHITE
+                    ),
+                    16.0,
+                    250.0
+                ),
+                0.0
+            );
+            assert_eq!(
+                list_indent(
+                    ui,
+                    &LayoutJob::simple_singleline(
+                        "•  שלום עולם".into(),
+                        theme::regular(16.0),
+                        Color32::WHITE
+                    ),
+                    16.0,
+                    250.0
+                ),
+                0.0
             );
         });
         output.textures_delta.clear();

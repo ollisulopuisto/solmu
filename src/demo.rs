@@ -3739,7 +3739,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 }
                 app.scroll_to_bottom = true;
             }
-            "forward-progress" => {
+            "forward-progress" | "forward-results" | "forward-sending" => {
                 apply_flags(app, Some("forward"));
                 let mut item = crate::composed_forward::Item {
                     origin: "https://synthetic.invalid".into(),
@@ -3755,11 +3755,30 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                         pending_id: "synthetic".into(),
                     },
                 };
+                for chat in app
+                    .chats
+                    .iter_mut()
+                    .filter(|chat| SAMPLES[..2].iter().any(|sample| sample.id == chat.id))
+                {
+                    chat.backend_origin = Some(item.origin.clone());
+                    chat.backend_account = Some(item.destination_account.clone());
+                }
+                if part == "forward-results" {
+                    item.state = crate::composed_forward::State::Confirmed {
+                        message_id: "final".into(),
+                    };
+                }
+                if part == "forward-sending" {
+                    item.state = crate::composed_forward::State::Sending;
+                }
                 app.forward_items.push(item.clone());
                 item.attachment = Some(1);
                 item.state = crate::composed_forward::State::FailedBeforeSend(
                     "Attachment download failed".into(),
                 );
+                if part == "forward-sending" {
+                    item.state = crate::composed_forward::State::Waiting;
+                }
                 app.forward_items.push(item.clone());
                 item.destination = SAMPLES[1].id.into();
                 item.state =
