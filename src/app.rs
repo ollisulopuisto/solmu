@@ -10075,21 +10075,25 @@ impl App {
                     })
                     .map(|m| m.chat.clone())
                     .unwrap_or_else(|| member.chat.clone());
+                let has_existing_draft = self.parked_draft(&owner)
+                    || crate::ui::merged::has_reply(self, ctx, &source)
+                    || (self.open_chat.as_deref() == Some(&owner)
+                        && (!self.composer.trim().is_empty()
+                            || !self.pending.is_empty()
+                            || self.reply_to.is_some()));
                 if text.is_empty() && files.is_empty() {
                     self.apply(Action::OpenChat(member.chat.clone()), ctx);
                     if self.open_chat.as_deref() == Some(&owner) {
-                        crate::ui::merged::prepare_destination(self, ctx, &source);
+                        if !has_existing_draft {
+                            crate::ui::merged::prepare_destination(self, ctx, &source);
+                        }
                         self.new_message = Default::default();
                         self.dialog = None;
                         self.focus_composer = true;
                     }
                     return;
                 }
-                if self.editing.is_some()
-                    || self.parked_draft(&owner)
-                    || (self.open_chat.as_deref() == Some(&owner)
-                        && (!self.composer.trim().is_empty() || !self.pending.is_empty()))
-                {
+                if self.editing.is_some() || has_existing_draft {
                     self.new_message.notice = Some(
                         crate::i18n::gettext(
                             self.locale,
