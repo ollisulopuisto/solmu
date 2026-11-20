@@ -15,7 +15,7 @@ from the latest Mac result. No screenshot or release change.
 
 ## 2026-11-20: Combine approved one-tail groups with restored overlap
 
-Olli confirmed15:30: one tail per grouped bubbles, with the older overlap back.
+This branch combines one tail per grouped bubbles with restored overlap.
 Integrated the four overlap-restoration commits from PR407 on the avatar-tail
 branch, retaining current main and its newer hidden-message handling. The tail
 rule now applies to ordinary outgoing/direct runs and linked runs too. Incoming
