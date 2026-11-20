@@ -14941,7 +14941,7 @@ mod tests {
                 ..*view
             };
             let mut row = Rect::NOTHING;
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 row = bubble_frame(
                     ui,
                     &view,
@@ -14975,6 +14975,7 @@ mod tests {
                     .iter()
                     .any(|text| text.contains("Message hidden") || text == "Unhide")
             );
+            output.textures_delta.clear();
             assert_eq!(row.height(), 32.0);
         });
     }
