@@ -703,3 +703,8 @@ history and search continuation. Tests cover disconnected inventory without a
 Chats replacement event, legitimate empty inventory, malformed history, and
 search retaining results/cursor across refusal and successful retry.
 No real Server query or UI-layout changes; native/live acceptance unverified.
+
+
+## Restore overlapping consecutive bubbles,20 November
+
+Regression traced to #355, which replaced #246 seam overlap with separated rows. Restore6px overlap using current-pass predecessor geometry, older-edge repaint and covered hit-test clipping. Keep current width bands and every-body top tails. Selection and hard-boundary rows remain separate. Native tests updated for geometry, scroll and covered menus, and both-theme group-stack app captures added to the existing Mac CI smoke path. No real chat sent, no package published. Local native build/check execution remains pending after missing Linux development dependencies and bounded compile-time attempts.

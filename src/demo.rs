@@ -5339,7 +5339,7 @@ mod tests {
     }
 
     #[test]
-    fn separated_bubbles_keep_their_own_menu_and_selection_targets() {
+    fn overlapping_bubbles_keep_their_own_menu_and_selection_targets() {
         let mut app = app();
         group_stacks_sample(&mut app);
         let ctx = egui::Context::default();
@@ -5358,10 +5358,10 @@ mod tests {
         let newer = rect(3);
         let point = egui::pos2(older.left() + 20.0, older.bottom() - 2.0);
         assert!(
-            !newer.contains(point),
-            "four-point row gap leaves no overlap"
+            newer.contains(point),
+            "the older lower edge sits in front of the next bubble"
         );
-        assert!((newer.top() - older.bottom() - 4.).abs() < 1.);
+        assert!((older.bottom() - newer.top() - 6.).abs() < 1.);
         for pressed in [true, false] {
             streak_test_frame(
                 &mut app,
@@ -5388,7 +5388,7 @@ mod tests {
             "newer bubble must not steal seam clicks"
         );
         egui::Popup::close_all(&ctx);
-        let point = egui::pos2(newer.left() + 20., newer.top() + 2.);
+        let point = egui::pos2(newer.left() + 20., older.bottom() + 2.);
         for pressed in [true, false] {
             streak_test_frame(
                 &mut app,
@@ -5534,8 +5534,8 @@ mod tests {
                     };
                     if let (Some(first), Some(next)) = (live(first), live(next)) {
                         assert!(
-                            (next.top() - first.bottom() - 4.0).abs() < 1.0,
-                            "scrolling retains the live four-point row gap"
+                            (first.bottom() - next.top() - 6.0).abs() < 1.0,
+                            "scrolling retains six-point overlap with current-pass geometry"
                         );
                     }
                 }
@@ -5824,16 +5824,16 @@ mod tests {
                 }
                 for (first, second) in [(0, 1), (2, 3), (3, 4), (5, 6), (6, 7), (8, 9), (10, 11)] {
                     assert!(
-                        rect(second).top() >= rect(first).bottom() + 3.5,
-                        "same-run bodies must not overlap"
+                        (rect(first).bottom() - rect(second).top() - 6.0).abs() < 1.0,
+                        "eligible same-sender bodies overlap by six points"
                     );
                     let id = bubble_id(SAMPLES[0].id, &format!("group-stack-{second}"));
                     let text = ctx
                         .data(|data| data.get_temp::<egui::Rect>(id.with("body")))
                         .unwrap();
                     assert!(
-                        text.top() >= rect(second).top(),
-                        "text stays inside its bubble"
+                        text.top() >= rect(first).bottom(),
+                        "text stays below the older bubble covering its top"
                     );
                 }
                 for (first, second) in [(1, 2), (4, 5), (7, 8), (9, 10)] {
