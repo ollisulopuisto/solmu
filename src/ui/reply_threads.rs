@@ -172,14 +172,6 @@ pub fn complete_full_scroll(
     }
     false
 }
-pub fn has_links(ctx: &egui::Context) -> bool {
-    frame(ctx).is_some_and(|f| {
-        !f.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .parents
-            .is_empty()
-    })
-}
 #[cfg(feature = "demo")]
 pub fn demo_open(app: &App, ctx: &egui::Context) {
     if let Some(chat) = app.current_chat() {
@@ -437,7 +429,8 @@ mod tests {
             },
         );
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["a".into()]));
+        let mut output = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["a".into()]));
+        output.textures_delta.clear();
         let key = scope(&app, &["a".into()]);
         ctx.data_mut(|d| {
             d.insert_temp(

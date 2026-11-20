@@ -2999,10 +2999,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     let streak_hues = chat
         .is_group()
         .then(|| sender_streak_hues(&conversation.messages));
-    let has_hidden = app.has_hidden_messages(&chat.id) || super::reply_threads::has_links(ui.ctx());
+    let has_hidden = app.has_hidden_messages(&chat.id);
     let starts = row_starts(
         &conversation.messages,
-        app.individual_message_rows(&chat.id) || super::reply_threads::has_links(ui.ctx()),
+        app.individual_message_rows(&chat.id),
     );
     let total = starts.len();
     // The current message: the one the cursor names, or the newest when it
@@ -5003,7 +5003,15 @@ fn bubble(
                         )
                     })
                     .unwrap_or(body.rect);
-                super::reply_threads::row(ui, message, &painted, view.palette.accent, actions);
+                // Albums retain their ordinary single-row navigation and accessibility.
+                // Each member keeps its exact message identity for thread entry/jumps.
+                if let Some(items) = album {
+                    for item in items {
+                        super::reply_threads::row(ui, item, &painted, view.palette.accent, actions);
+                    }
+                } else {
+                    super::reply_threads::row(ui, message, &painted, view.palette.accent, actions);
+                }
             }
         },
     );

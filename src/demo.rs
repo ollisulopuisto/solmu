@@ -25175,6 +25175,7 @@ mod card_width_tests {
 }
 
 /// Synthetic thread review fixture.
+#[cfg(feature = "demo")]
 pub(crate) fn reply_thread() -> bool {
     std::env::args().any(|arg| arg.contains("reply-thread"))
 }

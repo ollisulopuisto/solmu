@@ -719,3 +719,14 @@ Three production graph tests and three production router tests executed directly
 ## Authenticated automation product decision,20 November
 
 Updated PRODUCT.md and CONTRIBUTING.md to permit scoped authenticated API, CLI and MCP read/send access including WhatsApp, replacing the previous blanket exclusion. Read grants do not authorize writes. Revocation, explicit destination limits, loopback default, request validation, metadata-only auditing and remote-transport decisions remain requirements. Documentation only; no server, grant, token, installation or send created.
+
+## Thread CI follow-up,20 November
+
+Mac CI executed the thread changes and found new test texture-delta cleanup
+mistakes plus album accessibility/navigation regressions: using any reply link
+to force every message into a separate row split unrelated media albums. Keep
+the normal album grouping and register each member's exact thread identity on
+the album's shared painted bounds. Clear texture deltas in the new seeded
+fixtures. Native all-target/all-feature Clippy passes; local targeted application
+test execution exceeded120 seconds during compilation and has not run. CI must
+recheck the three existing demo failures, including right-click-beside-message.
