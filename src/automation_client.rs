@@ -94,7 +94,17 @@ impl Client {
                 format!(
                     "{}{}",
                     self.base,
-                    if method == "POST" { path } else { &parsed.1 }
+                    if method == "POST"
+                        || matches!(
+                            parsed.0,
+                            crate::read_api::Route::People
+                                | crate::read_api::Route::PersonMessages { .. }
+                        )
+                    {
+                        path
+                    } else {
+                        &parsed.1
+                    }
                 ),
             )
             .bearer_auth(self.token()?);

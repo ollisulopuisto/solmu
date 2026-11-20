@@ -771,3 +771,18 @@ read time, stale-grant check after disk claim, invalid token options, and Window
 directory-sync incompatibility. Final all-target/all-feature native Clippy, formatting and diff checks pass;407 existing portable adapter tests also pass. Own adversarial review found no remaining issue in these paths.
 No real token, service, account query, live send, media upload or release created.
 Full application tests and native Mac execution not run locally.
+
+## Automation independent-review fixes,20 November
+
+Devin found five real issues on8b46654: stale PID-lock recovery could delete a
+new owner's lock and lose send claims, Windows PID locks never recover after a
+crash, empty relative parent broke Unix directory sync, local people paths were
+rewritten to the upstream root, and early denied HTTP sends missed receipt audit.
+Journal transactions now hold a cross-platform OS file lock, never unlink it,
+and release automatically on process exit. Local people paths stay local, empty
+parents mean current directory, HTTP POST receipts precede denial paths and
+unclassifiable malformed heads get anonymous receipts.113 production-module tests
+pass, including a killed lock-holder subprocess followed by eight concurrent
+receipt/claim writers proving one retained claim, relative-path restart, denied
+HTTP receipts, and actual-client people/history routes. Native all-target/all-
+feature Clippy passes. Windows runtime and fresh independent CI/review pending.

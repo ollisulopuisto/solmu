@@ -234,3 +234,157 @@ fn actual_cli_sends_through_scoped_loopback_server() {
     assert_eq!(value["delivery_confirmed"], false);
     assert_eq!(f.count.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+#[ignore]
+fn crash_lock_holder() {
+    let Ok(path) = std::env::var("SOLMU_TEST_LOCK_PATH") else {
+        return;
+    };
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .unwrap();
+    f.lock().unwrap();
+    std::fs::write(format!("{path}.ready"), "ready").unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(60));
+    drop(f);
+}
+#[test]
+fn crash_releases_os_lock_and_concurrent_receipts_keep_one_claim() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("audit.json");
+    let lock = path.with_extension("writes.oslock");
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "crash_lock_holder", "--ignored"])
+        .env("SOLMU_TEST_LOCK_PATH", &lock)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let marker = std::path::PathBuf::from(format!("{}.ready", lock.display()));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !marker.exists() {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let count = Arc::new(AtomicUsize::new(0));
+    let barrier = Arc::new(std::sync::Barrier::new(8));
+    let mut tasks = vec![];
+    for _ in 0..8 {
+        let path = path.clone();
+        let count = count.clone();
+        let barrier = barrier.clone();
+        tasks.push(std::thread::spawn(move || {
+            let j = solmu::write_journal::WriteJournal::new(path);
+            barrier.wait();
+            j.audit_attempt("caller", 1).unwrap();
+            if matches!(
+                j.claim("caller", "stable", "digest", 1).unwrap(),
+                solmu::write_journal::Claim::New
+            ) {
+                count.fetch_add(1, Ordering::SeqCst);
+                j.finish(
+                    "caller",
+                    "stable",
+                    Outcome::Accepted {
+                        message_id: "m".into(),
+                    },
+                )
+                .unwrap();
+            }
+        }));
+    }
+    for t in tasks {
+        t.join().unwrap();
+    }
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    let journal: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(journal["attempts"].as_array().unwrap().len(), 8);
+    assert_eq!(journal["entries"].as_object().unwrap().len(), 1);
+}
+#[test]
+fn relative_journal_filename_persists_and_reopens() {
+    let name = format!("solmu-test-relative-{}-audit.json", std::process::id());
+    let path = std::path::PathBuf::from(&name);
+    let j = solmu::write_journal::WriteJournal::new(path.clone());
+    j.audit_attempt("caller", 1).unwrap();
+    assert!(matches!(
+        j.claim("caller", "request", "digest", 1).unwrap(),
+        solmu::write_journal::Claim::New
+    ));
+    assert!(matches!(
+        solmu::write_journal::WriteJournal::new(path.clone())
+            .claim("caller", "request", "digest", 2)
+            .unwrap(),
+        solmu::write_journal::Claim::Existing(Outcome::Claimed)
+    ));
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_file(path.with_extension("writes.oslock")).unwrap();
+}
+#[test]
+fn denied_http_attempts_have_durable_receipts() {
+    let f = Fixture::new();
+    for (token, headers) in [
+        ("unknown", ""),
+        (f.read.as_str(), ""),
+        (f.token.as_str(), "Origin: https://example.invalid\r\n"),
+        (f.token.as_str(), "Content-Length: 8\r\n"),
+    ] {
+        let _ = f.post(token, headers, "hi");
+    }
+    let audit: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(f.path.with_extension("writes.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(audit["attempts"].as_array().unwrap().len() >= 4);
+    assert_eq!(f.count.load(Ordering::SeqCst), 0);
+}
+#[test]
+fn actual_client_preserves_local_people_and_person_history_routes() {
+    let mut f = Fixture::new();
+    let settings = f.dir.path().join("settings.json");
+    std::fs::write(&settings,r#"{"beeper":{"people":[{"name":"Synthetic","members":[{"origin":"http://other.invalid","account":"a","chat":"c"}]}]}}"#).unwrap();
+    Arc::get_mut(&mut f.shared).unwrap().settings = Some(settings);
+    let mut r = Registry::load(&f.path).unwrap();
+    let token = r
+        .add("people", vec!["people:read".into()], vec![], None, 0)
+        .unwrap();
+    r.save(&f.path).unwrap();
+    let token_file = f.dir.path().join("people.token");
+    std::fs::write(&token_file, token).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&token_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let shared = f.shared.clone();
+    let path = f.path.clone();
+    let task = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            solmu::read_http::serve_connection(&mut stream, &path, &shared)
+        }
+    });
+    let client = solmu::automation_client::Client::new(&base, token_file).unwrap();
+    let (status, body) = client.call("GET", "/v1/people", None).unwrap();
+    assert_eq!(status, 200);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let id = v["items"][0]["id"].as_str().unwrap();
+    let (status, body) = client
+        .call("GET", &format!("/v1/people/{id}/messages?limit=2"), None)
+        .unwrap();
+    assert_eq!(status, 200);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["partial"], true);
+    assert!(v["items"].as_array().unwrap().is_empty());
+    task.join().unwrap();
+    assert_eq!(f.count.load(Ordering::SeqCst), 0);
+}

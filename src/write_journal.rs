@@ -43,6 +43,22 @@ impl WriteJournal {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
+    fn lock(&self) -> Result<std::fs::File, String> {
+        // Never unlink/recover a pathname. The OS owns exclusivity and releases
+        // it on close or process exit, including crashes on Windows.
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options
+            .open(self.path.with_extension("writes.oslock"))
+            .map_err(|_| "write audit lock unavailable")?;
+        file.lock().map_err(|_| "write audit lock unavailable")?;
+        Ok(file)
+    }
     fn load(&self) -> Result<Journal, String> {
         let meta = match std::fs::metadata(&self.path) {
             Ok(m) => m,
@@ -64,7 +80,11 @@ impl WriteJournal {
     }
     fn save(&self, journal: &Journal) -> Result<(), String> {
         use std::io::Write;
-        let parent = self.path.parent().unwrap_or(Path::new("."));
+        let parent = self
+            .path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
         let mut tmp =
             tempfile::NamedTempFile::new_in(parent).map_err(|_| "write audit unavailable")?;
         serde_json::to_writer(tmp.as_file_mut(), journal)
@@ -85,7 +105,7 @@ impl WriteJournal {
     }
     /// Record receipt before inspecting write content, including denied callers.
     pub fn audit_attempt(&self, client_hash: &str, at: i64) -> Result<(), String> {
-        let _lock = crate::read_api::Registry::lock(&self.path)?;
+        let _lock = self.lock()?;
         let mut journal = self.load()?;
         if journal.attempts.len() >= 10000 {
             return Err("write audit full".into());
@@ -103,7 +123,7 @@ impl WriteJournal {
         payload_digest: &str,
         at: i64,
     ) -> Result<Claim, String> {
-        let _lock = crate::read_api::Registry::lock(&self.path)?;
+        let _lock = self.lock()?;
         let mut journal = self.load()?;
         let key = format!("{client_hash}:{request_id}");
         if let Some(entry) = journal.entries.get(&key) {
@@ -133,7 +153,7 @@ impl WriteJournal {
         request_id: &str,
         outcome: Outcome,
     ) -> Result<(), String> {
-        let _lock = crate::read_api::Registry::lock(&self.path)?;
+        let _lock = self.lock()?;
         let mut journal = self.load()?;
         let entry = journal
             .entries

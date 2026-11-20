@@ -211,8 +211,25 @@ fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 
 pub fn serve_connection(stream: &mut TcpStream, path: &Path, shared: &Shared) {
     let Some(head) = read_head(stream) else {
+        // An incomplete/oversized head cannot be classified safely; record
+        // an anonymous malformed receipt rather than silently miss a write.
+        let journal = crate::write_journal::WriteJournal::new(path.with_extension("writes.json"));
+        let _ = journal.audit_attempt("", now());
         return respond(stream, 400, r#"{"error":"bad request"}"#);
     };
+    // Record every identifiable POST receipt before authorization, header,
+    // origin, body and rate-limit refusals. No request content is persisted.
+    let write_receipt = head.split_whitespace().next() == Some("POST");
+    if write_receipt {
+        let key = header(&head, "authorization")
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(hash_token)
+            .unwrap_or_default();
+        let journal = crate::write_journal::WriteJournal::new(path.with_extension("writes.json"));
+        if journal.audit_attempt(&key, now()).is_err() {
+            return respond(stream, 503, r#"{"error":"audit unavailable"}"#);
+        }
+    }
     if header(&head, "origin").is_some() || header(&head, "referer").is_some() {
         return respond(stream, 403, r#"{"error":"web-originated request refused"}"#);
     }
