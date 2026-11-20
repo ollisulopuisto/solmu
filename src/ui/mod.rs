@@ -30,6 +30,7 @@ pub mod rail;
 pub(crate) mod send_later;
 pub mod settings;
 pub mod switcher;
+mod transcript_text;
 pub mod update;
 pub mod widgets;
 

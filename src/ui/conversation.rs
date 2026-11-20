@@ -12229,17 +12229,52 @@ fn voice_transcript(
     };
     match worker.get(view.transcription_account, &view.chat.id, &message.id) {
         Some(crate::transcribe_worker::Status::Ready(text)) => {
+            ui.add_space(8.0);
             ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(format!("\"{text}\""))
-                            .font(theme::regular(12.0))
-                            .color(palette.secondary),
-                    )
-                    .halign(Align::Min)
-                    .wrap()
-                    .selectable(false),
+                theme::text(
+                    ui,
+                    crate::i18n::gettext(view.locale, "Transcript · On this device"),
+                    theme::regular(11.5),
+                    palette.secondary,
                 );
+                let id = egui::Id::new((
+                    "local-transcript-expanded",
+                    view.transcription_account,
+                    &view.chat.id,
+                    &message.id,
+                    &text,
+                ));
+                let drawn = super::transcript_text::show(
+                    ui,
+                    id,
+                    &text,
+                    super::transcript_text::Appearance {
+                        font: theme::regular(12.0),
+                        text: palette.secondary,
+                        link: palette.link,
+                        more: &crate::i18n::gettext(view.locale, "Show more (+{count} lines)"),
+                        less: &crate::i18n::gettext(view.locale, "Show less"),
+                    },
+                );
+                if drawn.expanded || drawn.total_lines <= 4 {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui
+                            .link(crate::i18n::gettext(view.locale, "Copy transcript"))
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(text.clone());
+                        }
+                        if ui
+                            .link(crate::i18n::gettext(view.locale, "Transcription language…"))
+                            .clicked()
+                        {
+                            actions.push(Action::ShowDialog(Dialog::TranscriptionLanguage {
+                                chat: view.chat.id.clone(),
+                                message: message.id.clone(),
+                            }));
+                        }
+                    });
+                }
             });
         }
         Some(crate::transcribe_worker::Status::Running) => {
@@ -12270,7 +12305,7 @@ fn voice_transcript(
             if theme::pill_button(
                 ui,
                 &palette,
-                &crate::i18n::gettext(view.locale, "Transcribe"),
+                &crate::i18n::gettext(view.locale, "Transcribe on this device"),
                 false,
             )
             .clicked()

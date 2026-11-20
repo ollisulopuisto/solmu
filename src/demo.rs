@@ -2616,6 +2616,22 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             // Evidence-only page for the code/quote panel shots: two fenced
             // blocks with prose between them, so the panels and their Copy
             // code buttons show in one capture.
+            "transcript-long" | "transcript-long-expanded" => {
+                transcript_sample(app);
+                let chat = app.open_chat.clone().unwrap();
+                let account = app.account().id.0.clone();
+                let text=(0..12).map(|i|format!("Paragraph {}. We can meet by the entrance at six. I will bring the tickets.",i+1)).collect::<Vec<_>>().join("\n\n");
+                app.transcriber = Some(crate::transcribe_worker::Worker::stub([(
+                    (account, chat.clone(), "ada-voice".into()),
+                    crate::transcribe_worker::Status::Ready(text),
+                )]));
+                app.conversations
+                    .get_mut(&chat)
+                    .unwrap()
+                    .messages
+                    .retain(|row| row.id == "ada-voice");
+                app.scroll_to_bottom = false;
+            }
             "code-panels" => {
                 let chat = SAMPLES[0].id;
                 let text = "Set it up like this:\n```\ncd ~/koodi/solmu\ncargo build\n```\nThen run the checks:\n```\ncargo test --locked\n```";
