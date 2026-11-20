@@ -15871,6 +15871,7 @@ mod tests {
         let mut app = app();
         let mut chat = Chat::new("fixture".into(), "Network name".into());
         chat.backend_account = Some("account".into());
+        chat.backend_origin = Some("http://fixture.invalid".into());
         app.settings.beeper.people.push(crate::merged::Person {
             name: "Alex".into(),
             members: vec![crate::merged::Member::of(&chat).unwrap()],
