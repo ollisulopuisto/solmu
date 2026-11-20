@@ -166,8 +166,7 @@ fn paint_appearance(
                 Color32::BLACK
             };
             let galley = initials_galley(ui, rect.width(), &text, ink);
-            ui.painter()
-                .galley(rect.center() - galley.size() / 2.0, galley, ink);
+            galley.paint(ui, rect.center() - galley.size() / 2.0, ink);
             true
         }
         Appearance::Image {
@@ -194,17 +193,15 @@ fn paint_appearance(
     }
 }
 
-fn initials_galley(ui: &egui::Ui, diameter: f32, text: &str, ink: Color32) -> Arc<egui::Galley> {
+fn initials_galley(ui: &egui::Ui, diameter: f32, text: &str, ink: Color32) -> super::widgets::Line {
     let mut font = theme::semibold(diameter * 0.38);
-    let mut galley = ui
-        .painter()
-        .layout_no_wrap(text.to_owned(), font.clone(), ink);
+    let mut line = super::widgets::line(ui, text, font.clone(), ink, f32::INFINITY, 1);
     let width = diameter * 0.78;
-    if galley.size().x > width {
-        font.size *= width / galley.size().x;
-        galley = ui.painter().layout_no_wrap(text.to_owned(), font, ink);
+    if line.size().x > width {
+        font.size *= width / line.size().x;
+        line = super::widgets::line(ui, text, font, ink, f32::INFINITY, 1);
     }
-    galley
+    line
 }
 
 /// Decode and bound a picked file, then look for a face to centre on. Runs
@@ -579,11 +576,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     if let Appearance::Initials { text, colour } = &mut editor.appearance {
                         ui.horizontal(|ui| {
                             ui.label(crate::i18n::gettext(locale, "Initials"));
-                            ui.add(
-                                egui::TextEdit::singleline(text)
-                                    .char_limit(12)
-                                    .desired_width(80.0),
-                            );
+                            ui.add(egui::TextEdit::singleline(text).desired_width(80.0));
                             *text = local_avatars::initials(text);
                         });
                         ui.horizontal(|ui| {
@@ -1170,7 +1163,7 @@ mod initials_layout_tests {
         app.attach(&ctx);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             for diameter in [28.0, 40.0, 110.0] {
-                for text in ["WWW", "漢字名", "AK"] {
+                for text in ["WWW", "漢字名", "AK", "👩🏽‍💻🇫🇮❤️", "A😀B"] {
                     let galley = initials_galley(ui, diameter, text, Color32::WHITE);
                     assert!(galley.size().x <= diameter * 0.8, "{text} at {diameter}");
                 }

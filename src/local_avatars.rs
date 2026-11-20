@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
+use unicode_segmentation::UnicodeSegmentation;
 
 pub const MAX_BYTES: u64 = 10 * 1024 * 1024;
 pub const MAX_DIMENSION: u32 = 8192;
@@ -178,9 +179,15 @@ pub fn replace(
     }
 }
 
+/// Up to three visible letters/numbers or emoji, never split a joined cluster.
 pub fn initials(text: &str) -> String {
-    text.chars()
-        .filter(|c| c.is_alphanumeric())
+    text.graphemes(true)
+        .filter(|cluster| {
+            // Keep combining marks with their base; reject controls and bidi
+            // formatting. ZWJ/variation selectors remain within valid emoji.
+            cluster.chars().next().is_some_and(char::is_alphanumeric)
+                || crate::emoji::only_emoji(cluster) == Some(1)
+        })
         .take(3)
         .collect()
 }
@@ -452,6 +459,23 @@ mod tests {
         assert_eq!(restored, entries);
     }
     #[test]
+    fn avatar_initials_preserve_emoji_and_grapheme_boundaries() {
+        for text in ["👩🏽‍💻", "👨‍👩‍👧‍👦", "🇫🇮", "❤️", "1️⃣", "e\u{301}"]
+        {
+            assert_eq!(initials(text), text);
+        }
+        assert_eq!(initials("👩🏽‍💻🇫🇮❤️Z"), "👩🏽‍💻🇫🇮❤️");
+        assert_eq!(initials("A😀B!C"), "A😀B");
+        assert_eq!(initials("\n\u{202e}<>!"), "");
+        let style = Appearance::Initials {
+            text: "👩🏽‍💻🇫🇮❤️".into(),
+            colour: [1, 2, 3],
+        };
+        let json = serde_json::to_string(&style).unwrap();
+        assert_eq!(serde_json::from_str::<Appearance>(&json).unwrap(), style);
+    }
+
+    #[test]
     fn image_paths_cannot_escape_owned_state() {
         assert!(image_path(Path::new("/state"), "../../secret.png").is_none());
         assert!(
@@ -459,7 +483,7 @@ mod tests {
                 .unwrap()
                 .starts_with("/state/custom-avatars")
         );
-        assert_eq!(initials("<A>\nK\u{202e}!!!😀"), "AK");
+        assert_eq!(initials("<A>\nK\u{202e}!!!😀"), "AK😀");
     }
 }
 
