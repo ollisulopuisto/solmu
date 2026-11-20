@@ -7,6 +7,31 @@ use crate::backend::LinkStatus;
 use crate::theme::{self, Icon};
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
+    if !app.settings.media_tools_onboarding_done {
+        card(
+            app,
+            ui,
+            "media-tools-onboarding",
+            "Voice and video transcription",
+            |app, ui| {
+                super::media_tools::show(app, ui);
+                let busy = app.media_tool_setup.busy();
+                ui.add_enabled_ui(!busy, |ui| {
+                    if ui
+                        .button(crate::i18n::gettext(app.locale, "Continue"))
+                        .clicked()
+                        || ui
+                            .button(crate::i18n::gettext(app.locale, "Skip for now"))
+                            .clicked()
+                    {
+                        app.settings.media_tools_onboarding_done = true;
+                        app.mark_settings_dirty();
+                    }
+                });
+            },
+        );
+        return;
+    }
     card(
         app,
         ui,

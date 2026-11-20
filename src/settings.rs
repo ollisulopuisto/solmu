@@ -429,6 +429,10 @@ pub enum TranscriptionEngine {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    #[serde(default)]
+    pub ffmpeg_path: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub media_tools_onboarding_done: bool,
     /// Local-only avatar presentation; never sent through a backend.
     #[serde(default)]
     pub local_avatars: Vec<crate::local_avatars::Entry>,
@@ -672,6 +676,8 @@ mod transcription_engine_migration_tests {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            ffmpeg_path: None,
+            media_tools_onboarding_done: false,
             local_avatars: Vec::new(),
             version: SETTINGS_VERSION,
             scheduler_url: default_scheduler_url(),
@@ -1908,4 +1914,28 @@ impl BeeperPreferences {
 
 fn default_scheduler_url() -> String {
     "http://127.0.0.1:23376".into()
+}
+
+#[cfg(test)]
+mod media_tool_preferences_tests {
+    #[test]
+    fn selected_media_path_and_onboarding_round_trip() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let mut settings = super::Settings::default();
+        settings.ffmpeg_path = Some(root.path().join("my-ffmpeg"));
+        settings.media_tools_onboarding_done = true;
+        settings.save(&path).unwrap();
+        let loaded = super::Settings::load(&path);
+        assert_eq!(loaded.ffmpeg_path, settings.ffmpeg_path);
+        assert!(loaded.media_tools_onboarding_done);
+        let mut value = serde_json::to_value(super::Settings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("ffmpeg_path");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("media_tools_onboarding_done");
+        let old: super::Settings = serde_json::from_value(value).unwrap();
+        assert!(old.ffmpeg_path.is_none());
+    }
 }

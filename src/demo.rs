@@ -2488,6 +2488,15 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     app.local_avatar_editor = None;
                 }
             }
+            "media-tools-settings" => {
+                app.page = crate::model::Page::Settings;
+                app.settings_search = "Media tools".into();
+            }
+            "media-tools-onboarding" => {
+                unlink(app);
+                app.link = crate::backend::LinkStatus::LoggedOut;
+                app.settings.media_tools_onboarding_done = false;
+            }
             "whisper-setup" => {
                 app.page = crate::model::Page::Settings;
                 app.settings_search = "Voice notes".into();

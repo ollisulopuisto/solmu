@@ -1,7 +1,34 @@
 //! Resolve optional local media tools without relying on a login-shell PATH.
 use std::path::{Path, PathBuf};
 
+static FFMPEG: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// App-wide explicit choice. All decoders and transcription use this resolver.
+pub fn configure(path: Option<PathBuf>) {
+    *FFMPEG.write().unwrap() = path;
+}
+pub fn configured() -> Option<PathBuf> {
+    FFMPEG.read().unwrap().clone()
+}
+
 pub fn resolve(tool: &str) -> Result<PathBuf, String> {
+    if let Some(path) = configured() {
+        if tool == "ffmpeg" {
+            return executable(&path).then_some(path).ok_or_else(||"The selected ffmpeg is no longer executable. Choose another in Settings > Media tools.".into());
+        }
+        if tool == "ffprobe" {
+            if let Some(parent) = path.parent() {
+                if let Ok(sibling) = resolve_in(tool, &[parent.to_path_buf()]) {
+                    return Ok(sibling);
+                }
+            }
+        }
+    }
+    detect(tool)
+}
+
+/// Automatic lookup never uses the explicit preference.
+pub fn detect(tool: &str) -> Result<PathBuf, String> {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|path| {
             std::env::split_paths(&path)
@@ -136,5 +163,98 @@ mod tests {
     #[test]
     fn resolver_rejects_relative_directories() {
         assert!(resolve_in("ffmpeg", &[PathBuf::from("relative")]).is_err());
+    }
+}
+
+/// Run only on a background thread. Kill a hung binary rather than freezing UI.
+pub fn verify(path: &Path, tool: &str) -> Result<(), String> {
+    if !path.is_absolute() || !executable(path) {
+        return Err("Choose an absolute executable file".into());
+    }
+    let output = tempfile::tempfile().map_err(|e| e.to_string())?;
+    let mut child = std::process::Command::new(path)
+        .arg("-version")
+        .stdin(std::process::Stdio::null())
+        .stdout(output.try_clone().map_err(|e| e.to_string())?)
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    let status = loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => break status,
+            None if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(25))
+            }
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Executable check timed out".into());
+            }
+        }
+    };
+    use std::io::{Read, Seek};
+    let mut output = output;
+    output.rewind().map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    output
+        .take(4096)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if status.success() && String::from_utf8_lossy(&bytes).starts_with(&format!("{tool} version "))
+    {
+        Ok(())
+    } else {
+        Err("The selected file did not identify as the requested media tool".into())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod executable_checks {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    fn script(root: &Path, name: &str, body: &str) -> PathBuf {
+        let path = root.join(name);
+        std::fs::write(&path, body).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+    #[test]
+    fn selected_executable_and_sibling_reach_the_production_resolver() {
+        let root = tempfile::tempdir().unwrap();
+        let ffmpeg = script(
+            root.path(),
+            "custom-ffmpeg",
+            "#!/bin/sh\nprintf 'ffmpeg version fixture\\n'\n",
+        );
+        let ffprobe = script(
+            root.path(),
+            "ffprobe",
+            "#!/bin/sh\nprintf 'ffprobe version fixture\\n'\n",
+        );
+        assert!(verify(&ffmpeg, "ffmpeg").is_ok());
+        assert!(verify(&ffprobe, "ffprobe").is_ok());
+        configure(Some(ffmpeg.clone()));
+        assert_eq!(resolve("ffmpeg").unwrap(), ffmpeg);
+        assert_eq!(resolve("ffprobe").unwrap(), ffprobe);
+        std::fs::remove_file(&ffmpeg).unwrap();
+        assert!(resolve("ffmpeg").is_err());
+        configure(None);
+    }
+    #[test]
+    fn rejects_wrong_non_executable_and_hung_files() {
+        let root = tempfile::tempdir().unwrap();
+        let wrong = script(
+            root.path(),
+            "wrong",
+            "#!/bin/sh\nprintf 'not the right tool\\n'\n",
+        );
+        assert!(verify(&wrong, "ffmpeg").is_err());
+        std::fs::set_permissions(&wrong, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(verify(&wrong, "ffmpeg").is_err());
+        let hung = script(root.path(), "hung", "#!/bin/sh\nwhile :; do :; done\n");
+        let start = std::time::Instant::now();
+        assert!(verify(&hung, "ffmpeg").unwrap_err().contains("timed out"));
+        assert!(start.elapsed().as_secs() < 6);
     }
 }

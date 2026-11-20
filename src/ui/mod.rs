@@ -20,6 +20,7 @@ pub mod local_avatars;
 pub mod locations;
 pub mod lock;
 pub mod login;
+mod media_tools;
 pub mod message_info;
 pub mod new_group;
 pub mod palette;
