@@ -2550,6 +2550,18 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     for_everyone: true,
                 });
             }
+            "batch-results" => {
+                app.batch_ui.owner = app.account().id.0.clone();
+                app.batch_ui.results = vec![crate::model::BatchItem {
+                    chat: "ada".into(),
+                    message: Some("402555".into()),
+                    everyone: false,
+                    result: Some(Ok(())),
+                }];
+                if let Some(chat) = app.chats.iter().find(|chat| !chat.is_group()) {
+                    app.batch_ui.results[0].chat = chat.id.clone();
+                }
+            }
             "previous-session-results" => {
                 app.batch_ui.owner = app.account().id.0.clone();
                 app.batch_ui.previous_session_results = vec![crate::model::BatchItem {
