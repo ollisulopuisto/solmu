@@ -15,6 +15,8 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- Chat-list reaction previews distinguish your reaction from reactions to your messages, without showing the original sender or delivery ticks as though the reaction were a new message. English wording first.
+
 - Ordered lists in Beeper rich-text messages keep their numbers after sending, including nested lists and non-default starting numbers, instead of appearing as bullets. Outbound Markdown stays unchanged.
 
 - Bridge messages carrying several attachments show them all instead of only the first: the set appears as an album with its caption, and each item downloads, replies, reacts and is deleted together with the message.

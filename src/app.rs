@@ -3875,6 +3875,7 @@ impl App {
             if let Some(message) = latest.filter(|m| m.timestamp >= display.last_activity) {
                 display.last_activity = message.timestamp;
                 display.last = Some(crate::model::LastMessage {
+                    reaction: None,
                     from_me: message.from_me,
                     sender: message.sender.clone(),
                     sender_name: message.sender_name.clone(),
@@ -34573,6 +34574,7 @@ mod chat_row_follows_messages_tests {
 
     fn last(text: &str, from_me: bool) -> LastMessage {
         LastMessage {
+            reaction: None,
             from_me,
             sender: "s".into(),
             sender_name: None,
