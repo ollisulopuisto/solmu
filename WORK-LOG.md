@@ -240,6 +240,10 @@ build the crate: PipeWire headers too old).
 
 
 
+## Larger reaction emoji,20 November
+
+Initial13px label inherited from initial commit0cd79a8, no documented size constraint found. Use17px emoji, keep count13px, same chip padding/click semantics. Measurement and painting share the exact mixed-size line. Footer metadata receives26px reacted row height so it does not constrain larger pills. Added font regression; native pixels/execution pending.
+
 ## 2026-11-18: Final helper pins from the published whisper-helper-v1.9.5 release
 
 Olli approved publication 14:49. #375 merged (matrix now uploads unsigned

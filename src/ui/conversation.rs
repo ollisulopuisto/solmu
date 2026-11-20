@@ -15760,9 +15760,16 @@ mod reaction_tests {
                 .iter()
                 .map(|section| section.format.font_id.size)
                 .collect();
-            assert_eq!(sizes.first(), Some(&17.0));
+            // The emoji font's platform-specific aspect ratio changes the
+            // invisible placeholder's font size. Its pinned row height,
+            // rather than that implementation detail, controls painted size.
+            let expected = ui.fonts_mut(|fonts| fonts.row_height(&crate::theme::regular(17.0)));
+            assert_eq!(
+                line.galley.job.sections[0].format.line_height,
+                Some(expected)
+            );
             assert_eq!(sizes.last(), Some(&13.0));
-            assert!(line.size().y >= 17.0);
+            assert!(line.size().y >= expected);
         });
         output.textures_delta.clear();
     }
