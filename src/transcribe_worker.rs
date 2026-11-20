@@ -41,15 +41,17 @@ type Key = (String, String, String);
 pub struct Generations {
     /// (account, chat) -> how many times it was deleted.
     chats: HashMap<(String, String), u64>,
+    accounts: HashMap<String, u64>,
     /// How many times everything was deleted.
     clears: u64,
 }
 
 impl Generations {
     /// The (clear, chat) generation a new job for this chat captures.
-    fn current(&self, account: &str, chat: &str) -> (u64, u64) {
+    fn current(&self, account: &str, chat: &str) -> (u64, u64, u64) {
         (
             self.clears,
+            self.accounts.get(account).copied().unwrap_or(0),
             self.chats
                 .get(&(account.to_owned(), chat.to_owned()))
                 .copied()
@@ -66,7 +68,7 @@ pub enum Command {
         account_id: String,
         global_language: Option<String>,
         /// (clear, chat) generation at queue time.
-        generation: (u64, u64),
+        generation: (u64, u64, u64),
     },
     RemoveChat {
         account_id: String,
@@ -350,6 +352,36 @@ impl Worker {
             account_id,
             chat_id,
         });
+    }
+
+    /// Logout/removal invalidates every queued/restoring result for this account.
+    pub fn remove_account(&self, account: String) -> Result<(), String> {
+        let _io = self
+            .shared
+            .store_io
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        *self
+            .shared
+            .generations
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .accounts
+            .entry(account.clone())
+            .or_default() += 1;
+        self.shared
+            .status
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|(owner, _, _), _| owner != &account);
+        self.restored
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|(_, key, _)| key.0 != account);
+        let result = self.store.as_ref().map(|store| store.remove_account(&account)).transpose().map_err(|_| "Could not remove this account's saved transcripts. Its encrypted archive may still contain them.".to_owned());
+        drop(_io);
+        let _ = self.tx.send(Command::Clear);
+        result.map(|_| ())
     }
 
     /// Deletes every transcript, effective on return: same immediate
@@ -1189,6 +1221,30 @@ mod tests {
         ));
         assert!(s.get("acc-2", "c1", "m5").is_some());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn account_logout_invalidates_late_results_without_erasing_other_accounts() {
+        let (store, dir) = store();
+        store.put("acc-2", "c1", "kept", "other account").unwrap();
+        let (engine, entered, release) = gated();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let count = wakes.clone();
+        let worker = Worker::spawn(Box::new(engine), store.clone(), move || {
+            count.fetch_add(1, Ordering::Relaxed);
+        });
+        worker.transcribe(job("late"), "acc-1".into(), None);
+        entered.recv().unwrap();
+        worker.remove_account("acc-1".into()).unwrap();
+        release.send(()).unwrap();
+        wait_wakes(&wakes, 2);
+        assert_eq!(store.get("acc-1", "c1", "late"), None);
+        assert_eq!(worker.get("acc-1", "c1", "late"), None);
+        assert_eq!(
+            store.get("acc-2", "c1", "kept").as_deref(),
+            Some("other account")
+        );
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

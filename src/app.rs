@@ -1290,7 +1290,8 @@ fn transcriber_worker(
     if choice == TranscriptionEngine::Off {
         return None;
     }
-    let store = match crate::transcriber::Store::new(dirs.state.join("transcripts"), 32 << 20) {
+    let store = match crate::transcriber::Store::encrypted(dirs.state.join("transcripts"), 32 << 20)
+    {
         Ok(store) => store,
         Err(error) => {
             eprintln!("solmu: transcript store unavailable: {error}");
@@ -2173,6 +2174,11 @@ impl App {
         let Some(index) = self.accounts.iter().position(|account| account.id == id) else {
             return;
         };
+        if let Some(worker) = self.transcript_reader()
+            && let Err(error) = worker.remove_account(id.0.clone())
+        {
+            self.toast_error(error);
+        }
         if self.accounts.len() <= 1 {
             self.accounts[index].backend.send(Command::Unlink);
             return;
@@ -6902,6 +6908,11 @@ impl App {
                 self.new_contact_dialog_request = None;
                 self.new_contact_pending = false;
                 let account = self.account().id.clone();
+                if let Some(worker) = self.transcript_reader()
+                    && let Err(error) = worker.remove_account(account.0.clone())
+                {
+                    self.toast_error(error);
+                }
                 self.poll_voting.clear();
                 self.interactive_sending.clear();
                 self.poll_creating = false;
@@ -7487,7 +7498,7 @@ impl App {
     /// has no engine or background thread and is never used to queue jobs.
     fn refresh_transcript_archive(&mut self) {
         self.transcript_archive = if self.transcriber.is_none() {
-            crate::transcriber::Store::new(self.dirs.state.join("transcripts"), 32 << 20)
+            crate::transcriber::Store::encrypted(self.dirs.state.join("transcripts"), 32 << 20)
                 .ok()
                 .map(|store| {
                     let waker = self.waker.clone();
@@ -27312,6 +27323,26 @@ mod tests {
         assert!(fading > 0.0 && fading < 1.0, "{fading}");
         assert_eq!(JumpHighlight::strength(JumpHighlight::DURATION), 0.0);
         assert_eq!(JumpHighlight::strength(10.0), 0.0);
+    }
+
+    #[test]
+    fn logout_purges_only_its_accounts_saved_transcripts() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let store =
+            crate::transcriber::Store::new(root.path().join("fixture-transcripts"), 1 << 20)
+                .unwrap();
+        store.put("1", "chat", "voice", "logged out text").unwrap();
+        store.put("2", "chat", "voice", "retained text").unwrap();
+        app.transcriber = Some(crate::transcribe_worker::Worker::stub_with_store(
+            store.clone(),
+        ));
+        app.handle_link(LinkStatus::LoggedOut, true);
+        assert_eq!(store.get("1", "chat", "voice"), None);
+        assert_eq!(
+            store.get("2", "chat", "voice").as_deref(),
+            Some("retained text")
+        );
     }
 
     #[test]

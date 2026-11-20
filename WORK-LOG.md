@@ -1120,7 +1120,16 @@ verify the user's live Studio installation or real-network delivery.
 
 Daemon now exits nonzero on any queue.save failure, before dispatch proceeds or control HTTP success is sent. Durable Sending recovers as Uncertain, no retry. Subprocess regression verifies save failure cannot return to caller. Existing closed-client acceptance verifies direct queue.json and restart/no-duplicate. Runtime test execution pending focused harness.
 
-
 ## Favorite marker placement,20 November
 
 Implement approved sketch5: paint-only hollow heart in avatar left gutter; existing network badges stay right. No independent click target or favorite toggle. Pure geometry regression checks compact/regular rows and no avatar overlap. Executed native tests/pixels pending CI.
+
+## Restore saved voice and video transcripts,20 November
+
+The private on-disk store already persisted transcripts. Bubble status only read hot memory, so after restart saved text could be searchable while the same bubble offered Transcribe again. Restore exact account/chat/message text asynchronously with bounded concurrent reads, versioned hit/miss cache, and deletion/drop checks. Use the archive reader for bubble text even with the speech engine off. Save/drop/reopen voice/video display and search regression failed against the old getter and passes after the fix. All focused worker tests pass in an isolated production-module harness; native test-target compilation passes. Full app/Mac runtime unverified. No new GUI or release.
+
+## Encrypted derived transcripts,20 November
+
+Production transcript readers/writers now use a local_transcripts table in each account's existing SQLCipher archive, with the archive's existing OS-keyring key and no plaintext fallback. Legacy text migrates by account in a transaction, commit with synchronous FULL, exact text readback, then plaintext-file unlink. Failed unlock, conflict, verification or purge prevents migration from silently counting as done. Existing backups/snapshots and storage-level deleted plaintext are not retroactively erased. OS-keyring access by apps already running as the user, admins and compromised logged-in sessions are not prevented by encryption at rest.
+
+Account unlink/logout purges only that account, invalidates queued results and closes our DB handle before account removal. Chat deletion/clear/search/restart retain their worker paths. Global text byte cap stays32MiB across accounts. Tests: three real SQLCipher module tests pass for wrong-key fail-closed/unkeyed read refusal/no plaintext markers, voice+video restart/search/account scope/removal, and verified migration/purge/conflict/no-account preservation.20 production worker tests pass including account logout late-result suppression. Native test-target compile passes; native app test execution and Mac Keychain/migration remain unrun. Existing source fixture harness uses test keys, not a real OS keyring.
