@@ -10928,6 +10928,44 @@ mod tests {
     }
 
     #[test]
+    fn counted_send_supports_fifty_explicit_recipients_without_extra_confirmation() {
+        use egui::accesskit::Role;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("new-message-selected"));
+        let source = app.chats[0].clone();
+        app.new_message.members.clear();
+        for index in 0..crate::ghost_groups::MAX_MEMBERS {
+            let mut chat = source.clone();
+            chat.id = format!("synthetic-audience-{index}");
+            chat.name = format!("Recipient {index}");
+            chat.locked = false;
+            let member = crate::ui::flat_groups::member(&app, &chat);
+            app.new_message.members.push(member);
+            app.chats.push(chat);
+        }
+        let selected = app.new_message.members.clone();
+        for _ in 0..8 {
+            render(&mut app, &ctx);
+        }
+        assert!(app.audience_queue.is_none(), "selection alone never sends");
+        press_labelled(&mut app, &ctx, "Send to 50 chats", Role::Button);
+        let queue = app
+            .audience_queue
+            .as_ref()
+            .expect("explicit counted click queues sends");
+        assert_eq!(queue.rows.len(), 50);
+        for (row, member) in queue.rows.iter().zip(&selected) {
+            assert_eq!(
+                row.member.chat, member.chat,
+                "only the selected destinations are queued"
+            );
+        }
+    }
+
+    #[test]
     fn new_message_many_files_keeps_send_control_inside_view_and_locked_names_hidden() {
         use egui::accesskit::Role;
         for (page, size) in [

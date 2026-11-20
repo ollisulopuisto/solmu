@@ -13,6 +13,15 @@ Local full-test compilation again exceeded the execution window, so these tests
 are not claimed passed locally. The previous album/texture failures are absent
 from the latest Mac result. No screenshot or release change.
 
+## 2026-11-20: Maximum audience counted-send regression
+
+Added a full-view regression that selects 50 synthetic distinct recipients,
+checks no queue exists from selection alone, clicks Send to50chats, then checks
+all50 exact destinations are queued in order. This preserves the existing
+explicit counted one-click send design, not an extra confirmation screen.
+All-target/all-feature Clippy passes; test execution awaits native CI, no pass
+claimed locally. No live account or send used.
+
 ## 2026-11-19: Beeper bridge messages show every attachment (fix/beeper-multi-attachment-messages)
 
 Olli reported bridge messages with several attachments showing only the
