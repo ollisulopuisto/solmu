@@ -906,6 +906,14 @@ fn network_badges(app: &App, ui: &egui::Ui, palette: &Palette, avatar: Rect, cha
     }
 }
 
+/// The left gutter of the avatar, opposite its source-network badges.
+fn favorite_indicator_rect(avatar: Rect) -> Rect {
+    Rect::from_center_size(
+        pos2(avatar.left() - 7.0, avatar.center().y),
+        Vec2::splat(12.0),
+    )
+}
+
 /// Stable main-list row id used by interaction tests.
 pub fn chat_row_id(chat: &str) -> egui::Id {
     egui::Id::new(("chat-row", chat))
@@ -1720,6 +1728,13 @@ fn favorite_chip(
             widgets::paint_disappearing_badge(ui, &palette, avatar_rect);
         }
         network_badges(app, ui, &palette, avatar_rect, chat);
+        if chat.favorite {
+            // Paint only: the row remains the sole click target.
+            let heart = favorite_indicator_rect(avatar_rect);
+            Icon::Heart
+                .image(palette.secondary, 12.0)
+                .paint_at(ui, heart);
+        }
         if chat.looks_unread() {
             // The badge respects the same settings as the chat list: a dot
             // only when counts are off, dimmed in a muted chat.
@@ -2753,12 +2768,6 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
                 .paint_at(ui, icon_rect);
             badge_right -= 20.0;
         }
-        if chat.favorite {
-            let icon_rect =
-                Rect::from_center_size(pos2(badge_right - 8.0, line_y + 8.0), Vec2::splat(14.0));
-            Icon::Heart.image(palette.dim, 14.0).paint_at(ui, icon_rect);
-            badge_right -= 20.0;
-        }
         if app.reply_later_contains(chat) {
             let icon_rect =
                 Rect::from_center_size(pos2(badge_right - 8.0, line_y + 8.0), Vec2::splat(14.0));
@@ -3670,6 +3679,20 @@ fn advance_after_ticks(delivery: crate::model::Delivery) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn favorite_marker_fits_left_gutter_without_covering_avatar_or_networks() {
+        for height in [56.0, 80.0] {
+            let avatar = egui::Rect::from_center_size(
+                egui::pos2(38.0, height / 2.0),
+                egui::Vec2::splat(48.0),
+            );
+            let heart = super::favorite_indicator_rect(avatar);
+            assert!(heart.left() >= 0.0);
+            assert!(heart.right() < avatar.left());
+            assert!(heart.top() >= 0.0 && heart.bottom() <= height);
+        }
+    }
+
     use super::*;
 
     #[test]

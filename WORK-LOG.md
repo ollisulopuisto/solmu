@@ -1103,3 +1103,8 @@ verify the user's live Studio installation or real-network delivery.
 ## Scheduler persistence failure,20 November
 
 Daemon now exits nonzero on any queue.save failure, before dispatch proceeds or control HTTP success is sent. Durable Sending recovers as Uncertain, no retry. Subprocess regression verifies save failure cannot return to caller. Existing closed-client acceptance verifies direct queue.json and restart/no-duplicate. Runtime test execution pending focused harness.
+
+
+## Favorite marker placement,20 November
+
+Implement approved sketch5: paint-only hollow heart in avatar left gutter; existing network badges stay right. No independent click target or favorite toggle. Pure geometry regression checks compact/regular rows and no avatar overlap. Executed native tests/pixels pending CI.
