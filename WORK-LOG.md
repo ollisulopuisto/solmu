@@ -1139,7 +1139,41 @@ verify the user's live Studio installation or real-network delivery.
 
 Daemon now exits nonzero on any queue.save failure, before dispatch proceeds or control HTTP success is sent. Durable Sending recovers as Uncertain, no retry. Subprocess regression verifies save failure cannot return to caller. Existing closed-client acceptance verifies direct queue.json and restart/no-duplicate. Runtime test execution pending focused harness.
 
-
 ## Favorite marker placement,20 November
 
 Implement approved sketch5: paint-only hollow heart in avatar left gutter; existing network badges stay right. No independent click target or favorite toggle. Pure geometry regression checks compact/regular rows and no avatar overlap. Executed native tests/pixels pending CI.
+
+## Restore saved voice and video transcripts,20 November
+
+The private on-disk store already persisted transcripts. Bubble status only read hot memory, so after restart saved text could be searchable while the same bubble offered Transcribe again. Restore exact account/chat/message text asynchronously with bounded concurrent reads, versioned hit/miss cache, and deletion/drop checks. Use the archive reader for bubble text even with the speech engine off. Save/drop/reopen voice/video display and search regression failed against the old getter and passes after the fix. All focused worker tests pass in an isolated production-module harness; native test-target compilation passes. Full app/Mac runtime unverified. No new GUI or release.
+
+## Encrypted derived transcripts,20 November
+
+Production transcript readers/writers now use a local_transcripts table in each account's existing SQLCipher archive, with the archive's existing OS-keyring key and no plaintext fallback. Legacy text migrates by account in a transaction, commit with synchronous FULL, exact text readback, then plaintext-file unlink. Failed unlock, conflict, verification or purge prevents migration from silently counting as done. Existing backups/snapshots and storage-level deleted plaintext are not retroactively erased. OS-keyring access by apps already running as the user, admins and compromised logged-in sessions are not prevented by encryption at rest.
+
+Account unlink/logout purges only that account, invalidates queued results and closes our DB handle before account removal. Chat deletion/clear/search/restart retain their worker paths. Global text byte cap stays32MiB across accounts. Tests: three real SQLCipher module tests pass for wrong-key fail-closed/unkeyed read refusal/no plaintext markers, voice+video restart/search/account scope/removal, and verified migration/purge/conflict/no-account preservation.20 production worker tests pass including account logout late-result suppression. Native test-target compile passes; native app test execution and Mac Keychain/migration remain unrun. Existing source fixture harness uses test keys, not a real OS keyring.
+
+Review follow-up: fresh Beeper profiles may have only beeper-drafts/drafts.db, not archive.db. Transcript storage now safely initializes the encrypted archive.db only inside an existing non-symlink account directory, retaining removal refusal. Quota and insert now share one account transaction, avoiding a committed save becoming failed/stale because another account cannot unlock. Tradeoff: quota is32MiB per account, not a global shared quota. This isolates accounts. Four SQLCipher tests pass including fresh Beeper directory selection/initialization with injected test key and an unavailable other account; actual OS-keyring constructor remains a Mac gate. Removal warning translated at UI boundary. Native test-target compile passes.
+## Encrypted transcript store review fixes,21 November
+
+Devin review of #420: account removal no longer purges transcripts before the backend's unconfirmed removal command (a confirmed logout still purges; a completed removal drops the account archive folder with its archive.db). Delete-all now attempts every account archive and surfaces the first failure in Settings instead of hiding partial deletions. Legacy plaintext migration moved off the settings thread onto the worker's store-serialized migration thread. Encrypted search matches the file store: an unscoped empty query returns nothing, and hits carry full transcript text without the display snapshot's clipping (the Voice panel's scoped empty query still lists transcripts). The account-deletion test now proves row removal by reopening the keyed fixture database instead of relying on a failed real-keyring reopen. Over-quota eviction stays silent by design, matching the plaintext store's cap eviction. Follow-up: Delete-all also removes unmigrated legacy plaintext so a pending migration cannot resurrect cleared transcripts. Per-message, per-chat and account removals now delete pending legacy plaintext too, for the same reason.
+
+## Empty migration no longer wakes views,21 November
+
+macOS CI caught two worker tests asserting exact scan counts failing after legacy migration moved onto a worker thread: `migrate_legacy_on_thread` woke the view unconditionally on success, so an empty archive_with_wake store still produced a third wake and raced the stale-completion test's wake counting. `Encrypted::migrate` and `Store::migrate_legacy` now return the number of transcripts moved; the migration thread wakes the view only when something actually migrated, and `Store::migrate_legacy` bumps the cache generation only then. The two exact-count tests (already in the tree) cover the regression: they failed before this fix on macOS.
+
+## Per-account legacy migration isolation,21 November
+
+Reviewer follow-up on #420: `Encrypted::migrate` returned on the first failing legacy account directory (missing archive folder or conflicting archive row), so every later account's plaintext stayed on disk and the migration failed identically on each launch. Migration now runs per account: a failing account keeps its plaintext for the next attempt and its first error is reported, while later healthy accounts still migrate and purge. `Encrypted::migrate`/`Store::migrate_legacy` return the migrated count plus the first per-account error; the worker wakes the view when anything moved and logs an incomplete migration. Regression: a bad account sorted before a healthy one no longer blocks the healthy account, and the conflict case now proves the archive row survives.
+
+## Partial-migration view coverage,21 November
+
+Devin follow-up on #420: the per-account migration regression verified the archive and the source files but not the view invalidation path. New regression drives a partial migration through the worker's migration thread: with one failing account and one healthy account the view wake still fires and the store version bumps, so cached results are invalidated and migrated text becomes searchable; the failing account's plaintext stays. Negative control: a retry with nothing left to migrate reports the failing account but does not bump the version again.
+
+## Clear partial-failure coverage,21 November
+
+Adversarial pass over the #420 diff (state transitions across files: select/edit/clear/retry/partial failure/ordering/restore). Held up: queued transcriptions die only on their own generation mismatch, so remove_account's repaint signal cannot drop other accounts' jobs; migration and clear/remove serialize on store_io in either order with final-correct results; clear_legacy still purges pending plaintext when an archive removal fails. New coverage: clear() reports a failing account but still clears the healthy account, purges pending legacy plaintext, and bumps the store version so views invalidate.
+
+## Deterministic clear order,21 November
+
+Devin follow-up on #420: the clear partial-failure test depended on filesystem directory order - a healthy account sorted first would pass even if the account loop stopped at the first error. Store::clear now attempts accounts in sorted order, and the test covers both orders: failing account first proves the loop continues past the error (healthy account still cleared, legacy plaintext still purged, version still bumped); failing account last proves the error still surfaces after successes.

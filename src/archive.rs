@@ -426,6 +426,23 @@ pub const GALLERY_PAGE: usize = 200;
 const UNARCHIVE_CHATS: &str = "unarchive_chats";
 const UNARCHIVE_CHATS_AT: &str = "unarchive_chats_at";
 
+/// A separate keyed connection for local derived text. Never opens plaintext.
+pub(crate) fn transcript_connection(path: &Path) -> anyhow::Result<Connection> {
+    let key = encryption::key_for(path)?;
+    transcript_connection_with_key(path, &key)
+}
+
+pub(crate) fn transcript_connection_with_key(
+    path: &Path,
+    key: &[u8; 32],
+) -> anyhow::Result<Connection> {
+    let connection = encryption::open(path, key)?;
+    connection.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;",
+    )?;
+    Ok(connection)
+}
+
 impl Archive {
     /// Unlocks the on-disk archive with its OS keyring key, migrating plaintext
     /// archives before their first encrypted use. Never falls back to plaintext.

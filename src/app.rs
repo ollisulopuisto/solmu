@@ -1299,7 +1299,8 @@ fn transcriber_worker(
     if choice == TranscriptionEngine::Off {
         return None;
     }
-    let store = match crate::transcriber::Store::new(dirs.state.join("transcripts"), 32 << 20) {
+    let store = match crate::transcriber::Store::encrypted(dirs.state.join("transcripts"), 32 << 20)
+    {
         Ok(store) => store,
         Err(error) => {
             eprintln!("solmu: transcript store unavailable: {error}");
@@ -2182,6 +2183,11 @@ impl App {
         let Some(index) = self.accounts.iter().position(|account| account.id == id) else {
             return;
         };
+        // Transcripts are not purged here: the backend's removal command is
+        // unconfirmed, and destroying the encrypted archive while the account
+        // stays linked loses text the user never asked to delete. A confirmed
+        // logout purges (handle_link), a completed removal drops the account's
+        // whole encrypted archive folder (finish_removed).
         if self.accounts.len() <= 1 {
             self.accounts[index].backend.send(Command::Unlink);
             return;
@@ -6917,6 +6923,11 @@ impl App {
                 self.new_contact_dialog_request = None;
                 self.new_contact_pending = false;
                 let account = self.account().id.clone();
+                if let Some(worker) = self.transcript_reader()
+                    && let Err(_error) = worker.remove_account(account.0.clone())
+                {
+                    self.toast_error(crate::i18n::gettext(self.locale, "Could not remove this account's saved transcripts. Its encrypted archive may still contain them.").into_owned());
+                }
                 self.poll_voting.clear();
                 self.interactive_sending.clear();
                 self.poll_creating = false;
@@ -7502,7 +7513,7 @@ impl App {
     /// has no engine or background thread and is never used to queue jobs.
     fn refresh_transcript_archive(&mut self) {
         self.transcript_archive = if self.transcriber.is_none() {
-            crate::transcriber::Store::new(self.dirs.state.join("transcripts"), 32 << 20)
+            crate::transcriber::Store::encrypted(self.dirs.state.join("transcripts"), 32 << 20)
                 .ok()
                 .map(|store| {
                     let waker = self.waker.clone();
@@ -27568,6 +27579,46 @@ mod tests {
         assert!(fading > 0.0 && fading < 1.0, "{fading}");
         assert_eq!(JumpHighlight::strength(JumpHighlight::DURATION), 0.0);
         assert_eq!(JumpHighlight::strength(10.0), 0.0);
+    }
+
+    #[test]
+    fn requested_account_removal_keeps_transcripts_until_logout_confirms() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _commands) = two_accounts(root.path());
+        let store =
+            crate::transcriber::Store::new(root.path().join("fixture-transcripts"), 1 << 20)
+                .unwrap();
+        store.put("1", "chat", "voice", "linked text").unwrap();
+        app.transcriber = Some(crate::transcribe_worker::Worker::stub_with_store(
+            store.clone(),
+        ));
+        let id = app.accounts[0].id.clone();
+        app.remove_account(id);
+        assert_eq!(
+            store.get("1", "chat", "voice").as_deref(),
+            Some("linked text"),
+            "an unconfirmed removal must not purge transcripts"
+        );
+    }
+
+    #[test]
+    fn logout_purges_only_its_accounts_saved_transcripts() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let store =
+            crate::transcriber::Store::new(root.path().join("fixture-transcripts"), 1 << 20)
+                .unwrap();
+        store.put("1", "chat", "voice", "logged out text").unwrap();
+        store.put("2", "chat", "voice", "retained text").unwrap();
+        app.transcriber = Some(crate::transcribe_worker::Worker::stub_with_store(
+            store.clone(),
+        ));
+        app.handle_link(LinkStatus::LoggedOut, true);
+        assert_eq!(store.get("1", "chat", "voice"), None);
+        assert_eq!(
+            store.get("2", "chat", "voice").as_deref(),
+            Some("retained text")
+        );
     }
 
     #[test]

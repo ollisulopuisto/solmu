@@ -6,6 +6,8 @@
 //! never a cloud API; the transcript store is bounded and private; a global
 //! default language with an optional per-message override.
 
+#[path = "transcriber/encrypted.rs"]
+mod encrypted;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -124,6 +126,7 @@ pub fn resolve_language(per_message: Option<&str>, global: Option<&str>) -> Opti
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,
+    encrypted: Option<Arc<encrypted::Encrypted>>,
     /// Total bytes the store may hold before evicting oldest.
     max_bytes: u64,
     /// Bumped on every mutation so cached searches invalidate.
@@ -140,9 +143,76 @@ impl Store {
         }
         Ok(Self {
             root,
+            encrypted: None,
             max_bytes,
             version: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    /// Production storage uses only each account's existing encrypted archive.
+    /// Legacy plaintext files are purged only after committed, verified migration.
+    /// Migration is keyring/database/file work: it runs on a worker thread via
+    /// `migrate_legacy`, never on the caller's (settings UI) thread.
+    pub fn encrypted(root: PathBuf, max_bytes: u64) -> std::io::Result<Self> {
+        if std::fs::symlink_metadata(&root).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(std::io::Error::other(
+                "Transcript migration root must not be a symlink",
+            ));
+        }
+        let mut store = Self::new(root.clone(), max_bytes)?;
+        let backend = encrypted::Encrypted::new(
+            root.parent()
+                .ok_or_else(|| std::io::Error::other("Transcript state directory unavailable"))?
+                .into(),
+        );
+        store.encrypted = Some(Arc::new(backend));
+        Ok(store)
+    }
+
+    /// Migrates legacy plaintext transcripts into the encrypted archives.
+    /// Safe to repeat; call off the UI thread. Each account migrates
+    /// independently: a failing account keeps its plaintext for the next
+    /// attempt and never blocks the others. Returns how many transcripts
+    /// moved and the first per-account error, if any; 0 with no error means
+    /// nothing changed, so no bump or view wake is needed.
+    pub fn migrate_legacy(&self) -> (usize, Option<std::io::Error>) {
+        if let Some(backend) = &self.encrypted {
+            let (migrated, error) = backend.migrate(&self.root);
+            if migrated > 0 {
+                self.bump();
+            }
+            (migrated, error)
+        } else {
+            (0, None)
+        }
+    }
+
+    pub fn remove_account(&self, account: &str) -> std::io::Result<()> {
+        let result = if let Some(backend) = &self.encrypted {
+            let mut result = backend.remove(account, None, None);
+            // Pending legacy plaintext goes too, or a later migration would
+            // resurrect the removed account's transcripts.
+            let path = self.root.join(encode(account));
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    if result.is_ok() {
+                        result = Err(error);
+                    }
+                }
+            }
+            result
+        } else {
+            let path = self.root.join(encode(account));
+            if path.exists() {
+                std::fs::remove_dir_all(path)
+            } else {
+                Ok(())
+            }
+        };
+        self.bump();
+        result
     }
 
     /// Mutation counter: search results are cached against it.
@@ -162,11 +232,30 @@ impl Store {
     }
 
     pub fn get(&self, account_id: &str, chat_id: &str, message_id: &str) -> Option<String> {
+        if let Some(backend) = &self.encrypted {
+            return backend.get(account_id, chat_id, message_id);
+        }
         std::fs::read_to_string(self.file_for(account_id, chat_id, message_id)).ok()
     }
 
     /// Removes one transcript, e.g. when its message is deleted.
     pub fn remove(&self, account_id: &str, chat_id: &str, message_id: &str) -> std::io::Result<()> {
+        if let Some(backend) = &self.encrypted {
+            let mut result = backend.remove(account_id, Some(chat_id), Some(message_id));
+            // Pending legacy plaintext goes too, or a later migration would
+            // resurrect the deleted transcript.
+            match std::fs::remove_file(self.file_for(account_id, chat_id, message_id)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    if result.is_ok() {
+                        result = Err(error);
+                    }
+                }
+            }
+            self.bump();
+            return result;
+        }
         match std::fs::remove_file(self.file_for(account_id, chat_id, message_id)) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -178,6 +267,24 @@ impl Store {
 
     /// Privacy control: removes every transcript of one chat.
     pub fn remove_chat(&self, account_id: &str, chat_id: &str) -> std::io::Result<()> {
+        if let Some(backend) = &self.encrypted {
+            let mut result = backend.remove(account_id, Some(chat_id), None);
+            // Pending legacy plaintext goes too, or a later migration would
+            // resurrect the deleted chat's transcripts.
+            let file = self.file_for(account_id, chat_id, "_");
+            let dir = file.parent().map(Path::to_path_buf).unwrap_or(file);
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    if result.is_ok() {
+                        result = Err(error);
+                    }
+                }
+            }
+            self.bump();
+            return result;
+        }
         let file = self.file_for(account_id, chat_id, "_");
         let dir = file.parent().map(Path::to_path_buf).unwrap_or(file);
         match std::fs::remove_dir_all(&dir) {
@@ -189,8 +296,29 @@ impl Store {
         Ok(())
     }
 
-    /// Privacy control: removes every transcript of every chat.
+    /// Privacy control: removes every transcript of every chat. Every account
+    /// is attempted even when one fails, so one unreadable archive cannot hide
+    /// the survivors of the rest; the first failure is still reported. Legacy
+    /// plaintext awaiting or spared by migration is deleted too, so a later
+    /// migration cannot resurrect cleared transcripts.
     pub fn clear(&self) -> std::io::Result<()> {
+        if let Some(backend) = &self.encrypted {
+            let mut result = Ok(());
+            // Sorted for a deterministic attempt order: every account is
+            // tried, a failing one never blocks or hides the others.
+            let mut accounts = backend.accounts();
+            accounts.sort();
+            for account in accounts {
+                if let Err(error) = backend.remove(&account, None, None)
+                    && result.is_ok()
+                {
+                    result = Err(error);
+                }
+            }
+            self.clear_legacy(&mut result);
+            self.bump();
+            return result;
+        }
         for entry in std::fs::read_dir(&self.root)?.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -201,6 +329,29 @@ impl Store {
         Ok(())
     }
 
+    /// Removes unmigrated plaintext transcripts from the store root, keeping
+    /// the first failure without skipping the rest.
+    fn clear_legacy(&self, result: &mut std::io::Result<()>) {
+        let entries = match std::fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) => {
+                if result.is_ok() {
+                    *result = Err(error);
+                }
+                return;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir()
+                && let Err(error) = std::fs::remove_dir_all(&path)
+                && result.is_ok()
+            {
+                *result = Err(error);
+            }
+        }
+    }
+
     /// Writes one transcript and evicts oldest files past the cap.
     pub fn put(
         &self,
@@ -209,6 +360,21 @@ impl Store {
         message_id: &str,
         text: &str,
     ) -> std::io::Result<()> {
+        if let Some(backend) = &self.encrypted {
+            backend.put(
+                account_id,
+                chat_id,
+                message_id,
+                text,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(std::io::Error::other)?
+                    .as_secs() as i64,
+                self.max_bytes,
+            )?;
+            self.bump();
+            return Ok(());
+        }
         let file = self.file_for(account_id, chat_id, message_id);
         use std::io::Write;
         for dir in [
@@ -371,6 +537,24 @@ impl Store {
         limit: usize,
         scope: Option<(&str, &str)>,
     ) -> Vec<Hit> {
+        if let Some(backend) = &self.encrypted {
+            let needle = crate::util::search_key(query.trim());
+            // Match the file store: an unscoped empty query returns nothing;
+            // only the Voice panel's scoped empty query lists transcripts.
+            if needle.is_empty() && scope.is_none() {
+                return Vec::new();
+            }
+            let mut hits = Vec::new();
+            let accounts = scope
+                .map(|(a, _)| vec![a.to_owned()])
+                .unwrap_or_else(|| backend.accounts());
+            for account in accounts {
+                hits.extend(backend.search(query, &account, scope.map(|(_, c)| c)));
+            }
+            hits.sort_by_key(|hit| std::cmp::Reverse(hit.modified));
+            hits.truncate(limit);
+            return hits;
+        }
         let needle = crate::util::search_key(query.trim());
         let mut hits = Vec::new();
         if !needle.is_empty() || scope.is_some() {
@@ -493,6 +677,13 @@ impl Store {
         account: &str,
         current: impl Fn() -> bool,
     ) -> Snapshot {
+        if let Some(backend) = &self.encrypted {
+            return if query.trim().is_empty() {
+                Snapshot::default()
+            } else {
+                backend.snapshot(query, account, None, current)
+            };
+        }
         let mut out = Snapshot::default();
         if query.trim().is_empty() {
             return out;
@@ -537,6 +728,9 @@ impl Store {
         chat: &str,
         current: impl Fn() -> bool,
     ) -> Snapshot {
+        if let Some(backend) = &self.encrypted {
+            return backend.snapshot(query, account, Some(chat), current);
+        }
         use std::io::Read;
         let mut retained = std::collections::BTreeMap::new();
         let mut retained_bytes = 0;
@@ -997,6 +1191,38 @@ mod tests {
         // Same rate in and out still converts to s16le.
         let same = wyoming_pcm_from_mono(&[0.5, -0.5], 16_000);
         assert_eq!(same.len(), 4);
+    }
+
+    #[test]
+    fn encrypted_clear_also_removes_unmigrated_plaintext() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("state").join("transcripts");
+        let store = Store::encrypted(legacy.clone(), 1 << 20).unwrap();
+        // No account archives exist yet, only plaintext awaiting migration.
+        let plaintext = Store::new(legacy.clone(), 1 << 20).unwrap();
+        plaintext.put("1", "chat", "voice", "legacy words").unwrap();
+        store.clear().unwrap();
+        assert!(store.get("1", "chat", "voice").is_none());
+        assert!(legacy.read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn encrypted_deletions_also_remove_pending_legacy_plaintext() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("state").join("transcripts");
+        let store = Store::encrypted(legacy.clone(), 1 << 20).unwrap();
+        let plaintext = Store::new(legacy.clone(), 1 << 20).unwrap();
+        plaintext.put("1", "chat", "voice", "legacy words").unwrap();
+        plaintext.put("1", "chat", "video", "more legacy").unwrap();
+        plaintext.put("1", "other", "voice", "other chat").unwrap();
+        // No account archive exists here, so the encrypted removal errors;
+        // the legacy plaintext must still be deleted.
+        let _ = store.remove("1", "chat", "voice");
+        assert!(plaintext.get("1", "chat", "voice").is_none());
+        let _ = store.remove_chat("1", "chat");
+        assert!(plaintext.get("1", "chat", "video").is_none());
+        let _ = store.remove_account("1");
+        assert!(plaintext.get("1", "other", "voice").is_none());
     }
 
     struct EchoEngine;
