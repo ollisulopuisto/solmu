@@ -46,7 +46,11 @@ jobs:
       - name: Validate report classification
         run: python .github/scripts/security-pilot-test.py
       - name: Run report-only scans
+        id: scan
         run: python .github/scripts/security-pilot-report.py --checks secrets,python,npm,go
+      - name: Report incomplete baseline even after setup failure
+        if: always() && steps.scan.outcome != 'success'
+        run: echo 'UNKNOWN baseline. Setup or scanner execution failed or was cancelled; inspect job logs. No clean result.' >> "$GITHUB_STEP_SUMMARY"
   codeql:
     if: github.event.repository.private == false
     runs-on: ubuntu-24.04
@@ -69,6 +73,11 @@ jobs:
           - language: actions
             build-mode: none
     steps:
+      - name: Refuse CodeQL debug artifact mode
+        if: runner.debug == '1'
+        run: |
+          echo 'UNKNOWN CodeQL. Debug runs are disabled because CodeQL may upload debugging artifacts. Run normally instead.' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false

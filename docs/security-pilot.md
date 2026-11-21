@@ -33,3 +33,5 @@ GitHub default-setup status was not readable, and is not claimed absent.
 Swift helpers are not analyzed in this Linux-only pilot; Swift CodeQL requires macOS.
 
 Cargo audits reuse the existing CI audit job and daily cadence rather than adding a duplicate. The job now checks all three Cargo.lock files in report-only mode.
+
+CodeQL debug reruns are refused before initialization because the upstream post-action can upload debug artifacts. Setup failures always leave an UNKNOWN baseline summary.
