@@ -181,6 +181,10 @@ rejecting an unwrapped line. Verified by rustc parse-check only; fmt/clippy/
 tests run in CI (this Ubuntu box cannot build the crate: PipeWire headers too
 old).
 
+## Hide unsupported message pin controls,20 November
+
+Hide message-pin menu, chord/help, and production banner while Beeper adapter has no pin read/write support. Favorites unchanged. Pins browse sketch parked, not cancelled: pins still meaningful for groups, owner uses favorites instead. No Matrix state route exists in Solmu; SDK endpoint list/schema inspected with no message-pin route found. Not a live Server capability probe. Revisit only with a verified source and owner instruction. Regression covers Cmd-Alt-P dispatch being absent; native execution/pixels pending CI.
+
 ## 2026-11-18: Repair #379 fallout that left main red
 
 Branch fix/context-menu-shortcut-fallout off main 2192fd3. #379 (context-menu

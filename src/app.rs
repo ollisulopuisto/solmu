@@ -8323,14 +8323,12 @@ impl App {
                 chat: chat.to_owned(),
                 token,
             });
-            self.backend.send(Command::LoadPins(chat.to_owned()));
         } else if !history.requested && !history.linked_read.pending() {
             history.requested = true;
             self.backend.send(Command::LoadChat {
                 chat: chat.to_owned(),
                 before: None,
             });
-            self.backend.send(Command::LoadPins(chat.to_owned()));
         }
     }
 
@@ -8776,7 +8774,6 @@ impl App {
         self.ensure_loaded(&id);
         // Read again on every open: a pin that expired while the chat was
         // closed leaves the line under the header.
-        self.backend.send(Command::LoadPins(id.clone()));
         if self
             .conversations
             .get(&id)
@@ -23731,10 +23728,10 @@ mod tests {
         );
     }
 
-    /// A pin that expires while the chat is closed leaves the line when it is
-    /// opened again, so the read is asked for on every open.
+    /// The Beeper backend cannot supply pins; neither opening nor history restore
+    /// should dispatch a request for an unsupported, invisible surface.
     #[test]
-    fn opening_a_chat_reads_its_pins_again() {
+    fn opening_and_restoring_a_chat_do_not_request_unsupported_pins() {
         let mut app = app();
         let (backend, mut commands) = Backend::recording();
         app.backend = backend;
@@ -23743,13 +23740,15 @@ mod tests {
 
         app.open_chat(chat.into());
 
-        let mut asked = false;
+        app.ensure_loaded(chat);
+        app.conversations.get_mut(chat).unwrap().requested = false;
+        app.ensure_loaded(chat);
         while let Ok(command) = commands.try_recv() {
-            if matches!(command, Command::LoadPins(id) if id == chat) {
-                asked = true;
-            }
+            assert!(
+                !matches!(command, Command::LoadPins(_)),
+                "unsupported pin load"
+            );
         }
-        assert!(asked, "the pins are read when the chat opens");
     }
 
     /// One pinned row, as the archive hands it over.

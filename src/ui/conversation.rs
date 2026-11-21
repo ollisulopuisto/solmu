@@ -194,7 +194,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if theme::chrome_in_headers(ui.ctx()) {
         super::banner(app, ui);
     }
-    pin_banner(app, ui, &chat);
+    if message_pins_supported() {
+        pin_banner(app, ui, &chat);
+    }
     composer(app, ui, &chat);
     messages(app, ui, &chat, 0.0);
     // Over the messages, which scroll under the header.
@@ -268,6 +270,12 @@ fn pin_bar_segments(top: f32, height: f32, count: usize) -> Vec<(f32, f32)> {
 /// an ellipsis when they do not fit. Clicking it opens that message and moves
 /// the line on to the next pin, so repeated clicks walk the chat's pins. A bar
 /// at its left has a segment per pin and lights the one shown.
+// The sole production backend has neither LoadPins nor SetMessagePinned support.
+// Do not advertise the old WhatsApp controls as working Beeper features.
+fn message_pins_supported() -> bool {
+    false
+}
+
 fn pin_banner(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     let now = crate::util::now();
     if let Some(wait) = app.chat_pins.get(&chat.id).and_then(|rows| {
@@ -7614,8 +7622,6 @@ fn message_menu_labels(locale: crate::i18n::Locale) -> Vec<String> {
         gettext(locale, "Reply privately"),
         gettext(locale, "Star"),
         gettext(locale, "Unstar"),
-        gettext(locale, "Pin message"),
-        gettext(locale, "Unpin message"),
         gettext(locale, "Forward"),
         gettext(locale, "Save for later"),
         gettext(locale, "Remove from Saved"),
@@ -8187,7 +8193,8 @@ fn context_menu(
     } else {
         crate::i18n::gettext(view.locale, "Pin message")
     };
-    if !matches!(message.content, Content::Revoked)
+    if message_pins_supported()
+        && !matches!(message.content, Content::Revoked)
         && widgets::menu_item_bound(ui, &palette, Some(Icon::Pin), &pin_label, "message-pin")
     {
         actions.push(Action::SetMessagePinned {
@@ -15028,8 +15035,8 @@ mod tests {
             for (key, alt) in [
                 (Key::R, false),
                 (Key::S, true),
-                (Key::P, true),
                 (Key::L, false),
+                (Key::P, true),
             ] {
                 let modifiers = Modifiers {
                     command: true,
@@ -15055,6 +15062,16 @@ mod tests {
                     |ui| context_menu(ui, view, &message, MenuOrigin::Chat, &mut actions),
                 );
                 output.textures_delta.clear();
+                if key == Key::P {
+                    assert!(!message_pins_supported());
+                    assert!(
+                        !actions
+                            .iter()
+                            .any(|action| matches!(action, Action::SetMessagePinned { .. })),
+                        "unsupported pin chord must not dispatch"
+                    );
+                    continue;
+                }
                 assert!(
                     actions.iter().any(|action| match action {
                         Action::Reply(id) => key == Key::R && id == "older-menu-target",

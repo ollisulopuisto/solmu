@@ -1434,13 +1434,6 @@ const MESSAGE_STAR: Shortcut = Shortcut {
     description: Some("Star or unstar the context-menu message"),
     menu: None,
 };
-const MESSAGE_PIN: Shortcut = Shortcut {
-    id: "message-pin",
-    keys: &[(COMMAND_ALT, Key::P)],
-    label: Some("Ctrl+Alt+P"),
-    description: Some("Pin or unpin the context-menu message"),
-    menu: None,
-};
 const MESSAGE_SAVE: Shortcut = Shortcut {
     id: "message-save",
     keys: &[(COMMAND_ALT, Key::B)],
@@ -1769,7 +1762,6 @@ pub static REGISTRY: &[Row] = &[
     Row::Binding(&INCOMING_BRIDGE),
     Row::Binding(&FORWARD),
     Row::Binding(&MESSAGE_STAR),
-    Row::Binding(&MESSAGE_PIN),
     Row::Binding(&MESSAGE_SAVE),
     Row::Help(
         "\u{2191} / \u{2193}, Enter",
@@ -2268,7 +2260,6 @@ mod tests {
             ),
             ("Ctrl+L", "Forward selected messages, or the latest message"),
             ("Ctrl+Alt+S", "Star or unstar the context-menu message"),
-            ("Ctrl+Alt+P", "Pin or unpin the context-menu message"),
             ("Ctrl+Alt+B", "Save or unsave the context-menu message"),
             (
                 "\u{2191} / \u{2193}, Enter",
@@ -2502,7 +2493,6 @@ mod tests {
         ("incoming-bridge", None),
         ("message-edit", None),
         ("message-star", None),
-        ("message-pin", None),
         ("message-save", None),
     ];
 
