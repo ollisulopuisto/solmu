@@ -21805,6 +21805,34 @@ mod tests {
         );
     }
 
+    /// Opening a thread over its visible root redraws that bubble on the
+    /// modal's layer; salted widget ids keep egui from rejecting the pair.
+    #[test]
+    fn a_thread_modal_over_its_visible_root_renders() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        let chat = app.open_chat.clone().unwrap();
+        let scope = crate::ui::reply_threads::scope(&app, std::slice::from_ref(&chat));
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                scope,
+                crate::ui::reply_threads::Key {
+                    chat: chat.clone(),
+                    id: "ada-voice".into(),
+                },
+            )
+        });
+        // Wide window: the thread draws as a modal over the dimmed list.
+        // Before the ids were salted, this pass panicked on the duplicate
+        // registration of the root's bubble.
+        frame_sized(&mut app, &ctx, 780.0, Vec::new());
+        assert!(crate::ui::reply_threads::active(&ctx));
+    }
+
     /// Runs one frame of the given height with these input events.
     fn frame_sized(
         app: &mut App,

@@ -5467,8 +5467,33 @@ pub fn messages_list_id(chat: &str) -> egui::Id {
 }
 
 /// Stable message-bubble id used by interaction tests.
+thread_local! {
+    /// Render-instance salt for bubble widget ids: the open thread's modal
+    /// redraws a visible bubble on a second layer, and egui rejects the same
+    /// id registered twice across layers, so that pass salts every id it
+    /// makes. None is the conversation itself; tests keep reading those ids.
+    static BUBBLE_NS: std::cell::Cell<Option<&'static str>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with every bubble id salted (see [`BUBBLE_NS`]).
+pub fn with_bubble_ns<R>(ns: &'static str, f: impl FnOnce() -> R) -> R {
+    struct Reset(Option<&'static str>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            BUBBLE_NS.with(|ns| ns.set(self.0));
+        }
+    }
+    let previous = BUBBLE_NS.with(|cell| cell.replace(Some(ns)));
+    let _reset = Reset(previous);
+    f()
+}
+
 pub fn bubble_id(chat: &str, message: &str) -> egui::Id {
-    egui::Id::new(("bubble", chat, message))
+    BUBBLE_NS.with(|ns| match ns.get() {
+        Some(ns) => egui::Id::new(("bubble", ns, chat, message)),
+        None => egui::Id::new(("bubble", chat, message)),
+    })
 }
 
 /// Where a voice message's speed chip was drawn, for interaction tests.
@@ -10600,6 +10625,18 @@ fn rich_body_full(
                     actions.push(Action::SelectMessage(message.id.clone()));
                 }
             }
+        }
+    } else if response.clicked()
+        && !response.double_clicked()
+        && !view.selecting
+        && ui.input(|input| input.modifiers.command)
+        && crate::app::can_select(&message.content)
+    {
+        // The text hit target owns clicks on the words themselves: a
+        // modified click there jumps a reply-linked bubble, as in the
+        // padding, and keeps selecting an unrelated one.
+        if !super::reply_threads::command_click(ui.ctx(), &message.chat, &message.id, actions) {
+            actions.push(Action::SelectMessage(message.id.clone()));
         }
     }
     ui.ctx().data_mut(|data| {

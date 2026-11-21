@@ -43,7 +43,7 @@ fn frame(ctx: &egui::Context) -> Option<Shared> {
 fn frame_id() -> egui::Id {
     egui::Id::new("loaded-reply-frame")
 }
-fn scope(app: &App, ids: &[String]) -> egui::Id {
+pub(crate) fn scope(app: &App, ids: &[String]) -> egui::Id {
     egui::Id::new(("reply-scope", &app.account().id.0, ids))
 }
 fn index(messages: &[&Message]) -> (HashMap<Key, Vec<Key>>, HashMap<Key, Key>) {
@@ -204,6 +204,15 @@ pub fn jump_within_thread(ctx: &egui::Context, key: &Key) -> bool {
     };
     let f = shared.lock().unwrap_or_else(|e| e.into_inner());
     if !(f.active && f.included.contains(key)) {
+        return false;
+    }
+    // Only a view that renders `thread_scroll` can deliver the hop; the
+    // linked timeline shows the thread in place but never consumes the
+    // queue, so there the caller navigates as if no thread were open.
+    let scrollable = ctx
+        .data(|d| d.get_temp::<bool>(f.scope.with("thread-scroll-here")))
+        .unwrap_or(false);
+    if !scrollable {
         return false;
     }
     ctx.data_mut(|d| d.insert_temp(f.scope.with("thread-scroll-to"), key.clone()));
@@ -588,6 +597,12 @@ pub fn ordinary(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat) -> 
 /// Queued in-thread jumps land here, and paged scrolling (PgUp/PgDn, Home,
 /// End) moves this list while the thread owns the view.
 fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, root: &Key) {
+    if let Some(shared) = frame(ui.ctx()) {
+        let f = shared.lock().unwrap_or_else(|e| e.into_inner());
+        // This view delivers in-thread jumps; the glyph may queue them here.
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(f.scope.with("thread-scroll-here"), true));
+    }
     let rows: Vec<_> = app
         .conversations
         .get(&chat.id)
@@ -606,35 +621,37 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
         .id_salt(("reply-thread", root))
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            if rows.is_empty() {
-                ui.label("This thread is no longer available in loaded history.");
-            }
-            let mut landing = None;
-            for m in rows {
-                let right = ui.max_rect().right();
-                let rect = super::conversation::linked_bubble(
-                    app,
-                    ui,
-                    chat,
-                    &m,
-                    None,
-                    true,
-                    right,
-                    None,
-                    &mut actions,
-                );
-                if let (Some(rect), Some(target)) = (rect, pending.as_ref())
-                    && target.chat == m.chat
-                    && target.id == m.id
-                {
-                    landing = Some(rect);
+            super::conversation::with_bubble_ns("thread", || {
+                ui.set_min_width(ui.available_width());
+                if rows.is_empty() {
+                    ui.label("This thread is no longer available in loaded history.");
                 }
-                ui.add_space(8.0);
-            }
-            if let Some(rect) = landing {
-                ui.scroll_to_rect(rect, Some(egui::Align::Center));
-            }
+                let mut landing = None;
+                for m in rows {
+                    let right = ui.max_rect().right();
+                    let rect = super::conversation::linked_bubble(
+                        app,
+                        ui,
+                        chat,
+                        &m,
+                        None,
+                        true,
+                        right,
+                        None,
+                        &mut actions,
+                    );
+                    if let (Some(rect), Some(target)) = (rect, pending.as_ref())
+                        && target.chat == m.chat
+                        && target.id == m.id
+                    {
+                        landing = Some(rect);
+                    }
+                    ui.add_space(8.0);
+                }
+                if let Some(rect) = landing {
+                    ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                }
+            })
         });
     if let Some(scroll) = app.scroll_page.take() {
         let mut state = output.state;
@@ -643,7 +660,11 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
             crate::model::Scroll::PageUp => state.offset.y = (state.offset.y - page).max(0.0),
             crate::model::Scroll::PageDown => state.offset.y += page,
             crate::model::Scroll::Top => state.offset.y = 0.0,
-            crate::model::Scroll::Bottom => state.offset.y = f32::INFINITY,
+            crate::model::Scroll::Bottom => {
+                // Finite: egui lays out from the stored offset before it can
+                // clamp, so infinity would put the rows at nonfinite edges.
+                state.offset.y = (output.content_size.y - output.inner_rect.height()).max(0.0);
+            }
         }
         state.store(ui.ctx(), output.id);
         ui.ctx().request_repaint();
