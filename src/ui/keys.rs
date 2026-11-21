@@ -49,6 +49,12 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
         return;
     }
+    if app.pending_picture_preview.is_some() {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            app.pending_picture_preview = None;
+        }
+        return;
+    }
     if app.picture_edit.is_some() {
         editor_keys(app, ctx);
         return;
@@ -1956,16 +1962,56 @@ pub(crate) fn route_native_actions(ctx: &egui::Context, actions: Vec<Action>) ->
 /// The actions behind a menu command, from the helpers the keys use, so a
 /// menu click and its key cannot differ. Empty while a viewer, editor or
 /// recording owns the window, as the keys are.
-pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
-    use super::rail::Destination;
-    use crate::model::ListMode;
-    if app.picture_edit.is_some()
+/// True while a viewer, editor, picker, dialog or recording owns the window:
+/// menu commands and shortcuts stay out of the background then.
+pub(crate) fn window_owned(app: &App) -> bool {
+    app.pending_picture_preview.is_some()
+        || app.picture_edit.is_some()
         || app.image_preview.is_some()
         || app.sticker_view.is_some()
         || app.recording.is_some()
         || app.picker.is_some()
         || app.dialog.is_some()
-    {
+}
+
+/// The native macOS menu maps some items straight to actions, bypassing the
+/// keyboard guards. While a viewer, editor or recording owns the window, drop
+/// the actions that would act behind it; window management stays.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn guard_native_menu(app: &App, actions: Vec<Action>) -> Vec<Action> {
+    if !window_owned(app) {
+        return actions;
+    }
+    actions
+        .into_iter()
+        .filter(|action| {
+            !match action {
+                // The caret chords go on to the dispatcher, which hands them
+                // to a focused dialog or picker field; menu_actions still
+                // blocks the background chat jump while the window is owned.
+                Action::MenuCommand(id) => id != "chat-newest" && id != "chat-oldest",
+                // Help opens an external browser behind the preview, so it
+                // is blocked like the dialogs.
+                action => matches!(
+                    action,
+                    Action::ShowDialog(_)
+                        | Action::Open(_)
+                        | Action::OpenUrl(_)
+                        | Action::OpenChatSearch
+                        | Action::FocusSearch
+                        | Action::ToggleSidebar
+                        | Action::ToggleInfoSidebar
+                        | Action::ToggleFlatGroups
+                ),
+            }
+        })
+        .collect()
+}
+
+pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
+    use super::rail::Destination;
+    use crate::model::ListMode;
+    if window_owned(app) {
         return Vec::new();
     }
     let chat = app.current_chat();

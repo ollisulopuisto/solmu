@@ -25,6 +25,7 @@ pub mod message_info;
 pub mod new_group;
 pub mod palette;
 pub mod pane;
+pub(crate) mod pending_picture_preview;
 pub mod picker;
 pub mod polls;
 pub mod rail;
@@ -77,6 +78,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         window_chrome(app, ui);
         return;
     }
+    // The full-window staged preview owns keyboard focus and input. Do not
+    // construct hidden background widgets, especially the independent composer.
+    if app.pending_picture_preview.is_some() {
+        keys::handle(app, ctx);
+        pending_picture_preview::show(app, ctx);
+        // A refused action (say, a second crop while one is being written)
+        // answers with a toast; it must not wait for the preview to close.
+        toasts(app, ctx);
+        focus_ring(app, ctx);
+        announce(app, ctx);
+        window_chrome(app, ui);
+        return;
+    }
     app.beeper_signin.show(ctx);
     if let Some(cfg) = app.beeper_signin.connect.take() {
         app.connect_beeper_session(cfg);
@@ -97,6 +111,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         && app.recording.is_none()
         && app.image_preview.is_none()
         && app.picture_edit.is_none()
+        && app.pending_picture_preview.is_none()
         && app.sticker_view.is_none()
         && app.emoji_start.is_none()
         && app.mention_start.is_none()
@@ -156,6 +171,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     image_preview::show(app, ctx);
     image_preview::show_sticker(app, ctx);
     image_editor::show(app, ctx);
+    pending_picture_preview::show(app, ctx);
     drop_target(app, ctx);
     toasts(app, ctx);
     focus_ring(app, ctx);

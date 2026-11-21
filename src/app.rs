@@ -769,6 +769,7 @@ pub struct App {
     pub sticker_draft: Option<crate::model::StickerDraft>,
     /// The staged picture being cropped, while the cropper is open.
     pub picture_edit: Option<crate::model::PictureEdit>,
+    pub pending_picture_preview: Option<AttachmentId>,
     /// The staged picture whose size was asked for, and whose cropper that
     /// answer may still open. A size that arrives for anything else has been
     /// overtaken by a cancellation or by another picture, and opening the
@@ -1187,6 +1188,19 @@ impl Pending {
     /// Whether the crop editor can open this file. It has to decode here and
     /// come back as a still: HEIC and AVIF do not decode, and a cropped GIF
     /// would silently lose its animation, so the pencil is not offered.
+    /// Whether the installed image loaders can show this file: JPEG, PNG,
+    /// WebP, GIF and SVG. Preview eligibility is wider than crop eligibility.
+    pub fn is_preview_supported_file(path: &std::path::Path) -> bool {
+        mime_guess2::from_path(path)
+            .first_raw()
+            .is_some_and(|mime| {
+                matches!(
+                    mime,
+                    "image/jpeg" | "image/png" | "image/webp" | "image/gif" | "image/svg+xml"
+                )
+            })
+    }
+
     pub fn is_crop_supported_file(path: &std::path::Path) -> bool {
         mime_guess2::from_path(path)
             .first_raw()
@@ -1770,6 +1784,7 @@ impl App {
             sticker_preview_pending: false,
             sticker_draft: None,
             picture_edit: None,
+            pending_picture_preview: None,
             picture_inspecting: None,
             picture_applying: Default::default(),
             picture_origins: Default::default(),
@@ -11663,6 +11678,13 @@ impl App {
             Action::SetPendingViewOnce(view_once) => {
                 self.set_pending_view_once(view_once);
             }
+            Action::PreviewPendingPicture(target) => {
+                if self.staged_at(target).is_some_and(|at| {
+                    crate::ui::pending_picture_preview::is_picture(&self.pending[at].item)
+                }) {
+                    self.pending_picture_preview = Some(target);
+                }
+            }
             Action::EditPicture(target) => {
                 // A crop still being written owns the attachment: each apply
                 // runs on its own thread and answers by attachment alone, so
@@ -11678,6 +11700,7 @@ impl App {
                     );
                     return;
                 }
+                self.pending_picture_preview = None;
                 // Whatever was being waited for is not what is wanted now.
                 self.picture_inspecting = None;
                 // Read out before anything is written back, so the borrow of
@@ -14264,7 +14287,7 @@ impl App {
         #[cfg(target_os = "macos")]
         self.actions.extend(crate::ui::keys::route_native_actions(
             ctx,
-            crate::macos::drain(self.window_hidden),
+            crate::ui::keys::guard_native_menu(self, crate::macos::drain(self.window_hidden)),
         ));
         self.handle_control_commands();
         self.poll_custom_themes();
@@ -15154,8 +15177,9 @@ impl App {
         }
         self.window_focused = focused;
         self.report_presence();
-        if locked || self.local_avatar_editor.is_some() {
-            // Files dropped or pasted on the lock screen or avatar editor go nowhere.
+        if locked || self.drops_go_nowhere() {
+            // Files dropped or pasted on the lock screen, avatar editor, picture
+            // preview or crop editor go nowhere.
             self.dropping = false;
         } else {
             self.scrolling.apply(ctx);
@@ -15317,6 +15341,15 @@ impl App {
     }
 
     /// Handles dropped files and pasted images for the open chat.
+    /// True while a surface owns the window so completely that a dropped or
+    /// pasted file would land behind it: the avatar editor, picture preview
+    /// or crop editor. The lock screen is covered by the caller's `locked`.
+    fn drops_go_nowhere(&self) -> bool {
+        self.local_avatar_editor.is_some()
+            || self.pending_picture_preview.is_some()
+            || self.picture_edit.is_some()
+    }
+
     fn take_drops_and_pastes(&mut self, ctx: &egui::Context) {
         let (dropped, hovering) = ctx.input(|input| {
             let dropped: Vec<PathBuf> = input
@@ -15947,6 +15980,90 @@ mod tests {
             preview.network.is_none(),
             "source badges replace the count suffix"
         );
+    }
+
+    #[test]
+    fn drops_and_pastes_go_nowhere_while_a_preview_or_crop_owns_the_window() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        app.chats.push(Chat::new("c".into(), "C".into()));
+        app.open_chat("c".into());
+        app.link = crate::backend::LinkStatus::Connected;
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        app.attach(&ctx);
+        let dropped = root.path().join("clip.png");
+        std::fs::write(&dropped, b"fixture").unwrap();
+        let frame = |app: &mut App, input: egui::RawInput| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1180.0, 780.0),
+                    )),
+                    ..input
+                },
+                |ui| app.frame_ui(ui),
+            );
+            output.textures_delta.clear();
+        };
+        #[derive(Debug)]
+        struct FixtureDrop(PathBuf);
+        impl egui::DroppedFile for FixtureDrop {
+            /// Supplies a synthetic path without consulting the user's files.
+            fn path(&self) -> &std::path::Path {
+                &self.0
+            }
+            /// Drop staging needs only the path, so fixture bytes are empty.
+            fn bytes(&self) -> Result<Vec<u8>, String> {
+                Ok(Vec::new())
+            }
+        }
+        let drop_input = || egui::RawInput {
+            dropped_files: vec![std::sync::Arc::new(FixtureDrop(dropped.clone()))],
+            ..Default::default()
+        };
+        // Negative control: with nothing owning the window, the drop stages.
+        frame(&mut app, drop_input());
+        assert_eq!(app.pending.len(), 1, "the control drop staged nothing");
+
+        // A full-window preview owns the window: the same drop goes nowhere.
+        let id = app.stage(Pending::Picture {
+            width: 2,
+            height: 2,
+            rgba: std::sync::Arc::from(vec![255u8; 16]),
+            texture: None,
+        });
+        app.pending_picture_preview = Some(id);
+        frame(&mut app, drop_input());
+        assert_eq!(app.pending.len(), 2, "a drop landed behind the preview");
+        // A paste behind the preview goes nowhere either.
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("fixture-clipboard-files"),
+                vec![dropped.clone()],
+            )
+        });
+        frame(
+            &mut app,
+            egui::RawInput {
+                events: vec![egui::Event::Paste("fixture".into())],
+                ..Default::default()
+            },
+        );
+        assert_eq!(app.pending.len(), 2, "a paste landed behind the preview");
+        app.pending_picture_preview = None;
+
+        // The crop editor owns the window the same way.
+        app.picture_edit = Some(crate::model::PictureEdit::new(
+            id,
+            crate::model::PictureSource::Pasted(std::sync::Arc::from(vec![255u8; 16])),
+            2,
+            2,
+        ));
+        frame(&mut app, drop_input());
+        assert_eq!(app.pending.len(), 2, "a drop landed behind the crop editor");
+        app.picture_edit = None;
     }
 
     #[test]
@@ -26414,6 +26531,28 @@ mod tests {
         ] {
             assert_eq!(
                 Pending::is_crop_supported_file(std::path::Path::new(name)),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_preview_covers_displayable_pictures_even_uncroppable_ones() {
+        for (name, expected) in [
+            ("photo.jpeg", true),
+            ("photo.png", true),
+            ("photo.webp", true),
+            // Displayable, though a crop would silently drop the animation.
+            ("photo.gif", true),
+            ("icon.svg", true),
+            // No loader decodes these here.
+            ("photo.heic", false),
+            ("photo.avif", false),
+            ("notes.pdf", false),
+        ] {
+            assert_eq!(
+                Pending::is_preview_supported_file(std::path::Path::new(name)),
                 expected,
                 "{name}"
             );

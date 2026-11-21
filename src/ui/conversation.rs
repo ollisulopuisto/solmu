@@ -1702,6 +1702,7 @@ pub(crate) fn composer_with_capabilities(
                 && app.dialog.is_none()
                 && app.ghost_ui.compose.is_none()
                         && !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
+                && app.pending_picture_preview.is_none()
                 && ui.input_mut(|input| {
                     let mut sent = false;
                     input.events.retain(|event| {
@@ -1729,6 +1730,7 @@ pub(crate) fn composer_with_capabilities(
                 && app.dialog.is_none()
                 && app.ghost_ui.compose.is_none()
                         && !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
+                && app.pending_picture_preview.is_none()
                 && app.editing.is_none()
                 && ui.input_mut(|input| {
                     let mut scheduled = false;
@@ -2203,6 +2205,7 @@ pub(crate) fn composer_with_capabilities(
             ui.ctx()
                 .data_mut(|data| data.insert_temp(composer_pill_id(), pill.response.rect));
             if (send_key || send_click)
+                && app.pending_picture_preview.is_none()
                 && app.scheduling_draft.is_none()
                 && (!app.composer.trim().is_empty() || !app.pending.is_empty())
             {
@@ -2229,7 +2232,7 @@ pub(crate) fn composer_with_capabilities(
                     });
                 }
                 app.focus_composer = true;
-            } else if (send_key || send_click) && unsent_voice.is_some() && app.editing.is_none() {
+            } else if (send_key || send_click) && app.pending_picture_preview.is_none() && unsent_voice.is_some() && app.editing.is_none() {
                 // An empty composer with a refused voice message: Send tries
                 // that message again.
                 app.actions.push(Action::SendRecording);
@@ -16408,7 +16411,7 @@ mod reaction_tests {
         assert!(labels.iter().any(|label| label == "Markierung entfernen"));
         assert!(labels.iter().any(|label| label == "Markieren"));
     }
-    /// The pencil on a staged picture means the tile opens the cropper, the
+    /// A staged picture opens a large preview, the
     /// corner cross only removes, and a document's tile does neither.
     #[test]
     fn clicking_a_staged_picture_opens_it_and_the_cross_only_removes() {
@@ -16477,16 +16480,16 @@ mod reaction_tests {
         assert!(
             actions
                 .iter()
-                .any(|action| matches!(action, Action::EditPicture(id) if *id == pasted)),
-            "clicking the picture tile opens it for editing: {actions:?}"
+                .any(|action| matches!(action, Action::PreviewPendingPicture(id) if *id == pasted)),
+            "clicking the picture tile opens a large preview: {actions:?}"
         );
         // A picture staged as a file opens the same way, through its size read.
         let actions = opened(&mut app, start + egui::vec2(72.0 + 8.0 + 36.0, 36.0));
         assert!(
             actions
                 .iter()
-                .any(|action| matches!(action, Action::EditPicture(id) if *id == file)),
-            "clicking the picture file tile opens it for editing: {actions:?}"
+                .any(|action| matches!(action, Action::PreviewPendingPicture(id) if *id == file)),
+            "clicking the picture file tile opens a large preview: {actions:?}"
         );
         // A document cannot be edited, so its tile does not pretend to open.
         let actions = opened(
@@ -16496,7 +16499,7 @@ mod reaction_tests {
         assert!(
             actions
                 .iter()
-                .all(|action| !matches!(action, Action::EditPicture(_))),
+                .all(|action| !matches!(action, Action::PreviewPendingPicture(_))),
             "a document tile opens nothing: {actions:?}"
         );
         // The corner cross removes its picture instead of opening it.
@@ -16510,15 +16513,17 @@ mod reaction_tests {
         assert!(
             actions
                 .iter()
-                .all(|action| !matches!(action, Action::EditPicture(_))),
+                .all(|action| !matches!(action, Action::PreviewPendingPicture(_))),
             "the cross does not open the editor: {actions:?}"
         );
     }
 
-    /// A GIF or HEIC tile is not clickable: the editor cannot keep a GIF's
-    /// animation and cannot decode HEIC, so neither offers the pencil.
+    /// A displayable picture tile opens the preview, never the cropper
+    /// directly; crop eligibility is the preview's Crop button and the
+    /// EditPicture guard's business. A HEIC tile stays inert: no loader
+    /// here decodes it, so a preview would only show an error.
     #[test]
-    fn a_gif_or_heic_tile_does_not_offer_the_pencil() {
+    fn a_tile_click_opens_the_preview_never_the_cropper() {
         let directory = tempfile::tempdir().unwrap();
         let (mut app, _) = App::headless(
             crate::paths::AppDirs::under(directory.path()),
@@ -16571,29 +16576,28 @@ mod reaction_tests {
                 },
             ]
         };
+        // GIF: previewable but not croppable. HEIC: not even displayable.
+        // PNG: previewable and croppable.
         let start = origin.get();
-        for tile in [0.0, 72.0 + 8.0] {
+        for (tile, previewable) in [(0.0, true), (72.0 + 8.0, false), (2.0 * (72.0 + 8.0), true)] {
             run(&mut app, click(start + egui::vec2(tile + 36.0, 36.0)));
             assert!(
                 app.actions
                     .iter()
                     .all(|action| !matches!(action, Action::EditPicture(_))),
-                "a GIF or HEIC tile opened the cropper: {:?}",
+                "a tile opened the cropper directly: {:?}",
+                app.actions
+            );
+            assert_eq!(
+                app.actions
+                    .iter()
+                    .any(|action| matches!(action, Action::PreviewPendingPicture(_))),
+                previewable,
+                "tile {tile}: {:?}",
                 app.actions
             );
             app.actions.clear();
         }
-        run(
-            &mut app,
-            click(start + egui::vec2(2.0 * (72.0 + 8.0) + 36.0, 36.0)),
-        );
-        assert!(
-            app.actions
-                .iter()
-                .any(|action| matches!(action, Action::EditPicture(_))),
-            "the plain picture still offers the pencil: {:?}",
-            app.actions
-        );
     }
 }
 
@@ -16606,17 +16610,11 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         for (index, item) in app.pending.iter_mut().enumerate() {
-            // A picture can be cropped before it goes out. Anything else
-            // cannot, and does not pretend to be clickable.
-            let editable = match &item.item {
-                crate::app::Pending::Picture { .. } => true,
-                crate::app::Pending::File(path) => {
-                    crate::app::Pending::is_crop_supported_file(path)
-                }
-                // A document goes as the file it is, so it is not edited here.
-                crate::app::Pending::Document(_) => false,
-            };
-            let sense = if editable {
+            // A picture opens its preview; the preview's Crop button decides
+            // whether it can be cropped. Anything else does not pretend to
+            // be clickable.
+            let previewable = crate::ui::pending_picture_preview::is_picture(&item.item);
+            let sense = if previewable {
                 Sense::click()
             } else {
                 Sense::hover()
@@ -16737,14 +16735,14 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
                         }
                     }
                 }
-                if editable && response.hovered() {
-                    // A picture that can be cropped says so, rather than
+                if previewable && response.hovered() {
+                    // A picture that opens its preview says so, rather than
                     // looking like every other tile.
                     let dim = palette.shadow.gamma_multiply(1.4);
                     ui.painter().rect_filled(rect, radius, dim);
                     theme::paint_icon(
                         ui,
-                        Icon::Pencil,
+                        Icon::Eye,
                         Rect::from_center_size(rect.center(), Vec2::splat(22.0)),
                         20.0,
                         palette.text,
@@ -16773,7 +16771,7 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
         app.actions.push(Action::RemovePending(index));
     }
     if let Some(target) = open {
-        app.actions.push(Action::EditPicture(target));
+        app.actions.push(Action::PreviewPendingPicture(target));
     }
     ui.add_space(4.0);
 }
