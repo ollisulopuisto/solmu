@@ -14996,6 +14996,48 @@ mod tests {
             .collect()
     }
 
+    fn has_one_named_restore_button(tree: &egui::accesskit::TreeUpdate) -> bool {
+        hidden_restore_announcements(tree) == ["Show message"]
+            && tree
+                .nodes
+                .iter()
+                .filter(|(_, node)| {
+                    node.role() == egui::accesskit::Role::Button
+                        && node.label() == Some("Show message")
+                })
+                .count()
+                == 1
+    }
+
+    #[test]
+    fn restore_check_rejects_static_text_in_place_of_named_button() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            // A clickable but unnamed target plus a separately exposed hint
+            // must not stand in for the named restore button.
+            ui.allocate_exact_size(vec2(160.0, 32.0), Sense::click());
+            widgets::line(
+                ui,
+                "Show message",
+                theme::regular(12.0),
+                Color32::WHITE,
+                200.0,
+                1,
+            )
+            .paint(ui, pos2(20.0, 50.0), Color32::WHITE);
+        });
+        let tree = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .expect("accessibility tree");
+        assert_eq!(hidden_restore_announcements(tree), ["Show message"]);
+        assert!(!has_one_named_restore_button(tree));
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn restore_announcement_check_detects_decorative_static_text() {
         let ctx = egui::Context::default();
@@ -15030,6 +15072,7 @@ mod tests {
             hidden_restore_announcements(tree),
             ["Show message", "Show message"]
         );
+        assert!(!has_one_named_restore_button(tree));
         output.textures_delta.clear();
     }
 
@@ -15115,8 +15158,10 @@ mod tests {
                         .accesskit_update
                         .as_ref()
                         .expect("accessibility tree");
-                    let labels = hidden_restore_announcements(tree);
-                    assert_eq!(labels, ["Show message"], "only the restore button is named");
+                    assert!(
+                        has_one_named_restore_button(tree),
+                        "one named Button and no separately announced hint are required"
+                    );
                     output.textures_delta.clear();
                 }
                 // The focus frame must paint the readable hint, not suppress it.
