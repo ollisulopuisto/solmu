@@ -530,6 +530,16 @@ fn sections(app: &App) -> Vec<Section> {
     // Voice-note transcription is not Beeper-specific: every mode that
     // can play a voice note must reach these controls, so the section is
     // always listed, unlike the Beeper-only one above.
+    let mut media_tools = Section::new(translated(locale, "Media tools"));
+    media_tools.block(
+        vec![
+            "ffmpeg".into(),
+            "ffprobe".into(),
+            "Transcription".into(),
+            "Media tools".into(),
+        ],
+        |ui, app| super::media_tools::show(app, ui),
+    );
     let mut transcription = Section::new(translated(locale, "Voice notes"));
     transcription.block(vec!["Transcription".into(), "Voice notes".into(), "Wyoming".into(), "Whisper".into()], move |ui, app| {
         use crate::i18n::gettext;
@@ -1212,6 +1222,7 @@ fn sections(app: &App) -> Vec<Section> {
     let mut sections = vec![
         appearance,
         chats,
+        media_tools,
         transcription,
         notifications,
         privacy,

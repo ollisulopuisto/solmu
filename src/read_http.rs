@@ -23,6 +23,9 @@ impl Upstream for ServerSender {
     fn get(&mut self, target: &str) -> Result<(u16, String), String> {
         self.get_bounded(target)
     }
+    fn send_text(&mut self, chat: &str, text: &str) -> crate::write_journal::Outcome {
+        self.send_api_text(chat, text)
+    }
 }
 
 /// Hands each request its own upstream handle, so a slow Server call
@@ -148,7 +151,9 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str) {
         403 => "403 Forbidden",
         404 => "404 Not Found",
         405 => "405 Method Not Allowed",
+        409 => "409 Conflict",
         429 => "429 Too Many Requests",
+        503 => "503 Service Unavailable",
         _ => "502 Bad Gateway",
     };
     let response = format!(
@@ -160,21 +165,41 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str) {
 
 fn read_head(stream: &mut TcpStream) -> Option<String> {
     let mut buf = Vec::new();
-    let mut chunk = [0u8; 2048];
+    let mut byte = [0u8; 1];
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let n = stream.read(&mut chunk).ok()?;
-        if n == 0 {
+        stream
+            .set_read_timeout(Some(
+                deadline.checked_duration_since(std::time::Instant::now())?,
+            ))
+            .ok()?;
+        if stream.read(&mut byte).ok()? != 1 {
             return None;
         }
-        buf.extend_from_slice(&chunk[..n]);
-        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
-            return Some(String::from_utf8_lossy(&buf).into_owned());
-        }
+        buf.push(byte[0]);
         if buf.len() > MAX_REQUEST {
             return None;
         }
+        if buf.ends_with(b"\r\n\r\n") {
+            return String::from_utf8(buf).ok();
+        }
     }
+}
+fn write_allowed(key: &str, at: i64) -> bool {
+    static LIMIT: std::sync::OnceLock<Mutex<std::collections::HashMap<String, (i64, u32)>>> =
+        std::sync::OnceLock::new();
+    let mut entries = LIMIT
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    entries.retain(|_, (minute, _)| *minute == at / 60);
+    let entry = entries.entry(key.into()).or_insert((at / 60, 0));
+    if entry.1 >= 10 {
+        return false;
+    }
+    entry.1 += 1;
+    true
 }
 
 fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
@@ -186,8 +211,25 @@ fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 
 pub fn serve_connection(stream: &mut TcpStream, path: &Path, shared: &Shared) {
     let Some(head) = read_head(stream) else {
+        // An incomplete/oversized head cannot be classified safely; record
+        // an anonymous malformed receipt rather than silently miss a write.
+        let journal = crate::write_journal::WriteJournal::new(path.with_extension("writes.json"));
+        let _ = journal.audit_attempt("", now());
         return respond(stream, 400, r#"{"error":"bad request"}"#);
     };
+    // Record every identifiable POST receipt before authorization, header,
+    // origin, body and rate-limit refusals. No request content is persisted.
+    let write_receipt = head.split_whitespace().next() == Some("POST");
+    if write_receipt {
+        let key = header(&head, "authorization")
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(hash_token)
+            .unwrap_or_default();
+        let journal = crate::write_journal::WriteJournal::new(path.with_extension("writes.json"));
+        if journal.audit_attempt(&key, now()).is_err() {
+            return respond(stream, 503, r#"{"error":"audit unavailable"}"#);
+        }
+    }
     if header(&head, "origin").is_some() || header(&head, "referer").is_some() {
         return respond(stream, 403, r#"{"error":"web-originated request refused"}"#);
     }
@@ -195,6 +237,29 @@ pub fn serve_connection(stream: &mut TcpStream, path: &Path, shared: &Shared) {
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
         return respond(stream, 400, r#"{"error":"bad request"}"#);
     };
+    if parts.next() != Some("HTTP/1.1") || parts.next().is_some() {
+        return respond(stream, 400, r#"{"error":"bad request line"}"#);
+    }
+    let headers: Vec<_> = head
+        .lines()
+        .skip(1)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let mut names = std::collections::HashSet::new();
+    for line in headers {
+        let Some((name, _)) = line.split_once(':') else {
+            return respond(stream, 400, r#"{"error":"bad header"}"#);
+        };
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+            || !names.insert(name.to_ascii_lowercase())
+            || name.eq_ignore_ascii_case("transfer-encoding")
+        {
+            return respond(stream, 400, r#"{"error":"ambiguous request"}"#);
+        }
+    }
     let registry = match shared
         .registry_cache
         .lock()
@@ -218,6 +283,88 @@ pub fn serve_connection(stream: &mut TcpStream, path: &Path, shared: &Shared) {
     };
     if !allowed {
         return respond(stream, 429, r#"{"error":"rate limited"}"#);
+    }
+    if method == "GET" && target == "/v1/capabilities" {
+        let Some(client) = bearer.and_then(|t| registry.authenticate(t, at)) else {
+            return respond(stream, 401, r#"{"error":"unauthorized"}"#);
+        };
+        return respond(
+            stream,
+            200,
+            &serde_json::json!({"scopes":client.scopes,"accounts":client.accounts,"send_destinations":client.send_destinations,"expires_at":client.expires_at}).to_string(),
+        );
+    }
+    if method == "POST" {
+        let Some(client) = bearer.and_then(|t| registry.authenticate(t, at)) else {
+            return respond(stream, 401, r#"{"error":"unauthorized"}"#);
+        };
+        let chat = match crate::read_api::route("GET", target) {
+            Ok((crate::read_api::Route::Messages(chat), _)) if !target.contains('?') => chat,
+            _ => return respond(stream, 405, r#"{"error":"method not allowed"}"#),
+        };
+        if header(&head, "content-type")
+            .and_then(|v| v.split(';').next())
+            .map(str::trim)
+            != Some("application/json")
+        {
+            return respond(stream, 400, r#"{"error":"JSON required"}"#);
+        }
+        let Some(length) = header(&head, "content-length")
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0 && *n <= 20 * 1024)
+        else {
+            return respond(
+                stream,
+                400,
+                r#"{"error":"bounded content length required"}"#,
+            );
+        };
+        if !write_allowed(&key, at) {
+            return respond(stream, 429, r#"{"error":"send rate limited"}"#);
+        }
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut body = vec![0; length];
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut offset = 0;
+        while offset < length {
+            let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                return respond(stream, 400, r#"{"error":"body timeout"}"#);
+            };
+            let _ = stream.set_read_timeout(Some(left));
+            match stream.read(&mut body[offset..]) {
+                Ok(n) if n > 0 => offset += n,
+                _ => return respond(stream, 400, r#"{"error":"incomplete body"}"#),
+            }
+        }
+        let mut upstream = shared.source.open();
+        let journal = crate::write_journal::WriteJournal::new(path.with_extension("writes.json"));
+        let (status, body) = crate::write_api::handle_recorded(
+            &registry,
+            &mut *upstream,
+            &journal,
+            bearer,
+            &chat,
+            &body,
+            at,
+            || {
+                shared
+                    .registry_cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .registry(path)
+                    .ok()
+                    .and_then(|r| {
+                        r.authenticate(bearer.unwrap_or(""), now())
+                            .map(|c| c == client)
+                    })
+                    .unwrap_or(false)
+            },
+        );
+        eprintln!(
+            "solmu-reader: client={} route=send status={status}",
+            client.name
+        );
+        return respond(stream, status, &body);
     }
     let people = if target.starts_with("/v1/people") {
         load_people(&shared.settings)

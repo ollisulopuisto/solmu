@@ -673,7 +673,7 @@ fn is_video_file(path: &Path) -> bool {
 /// `ffmpeg`. Nothing leaves the machine and no temporary file is written.
 fn extract_audio_with_ffmpeg(path: &Path) -> Result<Vec<f32>, String> {
     use std::process::{Command, Stdio};
-    let output = Command::new("ffmpeg")
+    let output = Command::new(crate::media_tools::resolve("ffmpeg")?)
         .args(["-v", "error", "-nostdin", "-i"])
         .arg(path)
         .args(["-vn", "-ac", "1", "-ar"])

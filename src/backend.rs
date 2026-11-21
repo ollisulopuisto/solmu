@@ -197,6 +197,7 @@ pub enum Command {
     BeeperForward {
         generation: u64,
         prepared: bool,
+        append_at: usize,
         items: Vec<(usize, crate::composed_forward::Item)>,
     },
     Forward {
@@ -385,6 +386,12 @@ pub enum Command {
         request_generation: u64,
         /// Whether the server refusal is permanent.
         permanent: bool,
+    },
+    PrepareEdit {
+        chat: ChatId,
+        id: String,
+        account: String,
+        request: u64,
     },
     EditText {
         chat: ChatId,
@@ -1148,6 +1155,10 @@ pub enum Event {
         message: Box<Message>,
         complete: bool,
     },
+    BeeperForwardRetryPrepared {
+        generation: u64,
+        items: Vec<(usize, crate::composed_forward::Item)>,
+    },
     BeeperForwardPrepared {
         generation: u64,
         items: Vec<crate::composed_forward::Item>,
@@ -1161,6 +1172,13 @@ pub enum Event {
     BeeperForwardProgress {
         generation: u64,
         index: usize,
+        state: crate::composed_forward::State,
+    },
+    BeeperForwardFeedback {
+        origin: String,
+        account: String,
+        chat: ChatId,
+        pending: String,
         state: crate::composed_forward::State,
     },
     BeeperForwardResolved {
@@ -1553,6 +1571,12 @@ pub enum Event {
     /// The account folders were deleted after RemoveAccount.
     AccountRemoved,
     /// The API outcome is uncertain. Restore text without automatically retrying.
+    BeeperEditPrepared {
+        chat: ChatId,
+        id: String,
+        request: u64,
+        result: Result<String, crate::rich_edit::Error>,
+    },
     BeeperEditUncertain {
         chat: ChatId,
         id: String,

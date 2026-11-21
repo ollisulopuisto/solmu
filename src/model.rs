@@ -449,7 +449,16 @@ pub struct GroupSettings {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct ReactionPreview {
+    pub emojis: String,
+    /// Some(true): only us; Some(false): only others; None: mixed/unknown.
+    pub from_me: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct LastMessage {
+    /// Aggregate metadata, never a claimed chronological "latest reactor".
+    pub reaction: Option<ReactionPreview>,
     pub from_me: bool,
     pub sender: String,
     /// Group-message sender.
@@ -480,11 +489,22 @@ impl LastMessage {
         locale: crate::i18n::Locale,
         text: &'a str,
     ) -> std::borrow::Cow<'a, str> {
-        if self.labelled {
+        let body = if self.labelled {
             localized_summary(locale, text)
         } else {
             std::borrow::Cow::Borrowed(text)
-        }
+        };
+        let Some(reaction) = &self.reaction else {
+            return body;
+        };
+        let label = match (reaction.from_me, self.from_me) {
+            (Some(true), _) => crate::i18n::gettext(locale, "You reacted {emoji} to the message "),
+            (Some(false), true) => crate::i18n::gettext(locale, "{emoji} to your message "),
+            (Some(false), false) => crate::i18n::gettext(locale, "{emoji} to the message "),
+            (None, _) => crate::i18n::gettext(locale, "Reactions {emoji} to the message "),
+        };
+        let label = label.replace("{emoji}", &reaction.emojis);
+        std::borrow::Cow::Owned(format!("{label}\"{body}\""))
     }
 }
 
@@ -1426,7 +1446,11 @@ impl Content {
         self.searchable_fields()
             .into_iter()
             .flat_map(str::lines)
-            .find(|line| line.to_lowercase().contains(&needle))
+            .find(|line| {
+                crate::literal_hints::without_literal_hints(line)
+                    .to_lowercase()
+                    .contains(&needle)
+            })
             .map(|line| line.trim().to_owned())
     }
 
@@ -2775,6 +2799,11 @@ pub fn forward_limit(frequently_forwarded: bool) -> usize {
 /// Actions queued by views and applied after drawing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    PrepareNewMessage {
+        member: crate::flat_groups::Member,
+        text: String,
+        files: Vec<PathBuf>,
+    },
     BatchArchive {
         request: u64,
         expected: crate::merged::Member,
@@ -3097,7 +3126,15 @@ pub enum Action {
     /// Forwards to the chosen recipients: one at once, several after
     /// their confirmation.
     ConfirmForward,
+    ForwardToSelected,
     RetryComposedForward,
+    RetryForwardRecipient {
+        origin: String,
+        account: String,
+        chat: String,
+    },
+    ShowForwardResults,
+    HideForwardResults,
     /// Starts selecting messages in the open chat, beginning with this one.
     SelectMessage(String),
     /// Adds a message to the selection or removes it.
@@ -3116,6 +3153,12 @@ pub enum Action {
     CancelSelection,
     /// Loads an outgoing message into the composer for editing.
     Edit(String),
+    PreparedEdit {
+        chat: ChatId,
+        id: String,
+        request: u64,
+        result: Result<String, crate::rich_edit::Error>,
+    },
     CancelEdit,
     /// Revokes an outgoing message for everyone. The chat travels with the
     /// message because the reader may switch chats before confirming.
@@ -4345,6 +4388,7 @@ mod tests {
         // A quote archived before `labelled` was kept still translates.
         assert_eq!(quote(None).summary_in(Locale::Spanish), "Foto: look");
         let last = |labelled| LastMessage {
+            reaction: None,
             from_me: false,
             sender: String::new(),
             sender_name: None,
