@@ -154,6 +154,12 @@ math and serde tests were verified in a scratch crate against the real
 image/serde versions, fmt via rustfmt; clippy and the full suite run in CI.
 macOS detection itself is unverified (Linux box): the macOS CI leg compiles
 it, runtime behaviour needs a Mac. No merge by the author.
+## Sidebar person names,20 November
+
+Implement approved sidebar sketch: remove linked suffix from chat title and network-count subtitle. Existing source-network avatar badges and combined timeline remain unchanged. Add title/subtitle regression. No new replacement icon. Native execution/pixel review pending.
+
+Pixel review caught a residual network-count suffix after removing linked. Removed that suffix from the merged-person preview; source badges stay intact. Both-theme synthetic Linux captures inspected with the full person name visible. Native Mac execution and review evidence publication remain separate gates.
+
 ## 2026-11-19: Captioned media bubbles settle to the picture (fix/captioned-media-bubble-width)
 
 Olli reported sent bubbles going "all funny" with a narrow media attached:
@@ -247,6 +253,14 @@ fenced_code_rows_fit_the_layout_width (wrap.rs already force-breaks overlong
 tokens); verified only by rustc parse-check locally, since this Ubuntu box
 cannot build the crate (PipeWire headers too old) - fmt/clippy/tests and any
 visual check run in CI.
+## 2026-11-21: Linked sidebar title hover follow-up (#411)
+
+Shared-boundary follow-up: reserve a one-point neutral gap between title and preview hover targets. The native handoff regression requires a strict positive gap; negative controls reject touching, overlapping and reversed regions. Click/drag still belongs to the full row.
+
+Hover arbitration follow-up: title tooltip uses its own non-overlapping top-line hover target, leaving the full row click/drag target unchanged. Extended preview regression opens a networkless name tooltip before moving directly into its message preview.
+
+Reviewer follow-up: retain the full-name hover tooltip without a network subtitle. Focused helper regression covers name-only and unchanged network cases. Formatting passes; runtime validation awaits CI.
+
 ## 2026-11-18: Failed link previews stay quiet (fix/preview-fail-quiet)
 
 local_link_previews (src/ui/conversation.rs) painted a prominent "Preview
