@@ -254,7 +254,9 @@ impl Store {
 
     /// Privacy control: removes every transcript of every chat. Every account
     /// is attempted even when one fails, so one unreadable archive cannot hide
-    /// the survivors of the rest; the first failure is still reported.
+    /// the survivors of the rest; the first failure is still reported. Legacy
+    /// plaintext awaiting or spared by migration is deleted too, so a later
+    /// migration cannot resurrect cleared transcripts.
     pub fn clear(&self) -> std::io::Result<()> {
         if let Some(backend) = &self.encrypted {
             let mut result = Ok(());
@@ -265,6 +267,7 @@ impl Store {
                     result = Err(error);
                 }
             }
+            self.clear_legacy(&mut result);
             self.bump();
             return result;
         }
@@ -276,6 +279,29 @@ impl Store {
         }
         self.bump();
         Ok(())
+    }
+
+    /// Removes unmigrated plaintext transcripts from the store root, keeping
+    /// the first failure without skipping the rest.
+    fn clear_legacy(&self, result: &mut std::io::Result<()>) {
+        let entries = match std::fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) => {
+                if result.is_ok() {
+                    *result = Err(error);
+                }
+                return;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir()
+                && let Err(error) = std::fs::remove_dir_all(&path)
+                && result.is_ok()
+            {
+                *result = Err(error);
+            }
+        }
     }
 
     /// Writes one transcript and evicts oldest files past the cap.
@@ -1117,6 +1143,19 @@ mod tests {
         // Same rate in and out still converts to s16le.
         let same = wyoming_pcm_from_mono(&[0.5, -0.5], 16_000);
         assert_eq!(same.len(), 4);
+    }
+
+    #[test]
+    fn encrypted_clear_also_removes_unmigrated_plaintext() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("state").join("transcripts");
+        let store = Store::encrypted(legacy.clone(), 1 << 20).unwrap();
+        // No account archives exist yet, only plaintext awaiting migration.
+        let plaintext = Store::new(legacy.clone(), 1 << 20).unwrap();
+        plaintext.put("1", "chat", "voice", "legacy words").unwrap();
+        store.clear().unwrap();
+        assert!(store.get("1", "chat", "voice").is_none());
+        assert!(legacy.read_dir().unwrap().next().is_none());
     }
 
     struct EchoEngine;
