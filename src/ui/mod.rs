@@ -20,6 +20,7 @@ pub mod local_avatars;
 pub mod locations;
 pub mod lock;
 pub mod login;
+mod media_tools;
 pub mod message_info;
 pub mod new_group;
 pub mod palette;
@@ -31,6 +32,7 @@ pub(crate) mod reply_threads;
 pub(crate) mod send_later;
 pub mod settings;
 pub mod switcher;
+mod transcript_text;
 pub mod update;
 pub mod widgets;
 

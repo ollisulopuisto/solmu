@@ -81,6 +81,45 @@ struct Shared {
     row_kinds: Vec<RowKind>,
 }
 
+/// Reserve an explicit code header and inset without adding copyable spaces or
+/// blank lines. Both cached and fresh layouts use these same row coordinates.
+fn spaced_code_galley(mut galley: Arc<Galley>, kinds: &[RowKind]) -> Arc<Galley> {
+    if !kinds.iter().any(|kind| matches!(kind, RowKind::Code(_))) {
+        return galley;
+    }
+    let galley_mut = Arc::make_mut(&mut galley);
+    let mut shift = 0.0;
+    let mut width = galley_mut
+        .rect
+        .width()
+        .max(100.0_f32.min(galley_mut.job.wrap.max_width + 20.0));
+    let mut previous = RowKind::Normal;
+    for (index, row) in galley_mut.rows.iter_mut().enumerate() {
+        let kind = kinds[index];
+        if matches!(previous, RowKind::Code(_)) && kind != previous {
+            shift += 10.0;
+        }
+        if matches!(kind, RowKind::Code(_)) && kind != previous {
+            shift += 20.0;
+        }
+        row.pos.y += shift;
+        if matches!(kind, RowKind::Code(_)) {
+            row.pos.x += 10.0;
+            width = width.max(row.pos.x + row.row.size.x + 10.0);
+        }
+        previous = kind;
+    }
+    if matches!(previous, RowKind::Code(_)) {
+        shift += 10.0;
+    }
+    galley_mut.rect.max.y += shift;
+    galley_mut.rect.max.x = galley_mut.rect.min.x + width;
+    galley_mut.mesh_bounds = galley_mut.rows.iter().fold(Rect::NOTHING, |bounds, row| {
+        bounds.union(row.row.visuals.mesh_bounds.translate(row.pos.to_vec2()))
+    });
+    galley
+}
+
 impl Text {
     /// Emoji sequences represented by placeholder glyphs.
     pub fn placements(&self) -> &[String] {
@@ -215,6 +254,7 @@ fn finish(
     let mut galley = bidi::layout_job(ui, built.job);
     crate::list_layout::hanging(&mut galley, &inserted, built.list_indent);
     let row_kinds = row_kinds(&galley, &built.blocks, &built.quotes);
+    let galley = spaced_code_galley(galley, &row_kinds);
     let copy_links = copy_links.unwrap_or_else(|| built.links.clone());
     Text {
         galley,
@@ -377,6 +417,7 @@ fn build(
         };
         let format = TextFormat {
             font_id,
+            line_height: span.block.then_some(size * 1.4),
             color,
             italics: span.italic,
             underline: if span.link.is_some() {
@@ -419,7 +460,10 @@ fn build(
         );
     }
     let list_indent = list_indent(ui, &job, size, max_width);
-    job.wrap.max_width = (max_width - list_indent).max(1.0);
+    // Reserve both decorations before either greedy shaping or balancing.
+    // The previous assignment replaced the code inset with the list cap.
+    let code_inset = if blocks.is_empty() { 0.0 } else { 20.0 };
+    job.wrap.max_width = (max_width - list_indent - code_inset).max(1.0);
     Built {
         job,
         list_indent,
@@ -613,6 +657,7 @@ struct PreparedKey {
     colors: [u32; 4],
     grow_emoji: bool,
     font_generation: u32,
+    pixels_per_point: u32,
 }
 
 impl PreparedKey {
@@ -622,6 +667,7 @@ impl PreparedKey {
         style: &Style,
         max_width: f32,
         grow_emoji: bool,
+        pixels_per_point: f32,
     ) -> Self {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -647,6 +693,7 @@ impl PreparedKey {
             ],
             grow_emoji,
             font_generation: crate::theme::font_generation(),
+            pixels_per_point: pixels_per_point.to_bits(),
         }
     }
 }
@@ -713,9 +760,14 @@ impl Prepared {
             &built.quotes,
             &breaks,
         );
-        // Breaks are hard newlines now; keep egui from re-wrapping a line
-        // that shaped a hair wider than the balancer measured.
-        job.wrap.max_width = f32::INFINITY;
+        // Prose keeps its planned breaks. Fenced code must also retain a
+        // hard shaping cap: token measurements can omit trailing whitespace,
+        // but those glyphs still take room before the panel's right inset.
+        if blocks.is_empty() {
+            job.wrap.max_width = f32::INFINITY;
+        } else {
+            job.wrap.max_width = cap;
+        }
         let galley = bidi::layout_job(ui, job.clone());
         let row_kinds = row_kinds(&galley, &blocks, &quotes);
         Self {
@@ -747,7 +799,7 @@ impl Prepared {
                     &self.shared.inserted,
                     self.shared.list_indent,
                 );
-                galley
+                spaced_code_galley(galley, &self.shared.row_kinds)
             },
             links: self.links.clone(),
             big: self.big,
@@ -802,7 +854,14 @@ pub fn layout_balanced(
     max_width: f32,
     grow_emoji: bool,
 ) -> Arc<Text> {
-    let key = PreparedKey::new(text, mentions, style, max_width, grow_emoji);
+    let key = PreparedKey::new(
+        text,
+        mentions,
+        style,
+        max_width,
+        grow_emoji,
+        ui.pixels_per_point(),
+    );
     let cache = prepared_cache(ui.ctx());
     {
         let mut cache = cache.lock().unwrap_or_else(|p| p.into_inner());
@@ -828,7 +887,7 @@ pub fn layout_balanced(
 
 /// Cache key: text, body size, wrap width, font generation, and a hash of
 /// everything else that shapes measurement: section fonts and link ranges.
-type BreaksKey = (String, u32, u32, u32, u64);
+type BreaksKey = (String, u32, u32, u32, u32, u64);
 
 /// Hashes the parts of a built job beyond its plain text that change token
 /// widths or break opportunities: each section's font family and size (bold
@@ -863,6 +922,7 @@ fn balanced_breaks(
         size.to_bits(),
         max_width.to_bits(),
         crate::theme::font_generation(),
+        ui.pixels_per_point().to_bits(),
         format_hash(built),
     );
     type Cache =
@@ -1343,6 +1403,7 @@ fn panel_rect(
 ) -> Option<Rect> {
     const PAD: f32 = 3.0;
     let rows = &laid.galley.rows;
+    let code = matches!(laid.row_kinds()[start], RowKind::Code(_));
     let top = rows[start].pos.y;
     let bottom = rows[end - 1].pos.y + rows[end - 1].row.size.y;
     if clip_height.is_some_and(|clip| top >= clip) {
@@ -1350,8 +1411,8 @@ fn panel_rect(
     }
     let bottom = clip_height.map_or(bottom, |clip| bottom.min(clip));
     Some(Rect::from_min_max(
-        Pos2::new(body.min.x, origin.y + top - PAD),
-        Pos2::new(body.max.x, origin.y + bottom + PAD),
+        Pos2::new(body.min.x, origin.y + top - if code { 8.0 } else { PAD }),
+        Pos2::new(body.max.x, origin.y + bottom + if code { 8.0 } else { PAD }),
     ))
 }
 
@@ -1374,43 +1435,32 @@ pub fn code_panel_rects(
         .collect()
 }
 
-/// The Copy code button hangs off the panel's top right: the opening
-/// fence's dropped marker leaves a blank row above the block, so the
-/// button sits in empty space and can never cover code, however narrow
-/// the panel. Top placement keeps it visible when a collapse clip cuts
-/// the block mid-panel: the clamped panel bottom lands at or below the
-/// clip, but the top stays on screen.
+/// Copy control outside and above the code panel, with a four-point gap.
 pub fn copy_button_rect(panel: Rect) -> Rect {
     Rect::from_min_max(
-        Pos2::new(panel.max.x - 68.0, panel.min.y - 16.0),
-        Pos2::new(panel.max.x - 4.0, panel.min.y - 2.0),
+        Pos2::new(
+            (panel.max.x - 82.0).max(panel.min.x + 6.0),
+            panel.min.y - 24.0,
+        ),
+        Pos2::new(panel.max.x - 6.0, panel.min.y - 4.0),
     )
 }
 
-/// Renders one panel's Copy code label and returns its response. The
-/// response rect must stay inside the 14pt band [`copy_button_rect`]
-/// reserves: a button that outgrows the band reaches into the first
-/// code row and intercepts selection drags there.
+/// Render a real accessible button in the separate20pt control band.
 pub fn put_copy_button(
     ui: &mut egui::Ui,
     panel: Rect,
     label: &str,
     color: Color32,
 ) -> egui::Response {
-    // A real Button in a style-overridden child UI: a plain Ui::put
-    // expands the button to the theme's 28pt minimum interact height and
-    // the overflow reaches into the first code row, where it intercepts
-    // selection drags; a bare allocate_rect plus painted text keeps the
-    // geometry but has no accessible label. The child UI caps the
-    // interact height at the 14pt band, and the Button supplies its own
-    // accessibility label.
+    // Limit the themed minimum height so selection stays clear of the header.
     let rect = copy_button_rect(panel);
     let mut child = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(rect)
             .layout(egui::Layout::right_to_left(egui::Align::Center)),
     );
-    child.spacing_mut().interact_size.y = 14.0;
+    child.spacing_mut().interact_size.y = 20.0;
     child.spacing_mut().button_padding = egui::vec2(4.0, 0.0);
     child.add(egui::Button::new(egui::RichText::new(label).small().color(color)).frame(false))
 }
@@ -3376,9 +3426,107 @@ mod monospace_tests {
         output.textures_delta.clear();
     }
 
-    /// The Copy code button floats off the panel's bottom right, in the
-    /// blank row the closing fence leaves, so it never covers code text
-    /// even when the panel is exactly as wide as its widest row.
+    /// Copy code sits outside and above the panel, separate from code selection.
+    #[test]
+    fn code_panels_have_inset_header_bottom_space_and_unchanged_copy() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "```\nfirst line\nsecond line\n```";
+            for laid in [
+                Arc::new(layout(ui, text, &[], &style, 220.0, false)),
+                layout_balanced(ui, text, &[], &style, 220.0, false),
+            ] {
+                let body = Rect::from_min_size(Pos2::ZERO, laid.galley.size());
+                let (_, panel) = code_panel_rects(body, Pos2::ZERO, &laid, None)[0];
+                let rows: Vec<_> = laid
+                    .galley
+                    .rows
+                    .iter()
+                    .zip(laid.row_kinds())
+                    .filter(|(_, kind)| matches!(kind, RowKind::Code(_)))
+                    .map(|(row, _)| row)
+                    .collect();
+                assert!(rows[0].pos.x - panel.left() >= 9.5);
+                assert!(rows[0].pos.y - copy_button_rect(panel).bottom() >= 5.5);
+                let last = rows.last().unwrap();
+                assert!(panel.bottom() - last.pos.y - last.row.size.y >= 7.5);
+                assert!(rows[1].pos.y - rows[0].pos.y >= 21.0);
+                assert_eq!(code_blocks(text), vec!["first line\nsecond line"]);
+                assert!(
+                    panel.top() >= 0.0,
+                    "header must fit inside allocated text body"
+                );
+            }
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn zoom_rebuilds_fenced_row_classifications_at_the_same_point_width() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let text = "```\nlet answer = value + several_more_values;\n```";
+        for scale in [1.0, 0.85, 1.25, 1.5, 2.0] {
+            ctx.set_pixels_per_point(scale);
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let style = Style {
+                    size: 16.0,
+                    color: Color32::WHITE,
+                    secondary: Color32::GRAY,
+                    link: Color32::BLUE,
+                    mention: Color32::WHITE,
+                };
+                for cap in [139.0, 140.0, 141.0, 220.0] {
+                    let cached = layout_balanced(ui, text, &[], &style, cap, false);
+                    let fresh = Prepared::build(ui, text, &[], &style, cap, false).draw(ui);
+                    assert_eq!(cached.galley.rows.len(), cached.row_kinds().len());
+                    assert_eq!(cached.row_kinds(), fresh.row_kinds());
+                    assert_eq!(cached.galley.rect, fresh.galley.rect);
+                }
+            });
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn wrapped_code_insets_stay_inside_the_requested_width() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let text = "Before\n```\na fairly long line of code with several words and punctuation();\n```\nAfter";
+            for cap in [140.0, 220.0, 300.0] {
+                for laid in [
+                    Arc::new(layout(ui, text, &[], &style, cap, false)),
+                    layout_balanced(ui, text, &[], &style, cap, false),
+                ] {
+                    assert!(laid.galley.size().x <= cap + 0.5,
+                        "code inset overflow: {} > {cap}", laid.galley.size().x);
+                    for (row, kind) in laid.galley.rows.iter().zip(laid.row_kinds()) {
+                        if matches!(kind, RowKind::Code(_)) {
+                            assert!(row.pos.x + row.row.size.x + 10.0 <= cap + 0.5);
+                        }
+                    }
+                    assert_eq!(code_blocks(text), vec!["a fairly long line of code with several words and punctuation();"]);
+                }
+            }
+        });
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn the_copy_button_never_covers_code_text() {
         let ctx = egui::Context::default();
@@ -3416,7 +3564,7 @@ mod monospace_tests {
     /// layout target: a themed Button expands to the theme's minimum
     /// interact height under Ui::put and leaks from the reserved band
     /// into the first code row, where it intercepts selection drags.
-    /// The response must stay inside the 14pt band above the panel.
+    /// The response must stay inside the20pt band above the panel.
     #[test]
     fn the_copy_button_response_stays_in_its_band() {
         let ctx = egui::Context::default();
@@ -3434,8 +3582,10 @@ mod monospace_tests {
             for (_, panel) in code_panel_rects(body, Pos2::ZERO, &laid, None) {
                 let response = put_copy_button(ui, panel, "Copy code", Color32::WHITE);
                 let band = copy_button_rect(panel);
+                assert!(band.bottom() <= panel.top() - 3.5);
+                assert!(!band.intersects(panel));
                 assert!(
-                    band.contains_rect(response.rect) && response.rect.height() <= 14.0,
+                    band.contains_rect(response.rect) && response.rect.height() <= 20.0,
                     "copy button response {:?} outgrew its band {band:?}",
                     response.rect
                 );
@@ -3599,7 +3749,8 @@ mod compact_list_tests {
             ] {
                 let built = build(ui, source, &[], &style, 180.0, false);
                 assert_eq!(built.list_indent, 0.0, "{source}");
-                assert_eq!(built.job.wrap.max_width, 180.0);
+                // Only the code panel's20pt inset, never list indentation.
+                assert_eq!(built.job.wrap.max_width, 160.0);
             }
             let built = build(
                 ui,

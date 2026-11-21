@@ -92,6 +92,7 @@ pub mod suggest;
 
 pub mod whisper_runtime;
 
+pub mod media_tool_setup;
 pub mod media_tools;
 pub mod reply_graph;
 
@@ -111,3 +112,4 @@ pub mod automation_mcp;
 
 pub mod list_layout;
 pub mod literal_hints;
+pub mod read_sync;

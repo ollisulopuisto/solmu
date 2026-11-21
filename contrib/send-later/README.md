@@ -70,6 +70,9 @@ permission - this directory only prepares the artifacts.
   and retry by hand.
 - A message due while the daemon was down becomes `missed`; it needs an
   explicit retry within the 15-minute grace window or it stays parked.
+- A malformed reconciliation search response leaves the send outcome unknown;
+  it is not reported as proof that no matching copy exists. A valid empty
+  search page is distinct from an unreadable or missing items array.
 - Enqueue validates the chat and account against the Beeper API, so a
   message cannot be queued into a chat the account cannot send to.
 

@@ -784,12 +784,27 @@ history and search continuation. Tests cover disconnected inventory without a
 Chats replacement event, legitimate empty inventory, malformed history, and
 search retaining results/cursor across refusal and successful retry.
 No real Server query or UI-layout changes; native/live acceptance unverified.
+## 2026-11-20 - Unknown reconciliation on malformed Server search
 
 ## Attachment-pencil handler,20 November
 
 Production previously neither compiled the picture-edit module nor routed InspectPicture/ApplyPictureEdit. Both now run through the existing local attachment-action worker, independently of Server/offline status, emitting targeted results. Output goes to account media cache/edited, never over the original. Thread-start failures answer the waiting action. Existing attachment-ID checks still reject stale results.
 
 Native library/test-target compile passes.418 portable adapter tests pass, including real routing that inspects an8x6 PNG, applies3x4 crop, verifies output dimensions and untouched source, and receives a missing-file error while disconnected. Harness stages real picture_edit/sticker_store sources. No live Mac pencil/crop/save roundtrip or new UI design claimed. A local disk-cache-full interruption was recovered by clearing disposable build caches before rerunning the suite.
+The Server reliability audit found that the scheduler interpreted a missing
+search items array as NotFound. That is not evidence that an uncertain send
+has no existing copy. Require items so malformed search leaves reconciliation
+Unknown. A failing-first real-HTTP regression reproduced NotFound before the
+fix; valid-empty pages still report NotFound. No automatic resend policy is
+changed, and no real messages or Server configuration were touched.
+
+
+## Shortcut edit targets,20 November
+
+Owner reports Up selected an older message. Source confirms the shortcut deliberately skips non-text rows (Beeper attachment edits are unsupported), not an index decrement. Conversation merge sorts by timestamp/history order. A separate real gap reproduced: hidden, Pending and Failed own text rows could become shortcut edit targets. Reject unsent rows in can_edit and hidden rows in the shortcut. Failing-first extracted production-method fixture:3fail/1pass before,4pass after. Added native App regression for hidden/pending/failed, latest sent/read and captioned album-member boundaries. The extraction uses simplified model scaffolding, not the full App suite. Full native CI remains required. Original older-target screenshot cause not proven; no cache/off-by-one claim. No editing-highlight UI changed.
+## Code block breathing room,20 November
+
+Fenced code has10pt horizontal inset, extra bottom space,1.4x line height and a reserved20pt accessible Copy code header inside the panel. Layout row positions, not copyable indentation/blank lines, supply the spacing, in cached and fresh paths. Actual synthetic before/after Linux screenshots inspected in dark/light: header separates from code, left/bottom no longer crammed, prose remains outside. New geometry/copy regression plus updated response-height assertion compile; execution/Mac/PR-hosted evidence remain gates. No release.
 ## Transcript reading alignment,20 November
 
 Ready voice/video transcript text now forces left alignment independently of outgoing bubble placement and has plain double quotation marks. New layout regression checks quoted multiline text has a common left edge under an outgoing layout. Both-theme actual synthetic Linux outgoing voice captures inspected. Native test-target compile passes; native test execution and Mac pixels remain gates. Richer transcript styling/collapse and moving the action outside the bubble remain sketch-only.
@@ -1068,3 +1083,13 @@ assertion. Native test-target compilation passes; full execution awaits CI.
 Production bubble/footer logic is unchanged.
 
 The same linked-minute fixture failure affected #437 Ubuntu (2523 passed, one failed). Reused the identical fixture-only correction from #433; no audit or production code changed. All exact-head CI/review gates restart.
+
+#424 review follow-up: natural width planning previously omitted the new code inset, then rendering subtracted it from the already settled text width. Fenced bodies now use the same cached padded layout for both timeline planning and per-bubble fallback. Added a14-line conversation width regression keeping the snippet below the collapse threshold. Native all-feature check passes; runtime remains CI-gated.
+
+#424 Mac runtime:2546 passed,2 failed. The compact-list fixture still expected the pre-inset180pt code cap; it now expects160pt while retaining zero list-indent assertion. New narrow-code regression caught shaped overflow after balancing disabled wrapping. Fenced prepared jobs now retain their hard inner shaping cap, including trailing whitespace. No assertions removed; width/copy regressions rerun in CI.
+
+#424 zoom review: prepared and break-plan caches now key the current pixel scale as well as point width and font generation. Regression cycles five scales at unchanged widths and compares cached row classifications/geometry with freshly prepared layout. This prevents scale rounding from reshaping a finite-width code job against old row metadata.
+
+## Terminal read synchronization404,20 November
+
+Linked-person reads fan out to each exact source. The read command used the generic Info toast for every HTTP failure, unlike history/poll terminal404 handling. A missing source now becomes unavailable for read synchronization until reconnect, logged once without identifiers. Local read clearing remains independent; no remote receipt is claimed. Other sources still synchronize;403/500 and transport errors stay visible. Read-only never posts. Three focused production-module tests pass, with the404 test first failing against the previous generic-failure behavior. Native test-target compilation passes; no live Server or Mac validation. No package publication.

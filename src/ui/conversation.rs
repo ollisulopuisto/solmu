@@ -6660,9 +6660,7 @@ pub(crate) fn linked_run_widths(
                     link: palette.link,
                     mention: palette.accent,
                 };
-                let measured = markup::measure(ui, text, &mentions, &style, cap, grow);
-                let plan = crate::wrap::balance(&measured.items, cap, measured.hyphen);
-                if plan.lines == 0 { 0. } else { plan.width }
+                natural_body_width(ui, text, &mentions, &style, cap, grow)
             });
             natural_call_width(ui, message, cap, app.locale, &palette)
                 .or_else(|| natural_content_width(message, cap, text))
@@ -6736,9 +6734,36 @@ fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f3
         link: palette.link,
         mention: palette.accent,
     };
-    let measured = markup::measure(ui, text, &mentions_of(view, message), &style, cap, grow);
+    Some(natural_body_width(
+        ui,
+        text,
+        &mentions_of(view, message),
+        &style,
+        cap,
+        grow,
+    ))
+}
+
+/// Fenced bodies include their panel inset in the settled outer width. Use
+/// the same cached layout as painting so planning cannot subtract it twice.
+fn natural_body_width(
+    ui: &egui::Ui,
+    text: &str,
+    mentions: &[markup::Mention],
+    style: &markup::Style,
+    cap: f32,
+    grow: bool,
+) -> f32 {
+    if text.contains("```") {
+        return markup::layout_balanced(ui, text, mentions, style, cap, grow)
+            .galley
+            .size()
+            .x
+            .min(cap);
+    }
+    let measured = markup::measure(ui, text, mentions, style, cap, grow);
     let plan = crate::wrap::balance(&measured.items, cap, measured.hyphen);
-    Some(if plan.lines == 0 { 0.0 } else { plan.width })
+    if plan.lines == 0 { 0.0 } else { plan.width }
 }
 
 /// Width of a quote's accent bar.
@@ -12421,17 +12446,61 @@ fn voice_transcript(
     };
     match worker.get(view.transcription_account, &view.chat.id, &message.id) {
         Some(crate::transcribe_worker::Status::Ready(text)) => {
+            ui.add_space(8.0);
             ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(format!("\"{text}\""))
-                            .font(theme::regular(12.0))
-                            .color(palette.secondary),
-                    )
-                    .halign(Align::Min)
-                    .wrap()
-                    .selectable(false),
+                theme::text(
+                    ui,
+                    crate::i18n::gettext(view.locale, "Transcript · On this device"),
+                    theme::regular(11.5),
+                    palette.secondary,
                 );
+                let id = egui::Id::new((
+                    "local-transcript-expanded",
+                    view.transcription_account,
+                    &view.chat.id,
+                    &message.id,
+                    &text,
+                ));
+                let drawn = super::transcript_text::show(
+                    ui,
+                    id,
+                    &text,
+                    super::transcript_text::Appearance {
+                        font: theme::regular(12.0),
+                        text: palette.secondary,
+                        link: palette.link,
+                        more: &crate::i18n::gettext(view.locale, "Show more (+{count} lines)"),
+                        less: &crate::i18n::gettext(view.locale, "Show less"),
+                    },
+                );
+                if let Some(response) = drawn.toggle {
+                    let response = response.tab_stop(Stop::Transcript(id.value(), 0));
+                    theme::reveal_focus(&response);
+                    theme::focus_outline(ui, response.id, response.rect, 4.0);
+                }
+                if drawn.expanded || drawn.total_lines <= 4 {
+                    ui.horizontal_wrapped(|ui| {
+                        let copy = ui
+                            .link(crate::i18n::gettext(view.locale, "Copy transcript"))
+                            .tab_stop(Stop::Transcript(id.value(), 1));
+                        theme::reveal_focus(&copy);
+                        theme::focus_outline(ui, copy.id, copy.rect, 4.0);
+                        if copy.clicked() {
+                            ui.ctx().copy_text(text.clone());
+                        }
+                        let language = ui
+                            .link(crate::i18n::gettext(view.locale, "Transcription language…"))
+                            .tab_stop(Stop::Transcript(id.value(), 2));
+                        theme::reveal_focus(&language);
+                        theme::focus_outline(ui, language.id, language.rect, 4.0);
+                        if language.clicked() {
+                            actions.push(Action::ShowDialog(Dialog::TranscriptionLanguage {
+                                chat: view.chat.id.clone(),
+                                message: message.id.clone(),
+                            }));
+                        }
+                    });
+                }
             });
         }
         Some(crate::transcribe_worker::Status::Running) => {
@@ -12462,7 +12531,7 @@ fn voice_transcript(
             if theme::pill_button(
                 ui,
                 &palette,
-                &crate::i18n::gettext(view.locale, "Transcribe"),
+                &crate::i18n::gettext(view.locale, "Transcribe on this device"),
                 false,
             )
             .clicked()
@@ -12809,6 +12878,39 @@ mod tests {
             !book.fresh(&key, body, flags, mentions),
             "an edited body is measured again"
         );
+    }
+
+    #[test]
+    fn fenced_snippet_planning_includes_inset_without_crossing_collapse_threshold() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let text = format!(
+                "```\n{}\n```",
+                vec!["let answer = value + 1;"; 14].join("\n")
+            );
+            let style = markup::Style {
+                size: BODY_SIZE,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let width = natural_body_width(ui, &text, &[], &style, 320.0, true);
+            let laid = markup::layout_balanced(ui, &text, &[], &style, width, true);
+            let code_rows = laid
+                .row_kinds()
+                .iter()
+                .filter(|kind| matches!(kind, markup::RowKind::Code(_)))
+                .count();
+            assert_eq!(code_rows, 14, "settling width must not wrap each code line");
+            assert!(
+                laid.galley.rows.len() <= 25,
+                "no needless Show more collapse"
+            );
+            assert!(laid.galley.size().x <= width + 0.5);
+        });
+        output.textures_delta.clear();
     }
 
     #[test]
@@ -14618,6 +14720,94 @@ mod tests {
                     "network {network:?}: edit offered only inside its window"
                 );
             }
+        });
+    }
+
+    #[test]
+    fn transcript_controls_join_production_main_chat_tab_order() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let message = crate::archive::tests::message("1@s.whatsapp.net", "voice", 0, true);
+            let text = "Transcript line\n".repeat(9);
+            let id = egui::Id::new((
+                "local-transcript-expanded",
+                view.transcription_account,
+                &view.chat.id,
+                &message.id,
+                &text,
+            ));
+            let worker = crate::transcribe_worker::Worker::stub([(
+                (
+                    view.transcription_account.to_owned(),
+                    view.chat.id.clone(),
+                    message.id.clone(),
+                ),
+                crate::transcribe_worker::Status::Ready(text.clone()),
+            )]);
+            let view = View {
+                transcriber: Some(&worker),
+                ..*view
+            };
+            let mut actions = Vec::new();
+            let mut copied = false;
+            for (frame, key) in [
+                None,
+                Some(Key::Tab),
+                Some(Key::Enter),
+                None,
+                Some(Key::Tab),
+                Some(Key::Enter),
+                Some(Key::Tab),
+                Some(Key::Enter),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let events = key
+                    .into_iter()
+                    .flat_map(|key| {
+                        [true, false].map(move |pressed| egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed,
+                            repeat: false,
+                            modifiers: Modifiers::NONE,
+                        })
+                    })
+                    .collect();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(500.0, 500.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        super::super::focus::begin(&ctx, true);
+                        voice_transcript(
+                            ui,
+                            &view,
+                            &message,
+                            std::path::Path::new("unused.ogg"),
+                            &mut actions,
+                        );
+                        super::super::focus::finish(&ctx, true);
+                    },
+                );
+                copied|=output.platform_output.commands.iter().any(|command|matches!(command,egui::OutputCommand::CopyText(value) if value==&text));
+                if frame == 3 {
+                    assert_eq!(ctx.data(|data| data.get_temp::<bool>(id)), Some(true));
+                }
+                output.textures_delta.clear();
+            }
+            assert!(copied);
+            assert!(actions.iter().any(|action| matches!(
+                action,
+                Action::ShowDialog(Dialog::TranscriptionLanguage { .. })
+            )));
         });
     }
 
