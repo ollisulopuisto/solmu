@@ -598,8 +598,8 @@ fn sections(app: &App) -> Vec<Section> {
         if ui.add_enabled(app.transcript_reader().is_some(), egui::Button::new("Delete all transcripts on this computer")).clicked()
             && let Some(worker) = app.transcript_reader()
         {
-            if let Err(error) = worker.clear() {
-                app.toast_error(crate::i18n::gettext(locale, &error).into_owned());
+            if worker.clear().is_err() {
+                app.toast_error(crate::i18n::gettext(locale, "Could not delete every saved transcript. Some encrypted archives may still contain them.").into_owned());
             }
             // The per-message language overrides belong to the transcripts.
             app.settings.transcription_language_overrides.clear();

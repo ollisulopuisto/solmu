@@ -27328,7 +27328,7 @@ mod tests {
     #[test]
     fn requested_account_removal_keeps_transcripts_until_logout_confirms() {
         let root = tempfile::tempdir().unwrap();
-        let (mut app, _events) = two_accounts(root.path(), "chat");
+        let (mut app, _commands) = two_accounts(root.path());
         let store =
             crate::transcriber::Store::new(root.path().join("fixture-transcripts"), 1 << 20)
                 .unwrap();
