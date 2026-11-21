@@ -16518,10 +16518,11 @@ mod reaction_tests {
         );
     }
 
-    /// A GIF or HEIC tile is not clickable: the editor cannot keep a GIF's
-    /// animation and cannot decode HEIC, so neither offers the pencil.
+    /// Every picture tile opens the preview, never the cropper directly;
+    /// crop eligibility is the preview's Crop button and the EditPicture
+    /// guard's business.
     #[test]
-    fn a_gif_or_heic_tile_does_not_offer_the_pencil() {
+    fn a_tile_click_opens_the_preview_never_the_cropper() {
         let directory = tempfile::tempdir().unwrap();
         let (mut app, _) = App::headless(
             crate::paths::AppDirs::under(directory.path()),
@@ -16575,28 +16576,24 @@ mod reaction_tests {
             ]
         };
         let start = origin.get();
-        for tile in [0.0, 72.0 + 8.0] {
+        for tile in [0.0, 72.0 + 8.0, 2.0 * (72.0 + 8.0)] {
             run(&mut app, click(start + egui::vec2(tile + 36.0, 36.0)));
             assert!(
                 app.actions
                     .iter()
                     .all(|action| !matches!(action, Action::EditPicture(_))),
-                "a GIF or HEIC tile opened the cropper: {:?}",
+                "a tile opened the cropper directly: {:?}",
+                app.actions
+            );
+            assert!(
+                app.actions
+                    .iter()
+                    .any(|action| matches!(action, Action::PreviewPendingPicture(_))),
+                "a picture tile did not open the preview: {:?}",
                 app.actions
             );
             app.actions.clear();
         }
-        run(
-            &mut app,
-            click(start + egui::vec2(2.0 * (72.0 + 8.0) + 36.0, 36.0)),
-        );
-        assert!(
-            app.actions
-                .iter()
-                .any(|action| matches!(action, Action::EditPicture(_))),
-            "the plain picture still offers the pencil: {:?}",
-            app.actions
-        );
     }
 }
 
