@@ -1066,3 +1066,5 @@ assertion. Native test-target compilation passes; full execution awaits CI.
 Production bubble/footer logic is unchanged.
 
 The same linked-minute fixture failure affected #437 Ubuntu (2523 passed, one failed). Reused the identical fixture-only correction from #433; no audit or production code changed. All exact-head CI/review gates restart.
+
+#424 review follow-up: natural width planning previously omitted the new code inset, then rendering subtracted it from the already settled text width. Fenced bodies now use the same cached padded layout for both timeline planning and per-bubble fallback. Added a14-line conversation width regression keeping the snippet below the collapse threshold. Native all-feature check passes; runtime remains CI-gated.
