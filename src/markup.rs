@@ -657,6 +657,7 @@ struct PreparedKey {
     colors: [u32; 4],
     grow_emoji: bool,
     font_generation: u32,
+    pixels_per_point: u32,
 }
 
 impl PreparedKey {
@@ -666,6 +667,7 @@ impl PreparedKey {
         style: &Style,
         max_width: f32,
         grow_emoji: bool,
+        pixels_per_point: f32,
     ) -> Self {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -691,6 +693,7 @@ impl PreparedKey {
             ],
             grow_emoji,
             font_generation: crate::theme::font_generation(),
+            pixels_per_point: pixels_per_point.to_bits(),
         }
     }
 }
@@ -851,7 +854,14 @@ pub fn layout_balanced(
     max_width: f32,
     grow_emoji: bool,
 ) -> Arc<Text> {
-    let key = PreparedKey::new(text, mentions, style, max_width, grow_emoji);
+    let key = PreparedKey::new(
+        text,
+        mentions,
+        style,
+        max_width,
+        grow_emoji,
+        ui.pixels_per_point(),
+    );
     let cache = prepared_cache(ui.ctx());
     {
         let mut cache = cache.lock().unwrap_or_else(|p| p.into_inner());
@@ -877,7 +887,7 @@ pub fn layout_balanced(
 
 /// Cache key: text, body size, wrap width, font generation, and a hash of
 /// everything else that shapes measurement: section fonts and link ranges.
-type BreaksKey = (String, u32, u32, u32, u64);
+type BreaksKey = (String, u32, u32, u32, u32, u64);
 
 /// Hashes the parts of a built job beyond its plain text that change token
 /// widths or break opportunities: each section's font family and size (bold
@@ -912,6 +922,7 @@ fn balanced_breaks(
         size.to_bits(),
         max_width.to_bits(),
         crate::theme::font_generation(),
+        ui.pixels_per_point().to_bits(),
         format_hash(built),
     );
     type Cache =
@@ -3455,6 +3466,33 @@ mod monospace_tests {
             }
         });
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn zoom_rebuilds_fenced_row_classifications_at_the_same_point_width() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let text = "```\nlet answer = value + several_more_values;\n```";
+        for scale in [1.0, 0.85, 1.25, 1.5, 2.0] {
+            ctx.set_pixels_per_point(scale);
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let style = Style {
+                    size: 16.0,
+                    color: Color32::WHITE,
+                    secondary: Color32::GRAY,
+                    link: Color32::BLUE,
+                    mention: Color32::WHITE,
+                };
+                for cap in [139.0, 140.0, 141.0, 220.0] {
+                    let cached = layout_balanced(ui, text, &[], &style, cap, false);
+                    let fresh = Prepared::build(ui, text, &[], &style, cap, false).draw(ui);
+                    assert_eq!(cached.galley.rows.len(), cached.row_kinds().len());
+                    assert_eq!(cached.row_kinds(), fresh.row_kinds());
+                    assert_eq!(cached.galley.rect, fresh.galley.rect);
+                }
+            });
+            output.textures_delta.clear();
+        }
     }
 
     #[test]
