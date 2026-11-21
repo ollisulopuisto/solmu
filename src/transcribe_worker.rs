@@ -107,7 +107,10 @@ fn migrate_legacy_on_thread(
         .spawn(move || {
             let _io = shared.store_io.lock().unwrap_or_else(|p| p.into_inner());
             match store.migrate_legacy() {
-                Ok(()) => wake(),
+                // Wake only when text actually moved: an empty migration is
+                // invisible, and an unconditional wake would look like a scan.
+                Ok(0) => {}
+                Ok(_) => wake(),
                 Err(error) => log::error!("solmu: legacy transcript migration failed: {error}"),
             }
         });

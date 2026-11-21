@@ -171,13 +171,17 @@ impl Store {
 
     /// Migrates legacy plaintext transcripts into the encrypted archives.
     /// Safe to repeat; call off the UI thread. A failure leaves the legacy
-    /// files in place for the next attempt.
-    pub fn migrate_legacy(&self) -> std::io::Result<()> {
+    /// files in place for the next attempt. Returns how many transcripts
+    /// moved; 0 means nothing changed, so no bump or view wake is needed.
+    pub fn migrate_legacy(&self) -> std::io::Result<usize> {
+        let mut migrated = 0;
         if let Some(backend) = &self.encrypted {
-            backend.migrate(&self.root)?;
-            self.bump();
+            migrated = backend.migrate(&self.root)?;
+            if migrated > 0 {
+                self.bump();
+            }
         }
-        Ok(())
+        Ok(migrated)
     }
 
     pub fn remove_account(&self, account: &str) -> std::io::Result<()> {

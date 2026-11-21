@@ -170,7 +170,8 @@ impl Encrypted {
     }
     /// One account transaction is committed and re-read before any source file
     /// is removed. Interrupted migration is safe to repeat; rows win on conflict.
-    pub fn migrate(&self, root: &Path) -> std::io::Result<()> {
+    pub fn migrate(&self, root: &Path) -> std::io::Result<usize> {
+        let mut migrated = 0usize;
         for encoded in super::subdirs(root) {
             let account =
                 super::decode(&encoded).ok_or_else(|| io("Invalid legacy transcript account"))?;
@@ -218,11 +219,12 @@ impl Encrypted {
                 }
                 Ok(())
             })?;
+            migrated += source.len();
             for (_, _, _, _, path) in source {
                 std::fs::remove_file(path)?;
             }
         }
-        Ok(())
+        Ok(migrated)
     }
 }
 
