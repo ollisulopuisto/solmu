@@ -3180,7 +3180,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             .as_ref()
             .filter(|(id, _)| id == &chat.id)
             .map(|(_, message)| message.as_str()),
-        reaction_menu: app.reaction_beside_menu,
+        // Only the pass that opened the picker keeps its menu open beside
+        // it; the other view renders the same bubble without claiming it.
+        reaction_menu: app.reaction_beside_menu && !app.reaction_from_thread,
         reaction_emoji: &app.settings.reaction_emoji,
         keyboard_navigation: &keyboard_navigation,
         names_or: &names_or,
@@ -8013,8 +8015,15 @@ pub(crate) fn linked_bubble(
         // Nothing scrolls, highlights, or selects in a list row.
         anchor: None,
         open_menu: None,
-        reaction: None,
-        reaction_menu: false,
+        // When the picker was opened from the thread's pass, this pass owns
+        // the target: it keeps its menu open and places it by the picker.
+        reaction: app
+            .reaction_target
+            .as_ref()
+            .filter(|_| app.reaction_from_thread)
+            .filter(|(id, _)| id == &chat.id)
+            .map(|(_, message)| message.as_str()),
+        reaction_menu: app.reaction_beside_menu && app.reaction_from_thread,
         reaction_emoji: &app.settings.reaction_emoji,
         keyboard_navigation: &keyboard_navigation,
         names_or: &names_or,

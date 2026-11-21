@@ -21934,6 +21934,57 @@ mod tests {
         assert!(crate::ui::reply_threads::active(&ctx));
     }
 
+    /// A reaction picker opened from the thread's menu keeps the thread's
+    /// menu open for it; the transcript's copy of the same bubble does not
+    /// open a second menu behind the modal.
+    #[test]
+    fn a_picker_from_the_thread_keeps_only_the_thread_menu_open() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        let chat = app.open_chat.clone().unwrap();
+        let scope = crate::ui::reply_threads::scope(&app, std::slice::from_ref(&chat));
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                scope,
+                crate::ui::reply_threads::Key {
+                    chat: chat.clone(),
+                    id: "ada-voice".into(),
+                },
+            )
+        });
+        frame_sized(&mut app, &ctx, 780.0, Vec::new());
+        app.apply(
+            crate::model::Action::OpenReactionPicker {
+                chat: chat.clone(),
+                message: "ada-voice".into(),
+                beside_menu: true,
+                from_thread: true,
+            },
+            &ctx,
+        );
+        for _ in 0..2 {
+            frame_sized(&mut app, &ctx, 780.0, Vec::new());
+        }
+        assert!(
+            egui::Popup::is_id_open(
+                &ctx,
+                crate::ui::conversation::thread_bubble_id(&chat, "ada-voice").with("popup"),
+            ),
+            "the thread's menu stays open for its picker"
+        );
+        assert!(
+            !egui::Popup::is_id_open(
+                &ctx,
+                crate::ui::conversation::bubble_id(&chat, "ada-voice").with("popup"),
+            ),
+            "the transcript copy does not open a second menu"
+        );
+    }
+
     /// Runs one frame of the given height with these input events.
     fn frame_sized(
         app: &mut App,
