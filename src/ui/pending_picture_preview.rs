@@ -128,7 +128,16 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                         {
                             app.pending_picture_preview = Some(pictures[index + 1]);
                         }
-                        if ui.button(gettext(locale, "Crop / rotate")).clicked() {
+                        // Pasted pictures crop from memory; staged files only
+                        // when the editor can decode and rewrite them.
+                        let croppable = file.as_deref().is_none_or(Pending::is_crop_supported_file);
+                        if ui
+                            .add_enabled(
+                                croppable,
+                                egui::Button::new(gettext(locale, "Crop / rotate")),
+                            )
+                            .clicked()
+                        {
                             app.actions.push(Action::EditPicture(target));
                         }
                         if ui.button(gettext(locale, "Done")).clicked() {
