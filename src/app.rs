@@ -9352,7 +9352,13 @@ impl App {
             .iter()
             .any(|staged| self.picture_applying.contains_key(&staged.id))
         {
+            // restore_text hands the caption back but drops its selected
+            // mentions; keep them as the view-once refusal does.
+            let restore_mentions = self.composer.trim().is_empty() && self.editing.is_none();
             self.restore_text(&owner, caption);
+            if restore_mentions {
+                self.composer_mentions = selected;
+            }
             self.toast_error(
                 crate::i18n::gettext(
                     self.locale,
@@ -26383,6 +26389,41 @@ mod tests {
                 .any(|command| matches!(command, Command::InspectPicture { .. })),
             "a plain picture still goes to the crop worker"
         );
+    }
+
+    #[test]
+    fn a_crop_wait_keeps_the_captions_selected_mentions() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let chat = "123@g.us";
+        let mut group = Chat::new(chat.into(), "Group".into());
+        group.participants = vec!["12345@s.whatsapp.net".into()];
+        app.chats.push(group);
+        app.open_chat(chat.into());
+        let target = app.stage(Pending::File("/fixture/photo.png".into()));
+        app.picture_applying.insert(
+            target,
+            crate::model::PictureOrigin {
+                source: crate::model::PictureSource::File("/fixture/photo.png".into()),
+                width: 4,
+                height: 4,
+                crop: crate::model::PictureCrop::full(4, 4),
+                turns: 0,
+            },
+        );
+        let (backend, _commands) = Backend::recording();
+        app.backend = backend;
+        let mention = ComposerMention::new("12345@s.whatsapp.net".into(), "Mira".into());
+        app.send_pending(
+            app.account().id.clone(),
+            chat.into(),
+            "hi @Mira".to_owned(),
+            vec![mention],
+        );
+        assert_eq!(app.composer, "hi @Mira");
+        assert_eq!(app.composer_mentions.len(), 1);
+        assert_eq!(app.composer_mentions[0].id, "12345@s.whatsapp.net");
+        assert_eq!(app.composer_mentions[0].name, "Mira");
     }
 
     #[test]
