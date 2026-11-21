@@ -2452,7 +2452,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.open_chat = Some(chat.into());
                 app.scroll_to_bottom = false;
             }
-            "avatar-editor" | "avatar-custom" | "avatar-info" | "avatar-image" => {
+            "avatar-editor" | "avatar-emoji" | "avatar-custom" | "avatar-info" | "avatar-image" => {
                 apply_flags(app, Some("info"));
                 let id = app.open_chat.clone().unwrap();
                 let name = app
@@ -2460,6 +2460,14 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     .map(|chat| app.chat_title(chat))
                     .unwrap_or_default();
                 crate::ui::local_avatars::open(app, &id, &name);
+                if part == "avatar-emoji"
+                    && let Some(editor) = app.local_avatar_editor.as_mut()
+                {
+                    editor.appearance = crate::local_avatars::Appearance::Initials {
+                        text: "👩🏽‍💻🇫🇮❤️".into(),
+                        colour: [115, 89, 165],
+                    };
+                }
                 if part == "avatar-custom" || part == "avatar-image" {
                     app.dialog = None;
                     let editor = app.local_avatar_editor.take().unwrap();

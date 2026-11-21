@@ -209,6 +209,10 @@ new fetch, so the avatar worker's small queue sees no extra pressure.
 Failing-first test covers miss-then-fallback and a real thumbnail winning.
 Verified by rustc parse-check only; fmt/clippy/tests run in CI (this Ubuntu
 box cannot build the crate: PipeWire headers too old).
+## Emoji avatar initials,20 November
+
+Retain existing three-symbol limit, count extended grapheme clusters rather than scalar chars. Accept emoji (family/ZWJ, skin tone, flags, keycaps) and letters with combining marks. Remove the TextEdit scalar12 cap that could cut a third long cluster before normalization. Shared color-emoji line renderer explicitly paints the avatar, with width fit unchanged. Tests cover clusters, limit, punctuation/control filtering and JSON persistence; native pixel verification pending.
+
 ## 2026-11-18: Code and quote panels with Copy code (feat/code-quote-panels)
 
 Styling PR, second half (markup groundwork was commit 0c1d1b9): markup.rs now
