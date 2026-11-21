@@ -112,3 +112,4 @@ pub mod automation_mcp;
 
 pub mod list_layout;
 pub mod literal_hints;
+pub mod read_sync;

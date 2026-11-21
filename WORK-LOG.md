@@ -1084,3 +1084,7 @@ The same linked-minute fixture failure affected #437 Ubuntu (2523 passed, one fa
 #424 Mac runtime:2546 passed,2 failed. The compact-list fixture still expected the pre-inset180pt code cap; it now expects160pt while retaining zero list-indent assertion. New narrow-code regression caught shaped overflow after balancing disabled wrapping. Fenced prepared jobs now retain their hard inner shaping cap, including trailing whitespace. No assertions removed; width/copy regressions rerun in CI.
 
 #424 zoom review: prepared and break-plan caches now key the current pixel scale as well as point width and font generation. Regression cycles five scales at unchanged widths and compares cached row classifications/geometry with freshly prepared layout. This prevents scale rounding from reshaping a finite-width code job against old row metadata.
+
+## Terminal read synchronization404,20 November
+
+Linked-person reads fan out to each exact source. The read command used the generic Info toast for every HTTP failure, unlike history/poll terminal404 handling. A missing source now becomes unavailable for read synchronization until reconnect, logged once without identifiers. Local read clearing remains independent; no remote receipt is claimed. Other sources still synchronize;403/500 and transport errors stay visible. Read-only never posts. Three focused production-module tests pass, with the404 test first failing against the previous generic-failure behavior. Native test-target compilation passes; no live Server or Mac validation. No package publication.

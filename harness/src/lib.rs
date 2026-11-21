@@ -18,6 +18,7 @@ pub mod paths;
 pub mod pending_media;
 pub mod privacy;
 pub mod recurrence;
+pub mod read_sync;
 pub mod run_widths;
 pub mod safety;
 pub mod saved;
