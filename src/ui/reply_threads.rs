@@ -146,6 +146,238 @@ pub fn close(ctx: &egui::Context) {
         ctx.request_repaint();
     }
 }
+
+/// Chat width below which an open thread fills the view instead of floating
+/// as a modal over it.
+pub const MODAL_MIN_WIDTH: f32 = 560.0;
+
+/// True while the open thread draws as its own inset modal: the caller keeps
+/// the background list rendering (dimmed under the overlay) but yields
+/// scrolling and keyboard focus to the thread.
+pub fn modal(app: &App, ui: &egui::Ui) -> bool {
+    ui.available_width() >= MODAL_MIN_WIDTH && owns(app, ui.ctx())
+}
+
+/// Whether this message takes part in any loaded reply relationship.
+pub fn is_linked(ctx: &egui::Context, chat: &str, id: &str) -> bool {
+    let key = Key {
+        chat: chat.to_owned(),
+        id: id.to_owned(),
+    };
+    frame(ctx).is_some_and(|shared| {
+        let f = shared.lock().unwrap_or_else(|e| e.into_inner());
+        f.parents.contains_key(&key) || f.replies.contains_key(&key)
+    })
+}
+
+/// The reply a jump from `replies`' parent lands on next: after the last
+/// landing, wrapping back to the first.
+fn next_reply(replies: &[Key], last: Option<usize>) -> usize {
+    match last {
+        Some(i) if !replies.is_empty() => (i + 1) % replies.len(),
+        _ => 0,
+    }
+}
+
+/// Remember where a jump started, for the chip that offers the way back:
+/// the full-chat scroll position, or the open thread the jump leaves.
+pub fn prepare_jump_back(ctx: &egui::Context) {
+    let Some(shared) = frame(ctx) else {
+        return;
+    };
+    let f = shared.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(root) = ctx.data(|d| d.get_temp::<Key>(f.scope)) {
+        ctx.data_mut(|d| d.insert_temp(f.scope.with("jump-back-thread"), root));
+    } else if let Some(saved) = ctx
+        .data(|d| d.get_temp::<(egui::Id, egui::scroll_area::State)>(f.scope.with("full-scroll")))
+    {
+        ctx.data_mut(|d| d.insert_temp(f.scope.with("jump-back"), saved));
+    }
+}
+
+/// Jump to a message the open thread already shows: queue an in-thread
+/// scroll and say whether that was possible. False means the jump has to
+/// leave the thread (or there is none) and the caller navigates instead.
+pub fn jump_within_thread(ctx: &egui::Context, key: &Key) -> bool {
+    let Some(shared) = frame(ctx) else {
+        return false;
+    };
+    let f = shared.lock().unwrap_or_else(|e| e.into_inner());
+    if !(f.active && f.included.contains(key)) {
+        return false;
+    }
+    ctx.data_mut(|d| d.insert_temp(f.scope.with("thread-scroll-to"), key.clone()));
+    ctx.request_repaint();
+    true
+}
+
+/// Ctrl/Command-click on a bubble: a reply jumps to its parent, a parent
+/// cycles through its replies (a fading chip names the landing), and an
+/// unrelated bubble keeps its old meaning, so the caller falls through to
+/// selection. True when this handled the click.
+pub fn command_click(
+    ctx: &egui::Context,
+    chat: &str,
+    id: &str,
+    actions: &mut Vec<crate::model::Action>,
+) -> bool {
+    let Some(shared) = frame(ctx) else {
+        return false;
+    };
+    let f = shared.lock().unwrap_or_else(|e| e.into_inner());
+    let key = Key {
+        chat: chat.to_owned(),
+        id: id.to_owned(),
+    };
+    if let Some(parent) = f.parents.get(&key).cloned() {
+        drop(f);
+        if !jump_within_thread(ctx, &parent) {
+            prepare_jump_back(ctx);
+            actions.push(crate::model::Action::OpenMessage {
+                chat: parent.chat,
+                message: parent.id,
+            });
+        }
+        return true;
+    }
+    if let Some(replies) = f.replies.get(&key).filter(|r| !r.is_empty()).cloned() {
+        let last = ctx
+            .data(|d| d.get_temp::<(Key, usize)>(f.scope.with("cycle")))
+            .filter(|(parent, _)| *parent == key)
+            .map(|(_, i)| i);
+        let n = next_reply(&replies, last);
+        let target = replies[n].clone();
+        ctx.data_mut(|d| {
+            d.insert_temp(f.scope.with("cycle"), (key, n));
+            d.insert_temp(
+                f.scope.with("cycle-chip"),
+                (
+                    target.clone(),
+                    n + 1,
+                    replies.len(),
+                    std::time::Instant::now(),
+                ),
+            );
+        });
+        drop(f);
+        if !jump_within_thread(ctx, &target) {
+            prepare_jump_back(ctx);
+            actions.push(crate::model::Action::OpenMessage {
+                chat: target.chat,
+                message: target.id,
+            });
+        }
+        return true;
+    }
+    false
+}
+
+/// The chips that follow a jump: a fading "reply N of M" at the landing,
+/// and the standing offer to go back to where the jump started.
+pub fn paint_jump_chips(ui: &egui::Ui) {
+    let Some(shared) = frame(ui.ctx()) else {
+        return;
+    };
+    let (scope, rects, active) = {
+        let f = shared.lock().unwrap_or_else(|e| e.into_inner());
+        (f.scope, f.rects.clone(), f.active)
+    };
+    let ctx = ui.ctx();
+    let cycle: Option<(Key, usize, usize, std::time::Instant)> =
+        ctx.data(|d| d.get_temp(scope.with("cycle-chip")));
+    if let Some((landed, n, total, since)) = cycle {
+        const FADE: f32 = 1.6;
+        let t = since.elapsed().as_secs_f32();
+        if t >= FADE {
+            ctx.data_mut(|d| {
+                d.remove::<(Key, usize, usize, std::time::Instant)>(scope.with("cycle-chip"))
+            });
+        } else if let Some(rect) = rects.get(&landed) {
+            let strength = (FADE - t) / FADE;
+            egui::Area::new(egui::Id::new(("reply-cycle-chip", &landed)))
+                .order(egui::Order::Foreground)
+                .fixed_pos(rect.left_bottom() + egui::vec2(8.0, -4.0))
+                .show(ctx, |ui| {
+                    egui::Frame::new()
+                        .fill(ui.visuals().window_fill())
+                        .stroke(ui.visuals().window_stroke())
+                        .corner_radius(egui::CornerRadius::same(10))
+                        .inner_margin(egui::Margin::symmetric(8, 4))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(if total == 1 {
+                                    "1 reply".to_owned()
+                                } else {
+                                    format!("reply {n} of {total}")
+                                })
+                                .small()
+                                .color(ui.visuals().text_color().gamma_multiply(strength)),
+                            );
+                        });
+                });
+            ctx.request_repaint();
+        }
+    }
+    if active {
+        return;
+    }
+    let jump_back: Option<(egui::Id, egui::scroll_area::State)> =
+        ctx.data(|d| d.get_temp(scope.with("jump-back")));
+    let jump_back_thread: Option<Key> = ctx.data(|d| d.get_temp(scope.with("jump-back-thread")));
+    let (label, show) = if jump_back.is_some() {
+        ("‹ Back to where you were", true)
+    } else if jump_back_thread.is_some() {
+        ("‹ Back to thread", true)
+    } else {
+        ("", false)
+    };
+    if !show {
+        return;
+    }
+    let top = ui.clip_rect().center_top() + egui::vec2(0.0, 8.0);
+    let outcome = egui::Area::new(egui::Id::new(("reply-jump-back", scope)))
+        .order(egui::Order::Foreground)
+        .pivot(egui::Align2::CENTER_TOP)
+        .fixed_pos(top)
+        .show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(ui.visuals().window_fill())
+                .stroke(ui.visuals().window_stroke())
+                .corner_radius(egui::CornerRadius::same(12))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let back = ui.button(label).clicked();
+                        let dismiss = ui.small_button("×").clicked();
+                        (back, dismiss)
+                    })
+                    .inner
+                })
+                .inner
+        })
+        .inner;
+    let (back, dismiss) = outcome;
+    if back {
+        if let Some((saved_id, saved)) = jump_back {
+            saved.store(ctx, saved_id);
+            ctx.request_discard("return to where the jump started");
+            ctx.data_mut(|d| {
+                d.remove::<(egui::Id, egui::scroll_area::State)>(scope.with("jump-back"))
+            });
+        } else if let Some(root) = jump_back_thread {
+            ctx.data_mut(|d| {
+                d.remove::<Key>(scope.with("jump-back-thread"));
+                d.insert_temp(scope, root);
+            });
+            ctx.request_repaint();
+        }
+    } else if dismiss {
+        ctx.data_mut(|d| {
+            d.remove::<(egui::Id, egui::scroll_area::State)>(scope.with("jump-back"));
+            d.remove::<Key>(scope.with("jump-back-thread"));
+        });
+    }
+}
 pub fn complete_full_scroll(
     ctx: &egui::Context,
     id: egui::Id,
@@ -347,6 +579,15 @@ pub fn ordinary(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat) -> 
     let Some(root) = current(ui.ctx()) else {
         return false;
     };
+    thread_scroll(app, ui, chat, &root);
+    true
+}
+
+/// The thread's own scrolling list of linked bubbles, shared by the
+/// full-bleed thread view and the modal: only the frame around it differs.
+/// Queued in-thread jumps land here, and paged scrolling (PgUp/PgDn, Home,
+/// End) moves this list while the thread owns the view.
+fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, root: &Key) {
     let rows: Vec<_> = app
         .conversations
         .get(&chat.id)
@@ -355,18 +596,24 @@ pub fn ordinary(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat) -> 
         .filter(|m| includes(ui.ctx(), m) && !hidden(app, &chat.id, &m.id))
         .cloned()
         .collect();
+    let pending = frame(ui.ctx()).and_then(|shared| {
+        let f = shared.lock().unwrap_or_else(|e| e.into_inner());
+        ui.ctx()
+            .data_mut(|d| d.remove_temp::<Key>(f.scope.with("thread-scroll-to")))
+    });
     let mut actions = vec![];
-    egui::ScrollArea::vertical()
-        .id_salt(("reply-thread", &root))
+    let output = egui::ScrollArea::vertical()
+        .id_salt(("reply-thread", root))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             if rows.is_empty() {
                 ui.label("This thread is no longer available in loaded history.");
             }
+            let mut landing = None;
             for m in rows {
                 let right = ui.max_rect().right();
-                super::conversation::linked_bubble(
+                let rect = super::conversation::linked_bubble(
                     app,
                     ui,
                     chat,
@@ -377,11 +624,134 @@ pub fn ordinary(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat) -> 
                     None,
                     &mut actions,
                 );
+                if let (Some(rect), Some(target)) = (rect, pending.as_ref())
+                    && target.chat == m.chat
+                    && target.id == m.id
+                {
+                    landing = Some(rect);
+                }
                 ui.add_space(8.0);
             }
+            if let Some(rect) = landing {
+                ui.scroll_to_rect(rect, Some(egui::Align::Center));
+            }
         });
+    if let Some(scroll) = app.scroll_page.take() {
+        let mut state = output.state;
+        let page = output.inner_rect.height() * 0.9;
+        match scroll {
+            crate::model::Scroll::PageUp => state.offset.y = (state.offset.y - page).max(0.0),
+            crate::model::Scroll::PageDown => state.offset.y += page,
+            crate::model::Scroll::Top => state.offset.y = 0.0,
+            crate::model::Scroll::Bottom => state.offset.y = f32::INFINITY,
+        }
+        state.store(ui.ctx(), output.id);
+        ui.ctx().request_repaint();
+    }
     app.actions.extend(actions);
-    true
+}
+
+/// The open thread as an inset modal over the dimmed chat: accent border and
+/// banner, its own scroll, a click on the dimmed backdrop or Esc to close.
+/// The composer stays outside, in the dimmed window below.
+pub fn modal_overlay(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    chat: &crate::model::Chat,
+    area: egui::Rect,
+) {
+    if !modal(app, ui) {
+        return;
+    }
+    let Some(root) = current(ui.ctx()) else {
+        return;
+    };
+    let ctx = ui.ctx().clone();
+    let palette = app.conversation_palette();
+    let dim = egui::Area::new(egui::Id::new("reply-thread-dim"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(area.min)
+        .show(&ctx, |ui| {
+            let (rect, response) = ui.allocate_exact_size(area.size(), egui::Sense::click());
+            ui.painter()
+                .rect_filled(rect, 0, egui::Color32::from_black_alpha(150));
+            response
+        })
+        .inner;
+    if dim.clicked() {
+        close(&ctx);
+        return;
+    }
+    let rect = egui::Rect::from_min_max(
+        area.min + egui::vec2(42.0, 28.0),
+        area.max - egui::vec2(42.0, 56.0),
+    );
+    let tint = crate::theme::tinted_strength(palette.window, palette.accent, 0.08);
+    let mut back = false;
+    egui::Area::new(egui::Id::new("reply-thread-modal"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.min)
+        .show(&ctx, |ui| {
+            // Registered before the content, so clicks in the gaps between
+            // widgets land here and never fall through to the dim backdrop.
+            let _swallow = ui.interact(rect, ui.id().with("backdrop"), egui::Sense::click());
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+                egui::Frame::new()
+                    .fill(tint)
+                    .stroke(egui::Stroke::new(2.5, palette.accent))
+                    .corner_radius(egui::CornerRadius::same(14))
+                    .show(ui, |ui| {
+                        ui.set_min_size(rect.size());
+                        ui.set_max_size(rect.size());
+                        egui::Frame::new()
+                            .fill(palette.accent)
+                            .corner_radius(egui::CornerRadius {
+                                nw: 12,
+                                ne: 12,
+                                sw: 0,
+                                se: 0,
+                            })
+                            .inner_margin(egui::Margin::symmetric(12, 8))
+                            .show(ui, |ui| {
+                                ui.set_min_width(rect.width() - 4.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("IN THREAD")
+                                            .strong()
+                                            .color(palette.on_accent),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .button(
+                                                    egui::RichText::new(
+                                                        "‹ Back to full chat (Esc)",
+                                                    )
+                                                    .color(palette.on_accent),
+                                                )
+                                                .clicked()
+                                            {
+                                                back = true;
+                                            }
+                                        },
+                                    );
+                                });
+                            });
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new("Thread · known loaded replies only")
+                                .small()
+                                .color(palette.secondary),
+                        );
+                        ui.add_space(2.0);
+                        thread_scroll(app, ui, chat, &root);
+                    });
+            });
+        });
+    if back {
+        close(&ctx);
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -497,5 +867,125 @@ mod tests {
         let set = chain(&Key::of(&a), &p);
         assert_eq!(set.len(), 3);
         assert!(!set.contains(&Key::of(&d)));
+    }
+    #[test]
+    fn next_reply_advances_and_wraps() {
+        let replies: Vec<Key> = (0..3)
+            .map(|i| Key {
+                chat: "a".into(),
+                id: format!("r{i}"),
+            })
+            .collect();
+        assert_eq!(next_reply(&replies, None), 0);
+        assert_eq!(next_reply(&replies, Some(0)), 1);
+        assert_eq!(next_reply(&replies, Some(2)), 0);
+        assert_eq!(next_reply(&[], None), 0);
+        assert_eq!(next_reply(&[], Some(5)), 0);
+    }
+    #[test]
+    fn is_linked_marks_replies_and_parents_only() {
+        let (_dir, _app, ctx) = seeded();
+        assert!(is_linked(&ctx, "a", "1"), "a parent is linked");
+        assert!(is_linked(&ctx, "a", "2"), "a reply is linked");
+        assert!(!is_linked(&ctx, "a", "elsewhere"));
+        assert!(
+            !is_linked(&ctx, "other", "2"),
+            "the chat is part of the key"
+        );
+    }
+    #[test]
+    fn command_click_on_a_reply_jumps_to_its_parent() {
+        let (_dir, _app, ctx) = seeded();
+        let mut actions = vec![];
+        assert!(command_click(&ctx, "a", "2", &mut actions));
+        assert_eq!(
+            actions,
+            [crate::model::Action::OpenMessage {
+                chat: "a".into(),
+                message: "1".into(),
+            }]
+        );
+        assert!(command_click(&ctx, "a", "1", &mut actions));
+        assert_eq!(actions.len(), 2, "the parent jumps to its reply");
+        assert!(!command_click(&ctx, "a", "unrelated", &mut actions));
+        assert_eq!(actions.len(), 2, "an unlinked bubble keeps its click");
+    }
+    #[test]
+    fn command_click_on_a_parent_cycles_its_replies() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _) =
+            App::headless(crate::paths::AppDirs::under(dir.path()), Default::default());
+        app.chats
+            .push(crate::model::Chat::new("a".into(), "Group".into()));
+        app.open_chat = Some("a".into());
+        app.conversations.insert(
+            "a".into(),
+            crate::app::Conversation {
+                messages: vec![
+                    m("a", "1", None),
+                    m("a", "2", Some(("a", "1"))),
+                    m("a", "3", Some(("a", "1"))),
+                ],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["a".into()]));
+        output.textures_delta.clear();
+        let mut actions = vec![];
+        for expected in ["2", "3", "2"] {
+            assert!(command_click(&ctx, "a", "1", &mut actions));
+            let Some(crate::model::Action::OpenMessage { message, .. }) = actions.last() else {
+                panic!("each click jumps to a reply");
+            };
+            assert_eq!(message, expected, "the cycle advances and wraps");
+        }
+    }
+    #[test]
+    fn jump_within_thread_queues_a_scroll_only_for_shown_messages() {
+        let (_dir, _app, ctx) = seeded();
+        let f = frame(&ctx).unwrap();
+        let scope = f.lock().unwrap().scope;
+        let root = Key {
+            chat: "a".into(),
+            id: "1".into(),
+        };
+        assert!(jump_within_thread(&ctx, &root), "the root is in the thread");
+        assert_eq!(
+            ctx.data(|d| d.get_temp::<Key>(scope.with("thread-scroll-to"))),
+            Some(root)
+        );
+        let outside = Key {
+            chat: "a".into(),
+            id: "unrelated".into(),
+        };
+        assert!(!jump_within_thread(&ctx, &outside));
+    }
+    #[test]
+    fn prepare_jump_back_captures_the_open_thread_or_the_full_scroll() {
+        let (_dir, _app, ctx) = seeded();
+        let f = frame(&ctx).unwrap();
+        let scope = f.lock().unwrap().scope;
+        // The seeded frame has an open thread: the way back is the thread.
+        prepare_jump_back(&ctx);
+        assert!(
+            ctx.data(|d| d.get_temp::<Key>(scope.with("jump-back-thread")))
+                .is_some()
+        );
+        // With no thread open, the saved full-chat scroll becomes the way back.
+        ctx.data_mut(|d| {
+            d.remove::<Key>(scope);
+            d.insert_temp(
+                scope.with("full-scroll"),
+                (egui::Id::new("scroll"), egui::scroll_area::State::default()),
+            );
+        });
+        prepare_jump_back(&ctx);
+        assert!(
+            ctx.data(
+                |d| d.get_temp::<(egui::Id, egui::scroll_area::State)>(scope.with("jump-back"))
+            )
+            .is_some()
+        );
     }
 }

@@ -21745,6 +21745,66 @@ mod tests {
         );
     }
 
+    /// Ctrl-click (Command-click on macOS) on a reply-linked bubble jumps to
+    /// the message it answers; the same click on an unrelated bubble starts
+    /// a selection, as before.
+    #[test]
+    fn a_command_click_jumps_a_linked_bubble_and_selects_a_plain_one() {
+        fn command_click(app: &mut App, ctx: &egui::Context, chat: &str, id: &str) {
+            let rect = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(
+                        crate::ui::conversation::bubble_id(chat, id).with("rect"),
+                    )
+                })
+                .expect("the bubble is on screen");
+            let pos = rect.center();
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::COMMAND,
+            };
+            for events in [
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
+                    button(true),
+                ],
+                vec![button(false)],
+                vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)],
+            ] {
+                frame_with(app, ctx, events);
+            }
+        }
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        let chat = app.open_chat.clone().unwrap();
+        command_click(&mut app, &ctx, &chat, "ada-reply");
+        assert!(
+            app.selection.is_none(),
+            "a linked bubble jumps, not selects"
+        );
+        assert_eq!(
+            app.jump_highlight
+                .as_ref()
+                .map(|jump| jump.message.as_str()),
+            Some("ada-voice"),
+            "the jump lands on the message the reply quotes"
+        );
+        app.jump_highlight = None;
+        command_click(&mut app, &ctx, &chat, "ada-link");
+        assert_eq!(
+            app.selection.as_ref().map(|(_, ids)| ids.as_slice()),
+            Some(&["ada-link".to_owned()][..]),
+            "an unrelated bubble starts a selection"
+        );
+    }
+
     /// Runs one frame of the given height with these input events.
     fn frame_sized(
         app: &mut App,

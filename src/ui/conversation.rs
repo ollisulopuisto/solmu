@@ -187,6 +187,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         ui.scope_builder(egui::UiBuilder::new().max_rect(list), |ui| {
             messages(app, ui, &chat, bar.height());
         });
+        // An open thread floats over the messages, below the header; the
+        // composer stays outside it, in the dimmed window.
+        super::reply_threads::modal_overlay(app, ui, &chat, list.with_min_y(bar.bottom()));
         // A vibrant window is flat, as Messages is: no shadows over the chat.
         return;
     }
@@ -198,7 +201,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         pin_banner(app, ui, &chat);
     }
     composer(app, ui, &chat);
+    let thread_area = ui.available_rect_before_wrap();
     messages(app, ui, &chat, 0.0);
+    // An open thread floats over the messages; the composer stays outside
+    // it, in the dimmed window.
+    super::reply_threads::modal_overlay(app, ui, &chat, thread_area);
     // Over the messages, which scroll under the header.
     widgets::paint_shadow_below(
         ui,
@@ -2981,16 +2988,23 @@ fn sticky_date<R>(
 /// beneath the header, which a vibrant window lays over it.
 fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     super::reply_threads::begin(app, ui, std::slice::from_ref(&chat.id));
-    if super::reply_threads::ordinary(app, ui, chat) {
+    let modal = super::reply_threads::modal(app, ui);
+    if !modal && super::reply_threads::ordinary(app, ui, chat) {
         return;
     }
     let palette = app.conversation_palette();
     // Taken up front: `names_or` below borrows the rest of `app` for the
-    // whole function, so a pending scroll must come out before that.
-    let pending_scroll = app.scroll_page.take();
+    // whole function, so a pending scroll must come out before that. While a
+    // thread modal is open the pending page scroll stays for it to take.
+    let pending_scroll = if modal { None } else { app.scroll_page.take() };
     // A scroll gesture that began over the messages stays with them when
-    // the pointer drifts off (#274), taken here for the same reason.
-    let carried = app.scroll_route.take(crate::app::ScrollPane::Messages);
+    // the pointer drifts off (#274), taken here for the same reason. The
+    // thread modal scrolls its own view instead.
+    let carried = if modal {
+        None
+    } else {
+        app.scroll_route.take(crate::app::ScrollPane::Messages)
+    };
     // An explicit jump (Ctrl+End, or the return-to-bottom button) must reach
     // the bottom even while a message bubble retains keyboard focus.
     let scroll_forced = std::mem::take(&mut app.scroll_to_bottom_forced);
@@ -3025,7 +3039,14 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     }
     // A pass that draws the list hidden (the first after a chat opens is)
     // gives no widget focus: the request waits for the pass that shows it.
-    let focus_list = if ui.is_visible() {
+    // The open thread modal owns keyboard focus; the dimmed list neither
+    // takes nor keeps it.
+    if modal {
+        ui.memory_mut(|memory| memory.surrender_focus(list_id));
+    }
+    let focus_list = if modal {
+        false
+    } else if ui.is_visible() {
         let deferred = app
             .list_focus_deferred
             .take()
@@ -3961,8 +3982,17 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                     && ui.input(|input| input.modifiers.command)
                                     && crate::app::can_select(&message.content)
                                 {
-                                    // Ctrl-click (Command-click on macOS) starts a selection.
-                                    actions.push(Action::SelectMessage(message.id.clone()));
+                                    // Ctrl-click (Command-click on macOS) jumps a
+                                    // reply-linked bubble to its parent or next reply;
+                                    // anything else starts a selection.
+                                    if !super::reply_threads::command_click(
+                                        ui.ctx(),
+                                        &chat.id,
+                                        &message.id,
+                                        actions,
+                                    ) {
+                                        actions.push(Action::SelectMessage(message.id.clone()));
+                                    }
                                 }
                                 if current && let Some(response) = &response {
                                     // The list's focus ring goes around its
@@ -4272,6 +4302,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                     .is_some_and(|pos| bar.contains(pos)))
     });
     super::reply_threads::finish(ui, palette.accent);
+    super::reply_threads::paint_jump_chips(ui);
     let restored_thread_scroll =
         super::reply_threads::complete_full_scroll(ui.ctx(), output.id, output.state);
     let complete = conversation.complete;
@@ -4929,7 +4960,10 @@ fn bubble(
                 .ctx()
                 .data(|d| d.get_temp::<String>(previous_id.with("message-id")))
             {
-                actions.push(Action::SelectMessage(id));
+                // Jump when the predecessor is reply-linked, select otherwise.
+                if !super::reply_threads::command_click(ui.ctx(), &message.chat, &id, actions) {
+                    actions.push(Action::SelectMessage(id));
+                }
             }
         }
     }
@@ -6065,18 +6099,20 @@ fn bubble_frame(
             }
             None
         } else if let Some(messages) = album {
-            for member in messages {
-                if let Some(quoted) = &member.quoted {
-                    quote_block(ui, view, member, quoted, settled.unwrap_or(cap), actions);
+            ui.horizontal_wrapped(|ui| {
+                for member in messages {
+                    if let Some(quoted) = &member.quoted {
+                        quote_chip(ui, view, member, quoted, actions);
+                    }
                 }
-            }
+            });
             tiles = album_content(ui, view, messages, settled.unwrap_or(cap), actions);
             None
         } else {
             match settled {
                 Some(width) => {
                     if let Some(quoted) = &message.quoted {
-                        quote_block(ui, view, message, quoted, width, actions);
+                        quote_chip(ui, view, message, quoted, actions);
                     }
                     content(ui, view, message, width, reserve, actions)
                 }
@@ -6898,22 +6934,20 @@ fn quoted_sender_name(view: &View<'_>, quoted: &crate::model::Quoted, you: &str)
     }
 }
 
-fn quote_block(
+/// The compact reply chip that replaced the full quote block: the quoted
+/// sender's bar and a jump glyph, no quoted text. The link itself reads from
+/// the hover route `reply_threads` draws and from this chip's tooltip; the
+/// quoted sender and summary still read from the bubble's label.
+fn quote_chip(
     ui: &mut egui::Ui,
     view: &View<'_>,
     message: &Message,
     quoted: &crate::model::Quoted,
-    width: f32,
     actions: &mut Vec<Action>,
 ) {
     let palette = view.palette;
     let mine = quotes_me(view, quoted);
-    let who = quoted_sender_name(view, quoted, "You");
-    let summary = markup::plain(
-        &quoted.summary_in(view.locale),
-        &quote_mentions(view, quoted),
-    );
-    // As in WhatsApp, the bar and name take the quoted sender's colour, the
+    // As in WhatsApp, the bar and glyph take the quoted sender's colour, the
     // one their name has in groups, kept readable on this bubble.
     let bubble = if message.from_me {
         palette.bubble_out
@@ -6936,28 +6970,16 @@ fn quote_block(
         .fill(colours.fill)
         .corner_radius(CornerRadius::same(QUOTE_RADIUS))
         .inner_margin(Margin {
-            left: QUOTE_BAR as i8 + 7,
-            right: 10,
-            top: 5,
-            bottom: 6,
+            left: QUOTE_BAR as i8 + 5,
+            right: 7,
+            top: 3,
+            bottom: 4,
         })
         .show(ui, |ui| {
-            // Include frame margins in the settled width. Use a bounded,
-            // left-aligned layout because own bubbles inherit right-to-left flow.
-            let inner_width = (width - QUOTE_BAR - 17.0).max(0.0);
-            ui.allocate_ui_with_layout(
-                vec2(inner_width, 0.0),
-                Layout::top_down(Align::Min),
-                |ui| {
-                    ui.set_width(inner_width);
-                    ui.spacing_mut().item_spacing.y = 1.0;
-                    widgets::rich_text(ui, &who, theme::semibold(12.5), colours.name);
-                    widgets::rich_text(ui, &summary, theme::regular(12.5), colours.text);
-                },
-            );
+            widgets::rich_text(ui, "↩", theme::semibold(14.0), colours.name);
         })
         .response;
-    // The bar runs the quote's full height along its rounded left edge.
+    // The bar runs the chip's full height along its rounded left edge.
     let bar = Rect::from_min_size(response.rect.min, vec2(QUOTE_BAR, response.rect.height()));
     ui.painter().rect_filled(
         bar,
@@ -6981,15 +7003,40 @@ fn quote_block(
             ui.id().with(("quote", &message.id, &quoted.id)),
             Sense::click(),
         )
-        .on_hover_cursor(egui::CursorIcon::PointingHand);
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(crate::i18n::gettext(
+            view.locale,
+            "Jump to the original message",
+        ));
+    let who = quoted_sender_name(view, quoted, &crate::i18n::gettext(view.locale, "You"));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            format!(
+                "{}, {}",
+                crate::i18n::gettext(view.locale, "Jump to the original message"),
+                who
+            ),
+        )
+    });
     if response.clicked() {
-        if let Some(chat) = &quoted.chat {
-            actions.push(Action::OpenMessage {
-                chat: chat.clone(),
-                message: quoted.id.clone(),
-            });
-        } else {
-            actions.push(Action::ScrollTo(quoted.id.clone()));
+        let target = crate::reply_graph::Key {
+            chat: quoted.chat.clone().unwrap_or_else(|| message.chat.clone()),
+            id: quoted.id.clone(),
+        };
+        // Inside an open thread that already shows the target, the jump
+        // scrolls the thread itself; otherwise leave and land on it.
+        if !super::reply_threads::jump_within_thread(ui.ctx(), &target) {
+            super::reply_threads::prepare_jump_back(ui.ctx());
+            if let Some(chat) = &quoted.chat {
+                actions.push(Action::OpenMessage {
+                    chat: chat.clone(),
+                    message: quoted.id.clone(),
+                });
+            } else {
+                actions.push(Action::ScrollTo(quoted.id.clone()));
+            }
         }
     }
 }
@@ -10543,7 +10590,15 @@ fn rich_body_full(
                     Action::ToggleSelected(message.id.clone())
                 });
             } else if modifiers.command {
-                actions.push(Action::SelectMessage(message.id.clone()));
+                // Jump reply-linked bubbles; select the rest.
+                if !super::reply_threads::command_click(
+                    ui.ctx(),
+                    &message.chat,
+                    &message.id,
+                    actions,
+                ) {
+                    actions.push(Action::SelectMessage(message.id.clone()));
+                }
             }
         }
     }
