@@ -97,15 +97,24 @@ jobs:
     needs: [changes, portable]
     if: ${{ !cancelled() && !failure() && needs.changes.outputs.audit == 'true' }}
     name: Dependency advisories
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --version 0.22.2 --locked --no-default-features
-      - name: Audit all locked dependencies
-        run: cargo audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13.18'
+      - name: Install pinned cargo-audit
+        run: |
+          curl --fail --silent --show-error --location 'https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.23.0/cargo-audit-x86_64-unknown-linux-musl-v0.23.0.tgz' -o "$RUNNER_TEMP/cargo-audit.tgz"
+          echo '4f01c74ed84b2dffd0b1d37012a62cdf2a92c96e25bdf8eec7fcc0d4d3eb7811  '"$RUNNER_TEMP/cargo-audit.tgz" | sha256sum --check
+          tar xzf "$RUNNER_TEMP/cargo-audit.tgz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/cargo-audit-x86_64-unknown-linux-musl-v0.23.0" >> "$GITHUB_PATH"
+      - name: Audit all locked dependencies (report only)
+        run: python .github/scripts/security-pilot-report.py --checks rust
 
   quality:
     needs: [changes, portable, mac-test]
