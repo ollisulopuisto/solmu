@@ -621,7 +621,7 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
         .id_salt(("reply-thread", root))
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            super::conversation::with_bubble_ns("thread", || {
+            super::conversation::with_bubble_ns(super::conversation::THREAD_BUBBLE_NS, || {
                 ui.set_min_width(ui.available_width());
                 if rows.is_empty() {
                     ui.label("This thread is no longer available in loaded history.");

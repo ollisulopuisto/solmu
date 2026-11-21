@@ -20202,6 +20202,91 @@ mod tests {
         );
     }
 
+    /// A modified click on a reply-linked bubble's link opens only the link:
+    /// the message gesture must not also jump or select.
+    #[test]
+    fn a_command_click_on_a_link_opens_only_the_link() {
+        let mut app = app();
+        let chat = SAMPLES[0].id.to_owned();
+        let parent = message(
+            &chat,
+            "link-parent",
+            false,
+            1_700_000_000,
+            Content::text("origin"),
+        );
+        let mut row = message(
+            &chat,
+            "link-reply",
+            false,
+            1_700_000_100,
+            Content::text("https://example.com/"),
+        );
+        row.quoted = Some(Quoted {
+            labelled: None,
+            chat: None,
+            id: "link-parent".into(),
+            sender: "someone".into(),
+            sender_name: None,
+            summary: "origin".into(),
+            mentions: Vec::new(),
+        });
+        app.conversations.get_mut(&chat).unwrap().messages = vec![parent, row];
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.backend.record_demo_commands();
+        for _ in 0..4 {
+            render(&mut app, &ctx);
+        }
+        let body = ctx
+            .data(|data| {
+                data.get_temp::<egui::Rect>(
+                    crate::ui::conversation::bubble_id(&chat, "link-reply").with("body"),
+                )
+            })
+            .unwrap();
+        let pos = body.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        let mut opened = Vec::new();
+        for events in [
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
+                press(true),
+            ],
+            vec![press(false)],
+            vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)],
+        ] {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1180.0, 780.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let ctx = ui.ctx().clone();
+                app.background_frame(&ctx);
+                app.frame_ui(ui);
+            });
+            output.textures_delta.clear();
+            for command in output.platform_output.commands {
+                if let egui::OutputCommand::OpenUrl(url) = command {
+                    opened.push(url.url);
+                }
+            }
+        }
+        assert_eq!(opened, ["https://example.com/"], "the link opens");
+        assert!(app.selection.is_none(), "no selection starts");
+        assert!(app.jump_highlight.is_none(), "no jump runs");
+    }
+
     #[test]
     fn expanded_text_selection_preserves_quote_and_preview_clicks() {
         for kind in ["quote", "preview"] {

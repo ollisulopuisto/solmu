@@ -11998,9 +11998,15 @@ impl App {
             Action::ClosePicker => {
                 let was_reaction = self.reaction_target.is_some();
                 if let Some((chat, message)) = &self.reaction_target {
+                    // The picker may have opened from the thread's salted
+                    // rendering pass; close both popup ids.
                     egui::Popup::close_id(
                         ctx,
                         crate::ui::conversation::bubble_id(chat, message).with("popup"),
+                    );
+                    egui::Popup::close_id(
+                        ctx,
+                        crate::ui::conversation::thread_bubble_id(chat, message).with("popup"),
                     );
                 }
                 self.picker = None;
@@ -12021,15 +12027,20 @@ impl App {
                 self.mention_start = None;
                 self.picker = None;
                 let id = crate::ui::conversation::bubble_id(&chat, &message);
+                let thread_id = crate::ui::conversation::thread_bubble_id(&chat, &message);
                 // Anchor to the menu when it stays open, else to the hover
-                // button that opened the picker.
+                // button that opened the picker. A picker opened in the
+                // thread stores its anchors under the salted id.
                 let anchor = if beside_menu {
                     "menu-rect"
                 } else {
                     "react-rect"
                 };
-                self.reaction_anchor =
-                    ctx.data(|data| data.get_temp::<egui::Rect>(id.with(anchor)));
+                self.reaction_anchor = ctx
+                    .data(|data| data.get_temp::<egui::Rect>(id.with(anchor)))
+                    .or_else(|| {
+                        ctx.data(|data| data.get_temp::<egui::Rect>(thread_id.with(anchor)))
+                    });
                 self.reaction_beside_menu = beside_menu;
                 self.reaction_target = Some((chat, message));
                 let frequent: Vec<String> = self
@@ -12330,6 +12341,10 @@ impl App {
                 egui::Popup::close_id(
                     ctx,
                     crate::ui::conversation::bubble_id(&chat, &message).with("popup"),
+                );
+                egui::Popup::close_id(
+                    ctx,
+                    crate::ui::conversation::thread_bubble_id(&chat, &message).with("popup"),
                 );
                 self.reaction_target = None;
                 self.reaction_anchor = None;

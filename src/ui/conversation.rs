@@ -5489,6 +5489,16 @@ pub fn with_bubble_ns<R>(ns: &'static str, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// The salt the open thread's second rendering pass uses for its bubble
+/// ids (see [`BUBBLE_NS`]).
+pub const THREAD_BUBBLE_NS: &str = "thread";
+
+/// The bubble id under the thread's salt: app-level actions apply outside
+/// any render pass, where no salt is set, so both variants are named.
+pub fn thread_bubble_id(chat: &str, message: &str) -> egui::Id {
+    egui::Id::new(("bubble", THREAD_BUBBLE_NS, chat, message))
+}
+
 pub fn bubble_id(chat: &str, message: &str) -> egui::Id {
     BUBBLE_NS.with(|ns| match ns.get() {
         Some(ns) => egui::Id::new(("bubble", ns, chat, message)),
@@ -10626,18 +10636,6 @@ fn rich_body_full(
                 }
             }
         }
-    } else if response.clicked()
-        && !response.double_clicked()
-        && !view.selecting
-        && ui.input(|input| input.modifiers.command)
-        && crate::app::can_select(&message.content)
-    {
-        // The text hit target owns clicks on the words themselves: a
-        // modified click there jumps a reply-linked bubble, as in the
-        // padding, and keeps selecting an unrelated one.
-        if !super::reply_threads::command_click(ui.ctx(), &message.chat, &message.id, actions) {
-            actions.push(Action::SelectMessage(message.id.clone()));
-        }
     }
     ui.ctx().data_mut(|data| {
         data.insert_temp(
@@ -10781,6 +10779,31 @@ fn rich_body_full(
                         actions.push(Action::CopyText(copy_text.clone()));
                     }
                 });
+        }
+    }
+    // A modified click on a link belongs to the link, never to the message.
+    let over_link = !laid.links.is_empty()
+        && response.interact_pointer_pos().is_some_and(|pos| {
+            laid.galley.rows.iter().any(|row| {
+                Rect::from_min_size(origin + row.pos.to_vec2(), row.row.size).contains(pos)
+            }) && {
+                let cursor = laid.galley.cursor_from_pos(pos - origin);
+                laid.link_at(cursor.index.0).is_some()
+            }
+        });
+    if response.clicked()
+        && !response.double_clicked()
+        && !padding
+        && !view.selecting
+        && !over_link
+        && ui.input(|input| input.modifiers.command)
+        && crate::app::can_select(&message.content)
+    {
+        // The text hit target owns clicks on the words themselves: a
+        // modified click there jumps a reply-linked bubble, as in the
+        // padding, and keeps selecting an unrelated one.
+        if !super::reply_threads::command_click(ui.ctx(), &message.chat, &message.id, actions) {
+            actions.push(Action::SelectMessage(message.id.clone()));
         }
     }
     if !laid.links.is_empty()
