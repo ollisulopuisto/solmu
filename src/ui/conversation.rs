@@ -6497,9 +6497,15 @@ fn bubble_frame(
             context_menu(ui, view, menu_target, MenuOrigin::Chat, actions);
         }
     });
+    // The rect is this frame's truth, published only while the menu draws:
+    // a superseded or closed menu must not leave one behind, or later frames
+    // (and picker anchors) would read a menu that is no longer there.
     if let Some(menu) = menu {
         ui.ctx()
             .data_mut(|data| data.insert_temp(bubble_id.with("menu-rect"), menu.response.rect));
+    } else {
+        ui.ctx()
+            .data_mut(|data| data.remove::<Rect>(bubble_id.with("menu-rect")));
     }
     // Keep the target explicit for every menu action, not just the emoji
     // picker. Paint in the message layer so the menu itself remains above it.
@@ -10825,8 +10831,11 @@ fn rich_body_full(
         }
     }
     // A modified click on a link belongs to the link, never to the message.
+    // The pointer position comes from hover, as in the link branch below:
+    // on the release frame that decides `clicked` there is no interaction
+    // position left, and the gesture would fire beside the open.
     let over_link = !laid.links.is_empty()
-        && response.interact_pointer_pos().is_some_and(|pos| {
+        && response.hover_pos().is_some_and(|pos| {
             laid.galley.rows.iter().any(|row| {
                 Rect::from_min_size(origin + row.pos.to_vec2(), row.row.size).contains(pos)
             }) && {

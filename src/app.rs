@@ -12054,6 +12054,11 @@ impl App {
                     .or_else(|| ctx.data(|data| data.get_temp::<egui::Rect>(then.with(anchor))));
                 self.reaction_beside_menu = beside_menu;
                 self.reaction_from_thread = from_thread;
+                // The pass that did not open the picker keeps no menu: an
+                // already-open one there closes now, so no second menu draws
+                // behind (or over) the owning pass before the frame ends.
+                let other = if from_thread { id } else { thread_id };
+                egui::Popup::close_id(ctx, other.with("popup"));
                 self.reaction_target = Some((chat, message));
                 let frequent: Vec<String> = self
                     .settings

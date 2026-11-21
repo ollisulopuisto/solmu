@@ -7956,11 +7956,9 @@ mod tests {
         for shape in shapes {
             collect(&shape.shape, &mut galleys);
         }
-        assert_eq!(
-            galleys.len(),
-            4,
-            "original, incoming quote, outgoing quote, composer preview"
-        );
+        // Reply chips carry no quoted text, so the phrase renders only in
+        // the original bubble and the composer's reply preview.
+        assert_eq!(galleys.len(), 2, "original and composer preview");
         let mut reversed = Vec::new();
         for (index, galley) in galleys.into_iter().enumerate() {
             let x = |letter| {
@@ -8017,10 +8015,9 @@ mod tests {
             collect(&shape.shape, &mut galleys);
         }
         let count = |text: &str| galleys.iter().filter(|g| g.text() == text).count();
-        assert!(
-            count("٤٥") >= 3,
-            "bubble, quote, and chat list preview of \"٤٥\""
-        );
+        // The reply chip shows no quoted text: the bubble and the chat
+        // list preview are the surfaces left for the number.
+        assert!(count("٤٥") >= 2, "bubble and chat list preview of \"٤٥\"");
         assert_eq!(count("١٢:٣٠"), 1, "composer");
         assert_eq!(
             galleys
@@ -13913,10 +13910,12 @@ mod tests {
         let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
         assert!(nodes.iter().any(|(label, _, _)| label == "Save all…"));
         assert!(nodes.iter().any(|(label, _, _)| label == "Download all"));
-        let shapes = frame_sized(&mut app, &ctx, 780.0, Vec::new());
-        assert!(
-            shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("A reference for the album")))
-        );
+        // The quote-free chip replaced the quoted text: the member keeps a
+        // jump button naming its quoted sender alongside the actions.
+        assert!(nodes.iter().any(|(label, role, _)| {
+            label.starts_with("Jump to the original message")
+                && *role == egui::accesskit::Role::Button
+        }));
     }
 
     /// Both local-date dividers and both grouped rows survive an album spanning midnight.
@@ -20298,7 +20297,13 @@ mod tests {
                 }
             }
         }
-        assert_eq!(opened, ["https://example.com/"], "the link opens");
+        let jump = app.jump_highlight.as_ref().map(|jump| jump.message.clone());
+        assert_eq!(
+            opened,
+            ["https://example.com/"],
+            "the link opens (selection: {:?}, jump: {jump:?})",
+            app.selection.as_ref().map(|(_, ids)| ids.clone())
+        );
         assert!(app.selection.is_none(), "no selection starts");
         assert!(app.jump_highlight.is_none(), "no jump runs");
     }
@@ -21898,10 +21903,12 @@ mod tests {
             "the jump lands on the message the reply quotes"
         );
         app.jump_highlight = None;
-        command_click(&mut app, &ctx, &chat, "ada-link");
+        // A modified click over a link belongs to the link, so the plain
+        // bubble here is one without links.
+        command_click(&mut app, &ctx, &chat, "ada-quote");
         assert_eq!(
             app.selection.as_ref().map(|(_, ids)| ids.as_slice()),
-            Some(&["ada-link".to_owned()][..]),
+            Some(&["ada-quote".to_owned()][..]),
             "an unrelated bubble starts a selection"
         );
     }
@@ -21946,6 +21953,38 @@ mod tests {
             render(&mut app, &ctx);
         }
         let chat = app.open_chat.clone().unwrap();
+        // A transcript menu left open when the thread's picker appears must
+        // not survive the takeover: it closes, and its published rect goes
+        // with it rather than lingering as residue.
+        let center = ctx
+            .data(|data| {
+                data.get_temp::<egui::Rect>(
+                    crate::ui::conversation::bubble_id(&chat, "ada-voice").with("rect"),
+                )
+            })
+            .expect("the bubble is on screen")
+            .center();
+        let right = |pressed| egui::Event::PointerButton {
+            pos: center,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame_sized(
+            &mut app,
+            &ctx,
+            780.0,
+            vec![egui::Event::PointerMoved(center), right(true)],
+        );
+        frame_sized(&mut app, &ctx, 780.0, vec![right(false)]);
+        frame_sized(&mut app, &ctx, 780.0, Vec::new());
+        assert!(
+            ctx.data(|data| data.get_temp::<egui::Rect>(
+                crate::ui::conversation::bubble_id(&chat, "ada-voice").with("menu-rect")
+            ))
+            .is_some(),
+            "the transcript menu drew after the right-click"
+        );
         let scope = crate::ui::reply_threads::scope(&app, std::slice::from_ref(&chat));
         ctx.data_mut(|data| {
             data.insert_temp(
@@ -21975,6 +22014,13 @@ mod tests {
                 crate::ui::conversation::thread_bubble_id(&chat, "ada-voice").with("popup"),
             ),
             "the thread's menu stays open for its picker"
+        );
+        assert!(
+            !egui::Popup::is_id_open(
+                &ctx,
+                crate::ui::conversation::bubble_id(&chat, "ada-voice").with("popup"),
+            ),
+            "the takeover closes the transcript's menu"
         );
         // is_id_open only reads the memory that survives the frame, where a
         // later open would replace an earlier one. A drawing menu publishes

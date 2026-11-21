@@ -252,7 +252,9 @@ pub(super) fn script() -> Vec<Cue> {
 
     // Hover controls, then several messages forwarded at once.
     add(65.3, Move(Bubble("group-reply")));
-    add(66.7, Move(BubbleCorner("group-reply")));
+    // Ctrl + click on a reply-linked bubble jumps instead of selecting, so
+    // the selection demo starts from a bubble with no reply links.
+    add(66.7, Move(BubbleCorner("group-everyone")));
     add(
         67.0,
         ClickWith(left, command(), "Ctrl + click · Select a message"),

@@ -159,6 +159,7 @@ pub fn modal(app: &App, ui: &egui::Ui) -> bool {
 }
 
 /// Whether this message takes part in any loaded reply relationship.
+#[cfg(test)]
 pub fn is_linked(ctx: &egui::Context, chat: &str, id: &str) -> bool {
     let key = Key {
         chat: chat.to_owned(),
@@ -1005,6 +1006,9 @@ mod tests {
         let (_dir, _app, ctx) = seeded();
         let f = frame(&ctx).unwrap();
         let scope = f.lock().unwrap().scope;
+        // Only a view that renders `thread_scroll` consumes the queued jump;
+        // mark one present, as the thread's scroll area does while open.
+        ctx.data_mut(|d| d.insert_temp(scope.with("thread-scroll-here"), true));
         let root = Key {
             chat: "a".into(),
             id: "1".into(),
