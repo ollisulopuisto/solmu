@@ -14987,6 +14987,52 @@ mod tests {
         }
     }
 
+    fn hidden_restore_announcements(tree: &egui::accesskit::TreeUpdate) -> Vec<&str> {
+        tree.nodes
+            .iter()
+            .flat_map(|(_, node)| [node.label(), node.value()])
+            .flatten()
+            .filter(|text| *text == "Show message" || *text == "···")
+            .collect()
+    }
+
+    #[test]
+    fn restore_announcement_check_detects_decorative_static_text() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.button("Show message").widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Show message")
+            });
+            let line = widgets::line(
+                ui,
+                "Show message",
+                theme::regular(12.0),
+                Color32::WHITE,
+                200.0,
+                1,
+            );
+            // Negative control: reproduce the old extra static-text node.
+            line.paint(ui, pos2(20.0, 50.0), Color32::WHITE);
+        });
+        let tree = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .expect("accessibility tree");
+        assert!(
+            tree.nodes
+                .iter()
+                .any(|(_, node)| node.value() == Some("Show message"))
+        );
+        assert_eq!(
+            hidden_restore_announcements(tree),
+            ["Show message", "Show message"]
+        );
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn focused_hidden_hint_stays_inside_narrow_incoming_and_outgoing_rows() {
         for own in [false, true] {
@@ -15069,12 +15115,7 @@ mod tests {
                         .accesskit_update
                         .as_ref()
                         .expect("accessibility tree");
-                    let labels: Vec<_> = tree
-                        .nodes
-                        .iter()
-                        .filter_map(|(_, node)| node.label())
-                        .filter(|label| *label == "Show message" || *label == "···")
-                        .collect();
+                    let labels = hidden_restore_announcements(tree);
                     assert_eq!(labels, ["Show message"], "only the restore button is named");
                     output.textures_delta.clear();
                 }
