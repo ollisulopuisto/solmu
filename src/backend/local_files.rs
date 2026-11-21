@@ -7,7 +7,9 @@ use super::{Command, Event};
 pub(super) fn handles(command: &Command) -> bool {
     matches!(
         command,
-        Command::PrepareSticker { .. }
+        Command::InspectPicture { .. }
+            | Command::ApplyPictureEdit { .. }
+            | Command::PrepareSticker { .. }
             | Command::PrepareGif { .. }
             | Command::PrepareClipboardImage(_)
             | Command::SaveAttachmentAs { .. }
@@ -15,7 +17,32 @@ pub(super) fn handles(command: &Command) -> bool {
     )
 }
 
-pub(super) fn run(command: Command) -> Option<Event> {
+pub(super) fn run(command: Command, picture_dir: Option<&Path>) -> Option<Event> {
+    match command {
+        Command::InspectPicture { target, path } => {
+            let result = std::fs::read(path)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| super::picture_edit::inspect(&bytes));
+            return Some(Event::PictureInspected { target, result });
+        }
+        Command::ApplyPictureEdit {
+            target,
+            source,
+            width,
+            height,
+            crop,
+            turns,
+        } => {
+            let result = picture_dir
+                .ok_or_else(|| "Picture edit cache is unavailable".to_owned())
+                .and_then(|dir| {
+                    super::picture_edit::write_temporary(&source, width, height, crop, turns, dir)
+                });
+            return Some(Event::PictureEdited { target, result });
+        }
+        _ => {}
+    }
+
     if matches!(
         &command,
         Command::PrepareSticker { .. } | Command::PrepareGif { .. }

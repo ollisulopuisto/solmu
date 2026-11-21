@@ -1183,6 +1183,15 @@ impl Pending {
             .first_raw()
             .is_some_and(|mime| matches!(mime, "image/jpeg" | "image/png" | "image/webp"))
     }
+
+    /// Whether the crop editor can open this file. It has to decode here and
+    /// come back as a still: HEIC and AVIF do not decode, and a cropped GIF
+    /// would silently lose its animation, so the pencil is not offered.
+    pub fn is_crop_supported_file(path: &std::path::Path) -> bool {
+        mime_guess2::from_path(path)
+            .first_raw()
+            .is_some_and(|mime| matches!(mime, "image/jpeg" | "image/png" | "image/webp"))
+    }
 }
 
 /// Whether this session draws through Wayland, where a compositor ignores an
@@ -6462,12 +6471,18 @@ impl App {
                     // rather than landing on whatever sits in its place now.
                     Ok(path) => match self.staged_at(target) {
                         Some(at) => {
+                            if let Some(previous) =
+                                self.attachment_temporary_paths.insert(target, path.clone())
+                            {
+                                crate::backend::beeper::discard_temp_upload(&previous);
+                            }
                             self.pending[at].item = Pending::File(path);
                             if let Some(origin) = self.picture_applying.remove(&target) {
                                 self.picture_origins.insert(target, origin);
                             }
                         }
                         None => {
+                            crate::backend::beeper::discard_temp_upload(&path);
                             self.picture_applying.remove(&target);
                         }
                     },
@@ -9326,6 +9341,30 @@ impl App {
         if self.pending.is_empty() {
             return;
         }
+        // A crop whose Keep is still being written has not landed on its
+        // attachment yet: sending now would upload the untouched original,
+        // and the late edit would be dropped with the attachment gone.
+        if self
+            .pending
+            .iter()
+            .any(|staged| self.picture_applying.contains_key(&staged.id))
+        {
+            // restore_text hands the caption back but drops its selected
+            // mentions; keep them as the view-once refusal does.
+            let restore_mentions = self.composer.trim().is_empty() && self.editing.is_none();
+            self.restore_text(&owner, caption);
+            if restore_mentions {
+                self.composer_mentions = selected;
+            }
+            self.toast_error(
+                crate::i18n::gettext(
+                    self.locale,
+                    "A crop is still being applied; send again when it lands.",
+                )
+                .into_owned(),
+            );
+            return;
+        }
         if self.pending.iter().any(|staged| {
             self.attachment_retry_sources
                 .get(&staged.id)
@@ -11612,6 +11651,20 @@ impl App {
                 self.set_pending_view_once(view_once);
             }
             Action::EditPicture(target) => {
+                // A crop still being written owns the attachment: each apply
+                // runs on its own thread and answers by attachment alone, so
+                // a second edit started now could finish out of order and
+                // pair the older crop with the newer edit's origin.
+                if self.picture_applying.contains_key(&target) {
+                    self.toast(
+                        crate::i18n::gettext(
+                            self.locale,
+                            "A crop is still being applied; edit again when it lands.",
+                        )
+                        .into_owned(),
+                    );
+                    return;
+                }
                 // Whatever was being waited for is not what is wanted now.
                 self.picture_inspecting = None;
                 // Read out before anything is written back, so the borrow of
@@ -11655,7 +11708,7 @@ impl App {
                             crop: origin.crop,
                             turns: origin.turns,
                         });
-                    } else if Pending::is_picture_file(&path) {
+                    } else if Pending::is_crop_supported_file(&path) {
                         // Its size has to be read before the cropper can open
                         // on it, and only this answer may open it.
                         self.picture_inspecting = Some(target);
@@ -26152,6 +26205,41 @@ mod tests {
     }
 
     #[test]
+    fn removing_a_cropped_attachment_reclaims_its_output_but_not_its_source() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let source = root.path().join("original.png");
+        image::RgbaImage::from_pixel(8, 6, image::Rgba([20, 40, 80, 255]))
+            .save(&source)
+            .unwrap();
+        let target = app.stage(Pending::File(source.clone()));
+        let output = crate::backend::picture_edit::write_temporary(
+            &crate::model::PictureSource::File(source.clone()),
+            8,
+            6,
+            crate::model::PictureCrop::full(8, 6),
+            0,
+            &root.path().join("cache"),
+        )
+        .unwrap();
+        app.apply_backend_event(
+            Event::PictureEdited {
+                target,
+                result: Ok(output.clone()),
+            },
+            true,
+        );
+        assert!(matches!(&app.pending[0].item, Pending::File(path) if path == &output));
+        assert!(output.exists());
+        app.apply(Action::RemovePending(0), &egui::Context::default());
+        crate::backend::beeper::flush_temp_cleanup();
+        assert!(app.pending.is_empty());
+        assert!(!output.exists(), "the discarded crop is reclaimed");
+        assert!(source.exists(), "the user's original stays untouched");
+        assert!(!app.attachment_temporary_paths.contains_key(&target));
+    }
+
+    #[test]
     fn a_crop_that_lands_after_its_attachment_was_removed_is_dropped() {
         let root = tempfile::tempdir().unwrap();
         let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
@@ -26274,6 +26362,174 @@ mod tests {
         assert!(
             matches!(&staged.item, Pending::File(path) if *path == staying),
             "the late result did not replace the picture that moved into its place"
+        );
+    }
+
+    #[test]
+    fn only_decodable_still_pictures_can_be_cropped() {
+        for (name, expected) in [
+            ("photo.jpg", true),
+            ("photo.jpeg", true),
+            ("photo.png", true),
+            ("photo.webp", true),
+            // A crop would silently drop the animation.
+            ("photo.gif", false),
+            // Neither decodes here, so the pencil would only error.
+            ("photo.heic", false),
+            ("photo.avif", false),
+            ("notes.pdf", false),
+        ] {
+            assert_eq!(
+                Pending::is_crop_supported_file(std::path::Path::new(name)),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_pencil_stays_away_from_pictures_the_editor_cannot_keep() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        for file in ["/fixture/clip.gif", "/fixture/photo.heic"] {
+            let target = app.stage(Pending::File(file.into()));
+            app.apply(Action::EditPicture(target), &egui::Context::default());
+            assert!(
+                app.picture_inspecting.is_none(),
+                "{file} started a size read that can only fail"
+            );
+            assert!(app.picture_edit.is_none(), "{file} opened the cropper");
+        }
+        assert!(
+            !std::iter::from_fn(|| commands.try_recv().ok())
+                .any(|command| matches!(command, Command::InspectPicture { .. })),
+            "an undecodable or animated picture was sent to the crop worker"
+        );
+        let target = app.stage(Pending::File("/fixture/photo.png".into()));
+        app.apply(Action::EditPicture(target), &egui::Context::default());
+        assert_eq!(app.picture_inspecting, Some(target));
+        assert!(
+            std::iter::from_fn(|| commands.try_recv().ok())
+                .any(|command| matches!(command, Command::InspectPicture { .. })),
+            "a plain picture still goes to the crop worker"
+        );
+    }
+
+    #[test]
+    fn a_crop_wait_keeps_the_captions_selected_mentions() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let chat = "123@g.us";
+        let mut group = Chat::new(chat.into(), "Group".into());
+        group.participants = vec!["12345@s.whatsapp.net".into()];
+        app.chats.push(group);
+        app.open_chat(chat.into());
+        let target = app.stage(Pending::File("/fixture/photo.png".into()));
+        app.picture_applying.insert(
+            target,
+            crate::model::PictureOrigin {
+                source: crate::model::PictureSource::File("/fixture/photo.png".into()),
+                width: 4,
+                height: 4,
+                crop: crate::model::PictureCrop::full(4, 4),
+                turns: 0,
+            },
+        );
+        let (backend, _commands) = Backend::recording();
+        app.backend = backend;
+        let mention = ComposerMention::new("12345@s.whatsapp.net".into(), "Mira".into());
+        app.send_pending(
+            app.account().id.clone(),
+            chat.into(),
+            "hi @Mira".to_owned(),
+            vec![mention],
+        );
+        assert_eq!(app.composer, "hi @Mira");
+        assert_eq!(app.composer_mentions.len(), 1);
+        assert_eq!(app.composer_mentions[0].id, "12345@s.whatsapp.net");
+        assert_eq!(app.composer_mentions[0].name, "Mira");
+    }
+
+    #[test]
+    fn a_crop_in_flight_keeps_the_editor_off_its_attachment() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let ctx = egui::Context::default();
+        let target = app.stage(Pending::File("/fixture/photo.png".into()));
+        app.picture_applying.insert(
+            target,
+            crate::model::PictureOrigin {
+                source: crate::model::PictureSource::File("/fixture/photo.png".into()),
+                width: 4,
+                height: 4,
+                crop: crate::model::PictureCrop::full(4, 4),
+                turns: 0,
+            },
+        );
+        app.apply(Action::EditPicture(target), &ctx);
+        assert!(app.picture_edit.is_none());
+        assert!(app.picture_inspecting.is_none());
+        assert!(
+            !std::iter::from_fn(|| commands.try_recv().ok())
+                .any(|command| matches!(command, Command::InspectPicture { .. })),
+            "a second edit started while the first crop was still being written"
+        );
+        // Once the crop has landed, the same picture opens again.
+        app.picture_applying.remove(&target);
+        app.apply(Action::EditPicture(target), &ctx);
+        assert_eq!(app.picture_inspecting, Some(target));
+    }
+
+    #[test]
+    fn a_send_waits_for_a_crop_still_being_written() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let chat = "fixture@s.whatsapp.net";
+        app.chats.push(Chat::new(chat.into(), "Fixture".into()));
+        app.open_chat(chat.into());
+        let target = app.stage(Pending::File("/fixture/photo.png".into()));
+        app.picture_applying.insert(
+            target,
+            crate::model::PictureOrigin {
+                source: crate::model::PictureSource::File("/fixture/photo.png".into()),
+                width: 4,
+                height: 4,
+                crop: crate::model::PictureCrop::full(4, 4),
+                turns: 0,
+            },
+        );
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        app.send_pending(
+            app.account().id.clone(),
+            chat.into(),
+            "caption".to_owned(),
+            vec![],
+        );
+        assert!(
+            !std::iter::from_fn(|| commands.try_recv().ok()).any(|command| matches!(
+                command,
+                Command::SendFiles { .. } | Command::SendImage { .. }
+            )),
+            "the untouched original went out while its crop was still being written"
+        );
+        assert_eq!(app.pending.len(), 1, "the staged picture was kept");
+        // Once the crop has landed, the same send goes through.
+        app.picture_applying.remove(&target);
+        app.send_pending(
+            app.account().id.clone(),
+            chat.into(),
+            "caption".to_owned(),
+            vec![],
+        );
+        assert!(
+            std::iter::from_fn(|| commands.try_recv().ok())
+                .any(|command| matches!(command, Command::SendFiles { .. })),
+            "the send no longer blocked once no crop was being written"
         );
     }
 

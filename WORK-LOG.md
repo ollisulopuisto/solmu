@@ -802,6 +802,11 @@ search retaining results/cursor across refusal and successful retry.
 No real Server query or UI-layout changes; native/live acceptance unverified.
 ## 2026-11-20 - Unknown reconciliation on malformed Server search
 
+## Attachment-pencil handler,20 November
+
+Production previously neither compiled the picture-edit module nor routed InspectPicture/ApplyPictureEdit. Both now run through the existing local attachment-action worker, independently of Server/offline status, emitting targeted results. Output goes to uniquely named disposable beeper-edited-* files at the account media cache root, registered for ownership, trimming and clearing protection, never over the original. Thread-start failures answer the waiting action. Existing attachment-ID checks still reject stale results.
+
+Native library/test-target compile passes.418 portable adapter tests pass, including real routing that inspects an8x6 PNG, applies3x4 crop, verifies output dimensions and untouched source, and receives a missing-file error while disconnected. Harness stages real picture_edit/sticker_store sources. No live Mac pencil/crop/save roundtrip or new UI design claimed. A local disk-cache-full interruption was recovered by clearing disposable build caches before rerunning the suite.
 The Server reliability audit found that the scheduler interpreted a missing
 search items array as NotFound. That is not evidence that an uncertain send
 has no existing copy. Require items so malformed search leaves reconciliation
