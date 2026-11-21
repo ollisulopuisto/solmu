@@ -16606,17 +16606,11 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         for (index, item) in app.pending.iter_mut().enumerate() {
-            // A picture can be cropped before it goes out. Anything else
-            // cannot, and does not pretend to be clickable.
-            let editable = match &item.item {
-                crate::app::Pending::Picture { .. } => true,
-                crate::app::Pending::File(path) => {
-                    crate::app::Pending::is_crop_supported_file(path)
-                }
-                // A document goes as the file it is, so it is not edited here.
-                crate::app::Pending::Document(_) => false,
-            };
-            let sense = if editable {
+            // A picture opens its preview; the preview's Crop button decides
+            // whether it can be cropped. Anything else does not pretend to
+            // be clickable.
+            let previewable = crate::ui::pending_picture_preview::is_picture(&item.item);
+            let sense = if previewable {
                 Sense::click()
             } else {
                 Sense::hover()
@@ -16737,8 +16731,8 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
                         }
                     }
                 }
-                if editable && response.hovered() {
-                    // A picture that can be cropped says so, rather than
+                if previewable && response.hovered() {
+                    // A picture that opens its preview says so, rather than
                     // looking like every other tile.
                     let dim = palette.shadow.gamma_multiply(1.4);
                     ui.painter().rect_filled(rect, radius, dim);
