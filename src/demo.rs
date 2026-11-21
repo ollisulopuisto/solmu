@@ -4437,7 +4437,20 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 }
             }
             "voice" => voice_sample(app),
-            "transcript" => transcript_sample(app),
+            "transcript" | "transcript-outgoing" => {
+                transcript_sample(app);
+                if part == "transcript-outgoing" {
+                    let chat = app.open_chat.clone().unwrap();
+                    if let Some(row) = app.conversations.get_mut(&chat).and_then(|history| {
+                        history
+                            .messages
+                            .iter_mut()
+                            .find(|row| row.id == "ada-voice")
+                    }) {
+                        row.from_me = true;
+                    }
+                }
+            }
             "transcription-language" => {
                 // The per-message language dialog over the fixture voice
                 // note, with an override typed in.

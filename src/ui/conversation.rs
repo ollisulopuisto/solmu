@@ -12421,7 +12421,18 @@ fn voice_transcript(
     };
     match worker.get(view.transcription_account, &view.chat.id, &message.id) {
         Some(crate::transcribe_worker::Status::Ready(text)) => {
-            theme::paragraph(ui, text, theme::regular(12.0), palette.secondary);
+            ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("\"{text}\""))
+                            .font(theme::regular(12.0))
+                            .color(palette.secondary),
+                    )
+                    .halign(Align::Min)
+                    .wrap()
+                    .selectable(false),
+                );
+            });
         }
         Some(crate::transcribe_worker::Status::Running) => {
             ui.horizontal(|ui| {
@@ -14607,6 +14618,62 @@ mod tests {
                     "network {network:?}: edit offered only inside its window"
                 );
             }
+        });
+    }
+
+    #[test]
+    fn ready_transcript_is_quoted_and_left_aligned_in_an_outgoing_layout() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let message = crate::archive::tests::message("1@s.whatsapp.net", "voice", 0, true);
+            let worker = crate::transcribe_worker::Worker::stub([((view.transcription_account.to_owned(), view.chat.id.clone(), message.id.clone()), crate::transcribe_worker::Status::Ready("A long first line that wraps into a shorter second line to verify left alignment.".into()))]);
+            let view = View {
+                transcriber: Some(&worker),
+                ..*view
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(230.0, 200.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.with_layout(Layout::top_down(Align::Max), |ui| {
+                        voice_transcript(
+                            ui,
+                            &view,
+                            &message,
+                            std::path::Path::new("unused.ogg"),
+                            &mut Vec::new(),
+                        )
+                    });
+                },
+            );
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        Some(text)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let text = texts
+                .iter()
+                .find(|text| text.galley.text().starts_with('"'))
+                .expect("quoted transcript");
+            assert!(text.galley.text().ends_with('"'));
+            assert!(text.galley.rows.len() > 1);
+            let first_x = text.galley.rows[0].pos.x;
+            assert!(
+                text.galley
+                    .rows
+                    .iter()
+                    .all(|row| (row.pos.x - first_x).abs() < 0.1)
+            );
+            output.textures_delta.clear();
         });
     }
 
