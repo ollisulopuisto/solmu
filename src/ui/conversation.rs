@@ -5504,7 +5504,7 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
-/// Run `f` with every bubble id salted (see [`BUBBLE_NS`]).
+/// Run `f` with every bubble id salted (see `BUBBLE_NS`).
 pub fn with_bubble_ns<R>(ns: &'static str, f: impl FnOnce() -> R) -> R {
     struct Reset(Option<&'static str>);
     impl Drop for Reset {
@@ -5518,7 +5518,7 @@ pub fn with_bubble_ns<R>(ns: &'static str, f: impl FnOnce() -> R) -> R {
 }
 
 /// The salt the open thread's second rendering pass uses for its bubble
-/// ids (see [`BUBBLE_NS`]).
+/// ids (see `BUBBLE_NS`).
 pub const THREAD_BUBBLE_NS: &str = "thread";
 
 /// True while the thread's salted rendering pass runs (see [`BUBBLE_NS`]):

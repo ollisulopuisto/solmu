@@ -1003,7 +1003,11 @@ mod tests {
     }
     #[test]
     fn jump_within_thread_queues_a_scroll_only_for_shown_messages() {
-        let (_dir, _app, ctx) = seeded();
+        // seeded() inserts the root after its first begin; rebuild the
+        // frame so it sees the open thread.
+        let (_dir, app, ctx) = seeded();
+        let mut output = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["a".into()]));
+        output.textures_delta.clear();
         let f = frame(&ctx).unwrap();
         let scope = f.lock().unwrap().scope;
         // Only a view that renders `thread_scroll` consumes the queued jump;

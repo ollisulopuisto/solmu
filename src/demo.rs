@@ -20260,7 +20260,9 @@ mod tests {
                 )
             })
             .unwrap();
-        let pos = body.center();
+        // The reply chip widens the body to the bubble's span, so the
+        // middle can sit past the last glyph; the link starts at the left.
+        let pos = body.left_center() + egui::vec2(20.0, 0.0);
         let press = |pressed| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
@@ -21884,13 +21886,49 @@ mod tests {
             }
         }
         let mut app = app();
+        // A small conversation keeps every row on screen: jumping to the
+        // parent cannot scroll the plain bubble out from under the second
+        // click.
+        let chat = SAMPLES[0].id.to_owned();
+        let mut reply = message(
+            &chat,
+            "threaded-reply",
+            false,
+            1_700_000_100,
+            Content::text("seconded"),
+        );
+        reply.quoted = Some(Quoted {
+            labelled: None,
+            chat: None,
+            id: "plain-parent".into(),
+            sender: "someone".into(),
+            sender_name: None,
+            summary: "origin".into(),
+            mentions: Vec::new(),
+        });
+        app.conversations.get_mut(&chat).unwrap().messages = vec![
+            message(
+                &chat,
+                "plain-parent",
+                false,
+                1_700_000_000,
+                Content::text("origin"),
+            ),
+            reply,
+            message(
+                &chat,
+                "plain-text",
+                false,
+                1_700_000_200,
+                Content::text("nothing linked here"),
+            ),
+        ];
         let ctx = egui::Context::default();
         app.attach(&ctx);
         for _ in 0..3 {
             render(&mut app, &ctx);
         }
-        let chat = app.open_chat.clone().unwrap();
-        command_click(&mut app, &ctx, &chat, "ada-reply");
+        command_click(&mut app, &ctx, &chat, "threaded-reply");
         assert!(
             app.selection.is_none(),
             "a linked bubble jumps, not selects"
@@ -21899,16 +21937,14 @@ mod tests {
             app.jump_highlight
                 .as_ref()
                 .map(|jump| jump.message.as_str()),
-            Some("ada-voice"),
+            Some("plain-parent"),
             "the jump lands on the message the reply quotes"
         );
         app.jump_highlight = None;
-        // A modified click over a link belongs to the link, so the plain
-        // bubble here is one without links.
-        command_click(&mut app, &ctx, &chat, "ada-quote");
+        command_click(&mut app, &ctx, &chat, "plain-text");
         assert_eq!(
             app.selection.as_ref().map(|(_, ids)| ids.as_slice()),
-            Some(&["ada-quote".to_owned()][..]),
+            Some(&["plain-text".to_owned()][..]),
             "an unrelated bubble starts a selection"
         );
     }
