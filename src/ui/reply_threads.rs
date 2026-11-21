@@ -613,8 +613,11 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
         .collect();
     let pending = frame(ui.ctx()).and_then(|shared| {
         let f = shared.lock().unwrap_or_else(|e| e.into_inner());
-        ui.ctx()
-            .data_mut(|d| d.remove::<Key>(f.scope.with("thread-scroll-to")))
+        ui.ctx().data_mut(|d| {
+            let pending = d.get_temp::<Key>(f.scope.with("thread-scroll-to"));
+            d.remove::<Key>(f.scope.with("thread-scroll-to"));
+            pending
+        })
     });
     let mut actions = vec![];
     let output = egui::ScrollArea::vertical()
