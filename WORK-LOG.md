@@ -785,6 +785,9 @@ Chats replacement event, legitimate empty inventory, malformed history, and
 search retaining results/cursor across refusal and successful retry.
 No real Server query or UI-layout changes; native/live acceptance unverified.
 
+## Transcript reading alignment,20 November
+
+Ready voice/video transcript text now forces left alignment independently of outgoing bubble placement and has plain double quotation marks. New layout regression checks quoted multiline text has a common left edge under an outgoing layout. Both-theme actual synthetic Linux outgoing voice captures inspected. Native test-target compile passes; native test execution and Mac pixels remain gates. Richer transcript styling/collapse and moving the action outside the bubble remain sketch-only.
 ## Finder media-tool resolution,20 November
 
 Video transcription invoked ffmpeg by bare name; Finder-launched macOS apps may lack Homebrew in PATH even when the tool is installed. Resolve executable absolute paths from PATH then macOS Homebrew Intel/ARM and MacPorts bin directories. Use the same resolver for animation ffmpeg and ffprobe. Missing transcription tool errors list searched directories. No existing ffmpeg override was found. Focused resolver tests pass with fake install directories, precedence, missing-tool diagnostics and relative-directory rejection; the fallback discovery test failed before resolution was implemented. Native library/test-target compilation passes. Real attached MP4 audio extraction passed with the same ffmpeg arguments separately; packaged Mac acceptance is unverified. No new UI or package publication.
