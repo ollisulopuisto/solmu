@@ -231,6 +231,8 @@ fenced_code_rows_fit_the_layout_width (wrap.rs already force-breaks overlong
 tokens); verified only by rustc parse-check locally, since this Ubuntu box
 cannot build the crate (PipeWire headers too old) - fmt/clippy/tests and any
 visual check run in CI.
+## 2026-11-21: Linked sidebar title hover follow-up (#411)
+
 Hover arbitration follow-up: title tooltip uses its own non-overlapping top-line hover target, leaving the full row click/drag target unchanged. Extended preview regression opens a networkless name tooltip before moving directly into its message preview.
 
 Reviewer follow-up: retain the full-name hover tooltip without a network subtitle. Focused helper regression covers name-only and unchanged network cases. Formatting passes; runtime validation awaits CI.
