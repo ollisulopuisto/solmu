@@ -81,6 +81,7 @@ jobs:
         with:
           category: /language:${{ matrix.language }}/security-pilot
           upload: never
+          upload-database: false
           output: ${{ runner.temp }}/pilot-codeql
       - name: Summarize CodeQL findings without storing artifacts
         run: python3 .github/scripts/security-pilot-codeql.py "$RUNNER_TEMP/pilot-codeql"
