@@ -99,7 +99,9 @@ pub struct Worker {
     /// Search memo: (store version, query, hits).
     search_cache: SearchCache,
     scoped_search_cache: ScopedSearchCache,
+    restored: RestoredCache,
     active_scans: Arc<AtomicUsize>,
+    restore_scans: Arc<AtomicUsize>,
     wake_search: Arc<dyn Fn() + Send + Sync>,
     /// What a stub was told, for tests; always empty on a live worker.
     recorded: Arc<Mutex<Vec<String>>>,
@@ -107,6 +109,8 @@ pub struct Worker {
 
 /// Search memo: (store version, query, hits).
 type SearchCache = Arc<Mutex<Option<(u64, String, Vec<Hit>)>>>;
+// Store-versioned restoration entries: None is in flight; Some(None) is absent.
+type RestoredCache = Arc<Mutex<VecDeque<(u64, Key, Option<Option<String>>)>>>;
 const SCOPED_CACHE_SLOTS: usize = 4;
 struct ScopedSnapshot {
     version: u64,
@@ -275,7 +279,9 @@ impl Worker {
             store: Some(store),
             search_cache: Arc::new(Mutex::new(None)),
             scoped_search_cache: Arc::new(Mutex::new(VecDeque::new())),
+            restored: Arc::new(Mutex::new(VecDeque::new())),
             active_scans: Arc::new(AtomicUsize::new(0)),
+            restore_scans: Arc::new(AtomicUsize::new(0)),
             wake_search,
             recorded: Arc::new(Mutex::new(Vec::new())),
         }
@@ -594,7 +600,9 @@ impl Worker {
             store: Some(store),
             search_cache: Arc::new(Mutex::new(None)),
             scoped_search_cache: Arc::new(Mutex::new(VecDeque::new())),
+            restored: Arc::new(Mutex::new(VecDeque::new())),
             active_scans: Arc::new(AtomicUsize::new(0)),
+            restore_scans: Arc::new(AtomicUsize::new(0)),
             wake_search: Arc::new(wake),
             recorded: Arc::new(Mutex::new(Vec::new())),
         }
@@ -642,7 +650,9 @@ impl Worker {
             store: None,
             search_cache: Arc::new(Mutex::new(None)),
             scoped_search_cache: Arc::new(Mutex::new(VecDeque::new())),
+            restored: Arc::new(Mutex::new(VecDeque::new())),
             active_scans: Arc::new(AtomicUsize::new(0)),
+            restore_scans: Arc::new(AtomicUsize::new(0)),
             wake_search: Arc::new(|| {}),
             recorded,
         }
@@ -667,18 +677,71 @@ impl Worker {
             .clone()
     }
 
-    /// Status for one message in one chat of one account, for the bubble.
+    /// Status for one message. Cold saved text loads off the paint thread;
+    /// both hits and misses are memoized until the store changes.
     pub fn get(&self, account_id: &str, chat_id: &str, message_id: &str) -> Option<Status> {
-        self.shared
+        let key = (
+            account_id.to_owned(),
+            chat_id.to_owned(),
+            message_id.to_owned(),
+        );
+        if let Some(status) = self
+            .shared
             .status
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .get(&(
-                account_id.to_owned(),
-                chat_id.to_owned(),
-                message_id.to_owned(),
-            ))
+            .get(&key)
             .cloned()
+        {
+            return Some(status);
+        }
+        let store = self.store.as_ref()?;
+        let version = store.version();
+        let mut cache = self.restored.lock().unwrap_or_else(|p| p.into_inner());
+        cache.retain(|(v, _, _)| *v == version);
+        if let Some((_, _, text)) = cache.iter().find(|(_, k, _)| *k == key) {
+            return text.clone().flatten().map(Status::Ready);
+        }
+        if cache.iter().filter(|(_, _, text)| text.is_none()).count() >= 4 {
+            return None;
+        }
+        if cache.len() >= 128 {
+            let index = cache.iter().position(|(_, _, text)| text.is_some())?;
+            cache.remove(index);
+        }
+        if self
+            .restore_scans
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                (count < 4).then_some(count + 1)
+            })
+            .is_err()
+        {
+            return None;
+        }
+        cache.push_back((version, key.clone(), None));
+        drop(cache);
+        let store = store.clone();
+        let restored = self.restored.clone();
+        let scans = self.restore_scans.clone();
+        let shared = self.shared.clone();
+        let wake = self.wake_search.clone();
+        std::thread::spawn(move || {
+            let _io = shared.store_io.lock().unwrap_or_else(|p| p.into_inner());
+            let text = store.get(&key.0, &key.1, &key.2);
+            if shared.alive.load(Ordering::Relaxed) && store.version() == version {
+                let mut cache = restored.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some((_, _, slot)) = cache
+                    .iter_mut()
+                    .find(|(v, k, _)| *v == version && *k == key)
+                {
+                    *slot = Some(text);
+                }
+            }
+            drop(_io);
+            scans.fetch_sub(1, Ordering::Relaxed);
+            wake();
+        });
+        None
     }
 }
 
@@ -693,6 +756,34 @@ impl Drop for Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_voice_and_video_restore_after_worker_restart_and_stay_searchable() {
+        let root = tempfile::tempdir().unwrap();
+        {
+            let store = Store::new(root.path().into(), 1 << 20).unwrap();
+            let worker = Worker::spawn(Box::new(EchoEngine), store, || {});
+            for id in ["voice", "video"] {
+                worker.transcribe(job(id), "acc-1".into(), Some("fi".into()));
+                assert!(matches!(
+                    wait_for(&worker, "acc-1", "c1", id),
+                    Status::Ready(_)
+                ));
+            }
+        }
+        let store = Store::new(root.path().into(), 1 << 20).unwrap();
+        let worker = Worker::archive(store);
+        for id in ["voice", "video"] {
+            assert!(matches!(
+                wait_for(&worker, "acc-1", "c1", id),
+                Status::Ready(_)
+            ));
+        }
+        assert_eq!(worker.search("note.ogg").len(), 2);
+        worker.remove_chat("acc-1".into(), "c1".into());
+        assert_eq!(worker.get("acc-1", "c1", "voice"), None);
+        assert!(worker.search("note.ogg").is_empty());
+    }
+
     #[test]
     fn saved_chat_snapshot_filters_before_limit_and_invalidates_on_delete() {
         let root = tempfile::tempdir().unwrap();
