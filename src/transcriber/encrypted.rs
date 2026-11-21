@@ -497,29 +497,47 @@ mod tests {
             .unwrap()
     }
 
-    #[test]
-    fn clear_reports_a_failing_account_but_still_clears_the_others() {
+    /// Clear attempts accounts in sorted order. `failing` loses its keyed
+    /// connection so its next access fails closed through the real keyring.
+    fn clear_with_failing_account(
+        accounts: &[&str],
+        failing: &str,
+    ) -> (
+        super::super::Store,
+        tempfile::TempDir,
+        std::io::Result<()>,
+        u64,
+    ) {
         let root = tempfile::tempdir().unwrap();
         let legacy = root.path().join("transcripts");
         let mut store = super::super::Store::new(legacy.clone(), 1 << 20).unwrap();
         store
-            .put("1", "chat", "voice", "orphan legacy words")
+            .put(failing, "chat", "voice", "orphan legacy words")
             .unwrap();
-        let backend = std::sync::Arc::new(fixture(root.path(), &["1", "2"]));
-        backend
-            .put("1", "chat", "kept", "failing account words", 1, 1 << 20)
-            .unwrap();
-        backend
-            .put("2", "chat", "voice", "healthy account words", 2, 1 << 20)
-            .unwrap();
-        // Force account 1's next access through the real keyring, which fails
-        // closed here: its archive rows must survive and its failure must be
-        // reported, without blocking account 2's deletion.
-        backend.connections.lock().unwrap().remove("1");
+        let backend = std::sync::Arc::new(fixture(root.path(), accounts));
+        for (offset, account) in accounts.iter().enumerate() {
+            backend
+                .put(
+                    account,
+                    "chat",
+                    "voice",
+                    "account words",
+                    offset as i64 + 1,
+                    1 << 20,
+                )
+                .unwrap();
+        }
+        backend.connections.lock().unwrap().remove(failing);
         store.encrypted = Some(std::sync::Arc::clone(&backend));
         let before = store.version();
-
         let result = store.clear();
+        (store, root, result, before)
+    }
+
+    #[test]
+    fn clear_reports_a_failing_account_but_still_clears_the_others() {
+        // Failing account first: the loop must continue past the error.
+        let (store, root, result, before) = clear_with_failing_account(&["1", "2"], "1");
         assert!(result.is_err(), "the failing account must be reported");
         assert!(store.version() > before, "cached views still invalidate");
         assert_eq!(
@@ -527,10 +545,24 @@ mod tests {
             1,
             "the failing account keeps its rows"
         );
-        assert_eq!(row_count(&root, "2"), 0, "the healthy account was cleared");
+        assert_eq!(
+            row_count(&root, "2"),
+            0,
+            "the healthy account was cleared after the failure"
+        );
         assert!(
             !store.file_for("1", "chat", "voice").exists(),
             "pending legacy plaintext still went away"
+        );
+
+        // Failing account last: its error must still surface after successes.
+        let (_store, root, result, _before) = clear_with_failing_account(&["1", "9"], "9");
+        assert!(result.is_err(), "a later failure must still be reported");
+        assert_eq!(row_count(&root, "1"), 0, "the healthy account was cleared");
+        assert_eq!(
+            row_count(&root, "9"),
+            1,
+            "the failing account keeps its rows"
         );
     }
     #[test]

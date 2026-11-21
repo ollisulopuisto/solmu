@@ -1154,3 +1154,7 @@ Devin follow-up on #420: the per-account migration regression verified the archi
 ## Clear partial-failure coverage,21 November
 
 Adversarial pass over the #420 diff (state transitions across files: select/edit/clear/retry/partial failure/ordering/restore). Held up: queued transcriptions die only on their own generation mismatch, so remove_account's repaint signal cannot drop other accounts' jobs; migration and clear/remove serialize on store_io in either order with final-correct results; clear_legacy still purges pending plaintext when an archive removal fails. New coverage: clear() reports a failing account but still clears the healthy account, purges pending legacy plaintext, and bumps the store version so views invalidate.
+
+## Deterministic clear order,21 November
+
+Devin follow-up on #420: the clear partial-failure test depended on filesystem directory order - a healthy account sorted first would pass even if the account loop stopped at the first error. Store::clear now attempts accounts in sorted order, and the test covers both orders: failing account first proves the loop continues past the error (healthy account still cleared, legacy plaintext still purged, version still bumped); failing account last proves the error still surfaces after successes.

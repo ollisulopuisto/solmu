@@ -304,7 +304,11 @@ impl Store {
     pub fn clear(&self) -> std::io::Result<()> {
         if let Some(backend) = &self.encrypted {
             let mut result = Ok(());
-            for account in backend.accounts() {
+            // Sorted for a deterministic attempt order: every account is
+            // tried, a failing one never blocks or hides the others.
+            let mut accounts = backend.accounts();
+            accounts.sort();
+            for account in accounts {
                 if let Err(error) = backend.remove(&account, None, None)
                     && result.is_ok()
                 {
