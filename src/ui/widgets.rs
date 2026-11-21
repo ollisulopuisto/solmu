@@ -42,6 +42,36 @@ impl Line {
     }
 }
 
+/// Reaction pills give the emoji more room without inflating the count.
+pub fn reaction_line(ui: &Ui, emoji_text: &str, count: usize, color: Color32) -> Line {
+    let mut job = egui::text::LayoutJob::default();
+    let mut placements = Vec::new();
+    emoji::append(
+        ui,
+        &mut job,
+        &mut placements,
+        emoji_text,
+        &egui::TextFormat::simple(crate::theme::regular(17.0), color),
+    );
+    let accessible_text = if count > 1 {
+        format!("{emoji_text} {count}")
+    } else {
+        emoji_text.to_owned()
+    };
+    if count > 1 {
+        job.append(
+            &format!(" {count}"),
+            0.0,
+            egui::TextFormat::simple(crate::theme::regular(13.0), color),
+        );
+    }
+    Line {
+        galley: bidi::layout_job(ui, job),
+        placements,
+        accessible_text,
+    }
+}
+
 /// Lays out text within `width` and `max_rows`, with an ellipsis and color emoji.
 pub fn line(
     ui: &Ui,
