@@ -11654,6 +11654,20 @@ impl App {
                 self.set_pending_view_once(view_once);
             }
             Action::EditPicture(target) => {
+                // A crop still being written owns the attachment: each apply
+                // runs on its own thread and answers by attachment alone, so
+                // a second edit started now could finish out of order and
+                // pair the older crop with the newer edit's origin.
+                if self.picture_applying.contains_key(&target) {
+                    self.toast(
+                        crate::i18n::gettext(
+                            self.locale,
+                            "A crop is still being applied; edit again when it lands.",
+                        )
+                        .into_owned(),
+                    );
+                    return;
+                }
                 // Whatever was being waited for is not what is wanted now.
                 self.picture_inspecting = None;
                 // Read out before anything is written back, so the borrow of
@@ -26424,6 +26438,38 @@ mod tests {
         assert_eq!(app.composer_mentions.len(), 1);
         assert_eq!(app.composer_mentions[0].id, "12345@s.whatsapp.net");
         assert_eq!(app.composer_mentions[0].name, "Mira");
+    }
+
+    #[test]
+    fn a_crop_in_flight_keeps_the_editor_off_its_attachment() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let ctx = egui::Context::default();
+        let target = app.stage(Pending::File("/fixture/photo.png".into()));
+        app.picture_applying.insert(
+            target,
+            crate::model::PictureOrigin {
+                source: crate::model::PictureSource::File("/fixture/photo.png".into()),
+                width: 4,
+                height: 4,
+                crop: crate::model::PictureCrop::full(4, 4),
+                turns: 0,
+            },
+        );
+        app.apply(Action::EditPicture(target), &ctx);
+        assert!(app.picture_edit.is_none());
+        assert!(app.picture_inspecting.is_none());
+        assert!(
+            !std::iter::from_fn(|| commands.try_recv().ok())
+                .any(|command| matches!(command, Command::InspectPicture { .. })),
+            "a second edit started while the first crop was still being written"
+        );
+        // Once the crop has landed, the same picture opens again.
+        app.picture_applying.remove(&target);
+        app.apply(Action::EditPicture(target), &ctx);
+        assert_eq!(app.picture_inspecting, Some(target));
     }
 
     #[test]
