@@ -8576,6 +8576,15 @@ mod tests {
     /// quote carries.
     #[test]
     fn a_reply_reads_the_quoted_sender_as_its_quote_draws_it() {
+        // These assertions depend on visible bubble geometry. A wall-clock
+        // midnight inserts day separators and changes which rows are visible;
+        // footer width also depends on the runner's clock format. Use the
+        // existing thread-local layout clock, not the CI machine's time.
+        let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
+            now: 1_773_237_600,
+            zone: jiff::tz::TimeZone::UTC,
+            twelve_hour: false,
+        });
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         let mut app = app();
@@ -15833,6 +15842,15 @@ mod tests {
 
     #[test]
     fn ctrl_click_selects_messages_and_shift_click_takes_the_ones_between() {
+        // These assertions depend on visible bubble geometry. A wall-clock
+        // midnight inserts day separators and changes which rows are visible;
+        // footer width also depends on the runner's clock format. Use the
+        // existing thread-local layout clock, not the CI machine's time.
+        let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
+            now: 1_773_237_600,
+            zone: jiff::tz::TimeZone::UTC,
+            twelve_hour: false,
+        });
         let mut app = app();
         let ctx = egui::Context::default();
         app.attach(&ctx);
@@ -19108,6 +19126,15 @@ mod tests {
     /// new messages there too.
     #[test]
     fn ctrl_end_on_the_newest_message_follows_new_messages() {
+        // These assertions depend on visible bubble geometry. A wall-clock
+        // midnight inserts day separators and changes which rows are visible;
+        // footer width also depends on the runner's clock format. Use the
+        // existing thread-local layout clock, not the CI machine's time.
+        let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
+            now: 1_773_237_600,
+            zone: jiff::tz::TimeZone::UTC,
+            twelve_hour: false,
+        });
         let (mut app, ctx, chat, events) = typing_long_chat();
         short_of_the_end(&mut app, &ctx, &chat);
         let newest = app.conversations[&chat].messages.last().unwrap().id.clone();
