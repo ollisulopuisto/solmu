@@ -81,6 +81,10 @@ explicit counted one-click send design, not an extra confirmation screen.
 All-target/all-feature Clippy passes; test execution awaits native CI, no pass
 claimed locally. No live account or send used.
 
+## Distinct editing target,20 November
+
+Implement approved artboard3 on top of shortcut-target fix #408. Edited message gets a3px contrast-adjusted outline and reserved EDITING header line (does not paint over a neighbor). Composer shows original preview, named Cancel and Save edit controls. Add visible-tag regression and both-theme edit-state Mac captures to CI. cargo check --lib --tests --features demo -j1 passes; test execution and app-pixel inspection still pending. No send behaviour or network action performed.
+
 ## 2026-11-19: Beeper bridge messages show every attachment (fix/beeper-multi-attachment-messages)
 
 Olli reported bridge messages with several attachments showing only the

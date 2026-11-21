@@ -1798,7 +1798,12 @@ pub(crate) fn composer_with_capabilities(
             // The send (or record) circle is smaller than the row by a gap on
             // each side, so it never touches the field's border, even grown on
             // hover; the same gap is left to its right.
-            let button_width = if app.editing.is_some() { 100.0 } else { (line - 2.0 * SEND_BUTTON_GAP).max(0.0) };
+            let button_width = if app.editing.is_some() {
+                let label = crate::i18n::gettext(app.locale, "Save edit");
+                let font = egui::TextStyle::Button.resolve(ui.style());
+                let text_width = ui.painter().layout_no_wrap(label.into_owned(), font, palette.text).size().x;
+                (text_width + 2.0 * ui.spacing().button_padding.x).max(100.0)
+            } else { (line - 2.0 * SEND_BUTTON_GAP).max(0.0) };
             let view_once = super::view_once::visible(
                 app.editing.is_some(),
                 chat.backend_account.is_some() || chat.backend_origin.is_some(),
