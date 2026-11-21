@@ -6660,9 +6660,7 @@ pub(crate) fn linked_run_widths(
                     link: palette.link,
                     mention: palette.accent,
                 };
-                let measured = markup::measure(ui, text, &mentions, &style, cap, grow);
-                let plan = crate::wrap::balance(&measured.items, cap, measured.hyphen);
-                if plan.lines == 0 { 0. } else { plan.width }
+                natural_body_width(ui, text, &mentions, &style, cap, grow)
             });
             natural_call_width(ui, message, cap, app.locale, &palette)
                 .or_else(|| natural_content_width(message, cap, text))
@@ -6736,9 +6734,36 @@ fn natural_text_width(ui: &egui::Ui, view: &View<'_>, message: &Message, cap: f3
         link: palette.link,
         mention: palette.accent,
     };
-    let measured = markup::measure(ui, text, &mentions_of(view, message), &style, cap, grow);
+    Some(natural_body_width(
+        ui,
+        text,
+        &mentions_of(view, message),
+        &style,
+        cap,
+        grow,
+    ))
+}
+
+/// Fenced bodies include their panel inset in the settled outer width. Use
+/// the same cached layout as painting so planning cannot subtract it twice.
+fn natural_body_width(
+    ui: &egui::Ui,
+    text: &str,
+    mentions: &[markup::Mention],
+    style: &markup::Style,
+    cap: f32,
+    grow: bool,
+) -> f32 {
+    if text.contains("```") {
+        return markup::layout_balanced(ui, text, mentions, style, cap, grow)
+            .galley
+            .size()
+            .x
+            .min(cap);
+    }
+    let measured = markup::measure(ui, text, mentions, style, cap, grow);
     let plan = crate::wrap::balance(&measured.items, cap, measured.hyphen);
-    Some(if plan.lines == 0 { 0.0 } else { plan.width })
+    if plan.lines == 0 { 0.0 } else { plan.width }
 }
 
 /// Width of a quote's accent bar.
@@ -12853,6 +12878,39 @@ mod tests {
             !book.fresh(&key, body, flags, mentions),
             "an edited body is measured again"
         );
+    }
+
+    #[test]
+    fn fenced_snippet_planning_includes_inset_without_crossing_collapse_threshold() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let text = format!(
+                "```\n{}\n```",
+                vec!["let answer = value + 1;"; 14].join("\n")
+            );
+            let style = markup::Style {
+                size: BODY_SIZE,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::LIGHT_BLUE,
+                mention: Color32::WHITE,
+            };
+            let width = natural_body_width(ui, &text, &[], &style, 320.0, true);
+            let laid = markup::layout_balanced(ui, &text, &[], &style, width, true);
+            let code_rows = laid
+                .row_kinds()
+                .iter()
+                .filter(|kind| matches!(kind, markup::RowKind::Code(_)))
+                .count();
+            assert_eq!(code_rows, 14, "settling width must not wrap each code line");
+            assert!(
+                laid.galley.rows.len() <= 25,
+                "no needless Show more collapse"
+            );
+            assert!(laid.galley.size().x <= width + 0.5);
+        });
+        output.textures_delta.clear();
     }
 
     #[test]

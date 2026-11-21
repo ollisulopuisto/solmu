@@ -785,6 +785,9 @@ Chats replacement event, legitimate empty inventory, malformed history, and
 search retaining results/cursor across refusal and successful retry.
 No real Server query or UI-layout changes; native/live acceptance unverified.
 
+## Code block breathing room,20 November
+
+Fenced code has10pt horizontal inset, extra bottom space,1.4x line height and a reserved20pt accessible Copy code header inside the panel. Layout row positions, not copyable indentation/blank lines, supply the spacing, in cached and fresh paths. Actual synthetic before/after Linux screenshots inspected in dark/light: header separates from code, left/bottom no longer crammed, prose remains outside. New geometry/copy regression plus updated response-height assertion compile; execution/Mac/PR-hosted evidence remain gates. No release.
 ## Transcript reading alignment,20 November
 
 Ready voice/video transcript text now forces left alignment independently of outgoing bubble placement and has plain double quotation marks. New layout regression checks quoted multiline text has a common left edge under an outgoing layout. Both-theme actual synthetic Linux outgoing voice captures inspected. Native test-target compile passes; native test execution and Mac pixels remain gates. Richer transcript styling/collapse and moving the action outside the bubble remain sketch-only.
@@ -1063,3 +1066,9 @@ assertion. Native test-target compilation passes; full execution awaits CI.
 Production bubble/footer logic is unchanged.
 
 The same linked-minute fixture failure affected #437 Ubuntu (2523 passed, one failed). Reused the identical fixture-only correction from #433; no audit or production code changed. All exact-head CI/review gates restart.
+
+#424 review follow-up: natural width planning previously omitted the new code inset, then rendering subtracted it from the already settled text width. Fenced bodies now use the same cached padded layout for both timeline planning and per-bubble fallback. Added a14-line conversation width regression keeping the snippet below the collapse threshold. Native all-feature check passes; runtime remains CI-gated.
+
+#424 Mac runtime:2546 passed,2 failed. The compact-list fixture still expected the pre-inset180pt code cap; it now expects160pt while retaining zero list-indent assertion. New narrow-code regression caught shaped overflow after balancing disabled wrapping. Fenced prepared jobs now retain their hard inner shaping cap, including trailing whitespace. No assertions removed; width/copy regressions rerun in CI.
+
+#424 zoom review: prepared and break-plan caches now key the current pixel scale as well as point width and font generation. Regression cycles five scales at unchanged widths and compares cached row classifications/geometry with freshly prepared layout. This prevents scale rounding from reshaping a finite-width code job against old row metadata.
