@@ -1,0 +1,99 @@
+name: Security pilot (report only)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/security-pilot.yml'
+      - '.github/scripts/security-pilot*'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/security-pilot.yml'
+      - '.github/scripts/security-pilot*'
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * 1'
+permissions:
+  contents: read
+concurrency:
+  group: security-pilot-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  baseline:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Findings and scan errors are visible but never gate this first pass.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13.18'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22.23.5'
+      - name: Install pinned scanners (no application installation)
+        run: |
+          python -m pip install 'pip-audit==2.10.1' 'bandit==1.9.4' 'uv==0.13.9'
+          npm install --global --ignore-scripts npm@12.2.3
+          curl --fail --silent --show-error --location 'https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz' -o "$RUNNER_TEMP/gitleaks.tgz"
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  '"$RUNNER_TEMP/gitleaks.tgz" | sha256sum --check
+          tar xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Validate report classification
+        run: python .github/scripts/security-pilot-test.py
+      - name: Run report-only scans
+        id: scan
+        run: python .github/scripts/security-pilot-report.py --checks secrets,python,npm,go
+      - name: Report incomplete baseline even after setup failure
+        if: always() && steps.scan.outcome != 'success'
+        run: echo 'UNKNOWN baseline. Setup or scanner execution failed or was cancelled; inspect job logs. No clean result.' >> "$GITHUB_STEP_SUMMARY"
+  codeql:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    continue-on-error: true
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: rust
+            build-mode: none
+          - language: python
+            build-mode: none
+          - language: ruby
+            build-mode: none
+          - language: c-cpp
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - name: Refuse CodeQL debug artifact mode
+        if: runner.debug == '1'
+        run: |
+          echo 'UNKNOWN CodeQL. Debug runs are disabled because CodeQL may upload debugging artifacts. Run normally instead.' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@800a1d8701a65d150a672fef0923dbf2660a62ec
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          dependency-caching: false
+      - uses: github/codeql-action/analyze@800a1d8701a65d150a672fef0923dbf2660a62ec
+        with:
+          category: /language:${{ matrix.language }}/security-pilot
+          upload: never
+          upload-database: false
+          output: ${{ runner.temp }}/pilot-codeql
+      - name: Summarize CodeQL findings without storing artifacts
+        run: python3 .github/scripts/security-pilot-codeql.py "$RUNNER_TEMP/pilot-codeql"
+      - name: Report CodeQL coverage limit
+        if: always()
+        run: echo 'CodeQL ${{ matrix.language }} is report-only; inspect Analyze logs. SARIF is temporary on the runner, not uploaded. A failed job is UNKNOWN, not clean.' >> "$GITHUB_STEP_SUMMARY"

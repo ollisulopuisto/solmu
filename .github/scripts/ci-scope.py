@@ -53,6 +53,8 @@ def classify(paths, full=False):
     for path in paths:
         if path.startswith(('docs/',)) or path.endswith('.md'):
             continue
+        if path.endswith(('/Cargo.toml', '/Cargo.lock')):
+            flags['audit'] = True
         if path.startswith('contrib/beeper-tools/'):
             flags['portable'] = True
         elif path in ('flake.nix', 'flake.lock') or path.startswith('packaging/flatpak/'):

@@ -1191,3 +1191,9 @@ Adversarial pass over the #420 diff (state transitions across files: select/edit
 ## Deterministic clear order,21 November
 
 Devin follow-up on #420: the clear partial-failure test depended on filesystem directory order - a healthy account sorted first would pass even if the account loop stopped at the first error. Store::clear now attempts accounts in sorted order, and the test covers both orders: failing account first proves the loop continues past the error (healthy account still cleared, legacy plaintext still purged, version still bumped); failing account last proves the error still surfaces after successes.
+
+## 2026-11-21: Free-only security pilot
+
+Review: Instinct, branch `agent/security-pilot-free`, isolated security-pilot worktree. Adds report-only, pinned scanners and weekly staggered public-hosted runs. See `docs/security-pilot.md` for coverage, output and limits. No app behavior/version change, fixes, releases, private CI, or merges.
+
+Security pilot review follow-up: include merge-resolution patches, tolerate null RustSec advisory warnings, fix native Go scan tags, and conform to repository lint. Added two regressions (both failed against the old implementation). CodeQL pin resolves in hosted CI; no change based solely on an external 404 claim.
