@@ -645,6 +645,7 @@ pub fn populate(app: &mut App) {
             .messages
             .last()
             .map(|last| crate::model::LastMessage {
+                reaction: None,
                 labelled: last.content.labelled(),
                 from_me: last.from_me,
                 sender: last.sender.clone(),
@@ -1047,6 +1048,7 @@ pub fn populate(app: &mut App) {
                         chat.id.clone(),
                         last.timestamp,
                         crate::model::LastMessage {
+                            reaction: None,
                             labelled: last.content.labelled(),
                             from_me: last.from_me,
                             sender: last.sender.clone(),
@@ -1304,6 +1306,7 @@ fn meta_ai_sample(app: &mut App) {
     let mut chat = Chat::new(id.into(), "Meta AI".into());
     chat.last_activity = now;
     chat.last = Some(crate::model::LastMessage {
+        reaction: None,
         labelled: reply.content.labelled(),
         from_me: false,
         sender: reply.sender.clone(),
@@ -1436,6 +1439,7 @@ fn interactive_sample(app: &mut App, with_image: bool) {
         let last = messages.last().unwrap();
         chat.last_activity = last.timestamp;
         chat.last = Some(crate::model::LastMessage {
+            reaction: None,
             labelled: last.content.labelled(),
             from_me: last.from_me,
             sender: last.sender.clone(),
@@ -2488,6 +2492,15 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     app.local_avatar_editor = None;
                 }
             }
+            "media-tools-settings" => {
+                app.page = crate::model::Page::Settings;
+                app.settings_search = "Media tools".into();
+            }
+            "media-tools-onboarding" => {
+                unlink(app);
+                app.link = crate::backend::LinkStatus::LoggedOut;
+                app.settings.media_tools_onboarding_done = false;
+            }
             "whisper-setup" => {
                 app.page = crate::model::Page::Settings;
                 app.settings_search = "Voice notes".into();
@@ -2549,6 +2562,18 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     messages: ids,
                     for_everyone: true,
                 });
+            }
+            "batch-results" => {
+                app.batch_ui.owner = app.account().id.0.clone();
+                app.batch_ui.results = vec![crate::model::BatchItem {
+                    chat: "ada".into(),
+                    message: Some("402555".into()),
+                    everyone: false,
+                    result: Some(Ok(())),
+                }];
+                if let Some(chat) = app.chats.iter().find(|chat| !chat.is_group()) {
+                    app.batch_ui.results[0].chat = chat.id.clone();
+                }
             }
             "previous-session-results" => {
                 app.batch_ui.owner = app.account().id.0.clone();
@@ -2616,6 +2641,22 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             // Evidence-only page for the code/quote panel shots: two fenced
             // blocks with prose between them, so the panels and their Copy
             // code buttons show in one capture.
+            "transcript-long" | "transcript-long-expanded" => {
+                transcript_sample(app);
+                let chat = app.open_chat.clone().unwrap();
+                let account = app.account().id.0.clone();
+                let text=(0..12).map(|i|format!("Paragraph {}. We can meet by the entrance at six. I will bring the tickets.",i+1)).collect::<Vec<_>>().join("\n\n");
+                app.transcriber = Some(crate::transcribe_worker::Worker::stub([(
+                    (account, chat.clone(), "ada-voice".into()),
+                    crate::transcribe_worker::Status::Ready(text),
+                )]));
+                app.conversations
+                    .get_mut(&chat)
+                    .unwrap()
+                    .messages
+                    .retain(|row| row.id == "ada-voice");
+                app.scroll_to_bottom = false;
+            }
             "code-panels" => {
                 let chat = SAMPLES[0].id;
                 let text = "Set it up like this:\n```\ncd ~/koodi/solmu\ncargo build\n```\nThen run the checks:\n```\ncargo test --locked\n```";
@@ -2676,6 +2717,19 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "linked-minute-gutter" => {
                 linked_sample(app);
                 minute_gutter_sample(app);
+                // The minute fixture replaces WhatsApp's relative timestamps
+                // with today's18:40 run. Keep Signal after that replacement,
+                // not interleaved when the wall clock approaches18:40.
+                let latest = app
+                    .conversations
+                    .get(SAMPLES[0].id)
+                    .and_then(|c| c.messages.iter().map(|m| m.timestamp).max())
+                    .unwrap_or_default();
+                if let Some(signal) = app.conversations.get_mut("393331234567@signal") {
+                    for (index, message) in signal.messages.iter_mut().enumerate() {
+                        message.timestamp = latest + 60 * (index as i64 + 1);
+                    }
+                }
             }
             "day-separators" => day_separators_sample(app),
             "linked-day-separators" => {
@@ -3053,6 +3107,71 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 form.error = Some(crate::app_lock::FormError::TooShort);
                 app.app_lock.form = Some(form);
             }
+            "new-message-selected"
+            | "new-message-many-files"
+            | "new-message-locked"
+            | "audience-results" => {
+                for chat in &mut app.chats {
+                    chat.backend_origin = Some("https://synthetic.invalid".into());
+                    chat.backend_account = Some("demo".into());
+                }
+                let members: Vec<_> = app
+                    .chats
+                    .iter()
+                    .filter(|chat| {
+                        [SAMPLES[0].id, SAMPLES[3].id, SAMPLES[4].id].contains(&chat.id.as_str())
+                    })
+                    .map(|chat| crate::ui::flat_groups::member(app, chat))
+                    .collect();
+                if matches!(
+                    part,
+                    "new-message-selected" | "new-message-many-files" | "new-message-locked"
+                ) {
+                    app.dialog = Some(crate::model::Dialog::NewChat);
+                    app.new_message.members = members[..2].to_vec();
+                    app.new_message.text = "Meet by the entrance at 18:00?".into();
+                    app.new_message.keep = true;
+                    app.new_message.name = "Weekend friends".into();
+                    if part == "new-message-many-files" {
+                        let path = app.dirs.cache.join("demo-attachment.png");
+                        image::RgbaImage::from_pixel(64, 48, image::Rgba([40, 180, 140, 255]))
+                            .save(&path)
+                            .unwrap();
+                        app.new_message.files = vec![path; 12];
+                    }
+                    if part == "new-message-locked" {
+                        let member = app.new_message.members[0].clone();
+                        if let Some(chat) = app.chats.iter_mut().find(|chat| chat.id == member.chat)
+                        {
+                            chat.locked = true;
+                        }
+                    }
+                } else {
+                    let mut queue = crate::audience_queue::Queue::new(
+                        "Weekend friends".into(),
+                        members
+                            .iter()
+                            .map(|m| crate::merged::Member {
+                                origin: m.origin.clone().unwrap(),
+                                account: m.bridge_account.clone().unwrap(),
+                                chat: m.chat.clone(),
+                            })
+                            .collect(),
+                        "Meet by the entrance at 18:00?".into(),
+                        vec![],
+                        std::time::Instant::now(),
+                    )
+                    .unwrap();
+                    queue.rows[0].states[0] = Some(crate::pending_media::State::Confirmed);
+                    queue.rows[1].states[0] = Some(crate::pending_media::State::Accepted {
+                        pending: "fixture".into(),
+                    });
+                    queue.rows[2].states[0] = Some(crate::pending_media::State::NotSubmitted(
+                        "Synthetic offline recipient; no request submitted".into(),
+                    ));
+                    app.audience_queue = Some(queue);
+                }
+            }
             "new-chat" => app.dialog = Some(crate::model::Dialog::NewChat),
             // New group: two people picked and a third being looked for,
             // then the group being named.
@@ -3323,6 +3442,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 let mut chat = Chat::new(ME.into(), "You".into());
                 chat.last_activity = now;
                 chat.last = messages.last().map(|last| crate::model::LastMessage {
+                    reaction: None,
                     labelled: last.content.labelled(),
                     from_me: true,
                     sender: last.sender.clone(),
@@ -3628,7 +3748,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 }
                 app.scroll_to_bottom = true;
             }
-            "forward-progress" => {
+            "forward-progress" | "forward-results" | "forward-sending" => {
                 apply_flags(app, Some("forward"));
                 let mut item = crate::composed_forward::Item {
                     origin: "https://synthetic.invalid".into(),
@@ -3644,11 +3764,30 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                         pending_id: "synthetic".into(),
                     },
                 };
+                for chat in app
+                    .chats
+                    .iter_mut()
+                    .filter(|chat| SAMPLES[..2].iter().any(|sample| sample.id == chat.id))
+                {
+                    chat.backend_origin = Some(item.origin.clone());
+                    chat.backend_account = Some(item.destination_account.clone());
+                }
+                if part == "forward-results" {
+                    item.state = crate::composed_forward::State::Confirmed {
+                        message_id: "final".into(),
+                    };
+                }
+                if part == "forward-sending" {
+                    item.state = crate::composed_forward::State::Sending;
+                }
                 app.forward_items.push(item.clone());
                 item.attachment = Some(1);
                 item.state = crate::composed_forward::State::FailedBeforeSend(
                     "Attachment download failed".into(),
                 );
+                if part == "forward-sending" {
+                    item.state = crate::composed_forward::State::Waiting;
+                }
                 app.forward_items.push(item.clone());
                 item.destination = SAMPLES[1].id.into();
                 item.state =
@@ -3980,6 +4119,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 let mut chat = Chat::new(ME.into(), "You".into());
                 chat.last_activity = now;
                 chat.last = messages.last().map(|last| crate::model::LastMessage {
+                    reaction: None,
                     labelled: last.content.labelled(),
                     from_me: true,
                     sender: last.sender.clone(),
@@ -4089,6 +4229,28 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                         message: "group-photo".into(),
                     });
                 }
+            }
+            "edit-markdown" | "edit-markdown-before" => {
+                let chat = SAMPLES[0].id;
+                app.open_chat = Some(chat.to_owned());
+                let id = "markdown-edit-fixture";
+                app.conversations
+                    .get_mut(chat)
+                    .unwrap()
+                    .messages
+                    .push(message(
+                        chat,
+                        id,
+                        true,
+                        crate::util::now(),
+                        Content::text("Keep the formatting\n• first item\n• bold second item"),
+                    ));
+                app.composer = crate::rich_edit::markdown("<p>Keep the formatting</p><ul><li>first item</li><li><strong>bold second item</strong></li></ul>").unwrap();
+                if part == "edit-markdown-before" {
+                    app.composer = "Keep the formatting\n• first item\n• bold second item".into();
+                }
+                app.editing = Some(id.into());
+                app.focus_composer = true;
             }
             "edit" => {
                 let chat = SAMPLES[0].id;
@@ -4205,7 +4367,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.category_filter = Some(crate::model::ChatFilter::Groups);
                 app.chat_filter = crate::model::ChatFilter::Unread;
             }
-            "grid" => {
+            "grid" | "avatar-tail" => {
                 let id = app
                     .chats
                     .iter()
@@ -4226,14 +4388,16 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     "First message from this sender",
                     "A follow-up from the same sender",
                     "A third message",
+                    if part == "avatar-tail" { "A taller first message wraps across several lines. This synthetic message checks that the tail stays tied to the avatar instead of moving with the bottom of the message bubble. A second sentence keeps the paragraph tall in a narrow window." } else { "A third message" },
                 ]
                 .iter()
+                .take(if part == "avatar-tail" { 4 } else { 3 })
                 .enumerate()
                 {
                     let mut m = source.clone();
                     m.id = format!("grid-{i}");
-                    m.sender = sender.into();
-                    m.sender_name = Some("Ada Example".into());
+                    m.sender = if part == "avatar-tail" && i == 3 { "tail-tall@example.invalid" } else { sender }.into();
+                    m.sender_name = Some(if part == "avatar-tail" && i == 3 { "Tall Example" } else { "Ada Example" }.into());
                     m.content = Content::text(*text);
                     m.timestamp += i as i64;
                     m.quoted = None;
@@ -4298,7 +4462,20 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 }
             }
             "voice" => voice_sample(app),
-            "transcript" => transcript_sample(app),
+            "transcript" | "transcript-outgoing" => {
+                transcript_sample(app);
+                if part == "transcript-outgoing" {
+                    let chat = app.open_chat.clone().unwrap();
+                    if let Some(row) = app.conversations.get_mut(&chat).and_then(|history| {
+                        history
+                            .messages
+                            .iter_mut()
+                            .find(|row| row.id == "ada-voice")
+                    }) {
+                        row.from_me = true;
+                    }
+                }
+            }
             "transcription-language" => {
                 // The per-message language dialog over the fixture voice
                 // note, with an override typed in.
@@ -5309,6 +5486,13 @@ mod tests {
 
     #[test]
     fn linked_messages_style_uses_one_clock_per_run() {
+        // Regression: at18:40 the old relative Signal samples interleaved
+        // with this fixture and legitimately split the WhatsApp run.
+        let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
+            now: 1_773_254_400,
+            zone: jiff::tz::TimeZone::UTC,
+            twelve_hour: false,
+        });
         let mut app = app();
         apply_flags(&mut app, Some("linked-minute-gutter,messages"));
         let ctx = egui::Context::default();
@@ -5339,7 +5523,7 @@ mod tests {
     }
 
     #[test]
-    fn separated_bubbles_keep_their_own_menu_and_selection_targets() {
+    fn overlapping_bubbles_keep_their_own_menu_and_selection_targets() {
         let mut app = app();
         group_stacks_sample(&mut app);
         let ctx = egui::Context::default();
@@ -5358,10 +5542,10 @@ mod tests {
         let newer = rect(3);
         let point = egui::pos2(older.left() + 20.0, older.bottom() - 2.0);
         assert!(
-            !newer.contains(point),
-            "four-point row gap leaves no overlap"
+            newer.contains(point),
+            "the older lower edge sits in front of the next bubble"
         );
-        assert!((newer.top() - older.bottom() - 4.).abs() < 1.);
+        assert!((older.bottom() - newer.top() - 6.).abs() < 1.);
         for pressed in [true, false] {
             streak_test_frame(
                 &mut app,
@@ -5388,7 +5572,7 @@ mod tests {
             "newer bubble must not steal seam clicks"
         );
         egui::Popup::close_all(&ctx);
-        let point = egui::pos2(newer.left() + 20., newer.top() + 2.);
+        let point = egui::pos2(newer.left() + 20., older.bottom() + 2.);
         for pressed in [true, false] {
             streak_test_frame(
                 &mut app,
@@ -5426,6 +5610,85 @@ mod tests {
     }
 
     #[test]
+    fn overlap_seam_command_click_selects_the_older_message() {
+        let mut app = app();
+        group_stacks_sample(&mut app);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..4 {
+            streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+        }
+        let id = crate::ui::conversation::bubble_id(SAMPLES[0].id, "group-stack-2");
+        let older = ctx
+            .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
+            .unwrap();
+        let point = egui::pos2(older.left() + 20.0, older.bottom() - 2.0);
+        for pressed in [true, false] {
+            streak_test_frame(
+                &mut app,
+                &ctx,
+                1180.0,
+                2000.0,
+                vec![
+                    // egui tracks held modifiers through this event, independently
+                    // of the per-pointer event metadata.
+                    egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::COMMAND,
+                    },
+                ],
+            );
+        }
+        assert_eq!(
+            app.selection.as_ref().map(|(_, ids)| ids.as_slice()),
+            Some(["group-stack-2".to_owned()].as_slice())
+        );
+    }
+
+    #[test]
+    fn overlap_seam_double_click_replies_to_the_older_message() {
+        let mut app = app();
+        group_stacks_sample(&mut app);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..4 {
+            streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+        }
+        let id = crate::ui::conversation::bubble_id(SAMPLES[0].id, "group-stack-2");
+        let older = ctx
+            .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
+            .unwrap();
+        let point = egui::pos2(older.left() + 20.0, older.bottom() - 2.0);
+        for _ in 0..2 {
+            for pressed in [true, false] {
+                streak_test_frame(
+                    &mut app,
+                    &ctx,
+                    1180.0,
+                    2000.0,
+                    vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+        }
+        assert_eq!(
+            app.reply_to.as_ref().map(|reply| reply.id.as_str()),
+            Some("group-stack-2")
+        );
+    }
+
+    #[test]
     fn group_shadow_colours_the_body_and_tail_without_a_stripe() {
         for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
             let mut app = app();
@@ -5455,8 +5718,15 @@ mod tests {
                 let egui::Shape::Rect(body) = &parts[0] else {
                     panic!("body shadow");
                 };
+                if ![0, 2, 5, 8].contains(&index) {
+                    assert!(
+                        !matches!(&parts[1], egui::Shape::Mesh(_)),
+                        "followers have no tail shadow"
+                    );
+                    return body.fill;
+                }
                 let egui::Shape::Mesh(tail) = &parts[1] else {
-                    panic!("tail shadow");
+                    panic!("head tail shadow");
                 };
                 assert!(
                     tail.vertices.iter().any(|vertex| vertex.color == body.fill),
@@ -5534,8 +5804,8 @@ mod tests {
                     };
                     if let (Some(first), Some(next)) = (live(first), live(next)) {
                         assert!(
-                            (next.top() - first.bottom() - 4.0).abs() < 1.0,
-                            "scrolling retains the live four-point row gap"
+                            (first.bottom() - next.top() - 6.0).abs() < 1.0,
+                            "scrolling retains six-point overlap with current-pass geometry"
                         );
                     }
                 }
@@ -5810,30 +6080,30 @@ mod tests {
                     let body = rect(index);
                     assert_eq!(painted.top(), body.top(), "tails leave the top edge");
                     assert_eq!(painted.bottom(), body.bottom(), "no tail below the body");
-                    if index < 10 {
-                        assert!(
-                            (body.left() - painted.left() - crate::ui::widgets::TAIL_WIDTH).abs()
-                                < 0.5
-                        );
+                    let head = [0, 2, 5, 8, 10].contains(&index);
+                    let reach = if head {
+                        crate::ui::widgets::TAIL_WIDTH
                     } else {
-                        assert!(
-                            (painted.right() - body.right() - crate::ui::widgets::TAIL_WIDTH).abs()
-                                < 0.5
-                        );
+                        0.0
+                    };
+                    if index < 10 {
+                        assert!((body.left() - painted.left() - reach).abs() < 0.5);
+                    } else {
+                        assert!((painted.right() - body.right() - reach).abs() < 0.5);
                     }
                 }
                 for (first, second) in [(0, 1), (2, 3), (3, 4), (5, 6), (6, 7), (8, 9), (10, 11)] {
                     assert!(
-                        rect(second).top() >= rect(first).bottom() + 3.5,
-                        "same-run bodies must not overlap"
+                        (rect(first).bottom() - rect(second).top() - 6.0).abs() < 1.0,
+                        "eligible same-sender bodies overlap by six points"
                     );
                     let id = bubble_id(SAMPLES[0].id, &format!("group-stack-{second}"));
                     let text = ctx
                         .data(|data| data.get_temp::<egui::Rect>(id.with("body")))
                         .unwrap();
                     assert!(
-                        text.top() >= rect(second).top(),
-                        "text stays inside its bubble"
+                        text.top() >= rect(first).bottom(),
+                        "text stays below the older bubble covering its top"
                     );
                 }
                 for (first, second) in [(1, 2), (4, 5), (7, 8), (9, 10)] {
@@ -7858,14 +8128,29 @@ mod tests {
         app.attach(&ctx);
         let mut at = None;
         let mut drawn_now = Vec::new();
-        settle(&mut app, &ctx, &mut at, &mut drawn_now, "Transcribe");
+        settle(
+            &mut app,
+            &ctx,
+            &mut at,
+            &mut drawn_now,
+            "Transcribe on this device",
+        );
         assert!(
-            at.is_none() && !drawn_now.iter().any(|text| text == "Transcribe"),
+            at.is_none()
+                && !drawn_now
+                    .iter()
+                    .any(|text| text == "Transcribe on this device"),
             "no configured service, no transcription offer"
         );
 
         app.transcriber = Some(crate::transcribe_worker::Worker::stub([]));
-        settle(&mut app, &ctx, &mut at, &mut drawn_now, "Transcribe");
+        settle(
+            &mut app,
+            &ctx,
+            &mut at,
+            &mut drawn_now,
+            "Transcribe on this device",
+        );
         let at = at.expect("the configured service offers Transcribe");
         frame_with(&mut app, &ctx, click(at));
         // frame_ui applies queued actions at the end of the frame, so the
@@ -8335,6 +8620,15 @@ mod tests {
     /// quote carries.
     #[test]
     fn a_reply_reads_the_quoted_sender_as_its_quote_draws_it() {
+        // These assertions depend on visible bubble geometry. A wall-clock
+        // midnight inserts day separators and changes which rows are visible;
+        // footer width also depends on the runner's clock format. Use the
+        // existing thread-local layout clock, not the CI machine's time.
+        let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
+            now: 1_773_237_600,
+            zone: jiff::tz::TimeZone::UTC,
+            twelve_hour: false,
+        });
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         let mut app = app();
@@ -10777,6 +11071,9 @@ mod tests {
         label: &str,
         role: egui::accesskit::Role,
     ) {
+        if label == "New group" {
+            press_labelled(app, ctx, "Other actions", egui::accesskit::Role::Button);
+        }
         let nodes = accessible_nodes(app, ctx, Vec::new());
         let pos = nodes
             .iter()
@@ -10784,6 +11081,154 @@ mod tests {
             .map(|(_, _, pos)| *pos)
             .unwrap_or_else(|| panic!("no {role:?} {label:?} in {nodes:?}"));
         press_at(app, ctx, pos);
+    }
+
+    #[test]
+    fn audience_results_own_escape_and_block_background_composer_enter() {
+        for send_by_enter in [false, true] {
+            let mut app = app();
+            app.settings.enter_sends = send_by_enter;
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            apply_flags(&mut app, Some("audience-results"));
+            app.composer = "background draft".into();
+            ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("composer-text")));
+            for key in [egui::Key::Enter, egui::Key::Tab, egui::Key::Enter] {
+                frame_with(
+                    &mut app,
+                    &ctx,
+                    vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+            }
+            assert_eq!(app.composer, "background draft");
+            assert!(!app.actions.iter().any(|action| matches!(
+                action,
+                crate::model::Action::SendText { .. } | crate::model::Action::SendPending { .. }
+            )));
+            let chat = app.open_chat.clone();
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            assert!(!app.audience_queue.as_ref().unwrap().visible);
+            assert_eq!(app.open_chat, chat);
+        }
+    }
+
+    #[test]
+    fn explicit_counted_send_starts_audience_without_extra_confirmation() {
+        use egui::accesskit::Role;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("new-message-selected"));
+        for _ in 0..8 {
+            render(&mut app, &ctx);
+        }
+        assert!(app.audience_queue.is_none());
+        press_labelled(&mut app, &ctx, "Send to 2 chats", Role::Button);
+        assert_eq!(app.audience_queue.as_ref().unwrap().rows.len(), 2);
+    }
+
+    #[test]
+    fn counted_send_supports_fifty_explicit_recipients_without_extra_confirmation() {
+        use egui::accesskit::Role;
+        let mut app = app();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("new-message-selected"));
+        let source = app.chats[0].clone();
+        app.new_message.members.clear();
+        for index in 0..crate::ghost_groups::MAX_MEMBERS {
+            let mut chat = source.clone();
+            chat.id = format!("synthetic-audience-{index}");
+            chat.name = format!("Recipient {index}");
+            chat.locked = false;
+            let member = crate::ui::flat_groups::member(&app, &chat);
+            app.new_message.members.push(member);
+            app.chats.push(chat);
+        }
+        let selected = app.new_message.members.clone();
+        for _ in 0..8 {
+            render(&mut app, &ctx);
+        }
+        assert!(app.audience_queue.is_none(), "selection alone never sends");
+        press_labelled(&mut app, &ctx, "Send to 50 chats", Role::Button);
+        let queue = app
+            .audience_queue
+            .as_ref()
+            .expect("explicit counted click queues sends");
+        assert_eq!(queue.rows.len(), 50);
+        for (row, member) in queue.rows.iter().zip(&selected) {
+            assert_eq!(
+                row.member.chat, member.chat,
+                "only the selected destinations are queued"
+            );
+        }
+    }
+
+    #[test]
+    fn new_message_many_files_keeps_send_control_inside_view_and_locked_names_hidden() {
+        use egui::accesskit::Role;
+        for (page, size) in [
+            ("new-message-many-files", egui::vec2(1180.0, 780.0)),
+            ("new-message-many-files", egui::vec2(800.0, 600.0)),
+            ("new-message-locked", egui::vec2(1180.0, 780.0)),
+        ] {
+            let mut app = app();
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            app.attach(&ctx);
+            apply_flags(&mut app, Some(page));
+            let mut nodes = Vec::new();
+            for _ in 0..8 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        app.frame_ui(ui);
+                    },
+                );
+                output.textures_delta.clear();
+                if let Some(update) = output.platform_output.accesskit_update {
+                    nodes = update.nodes;
+                }
+            }
+            let labels: Vec<_> = nodes.iter().filter_map(|(_, node)| node.label()).collect();
+            if page == "new-message-locked" {
+                assert!(!labels.iter().any(|label| label.contains("Ada Lovelace")));
+                assert!(
+                    labels
+                        .iter()
+                        .any(|label| label.contains("Unavailable chat"))
+                );
+            }
+            let button = nodes
+                .iter()
+                .find(|(_, node)| {
+                    node.role() == Role::Button && node.label() == Some("Send to 2 chats")
+                })
+                .unwrap();
+            let bounds = button.1.bounds().unwrap();
+            assert!(bounds.y1 <= size.y as f64 && bounds.y0 >= 0.0, "{bounds:?}");
+        }
     }
 
     fn new_group_dialog() -> (App, egui::Context) {
@@ -10829,7 +11274,7 @@ mod tests {
         use egui::accesskit::Role;
         let (mut app, ctx) = new_group_dialog();
         let labels = accessible_labels(&mut app, &ctx);
-        for row in ["New group", "Add contact"] {
+        for row in ["New message", "Other actions"] {
             assert!(labels.iter().any(|label| label == row), "{labels:?}");
         }
         press_labelled(&mut app, &ctx, "New group", Role::Button);
@@ -10992,6 +11437,7 @@ mod tests {
         for chat in app.chats.iter_mut() {
             if chat.id == group || chat.id == typing {
                 chat.last = Some(crate::model::LastMessage {
+                    reaction: None,
                     labelled: false,
                     from_me: false,
                     sender: sender.into(),
@@ -11002,6 +11448,7 @@ mod tests {
                 });
             } else if chat.id == direct {
                 chat.last = Some(crate::model::LastMessage {
+                    reaction: None,
                     labelled: false,
                     from_me: false,
                     sender: direct.into(),
@@ -15402,6 +15849,12 @@ mod tests {
             for _ in 0..3 {
                 render(&mut app, &ctx);
             }
+            // Reply controls change transcript height. Jump to the row under
+            // test rather than right-clicking a cached rect behind the header.
+            app.apply(crate::model::Action::ScrollTo(message.into()), &ctx);
+            for _ in 0..3 {
+                render(&mut app, &ctx);
+            }
             let id = crate::ui::conversation::bubble_id(&chat, message);
             let rect = ctx
                 .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
@@ -15433,6 +15886,15 @@ mod tests {
 
     #[test]
     fn ctrl_click_selects_messages_and_shift_click_takes_the_ones_between() {
+        // These assertions depend on visible bubble geometry. A wall-clock
+        // midnight inserts day separators and changes which rows are visible;
+        // footer width also depends on the runner's clock format. Use the
+        // existing thread-local layout clock, not the CI machine's time.
+        let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
+            now: 1_773_237_600,
+            zone: jiff::tz::TimeZone::UTC,
+            twelve_hour: false,
+        });
         let mut app = app();
         let ctx = egui::Context::default();
         app.attach(&ctx);
@@ -18708,6 +19170,15 @@ mod tests {
     /// new messages there too.
     #[test]
     fn ctrl_end_on_the_newest_message_follows_new_messages() {
+        // These assertions depend on visible bubble geometry. A wall-clock
+        // midnight inserts day separators and changes which rows are visible;
+        // footer width also depends on the runner's clock format. Use the
+        // existing thread-local layout clock, not the CI machine's time.
+        let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
+            now: 1_773_237_600,
+            zone: jiff::tz::TimeZone::UTC,
+            twelve_hour: false,
+        });
         let (mut app, ctx, chat, events) = typing_long_chat();
         short_of_the_end(&mut app, &ctx, &chat);
         let newest = app.conversations[&chat].messages.last().unwrap().id.clone();
@@ -18732,11 +19203,14 @@ mod tests {
             .unwrap();
         settle_key_scroll(&mut app, &ctx);
         let (after, _) = scroll_metrics(&ctx, &chat);
-        assert!(
-            after > before + 20.0,
-            "the view followed ({before} -> {after})"
-        );
+        assert!(after > before, "the view followed ({before} -> {after})");
         assert!(app.at_bottom);
+        // Overlap and a collapsed prior footer make the height increment
+        // content-dependent. Check the true end, not a fixed20px delta.
+        assert!(
+            (offset_after_the_button(&mut app, &ctx, &chat) - after).abs() < 0.5,
+            "new arrival followed to the exact bottom"
+        );
     }
 
     /// G18: the wheel still scrolls away from the end after End; the keys'
@@ -19241,7 +19715,7 @@ mod tests {
                 ctx.data(|data| data.get_temp::<egui::Rect>(footer_id(chat, "long-c")))
                     .is_some()
             );
-            assert!((b.top() - a.bottom() - 4.).abs() < 1.);
+            assert!((a.bottom() - b.top() - 6.).abs() < 1.);
         }
     }
 
@@ -23949,12 +24423,11 @@ mod bubble_detail_tests {
     }
 
     /// The `bubbles` page in both Messages palettes: every message of the
-    /// sample is drawn, with the same top-corner tail on every body as the
-    /// other skins. Free emoji and bare pictures keep their own geometry.
+    /// sample is drawn, with one top-corner tail per run as the other skins. Free emoji and bare pictures keep their own geometry.
     /// All of it fits a 1280
     /// by 1000 window.
     #[test]
-    fn messages_balloons_tail_every_body() {
+    fn messages_balloons_tail_only_the_run_head() {
         // These runs belong to one day. Near midnight a real clock puts a
         // day boundary between them, correctly giving another bubble a tail.
         let _clock = crate::util::fixed_clock::set(crate::util::fixed_clock::Clock {
@@ -24020,10 +24493,10 @@ mod bubble_detail_tests {
             );
             for (id, own, tailed) in [
                 ("bubbles-in-1", false, true),
-                ("bubbles-in-2", false, true),
+                ("bubbles-in-2", false, false),
                 ("bubbles-out-1", true, true),
-                ("bubbles-out-3", true, true),
-                ("bubbles-in-4", false, true),
+                ("bubbles-out-3", true, false),
+                ("bubbles-in-4", false, false),
                 ("bubbles-out-4", true, true),
             ] {
                 let past = out_past(id, own);
@@ -25172,4 +25645,10 @@ mod card_width_tests {
             }
         }
     }
+}
+
+/// Synthetic thread review fixture.
+#[cfg(feature = "demo")]
+pub(crate) fn reply_thread() -> bool {
+    std::env::args().any(|arg| arg.contains("reply-thread"))
 }

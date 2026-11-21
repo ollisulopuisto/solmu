@@ -264,6 +264,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             bookmarks_switch(app, ui);
         }
         super::batch_actions::archive_bar(app, ui);
+        super::dialogs::forward_status(app, ui);
         return;
     }
     Frame::new()
@@ -287,6 +288,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
             }
             search_field(app, ui);
             super::batch_actions::archive_bar(app, ui);
+            super::dialogs::forward_status(app, ui);
             ui.add_space(8.0);
             let row = ui.horizontal(|ui| {
                 let gap = ui.spacing().item_spacing.x;
@@ -2511,6 +2513,7 @@ pub(super) fn self_row(app: &mut App, ui: &mut egui::Ui) {
 /// A row that starts something, drawn like a person's: an icon on the
 /// accent colour where the photo would be. New chat's New group and Add
 /// contact.
+#[allow(dead_code)] // Retained for the legacy New group workflow.
 pub(super) fn action_row(app: &App, ui: &mut egui::Ui, icon: Icon, label: &str) -> egui::Response {
     let palette = app.palette;
     let (rect, response) = ui.allocate_exact_size(
@@ -2823,7 +2826,7 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
             )
         } else if let Some(last) = &chat.last {
             let mut prefix = String::new();
-            if last.from_me {
+            if last.from_me && last.reaction.is_none() {
                 let tick_rect =
                     Rect::from_center_size(pos2(x + 8.0, line_y + 8.0), Vec2::splat(16.0));
                 let delivery = super::conversation::display_delivery(
@@ -2834,7 +2837,7 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
                 );
                 widgets::ticks(ui, &palette, tick_rect, delivery);
                 x += advance_after_ticks(delivery);
-            } else if chat.is_group() {
+            } else if chat.is_group() && last.reaction.is_none() {
                 let sender = app.display_name_or(&last.sender, last.sender_name.as_deref());
                 let first = app.short_name(&last.sender, &sender);
                 prefix = format!("{first}: ");

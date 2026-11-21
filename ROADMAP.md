@@ -2,6 +2,16 @@
 
 Ideas and planned work. An entry here is not a commitment or a schedule.
 
+## Full internationalization
+
+Status: planned for later, not scheduled. Requested by the maintainer.
+
+Audit all user-facing strings, including reaction previews, for extractable
+translations, complete locale coverage and correct plural/placeholder handling.
+Include requested locales such as Finnish and verify translated wording in the interface. Reaction
+preview wording ships in English first; this entry records follow-up work only,
+not an implementation commitment for the current PR.
+
 ## Standalone Beeper-less mode (direct Matrix login, E2EE keys, bridges)
 
 Status: idea, not scheduled. Requested by the maintainer.

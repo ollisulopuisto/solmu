@@ -1,7 +1,7 @@
-# Solmu read API (EXPERIMENTAL, local only, not ready)
+# Solmu scoped API (experimental, local only)
 
-`solmu-reader` lets other apps on the same machine read messages through
-Solmu with their own revocable credentials. It runs beside the Beeper
+`solmu-reader` lets other apps on the same machine read messages and, with a
+separate exact-destination send grant, send text with their own revocable credentials. It runs beside the Beeper
 Server, like `solmu-scheduler`. This is code and docs only: nothing here
 is installed, deployed, or granted to any app.
 
@@ -12,9 +12,9 @@ is installed, deployed, or granted to any app.
   least privilege. It is left alone and never exposed.
 - The Send Later daemon has one shared control token and can queue sends.
   It is not reused here.
-- `solmu-reader` holds the Server token itself and offers only GET on four
-  endpoint families. No send, edit, delete, read-marker, reaction or
-  focus endpoint is routable (tests assert this).
+- `solmu-reader` holds the Server token itself. Existing read tokens remain
+  read-only. Text send requires `messages:send` and explicit account/chat pairs.
+  Edit, delete, read-marker, reaction and focus endpoints remain unroutable.
 
 ## Endpoints
 
@@ -65,7 +65,7 @@ names, chat ids or message content, and it never contacts the Server.
 
 One configured Beeper origin, read through that Server's API, plus the
 linked-person view over members recorded under that origin. Not claimed:
-multiple origins, Solmu native WhatsApp mode, live behavior.
+multiple origins, direct protocol login, or live delivery verification.
 
 ## Authentication and authorization
 
@@ -94,17 +94,15 @@ multiple origins, Solmu native WhatsApp mode, live behavior.
 
 ## Not covered (explicitly)
 
-- Chats served by a different API backend than this reader's (another
-  origin), and Solmu's native WhatsApp mode (no Beeper backend; chats
-  have no origin and cannot be linked people), are not served.
-  Reading them is the main remaining coverage work; see DIRECT-NETWORKS.md
-  for the design (in-app read-only broker, opt-in, nothing persisted).
+- Chats served by another API origin are not served. Current app code creates
+  only the Beeper backend. Inherited native-WhatsApp-mode/broker design notes
+  describe future or historical paths, not a second live backend in this fork.
 - The scheduled queue is not exposed through this API.
 - No push or websocket: clients poll.
 - No remote access. Reaching it from another machine (SSH tunnel, VPN) is a
   separate, later decision.
-- The server is single-threaded; a slow local client can delay others up to
-  the 5 s read timeout.
+- Connections have separate bounded worker slots. Slow clients occupy their
+  own slot until the total header/body deadlines expire.
 
 ## Unverified
 
@@ -138,6 +136,67 @@ multiple origins, Solmu native WhatsApp mode, live behavior.
   alive; age alone never breaks it. Pid reuse after a crash can keep a stale
   lock until it is removed by hand.
 - Live check of Server side effects (see Unverified) and of response shapes.
-- Other-origin and native-mode chats: not built (see DIRECT-NETWORKS.md).
+- Other-origin chats and direct protocol login are not built.
 - Linked-person endpoints are tested only against synthetic settings and a
   mock Server.
+
+## Scoped text sends, CLI and MCP
+
+This implementation serves one configured Beeper Server/Desktop origin, matching
+the app's current backend, including WhatsApp connected through Beeper. It does
+not add direct WhatsApp protocol login or remove the existing Server dependency.
+No service, token or send is created merely by building these binaries.
+
+To grant sending, create a private JSON file containing only the exact intended
+account/chat pairs, for example synthetic `[{"account":"a","chat":"c"}]`, then run:
+
+```sh
+solmu-reader token add MY_APP --scopes messages:send --accounts a --days 7 --send-destinations-file /path/to/destinations.json
+```
+
+The token appears once. Store it in a private file (0600 on Unix), not a shell
+argument, source control or a shared log. Account restrictions and destination
+pairs are both enforced. Omission of the destination file never grants sending.
+Existing `token revoke NAME` revokes both reads and sends. After revocation,
+expiry or changed grants, in-flight sends revalidate before committing upstream;
+a send already committed cannot be recalled by revocation.
+
+`GET /v1/capabilities` requires a valid bearer and returns that client's scopes,
+account restrictions, exact send destinations and expiry, never its token.
+`POST /v1/chats/{percent-encoded-id}/messages` requires JSON with only
+`account_id`, `text`, `request_id`. Text is bounded to 16 KiB and JSON to 20 KiB.
+It sends one text, without attachments, quotes, mentions or implicit recipient
+selection. Write requests are separately limited to 10/minute/token. Browser
+Origin/Referer, duplicate headers, transfer encoding and unbounded bodies are
+refused; the listener remains loopback-only. No MCP HTTP endpoint is added.
+
+```sh
+solmu-control send --token-file /private/client-token --account a --chat c --text-file /private/message.txt --request-id stable-unique-id
+solmu-mcp --token-file /private/client-token
+```
+
+Both clients default to `http://127.0.0.1:23377`; optional `--url` accepts only
+literal loopback HTTP origins. Redirects and proxy-environment routing are disabled.
+MCP uses bounded newline-delimited JSON-RPC over stdio, supports modern 2026-07-28
+per-request metadata/server discovery and explicit 2025-11-25 initialization for
+older clients. Its tool list follows the current token's scopes. Actual tool
+calls always pass through the same server authorization and write journal.
+Tools are accounts, chats, messages, search, people and send_text. Callers need
+human authorization for their own actions; tool annotations do not grant consent.
+No secret or diagnostic text is emitted to MCP stdout.
+
+Write receipt metadata and claim/outcome records are saved beside the client
+registry in `reader-clients.writes.json` (0600 on Unix). The journal contains
+hashed client identities, timestamps, request IDs, payload digests and outcomes,
+not plaintext message bodies or credentials. It refuses writes if persistence
+fails or its bounded history fills; archive it deliberately, never delete it to
+force a retry. Reusing an ID with different content or destination is refused.
+Claimed/unknown writes are never automatically resent, including after a crash.
+A successful response means accepted, not delivered. Never use a new request ID
+to retry an uncertain send. Read-state side effects of upstream GET endpoints
+have not been live-verified. No account/network terms exemption is implied.
+
+Protocol references:
+- https://modelcontextprotocol.io/specification/2026-07-28/basic/lifecycle
+- https://modelcontextprotocol.io/specification/2026-07-28/server/tools
+- https://modelcontextprotocol.io/specification/2026-07-28/server/discover

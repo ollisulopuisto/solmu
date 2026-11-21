@@ -22,13 +22,20 @@ Product boundaries and upstream responsibilities:
 - Solmu will not embed a browser engine, add telemetry, or introduce a
   Solmu-operated service. Features that send message content to a third
   party are out of scope.
-- Solmu will never automate WhatsApp: no bots, MCP server, or API,
-  command-line or scripting interface that reads or sends messages, and no
-  bulk or automatic replies. Send Later, including repeating sends, is
-  allowed: your own text, to one chat per schedule, stopped by you. So are
-  ghost groups: up to 50 chats you picked, one message you wrote, sent to each
-  chat separately, disbanded in one click.
-  WhatsApp's terms forbid automated use and it bans accounts for it.
+- Scripted access, command-line control, APIs and MCP may read or send messages,
+  including WhatsApp, only through authenticated, revocable, scoped tokens.
+  Reading does not grant sending: writes require a separate send scope and
+  explicit destination limits. No unauthenticated read or write route is allowed.
+  Bind loopback-only by default, keep the upstream credential private, and audit
+  write attempts without message bodies or credentials. Expiry, revocation and
+  account/destination restrictions must be enforced at each request.
+- Authentication is necessary, not sufficient: validate request sizes, routes,
+  rate limits and destination identity, and test refusals. Do not claim that
+  authenticated automation avoids network terms or account restrictions. Remote
+  exposure needs an explicit secure-transport and access-control decision.
+- Send Later and ghost groups remain visible user-controlled workflows: your
+  text and chosen recipients, cancellable by you, with no unsolicited replies.
+
 
 The guide's [current limitations](https://zapfast.rocks/what-is-zapfast/#what-it-does-not-do-yet)
 describe what is implemented today, not permanent exclusions. Missing features,

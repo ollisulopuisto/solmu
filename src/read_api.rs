@@ -24,12 +24,13 @@ use sha2::{Digest, Sha256};
 
 use crate::merged::Person;
 
-pub const SCOPES: [&str; 5] = [
+pub const SCOPES: [&str; 6] = [
     "accounts:read",
     "chats:read",
     "messages:read",
     "search:read",
     "people:read",
+    "messages:send",
 ];
 const MAX_LIMIT: u32 = 100;
 pub const RATE_PER_MINUTE: u32 = 120;
@@ -49,6 +50,8 @@ pub struct ClientEntry {
     pub expires_at: Option<i64>,
     #[serde(default)]
     pub created_at: i64,
+    #[serde(default)]
+    pub send_destinations: Vec<crate::write_grants::Destination>,
 }
 
 #[derive(Serialize, Deserialize, Default, Debug)]
@@ -165,6 +168,20 @@ impl Registry {
             {
                 return Err("registry has an empty or unknown scope".into());
             }
+            if client
+                .scopes
+                .iter()
+                .any(|scope| scope == crate::write_grants::SEND_SCOPE)
+                && (!crate::write_grants::valid_destinations(&client.send_destinations)
+                    || client.send_destinations.iter().any(|d| {
+                        !client.accounts.is_empty() && !client.accounts.contains(&d.account)
+                    }))
+            {
+                return Err(
+                    "send scope requires explicit valid destinations within the account grant"
+                        .into(),
+                );
+            }
             if client.accounts.iter().any(|a| !valid_account(a)) {
                 return Err("registry has an invalid account id".into());
             }
@@ -244,6 +261,17 @@ impl Registry {
         expires_at: Option<i64>,
         now: i64,
     ) -> Result<String, String> {
+        self.add_with_destinations(name, scopes, accounts, vec![], expires_at, now)
+    }
+    pub fn add_with_destinations(
+        &mut self,
+        name: &str,
+        scopes: Vec<String>,
+        accounts: Vec<String>,
+        send_destinations: Vec<crate::write_grants::Destination>,
+        expires_at: Option<i64>,
+        now: i64,
+    ) -> Result<String, String> {
         let mut bytes = [0u8; 32];
         ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes)
             .map_err(|_| "no secure randomness available".to_string())?;
@@ -258,6 +286,7 @@ impl Registry {
             accounts,
             expires_at,
             created_at: now,
+            send_destinations,
         };
         let mut next = Registry {
             clients: self.clients.clone(),
@@ -446,6 +475,10 @@ pub fn route(method: &str, target: &str) -> Result<(Route, String), u16> {
 pub trait Upstream {
     /// A GET against the Server. Err is a transport failure.
     fn get(&mut self, target: &str) -> Result<(u16, String), String>;
+    /// Default refusal keeps read-only test/adaptor implementations incapable of sending.
+    fn send_text(&mut self, _chat: &str, _text: &str) -> crate::write_journal::Outcome {
+        crate::write_journal::Outcome::Rejected
+    }
 }
 
 fn account_of(value: &Value) -> Option<&str> {
@@ -880,7 +913,16 @@ mod tests {
 
     #[test]
     fn nothing_but_get_on_the_allowlist_is_routable() {
-        let (registry, token) = setup(&SCOPES, &[]);
+        let (registry, token) = setup(
+            &[
+                "accounts:read",
+                "chats:read",
+                "messages:read",
+                "search:read",
+                "people:read",
+            ],
+            &[],
+        );
         for method in ["POST", "PUT", "PATCH", "DELETE"] {
             assert_eq!(run(&registry, &token, method, "/v1/chats").0, 405);
         }
@@ -924,7 +966,16 @@ mod tests {
 
     #[test]
     fn account_allowlist_filters_every_listing() {
-        let (registry, token) = setup(&SCOPES, &["a1"]);
+        let (registry, token) = setup(
+            &[
+                "accounts:read",
+                "chats:read",
+                "messages:read",
+                "search:read",
+                "people:read",
+            ],
+            &["a1"],
+        );
         let accounts = run(&registry, &token, "GET", "/v1/accounts");
         assert_eq!(accounts.1, r#"[{"accountID":"a1"}]"#);
         let chats: Value =
@@ -940,7 +991,16 @@ mod tests {
 
     #[test]
     fn account_allowlist_guards_messages_by_chat_owner() {
-        let (registry, token) = setup(&SCOPES, &["a1"]);
+        let (registry, token) = setup(
+            &[
+                "accounts:read",
+                "chats:read",
+                "messages:read",
+                "search:read",
+                "people:read",
+            ],
+            &["a1"],
+        );
         assert_eq!(
             run(&registry, &token, "GET", "/v1/chats/c-a1/messages").0,
             200
@@ -957,7 +1017,16 @@ mod tests {
 
     #[test]
     fn upstream_failures_never_leak_detail() {
-        let (registry, token) = setup(&SCOPES, &[]);
+        let (registry, token) = setup(
+            &[
+                "accounts:read",
+                "chats:read",
+                "messages:read",
+                "search:read",
+                "people:read",
+            ],
+            &[],
+        );
         let missing = run(&registry, &token, "GET", "/v1/chats/missing/messages");
         assert_eq!(missing.0, 404);
         assert!(!missing.1.contains("internal"));

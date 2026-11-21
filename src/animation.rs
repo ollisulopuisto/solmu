@@ -361,15 +361,20 @@ pub fn can_play_video() -> bool {
 
 /// Whether `ffmpeg` is available for other MP4 codecs.
 fn ffmpeg_present() -> bool {
-    static KNOWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *KNOWN.get_or_init(|| {
-        Command::new("ffmpeg")
-            .arg("-version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
-    })
+    // Called only by a decoder thread. Do not permanently cache a missing
+    // executable, Preferences can select one during this session.
+    crate::media_tools::resolve("ffmpeg")
+        .is_ok_and(|path| crate::media_tools::verify(&path, "ffmpeg").is_ok())
+}
+
+/// Drop failures and old decoder inboxes when Preferences changes tools.
+/// In-flight old decoders retain their detached inbox, never poisoning retries.
+pub fn media_tools_changed(ctx: &egui::Context) {
+    ctx.data_mut(|data| {
+        data.remove::<Cache>(egui::Id::new("animations"));
+        data.remove::<Inbox>(egui::Id::new("animation-inbox"));
+    });
+    ctx.request_repaint();
 }
 
 /// Decodes up to `limit` frames.
@@ -681,7 +686,7 @@ fn decode_with_ffmpeg(path: &Path, limit: usize) -> Option<Decoded> {
     if !ffmpeg_present() {
         return None;
     }
-    let probe = Command::new("ffprobe")
+    let probe = Command::new(crate::media_tools::resolve("ffprobe").ok()?)
         .args([
             "-v",
             "error",
@@ -706,7 +711,7 @@ fn decode_with_ffmpeg(path: &Path, limit: usize) -> Option<Decoded> {
     // Use even dimensions and preserve aspect ratio.
     let out_height = ((height as u64 * out_width as u64 / width as u64) as u32).max(2) & !1;
     let fps = 15u32;
-    let mut child = Command::new("ffmpeg")
+    let mut child = Command::new(crate::media_tools::resolve("ffmpeg").ok()?)
         .args(["-v", "error", "-i"])
         .arg(path)
         .args([
@@ -1588,5 +1593,26 @@ mod probe {
             poster.seconds,
             started.elapsed()
         );
+    }
+}
+
+#[cfg(test)]
+mod media_tool_change_tests {
+    use super::*;
+    #[test]
+    fn changed_tool_retries_failed_media_and_detaches_late_old_failures() {
+        let ctx = egui::Context::default();
+        let path = PathBuf::from("failed-video.mp4");
+        cache(&ctx)
+            .0
+            .lock()
+            .unwrap()
+            .entries
+            .insert(path.clone(), Entry::Failed);
+        let old_inbox = inbox(&ctx);
+        media_tools_changed(&ctx);
+        assert!(cache(&ctx).0.lock().unwrap().entries.is_empty());
+        old_inbox.0.lock().unwrap().push((path, None, true));
+        assert!(inbox(&ctx).0.lock().unwrap().is_empty());
     }
 }

@@ -29,8 +29,11 @@ pub struct SchedulingDraft {
 pub struct Account {
     /// Pending mutations and outcomes stay with their owning account.
     pub batch_ui: crate::model::BatchState,
+    pub audience_queue: Option<crate::audience_queue::Queue>,
+    pub new_message: crate::audience_queue::Draft,
     pub id: AccountId,
     pub forward_dialog_hidden: bool,
+    pub forward_view_closed: bool,
     pub forward_generation: u64,
     pub forward_items: Vec<crate::composed_forward::Item>,
     pub dirs: AccountDirs,
@@ -216,9 +219,12 @@ impl Account {
         let retired_scope =
             settings.list_filter.take().is_some() | settings.chat_category.take().is_some();
         Self {
+            audience_queue: None,
+            new_message: Default::default(),
             batch_ui: Default::default(),
             id,
             forward_dialog_hidden: false,
+            forward_view_closed: false,
             forward_generation: 0,
             forward_items: Vec::new(),
             dirs,
