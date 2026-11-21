@@ -37,6 +37,11 @@ impl Line {
                 &self.accessible_text,
             )
         });
+        self.paint_decorative(ui, pos, fallback);
+    }
+
+    /// Paint inside an already named widget without adding another label.
+    pub fn paint_decorative(&self, ui: &Ui, pos: egui::Pos2, fallback: Color32) {
         ui.painter().galley(pos, self.galley.clone(), fallback);
         emoji::paint(ui, &self.galley, pos, &self.placements);
     }

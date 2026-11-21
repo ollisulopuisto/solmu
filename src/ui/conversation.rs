@@ -5863,7 +5863,7 @@ fn bubble_frame(
                 );
             }
         }
-        line.paint(ui, centre - line.size() / 2.0, ink);
+        line.paint_decorative(ui, centre - line.size() / 2.0, ink);
         if active {
             unhide.clone().on_hover_text(hint.as_ref());
         }
@@ -14991,6 +14991,7 @@ mod tests {
     fn focused_hidden_hint_stays_inside_narrow_incoming_and_outgoing_rows() {
         for own in [false, true] {
             let ctx = egui::Context::default();
+            ctx.enable_accesskit();
             crate::theme::install(&ctx);
             with_still_view(|view| {
                 let message = crate::archive::tests::message("1@s.whatsapp.net", "hidden", 0, own);
@@ -15037,6 +15038,14 @@ mod tests {
                     fn hints(shape: &egui::Shape, rects: &mut Vec<Rect>) {
                         match shape {
                             egui::Shape::Text(text) if text.galley.text() == "Show message" => {
+                                assert!(!text.galley.elided, "focused hint must not be truncated");
+                                let painted: String = text
+                                    .galley
+                                    .rows
+                                    .iter()
+                                    .flat_map(|row| row.glyphs.iter().map(|glyph| glyph.chr))
+                                    .collect();
+                                assert_eq!(painted, "Show message");
                                 rects.push(Rect::from_min_size(text.pos, text.galley.size()))
                             }
                             egui::Shape::Vec(parts) => {
@@ -15055,6 +15064,18 @@ mod tests {
                     if ctx.memory(|memory| memory.focused()).is_some() && !rects.is_empty() {
                         assert!(rects.iter().all(|hint| row.contains_rect(*hint)));
                     }
+                    let tree = output
+                        .platform_output
+                        .accesskit_update
+                        .as_ref()
+                        .expect("accessibility tree");
+                    let labels: Vec<_> = tree
+                        .nodes
+                        .iter()
+                        .filter_map(|(_, node)| node.label())
+                        .filter(|label| *label == "Show message" || *label == "···")
+                        .collect();
+                    assert_eq!(labels, ["Show message"], "only the restore button is named");
                     output.textures_delta.clear();
                 }
                 // The focus frame must paint the readable hint, not suppress it.

@@ -62,6 +62,8 @@ Implement approved artboard4: no permanent visible label, compact32px seam/ellip
 
 Keyboard review follow-up: focused restoration text now replaces the ellipsis inside the seam, never outside the row where outgoing alignment could clip it. Narrow incoming/outgoing focus-label coverage added. Native test-target compilation passes. Actual Linux keyboard navigation exercised from the composer through Tab stops; Show message is visible within the focused seam in dark and light captures. Mac execution remains unverified.
 
+Reviewer follow-up: the seam paints its visual hint without a second accessibility label. The focused regression rejects elided galleys, checks painted glyphs, and asserts one accessible restore name. Formatting passes; local Clippy exceeded the bounded run without diagnostics, so execution and compile validation await fresh CI.
+
 ## 2026-11-20: One receipt per automation request, bounded receipt history
 
 The follow-on review found HTTP and the shared write handler both recording a
