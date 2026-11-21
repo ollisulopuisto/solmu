@@ -16007,11 +16007,20 @@ mod tests {
             );
             output.textures_delta.clear();
         };
+        #[derive(Debug)]
+        struct FixtureDrop(PathBuf);
+        impl egui::DroppedFile for FixtureDrop {
+            /// Supplies a synthetic path without consulting the user's files.
+            fn path(&self) -> &std::path::Path {
+                &self.0
+            }
+            /// Drop staging needs only the path, so fixture bytes are empty.
+            fn bytes(&self) -> Result<Vec<u8>, String> {
+                Ok(Vec::new())
+            }
+        }
         let drop_input = || egui::RawInput {
-            dropped_files: vec![egui::DroppedFile {
-                path: Some(dropped.clone()),
-                ..Default::default()
-            }],
+            dropped_files: vec![std::sync::Arc::new(FixtureDrop(dropped.clone()))],
             ..Default::default()
         };
         // Negative control: with nothing owning the window, the drop stages.

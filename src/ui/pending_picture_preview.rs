@@ -237,7 +237,7 @@ mod tests {
     }
     #[test]
     fn a_native_caret_chord_reaches_a_focused_dialog_field() {
-        use crate::model::Dialog;
+        use crate::model::{Chat, Dialog};
         let root = tempfile::tempdir().unwrap();
         let (mut app, _) = App::headless(
             crate::paths::AppDirs::under(root.path()),
