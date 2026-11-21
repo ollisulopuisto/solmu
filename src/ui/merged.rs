@@ -823,7 +823,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 .and_then(|conv| conv.messages.get(*idx))
         })
         .collect();
-    super::reply_threads::bar(ui);
+    super::reply_threads::bar(ui, app.locale);
     let thread_root = super::reply_threads::current(ui.ctx());
     let filtered =
         thread_root.is_some() || !state.search.trim().is_empty() || state.source_filter.is_some();
@@ -1256,6 +1256,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         })
         .inner;
     super::reply_threads::finish(ui, app.conversation_palette().accent);
+    // The linked timeline shows the thread in place, so it never gets the
+    // modal; the jump chips still apply.
+    super::reply_threads::paint_jump_chips(ui, app.locale);
     if thread_root.is_none() {
         super::reply_threads::complete_full_scroll(ui.ctx(), output.id, output.state);
     }

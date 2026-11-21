@@ -398,6 +398,8 @@ fn header(
                         chat: chat.to_owned(),
                         message: message.clone(),
                         beside_menu: false,
+                        // The viewer floats above both bubble passes.
+                        from_thread: false,
                     });
                 }
                 if theme::icon_button(

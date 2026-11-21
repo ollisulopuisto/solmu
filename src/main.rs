@@ -431,6 +431,11 @@ fn run() -> eframe::Result<()> {
         .demo_page
         .as_deref()
         .is_some_and(|page| page.split(',').any(|part| part.trim() == "link-menu"));
+    #[cfg(feature = "demo")]
+    let demo_thread = cli
+        .demo_page
+        .as_deref()
+        .is_some_and(|page| page.split(',').any(|part| part.trim() == "thread"));
     let mut update_receipt = launch.receipt;
     // The link, archive, and tray outlive windows. The shell recreates a
     // window when the tray, a notification, or another launch requests one;
@@ -513,6 +518,8 @@ fn run() -> eframe::Result<()> {
                         open_phone_menu: demo_phone_menu,
                         #[cfg(feature = "demo")]
                         link_menu_click: if demo_link_menu { 12 } else { 0 },
+                        #[cfg(feature = "demo")]
+                        open_thread: demo_thread,
                         #[cfg(feature = "demo")]
                         tour,
                     }))
@@ -677,6 +684,8 @@ struct Shell {
     hover: Option<egui::Pos2>,
     #[cfg(feature = "demo")]
     open_phone_menu: bool,
+    #[cfg(feature = "demo")]
+    open_thread: bool,
     #[cfg(feature = "demo")]
     link_menu_click: u8,
 }
@@ -851,6 +860,10 @@ impl Shell {
         #[cfg(feature = "demo")]
         if std::mem::take(&mut self.open_phone_menu) {
             egui::Popup::open_id(ui.ctx(), solmu::demo::phone_menu_popup_id());
+        }
+        #[cfg(feature = "demo")]
+        if std::mem::take(&mut self.open_thread) {
+            solmu::demo::open_thread_shot(app, ui.ctx());
         }
         app.frame_ui(ui);
         let startups: Vec<_> = app

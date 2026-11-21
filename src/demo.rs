@@ -5193,6 +5193,22 @@ pub fn sample_ids() -> Vec<&'static str> {
     SAMPLES.iter().map(|sample| sample.id).collect()
 }
 
+/// `--demo-page thread`: open the first sample chat's thread on the first
+/// window frame, so headless captures show the reply redesign's modal.
+pub fn open_thread_shot(app: &App, ctx: &egui::Context) {
+    let chat = SAMPLES[0].id.to_owned();
+    let scope = crate::ui::reply_threads::scope(app, std::slice::from_ref(&chat));
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            scope,
+            crate::ui::reply_threads::Key {
+                chat,
+                id: "ada-voice".into(),
+            },
+        )
+    });
+}
+
 /// Puts a synthetic call on screen, for the call previews and their layout test.
 ///
 /// Demo mode has no engine, no peer, and no camera, so the surface is handed the same snapshot a
@@ -7940,11 +7956,9 @@ mod tests {
         for shape in shapes {
             collect(&shape.shape, &mut galleys);
         }
-        assert_eq!(
-            galleys.len(),
-            4,
-            "original, incoming quote, outgoing quote, composer preview"
-        );
+        // Reply chips carry no quoted text, so the phrase renders only in
+        // the original bubble and the composer's reply preview.
+        assert_eq!(galleys.len(), 2, "original and composer preview");
         let mut reversed = Vec::new();
         for (index, galley) in galleys.into_iter().enumerate() {
             let x = |letter| {
@@ -8001,10 +8015,9 @@ mod tests {
             collect(&shape.shape, &mut galleys);
         }
         let count = |text: &str| galleys.iter().filter(|g| g.text() == text).count();
-        assert!(
-            count("٤٥") >= 3,
-            "bubble, quote, and chat list preview of \"٤٥\""
-        );
+        // The reply chip shows no quoted text: the bubble and the chat
+        // list preview are the surfaces left for the number.
+        assert!(count("٤٥") >= 2, "bubble and chat list preview of \"٤٥\"");
         assert_eq!(count("١٢:٣٠"), 1, "composer");
         assert_eq!(
             galleys
@@ -13897,10 +13910,12 @@ mod tests {
         let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
         assert!(nodes.iter().any(|(label, _, _)| label == "Save all…"));
         assert!(nodes.iter().any(|(label, _, _)| label == "Download all"));
-        let shapes = frame_sized(&mut app, &ctx, 780.0, Vec::new());
-        assert!(
-            shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("A reference for the album")))
-        );
+        // The quote-free chip replaced the quoted text: the member keeps a
+        // jump button naming its quoted sender alongside the actions.
+        assert!(nodes.iter().any(|(label, role, _)| {
+            label.starts_with("Jump to the original message")
+                && *role == egui::accesskit::Role::Button
+        }));
     }
 
     /// Both local-date dividers and both grouped rows survive an album spanning midnight.
@@ -20202,6 +20217,99 @@ mod tests {
         );
     }
 
+    /// A modified click on a reply-linked bubble's link opens only the link:
+    /// the message gesture must not also jump or select.
+    #[test]
+    fn a_command_click_on_a_link_opens_only_the_link() {
+        let mut app = app();
+        let chat = SAMPLES[0].id.to_owned();
+        let parent = message(
+            &chat,
+            "link-parent",
+            false,
+            1_700_000_000,
+            Content::text("origin"),
+        );
+        let mut row = message(
+            &chat,
+            "link-reply",
+            false,
+            1_700_000_100,
+            Content::text("https://example.com/"),
+        );
+        row.quoted = Some(Quoted {
+            labelled: None,
+            chat: None,
+            id: "link-parent".into(),
+            sender: "someone".into(),
+            sender_name: None,
+            summary: "origin".into(),
+            mentions: Vec::new(),
+        });
+        app.conversations.get_mut(&chat).unwrap().messages = vec![parent, row];
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.backend.record_demo_commands();
+        for _ in 0..4 {
+            render(&mut app, &ctx);
+        }
+        let body = ctx
+            .data(|data| {
+                data.get_temp::<egui::Rect>(
+                    crate::ui::conversation::bubble_id(&chat, "link-reply").with("body"),
+                )
+            })
+            .unwrap();
+        // The reply chip widens the body to the bubble's span, so the
+        // middle can sit past the last glyph; the link starts at the left.
+        let pos = body.left_center() + egui::vec2(20.0, 0.0);
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        let mut opened = Vec::new();
+        for events in [
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
+                press(true),
+            ],
+            vec![press(false)],
+            vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)],
+        ] {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1180.0, 780.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let ctx = ui.ctx().clone();
+                app.background_frame(&ctx);
+                app.frame_ui(ui);
+            });
+            output.textures_delta.clear();
+            for command in output.platform_output.commands {
+                if let egui::OutputCommand::OpenUrl(url) = command {
+                    opened.push(url.url);
+                }
+            }
+        }
+        let jump = app.jump_highlight.as_ref().map(|jump| jump.message.clone());
+        assert_eq!(
+            opened,
+            ["https://example.com/"],
+            "the link opens (selection: {:?}, jump: {jump:?})",
+            app.selection.as_ref().map(|(_, ids)| ids.clone())
+        );
+        assert!(app.selection.is_none(), "no selection starts");
+        assert!(app.jump_highlight.is_none(), "no jump runs");
+    }
+
     #[test]
     fn expanded_text_selection_preserves_quote_and_preview_clicks() {
         for kind in ["quote", "preview"] {
@@ -21742,6 +21850,231 @@ mod tests {
             !after
                 .iter()
                 .any(|(rect, fill)| *fill == band && rect.width() > 600.0)
+        );
+    }
+
+    /// Ctrl-click (Command-click on macOS) on a reply-linked bubble jumps to
+    /// the message it answers; the same click on an unrelated bubble starts
+    /// a selection, as before.
+    #[test]
+    fn a_command_click_jumps_a_linked_bubble_and_selects_a_plain_one() {
+        fn command_click(app: &mut App, ctx: &egui::Context, chat: &str, id: &str) {
+            let rect = ctx
+                .data(|data| {
+                    data.get_temp::<egui::Rect>(
+                        crate::ui::conversation::bubble_id(chat, id).with("rect"),
+                    )
+                })
+                .expect("the bubble is on screen");
+            let pos = rect.center();
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::COMMAND,
+            };
+            for events in [
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
+                    button(true),
+                ],
+                vec![button(false)],
+                vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)],
+            ] {
+                frame_with(app, ctx, events);
+            }
+        }
+        let mut app = app();
+        // A small conversation keeps every row on screen: jumping to the
+        // parent cannot scroll the plain bubble out from under the second
+        // click.
+        let chat = SAMPLES[0].id.to_owned();
+        let mut reply = message(
+            &chat,
+            "threaded-reply",
+            false,
+            1_700_000_100,
+            Content::text("seconded"),
+        );
+        reply.quoted = Some(Quoted {
+            labelled: None,
+            chat: None,
+            id: "plain-parent".into(),
+            sender: "someone".into(),
+            sender_name: None,
+            summary: "origin".into(),
+            mentions: Vec::new(),
+        });
+        app.conversations.get_mut(&chat).unwrap().messages = vec![
+            message(
+                &chat,
+                "plain-parent",
+                false,
+                1_700_000_000,
+                Content::text("origin"),
+            ),
+            reply,
+            message(
+                &chat,
+                "plain-text",
+                false,
+                1_700_000_200,
+                Content::text("nothing linked here"),
+            ),
+        ];
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        command_click(&mut app, &ctx, &chat, "threaded-reply");
+        assert!(
+            app.selection.is_none(),
+            "a linked bubble jumps, not selects"
+        );
+        assert_eq!(
+            app.jump_highlight
+                .as_ref()
+                .map(|jump| jump.message.as_str()),
+            Some("plain-parent"),
+            "the jump lands on the message the reply quotes"
+        );
+        app.jump_highlight = None;
+        command_click(&mut app, &ctx, &chat, "plain-text");
+        assert_eq!(
+            app.selection.as_ref().map(|(_, ids)| ids.as_slice()),
+            Some(&["plain-text".to_owned()][..]),
+            "an unrelated bubble starts a selection"
+        );
+    }
+
+    /// Opening a thread over its visible root redraws that bubble on the
+    /// modal's layer; salted widget ids keep egui from rejecting the pair.
+    #[test]
+    fn a_thread_modal_over_its_visible_root_renders() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        let chat = app.open_chat.clone().unwrap();
+        let scope = crate::ui::reply_threads::scope(&app, std::slice::from_ref(&chat));
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                scope,
+                crate::ui::reply_threads::Key {
+                    chat: chat.clone(),
+                    id: "ada-voice".into(),
+                },
+            )
+        });
+        // Wide window: the thread draws as a modal over the dimmed list.
+        // Before the ids were salted, this pass panicked on the duplicate
+        // registration of the root's bubble.
+        frame_sized(&mut app, &ctx, 780.0, Vec::new());
+        assert!(crate::ui::reply_threads::active(&ctx));
+    }
+
+    /// A reaction picker opened from the thread's menu keeps the thread's
+    /// menu open for it; the transcript's copy of the same bubble does not
+    /// open a second menu behind the modal.
+    #[test]
+    fn a_picker_from_the_thread_keeps_only_the_thread_menu_open() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..3 {
+            render(&mut app, &ctx);
+        }
+        let chat = app.open_chat.clone().unwrap();
+        // A transcript menu left open when the thread's picker appears must
+        // not survive the takeover: it closes, and its published rect goes
+        // with it rather than lingering as residue.
+        let center = ctx
+            .data(|data| {
+                data.get_temp::<egui::Rect>(
+                    crate::ui::conversation::bubble_id(&chat, "ada-voice").with("rect"),
+                )
+            })
+            .expect("the bubble is on screen")
+            .center();
+        let right = |pressed| egui::Event::PointerButton {
+            pos: center,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame_sized(
+            &mut app,
+            &ctx,
+            780.0,
+            vec![egui::Event::PointerMoved(center), right(true)],
+        );
+        frame_sized(&mut app, &ctx, 780.0, vec![right(false)]);
+        frame_sized(&mut app, &ctx, 780.0, Vec::new());
+        assert!(
+            ctx.data(|data| data.get_temp::<egui::Rect>(
+                crate::ui::conversation::bubble_id(&chat, "ada-voice").with("menu-rect")
+            ))
+            .is_some(),
+            "the transcript menu drew after the right-click"
+        );
+        let scope = crate::ui::reply_threads::scope(&app, std::slice::from_ref(&chat));
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                scope,
+                crate::ui::reply_threads::Key {
+                    chat: chat.clone(),
+                    id: "ada-voice".into(),
+                },
+            )
+        });
+        frame_sized(&mut app, &ctx, 780.0, Vec::new());
+        app.apply(
+            crate::model::Action::OpenReactionPicker {
+                chat: chat.clone(),
+                message: "ada-voice".into(),
+                beside_menu: true,
+                from_thread: true,
+            },
+            &ctx,
+        );
+        for _ in 0..2 {
+            frame_sized(&mut app, &ctx, 780.0, Vec::new());
+        }
+        assert!(
+            egui::Popup::is_id_open(
+                &ctx,
+                crate::ui::conversation::thread_bubble_id(&chat, "ada-voice").with("popup"),
+            ),
+            "the thread's menu stays open for its picker"
+        );
+        assert!(
+            !egui::Popup::is_id_open(
+                &ctx,
+                crate::ui::conversation::bubble_id(&chat, "ada-voice").with("popup"),
+            ),
+            "the takeover closes the transcript's menu"
+        );
+        // is_id_open only reads the memory that survives the frame, where a
+        // later open would replace an earlier one. A drawing menu publishes
+        // its rect, which no frame in this test has had a chance to store
+        // for the transcript copy unless that copy really drew a menu.
+        assert!(
+            ctx.data(|data| data.get_temp::<egui::Rect>(
+                crate::ui::conversation::thread_bubble_id(&chat, "ada-voice").with("menu-rect")
+            ))
+            .is_some(),
+            "the thread's menu drew during the frame"
+        );
+        assert!(
+            ctx.data(|data| data.get_temp::<egui::Rect>(
+                crate::ui::conversation::bubble_id(&chat, "ada-voice").with("menu-rect")
+            ))
+            .is_none(),
+            "the transcript copy never drew a menu of its own"
         );
     }
 

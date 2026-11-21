@@ -659,6 +659,9 @@ pub struct App {
     /// The reaction picker came from a message's context menu, which stays
     /// open beside it.
     pub reaction_beside_menu: bool,
+    /// The reaction picker was opened from the open thread's rendering
+    /// pass: its menu anchor lives under the thread's salted bubble id.
+    pub reaction_from_thread: bool,
     /// Demo/test: keep this message's context menu open.
     pub open_message_menu: Option<String>,
     /// Demo/test: keep this chat row's context menu open.
@@ -1725,6 +1728,7 @@ impl App {
             reaction_target: None,
             reaction_anchor: None,
             reaction_beside_menu: false,
+            reaction_from_thread: false,
             open_message_menu: None,
             #[cfg(any(test, feature = "demo"))]
             open_chat_menu: None,
@@ -11998,9 +12002,15 @@ impl App {
             Action::ClosePicker => {
                 let was_reaction = self.reaction_target.is_some();
                 if let Some((chat, message)) = &self.reaction_target {
+                    // The picker may have opened from the thread's salted
+                    // rendering pass; close both popup ids.
                     egui::Popup::close_id(
                         ctx,
                         crate::ui::conversation::bubble_id(chat, message).with("popup"),
+                    );
+                    egui::Popup::close_id(
+                        ctx,
+                        crate::ui::conversation::thread_bubble_id(chat, message).with("popup"),
                     );
                 }
                 self.picker = None;
@@ -12015,22 +12025,40 @@ impl App {
                 chat,
                 message,
                 beside_menu,
+                from_thread,
             } => {
                 self.focus_composer = false;
                 self.emoji_start = None;
                 self.mention_start = None;
                 self.picker = None;
                 let id = crate::ui::conversation::bubble_id(&chat, &message);
+                let thread_id = crate::ui::conversation::thread_bubble_id(&chat, &message);
                 // Anchor to the menu when it stays open, else to the hover
-                // button that opened the picker.
+                // button that opened the picker. A picker opened in the
+                // thread stores its anchors under the salted id.
                 let anchor = if beside_menu {
                     "menu-rect"
                 } else {
                     "react-rect"
                 };
-                self.reaction_anchor =
-                    ctx.data(|data| data.get_temp::<egui::Rect>(id.with(anchor)));
+                // Both views can have a fresh anchor for the same message:
+                // the transcript renders under the thread's modal, and temp
+                // data persists across frames. The click's origin decides.
+                let (first, then) = if from_thread {
+                    (thread_id, id)
+                } else {
+                    (id, thread_id)
+                };
+                self.reaction_anchor = ctx
+                    .data(|data| data.get_temp::<egui::Rect>(first.with(anchor)))
+                    .or_else(|| ctx.data(|data| data.get_temp::<egui::Rect>(then.with(anchor))));
                 self.reaction_beside_menu = beside_menu;
+                self.reaction_from_thread = from_thread;
+                // The pass that did not open the picker keeps no menu: an
+                // already-open one there closes now, so no second menu draws
+                // behind (or over) the owning pass before the frame ends.
+                let other = if from_thread { id } else { thread_id };
+                egui::Popup::close_id(ctx, other.with("popup"));
                 self.reaction_target = Some((chat, message));
                 let frequent: Vec<String> = self
                     .settings
@@ -12330,6 +12358,10 @@ impl App {
                 egui::Popup::close_id(
                     ctx,
                     crate::ui::conversation::bubble_id(&chat, &message).with("popup"),
+                );
+                egui::Popup::close_id(
+                    ctx,
+                    crate::ui::conversation::thread_bubble_id(&chat, &message).with("popup"),
                 );
                 self.reaction_target = None;
                 self.reaction_anchor = None;
@@ -35468,5 +35500,37 @@ mod chat_row_follows_messages_tests {
             true,
         );
         assert_eq!(app.chat("peter").unwrap().last_activity, 100);
+    }
+
+    /// Both the transcript and the open thread can hold a fresh anchor for
+    /// the same message: the click's origin, not a fixed order, picks it.
+    #[test]
+    fn the_reaction_picker_anchors_to_the_view_that_opened_it() {
+        let ctx = egui::Context::default();
+        for from_thread in [false, true] {
+            let mut app = app();
+            let plain = crate::ui::conversation::bubble_id("chat", "m1");
+            let salted = crate::ui::conversation::thread_bubble_id("chat", "m1");
+            let plain_rect =
+                egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(20.0, 8.0));
+            let salted_rect =
+                egui::Rect::from_min_size(egui::pos2(50.0, 50.0), egui::vec2(20.0, 8.0));
+            ctx.data_mut(|d| {
+                d.insert_temp(plain.with("react-rect"), plain_rect);
+                d.insert_temp(salted.with("react-rect"), salted_rect);
+            });
+            app.apply(
+                Action::OpenReactionPicker {
+                    chat: "chat".into(),
+                    message: "m1".into(),
+                    beside_menu: false,
+                    from_thread,
+                },
+                &ctx,
+            );
+            let expected = if from_thread { salted_rect } else { plain_rect };
+            assert_eq!(app.reaction_anchor, Some(expected));
+            assert_eq!(app.reaction_from_thread, from_thread);
+        }
     }
 }

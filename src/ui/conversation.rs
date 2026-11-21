@@ -182,11 +182,23 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 bar
             })
             .inner;
+        // Below the header to the window's edge: the dim veil also covers
+        // the composer, which stays outside the thread and inert under it.
+        let backdrop = ui.available_rect_before_wrap().with_min_y(bar.bottom());
         composer(app, ui, &chat);
         let list = ui.available_rect_before_wrap().with_min_y(bar.top());
         ui.scope_builder(egui::UiBuilder::new().max_rect(list), |ui| {
             messages(app, ui, &chat, bar.height());
         });
+        // An open thread floats over the messages, below the header; the
+        // composer stays outside it, in the dimmed window.
+        super::reply_threads::modal_overlay(
+            app,
+            ui,
+            &chat,
+            backdrop,
+            list.with_min_y(bar.bottom()),
+        );
         // A vibrant window is flat, as Messages is: no shadows over the chat.
         return;
     }
@@ -197,8 +209,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if message_pins_supported() {
         pin_banner(app, ui, &chat);
     }
+    // From below the banners to the window's edge: the dim veil also
+    // covers the composer, which stays outside the thread and inert under it.
+    let backdrop = ui.available_rect_before_wrap();
     composer(app, ui, &chat);
+    let thread_area = ui.available_rect_before_wrap();
     messages(app, ui, &chat, 0.0);
+    // An open thread floats over the messages; the composer stays outside
+    // it, in the dimmed window.
+    super::reply_threads::modal_overlay(app, ui, &chat, backdrop, thread_area);
     // Over the messages, which scroll under the header.
     widgets::paint_shadow_below(
         ui,
@@ -2981,16 +3000,23 @@ fn sticky_date<R>(
 /// beneath the header, which a vibrant window lays over it.
 fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     super::reply_threads::begin(app, ui, std::slice::from_ref(&chat.id));
-    if super::reply_threads::ordinary(app, ui, chat) {
+    let modal = super::reply_threads::modal(app, ui);
+    if !modal && super::reply_threads::ordinary(app, ui, chat) {
         return;
     }
     let palette = app.conversation_palette();
     // Taken up front: `names_or` below borrows the rest of `app` for the
-    // whole function, so a pending scroll must come out before that.
-    let pending_scroll = app.scroll_page.take();
+    // whole function, so a pending scroll must come out before that. While a
+    // thread modal is open the pending page scroll stays for it to take.
+    let pending_scroll = if modal { None } else { app.scroll_page.take() };
     // A scroll gesture that began over the messages stays with them when
-    // the pointer drifts off (#274), taken here for the same reason.
-    let carried = app.scroll_route.take(crate::app::ScrollPane::Messages);
+    // the pointer drifts off (#274), taken here for the same reason. The
+    // thread modal scrolls its own view instead.
+    let carried = if modal {
+        0.0
+    } else {
+        app.scroll_route.take(crate::app::ScrollPane::Messages)
+    };
     // An explicit jump (Ctrl+End, or the return-to-bottom button) must reach
     // the bottom even while a message bubble retains keyboard focus.
     let scroll_forced = std::mem::take(&mut app.scroll_to_bottom_forced);
@@ -3025,7 +3051,14 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     }
     // A pass that draws the list hidden (the first after a chat opens is)
     // gives no widget focus: the request waits for the pass that shows it.
-    let focus_list = if ui.is_visible() {
+    // The open thread modal owns keyboard focus; the dimmed list neither
+    // takes nor keeps it.
+    if modal {
+        ui.memory_mut(|memory| memory.surrender_focus(list_id));
+    }
+    let focus_list = if modal {
+        false
+    } else if ui.is_visible() {
         let deferred = app
             .list_focus_deferred
             .take()
@@ -3147,7 +3180,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             .as_ref()
             .filter(|(id, _)| id == &chat.id)
             .map(|(_, message)| message.as_str()),
-        reaction_menu: app.reaction_beside_menu,
+        // Only the pass that opened the picker keeps its menu open beside
+        // it; the other view renders the same bubble without claiming it.
+        reaction_menu: app.reaction_beside_menu && !app.reaction_from_thread,
         reaction_emoji: &app.settings.reaction_emoji,
         keyboard_navigation: &keyboard_navigation,
         names_or: &names_or,
@@ -3961,8 +3996,17 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                     && ui.input(|input| input.modifiers.command)
                                     && crate::app::can_select(&message.content)
                                 {
-                                    // Ctrl-click (Command-click on macOS) starts a selection.
-                                    actions.push(Action::SelectMessage(message.id.clone()));
+                                    // Ctrl-click (Command-click on macOS) jumps a
+                                    // reply-linked bubble to its parent or next reply;
+                                    // anything else starts a selection.
+                                    if !super::reply_threads::command_click(
+                                        ui.ctx(),
+                                        &chat.id,
+                                        &message.id,
+                                        &mut actions,
+                                    ) {
+                                        actions.push(Action::SelectMessage(message.id.clone()));
+                                    }
                                 }
                                 if current && let Some(response) = &response {
                                     // The list's focus ring goes around its
@@ -4272,6 +4316,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                     .is_some_and(|pos| bar.contains(pos)))
     });
     super::reply_threads::finish(ui, palette.accent);
+    super::reply_threads::paint_jump_chips(ui, app.locale);
     let restored_thread_scroll =
         super::reply_threads::complete_full_scroll(ui.ctx(), output.id, output.state);
     let complete = conversation.complete;
@@ -4674,6 +4719,7 @@ fn open_reaction_picker_action(chat: &str, message: &str) -> Action {
         chat: chat.to_owned(),
         message: message.to_owned(),
         beside_menu: false,
+        from_thread: in_thread_pass(),
     }
 }
 
@@ -4929,7 +4975,10 @@ fn bubble(
                 .ctx()
                 .data(|d| d.get_temp::<String>(previous_id.with("message-id")))
             {
-                actions.push(Action::SelectMessage(id));
+                // Jump when the predecessor is reply-linked, select otherwise.
+                if !super::reply_threads::command_click(ui.ctx(), &message.chat, &id, actions) {
+                    actions.push(Action::SelectMessage(id));
+                }
             }
         }
     }
@@ -5149,10 +5198,24 @@ fn bubble(
                 // Each member keeps its exact message identity for thread entry/jumps.
                 if let Some(items) = album {
                     for item in items {
-                        super::reply_threads::row(ui, item, &painted, view.palette.accent, actions);
+                        super::reply_threads::row(
+                            ui,
+                            item,
+                            &painted,
+                            view.palette.accent,
+                            actions,
+                            view.locale,
+                        );
                     }
                 } else {
-                    super::reply_threads::row(ui, message, &painted, view.palette.accent, actions);
+                    super::reply_threads::row(
+                        ui,
+                        message,
+                        &painted,
+                        view.palette.accent,
+                        actions,
+                        view.locale,
+                    );
                 }
             }
         },
@@ -5432,9 +5495,50 @@ pub fn messages_list_id(chat: &str) -> egui::Id {
     egui::Id::new(("messages-list", chat))
 }
 
-/// Stable message-bubble id used by interaction tests.
+// Render-instance salt for bubble widget ids: the open thread's modal
+// redraws a visible bubble on a second layer, and egui rejects the same
+// id registered twice across layers, so that pass salts every id it
+// makes. None is the conversation itself; tests keep reading those ids.
+thread_local! {
+    static BUBBLE_NS: std::cell::Cell<Option<&'static str>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with every bubble id salted (see `BUBBLE_NS`).
+pub fn with_bubble_ns<R>(ns: &'static str, f: impl FnOnce() -> R) -> R {
+    struct Reset(Option<&'static str>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            BUBBLE_NS.with(|ns| ns.set(self.0));
+        }
+    }
+    let previous = BUBBLE_NS.with(|cell| cell.replace(Some(ns)));
+    let _reset = Reset(previous);
+    f()
+}
+
+/// The salt the open thread's second rendering pass uses for its bubble
+/// ids (see `BUBBLE_NS`).
+pub const THREAD_BUBBLE_NS: &str = "thread";
+
+/// True while the thread's salted rendering pass runs (see `BUBBLE_NS`):
+/// anchors the pass stores live under the salted bubble id, not the
+/// transcript's, and actions need to know which ones to read.
+pub fn in_thread_pass() -> bool {
+    BUBBLE_NS.with(|ns| ns.get() == Some(THREAD_BUBBLE_NS))
+}
+
+/// The bubble id under the thread's salt: app-level actions apply outside
+/// any render pass, where no salt is set, so both variants are named.
+pub fn thread_bubble_id(chat: &str, message: &str) -> egui::Id {
+    egui::Id::new(("bubble", THREAD_BUBBLE_NS, chat, message))
+}
+
 pub fn bubble_id(chat: &str, message: &str) -> egui::Id {
-    egui::Id::new(("bubble", chat, message))
+    BUBBLE_NS.with(|ns| match ns.get() {
+        Some(ns) => egui::Id::new(("bubble", ns, chat, message)),
+        None => egui::Id::new(("bubble", chat, message)),
+    })
 }
 
 /// Where a voice message's speed chip was drawn, for interaction tests.
@@ -6065,18 +6169,20 @@ fn bubble_frame(
             }
             None
         } else if let Some(messages) = album {
-            for member in messages {
-                if let Some(quoted) = &member.quoted {
-                    quote_block(ui, view, member, quoted, settled.unwrap_or(cap), actions);
+            ui.horizontal_wrapped(|ui| {
+                for member in messages {
+                    if let Some(quoted) = &member.quoted {
+                        quote_chip(ui, view, member, quoted, actions);
+                    }
                 }
-            }
+            });
             tiles = album_content(ui, view, messages, settled.unwrap_or(cap), actions);
             None
         } else {
             match settled {
                 Some(width) => {
                     if let Some(quoted) = &message.quoted {
-                        quote_block(ui, view, message, quoted, width, actions);
+                        quote_chip(ui, view, message, quoted, actions);
                     }
                     content(ui, view, message, width, reserve, actions)
                 }
@@ -6391,9 +6497,15 @@ fn bubble_frame(
             context_menu(ui, view, menu_target, MenuOrigin::Chat, actions);
         }
     });
+    // The rect is this frame's truth, published only while the menu draws:
+    // a superseded or closed menu must not leave one behind, or later frames
+    // (and picker anchors) would read a menu that is no longer there.
     if let Some(menu) = menu {
         ui.ctx()
             .data_mut(|data| data.insert_temp(bubble_id.with("menu-rect"), menu.response.rect));
+    } else {
+        ui.ctx()
+            .data_mut(|data| data.remove::<Rect>(bubble_id.with("menu-rect")));
     }
     // Keep the target explicit for every menu action, not just the emoji
     // picker. Paint in the message layer so the menu itself remains above it.
@@ -6898,22 +7010,20 @@ fn quoted_sender_name(view: &View<'_>, quoted: &crate::model::Quoted, you: &str)
     }
 }
 
-fn quote_block(
+/// The compact reply chip that replaced the full quote block: the quoted
+/// sender's bar and a jump glyph, no quoted text. The link itself reads from
+/// the hover route `reply_threads` draws and from this chip's tooltip; the
+/// quoted sender and summary still read from the bubble's label.
+fn quote_chip(
     ui: &mut egui::Ui,
     view: &View<'_>,
     message: &Message,
     quoted: &crate::model::Quoted,
-    width: f32,
     actions: &mut Vec<Action>,
 ) {
     let palette = view.palette;
     let mine = quotes_me(view, quoted);
-    let who = quoted_sender_name(view, quoted, "You");
-    let summary = markup::plain(
-        &quoted.summary_in(view.locale),
-        &quote_mentions(view, quoted),
-    );
-    // As in WhatsApp, the bar and name take the quoted sender's colour, the
+    // As in WhatsApp, the bar and glyph take the quoted sender's colour, the
     // one their name has in groups, kept readable on this bubble.
     let bubble = if message.from_me {
         palette.bubble_out
@@ -6936,28 +7046,16 @@ fn quote_block(
         .fill(colours.fill)
         .corner_radius(CornerRadius::same(QUOTE_RADIUS))
         .inner_margin(Margin {
-            left: QUOTE_BAR as i8 + 7,
-            right: 10,
-            top: 5,
-            bottom: 6,
+            left: QUOTE_BAR as i8 + 5,
+            right: 7,
+            top: 3,
+            bottom: 4,
         })
         .show(ui, |ui| {
-            // Include frame margins in the settled width. Use a bounded,
-            // left-aligned layout because own bubbles inherit right-to-left flow.
-            let inner_width = (width - QUOTE_BAR - 17.0).max(0.0);
-            ui.allocate_ui_with_layout(
-                vec2(inner_width, 0.0),
-                Layout::top_down(Align::Min),
-                |ui| {
-                    ui.set_width(inner_width);
-                    ui.spacing_mut().item_spacing.y = 1.0;
-                    widgets::rich_text(ui, &who, theme::semibold(12.5), colours.name);
-                    widgets::rich_text(ui, &summary, theme::regular(12.5), colours.text);
-                },
-            );
+            widgets::rich_text(ui, "↩", theme::semibold(14.0), colours.name);
         })
         .response;
-    // The bar runs the quote's full height along its rounded left edge.
+    // The bar runs the chip's full height along its rounded left edge.
     let bar = Rect::from_min_size(response.rect.min, vec2(QUOTE_BAR, response.rect.height()));
     ui.painter().rect_filled(
         bar,
@@ -6981,15 +7079,40 @@ fn quote_block(
             ui.id().with(("quote", &message.id, &quoted.id)),
             Sense::click(),
         )
-        .on_hover_cursor(egui::CursorIcon::PointingHand);
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(crate::i18n::gettext(
+            view.locale,
+            "Jump to the original message",
+        ));
+    let who = quoted_sender_name(view, quoted, &crate::i18n::gettext(view.locale, "You"));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            format!(
+                "{}, {}",
+                crate::i18n::gettext(view.locale, "Jump to the original message"),
+                who
+            ),
+        )
+    });
     if response.clicked() {
-        if let Some(chat) = &quoted.chat {
-            actions.push(Action::OpenMessage {
-                chat: chat.clone(),
-                message: quoted.id.clone(),
-            });
-        } else {
-            actions.push(Action::ScrollTo(quoted.id.clone()));
+        let target = crate::reply_graph::Key {
+            chat: quoted.chat.clone().unwrap_or_else(|| message.chat.clone()),
+            id: quoted.id.clone(),
+        };
+        // Inside an open thread that already shows the target, the jump
+        // scrolls the thread itself; otherwise leave and land on it.
+        if !super::reply_threads::jump_within_thread(ui.ctx(), &target) {
+            super::reply_threads::prepare_jump_back(ui.ctx());
+            if let Some(chat) = &quoted.chat {
+                actions.push(Action::OpenMessage {
+                    chat: chat.clone(),
+                    message: quoted.id.clone(),
+                });
+            } else {
+                actions.push(Action::ScrollTo(quoted.id.clone()));
+            }
         }
     }
 }
@@ -7898,8 +8021,15 @@ pub(crate) fn linked_bubble(
         // Nothing scrolls, highlights, or selects in a list row.
         anchor: None,
         open_menu: None,
-        reaction: None,
-        reaction_menu: false,
+        // When the picker was opened from the thread's pass, this pass owns
+        // the target: it keeps its menu open and places it by the picker.
+        reaction: app
+            .reaction_target
+            .as_ref()
+            .filter(|_| app.reaction_from_thread)
+            .filter(|(id, _)| id == &chat.id)
+            .map(|(_, message)| message.as_str()),
+        reaction_menu: app.reaction_beside_menu && app.reaction_from_thread,
         reaction_emoji: &app.settings.reaction_emoji,
         keyboard_navigation: &keyboard_navigation,
         names_or: &names_or,
@@ -8202,6 +8332,7 @@ fn context_menu(
                     chat: chat.clone(),
                     message: message.id.clone(),
                     beside_menu: true,
+                    from_thread: in_thread_pass(),
                 });
             }
         },
@@ -10543,7 +10674,15 @@ fn rich_body_full(
                     Action::ToggleSelected(message.id.clone())
                 });
             } else if modifiers.command {
-                actions.push(Action::SelectMessage(message.id.clone()));
+                // Jump reply-linked bubbles; select the rest.
+                if !super::reply_threads::command_click(
+                    ui.ctx(),
+                    &message.chat,
+                    &message.id,
+                    actions,
+                ) {
+                    actions.push(Action::SelectMessage(message.id.clone()));
+                }
             }
         }
     }
@@ -10689,6 +10828,34 @@ fn rich_body_full(
                         actions.push(Action::CopyText(copy_text.clone()));
                     }
                 });
+        }
+    }
+    // A modified click on a link belongs to the link, never to the message.
+    // The pointer position comes from hover, as in the link branch below:
+    // on the release frame that decides `clicked` there is no interaction
+    // position left, and the gesture would fire beside the open.
+    let over_link = !laid.links.is_empty()
+        && response.hover_pos().is_some_and(|pos| {
+            laid.galley.rows.iter().any(|row| {
+                Rect::from_min_size(origin + row.pos.to_vec2(), row.row.size).contains(pos)
+            }) && {
+                let cursor = laid.galley.cursor_from_pos(pos - origin);
+                laid.link_at(cursor.index.0).is_some()
+            }
+        });
+    if response.clicked()
+        && !response.double_clicked()
+        && !padding
+        && !view.selecting
+        && !over_link
+        && ui.input(|input| input.modifiers.command)
+        && crate::app::can_select(&message.content)
+    {
+        // The text hit target owns clicks on the words themselves: a
+        // modified click there jumps a reply-linked bubble, as in the
+        // padding, and keeps selecting an unrelated one.
+        if !super::reply_threads::command_click(ui.ctx(), &message.chat, &message.id, actions) {
+            actions.push(Action::SelectMessage(message.id.clone()));
         }
     }
     if !laid.links.is_empty()
@@ -13845,7 +14012,7 @@ mod tests {
         let action = open_reaction_picker_action("chat@example", "message-42");
         assert!(matches!(
             action,
-            Action::OpenReactionPicker { chat, message, beside_menu: false }
+            Action::OpenReactionPicker { chat, message, beside_menu: false, from_thread: false }
                 if chat == "chat@example" && message == "message-42"
         ));
     }

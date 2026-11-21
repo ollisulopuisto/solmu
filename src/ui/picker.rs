@@ -388,10 +388,15 @@ fn reaction_picker(app: &mut App, ctx: &egui::Context) {
     let palette = app.palette;
     let screen = ctx.content_rect();
     let menu = if app.reaction_beside_menu {
-        ctx.data(|data| {
-            data.get_temp::<Rect>(conversation::bubble_id(&chat, &message).with("menu-rect"))
-        })
-        .or(app.reaction_anchor)
+        // The open menu's rect lives under the id of the pass that opened
+        // it: the thread's salted id for a click in the thread.
+        let menu_id = if app.reaction_from_thread {
+            conversation::thread_bubble_id(&chat, &message)
+        } else {
+            conversation::bubble_id(&chat, &message)
+        };
+        ctx.data(|data| data.get_temp::<Rect>(menu_id.with("menu-rect")))
+            .or(app.reaction_anchor)
     } else {
         app.reaction_anchor
     };
