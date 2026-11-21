@@ -4651,6 +4651,7 @@ impl App {
             return false;
         };
         message.from_me
+            && !matches!(message.status, Delivery::Pending | Delivery::Failed)
             && matches!(message.content, Content::Text { .. })
             && crate::util::now() - message.timestamp <= window.as_secs() as i64
     }
@@ -8820,16 +8821,20 @@ impl App {
 
     /// The most recent own text message in the open chat, for Arrow-Up
     /// editing. Non-text and revoked messages cannot be edited and are
-    /// skipped.
+    /// skipped. Hidden and unsent rows are never shortcut edit targets.
     pub(crate) fn previous_own_editable(&self) -> Option<String> {
         let open = self.open_chat.as_deref()?;
         let chat = self.chat(open)?;
         let conversation = self.conversations.get(open)?;
+        let hidden = crate::hidden_messages::ids_in(
+            &self.settings.beeper.hidden_messages,
+            &self.later_key(chat),
+        );
         conversation
             .messages
             .iter()
             .rev()
-            .find(|message| self.can_edit(chat, message))
+            .find(|message| !hidden.contains(message.id.as_str()) && self.can_edit(chat, message))
             .map(|message| message.id.clone())
     }
 
@@ -16029,6 +16034,68 @@ mod tests {
         assert_eq!(app.settings_search, "Local AI");
         assert_eq!(app.page, Page::Settings);
         assert!(inbox.try_recv().is_err());
+    }
+
+    #[test]
+    fn edit_latest_skips_hidden_pending_failed_and_attachment_rows() {
+        for (status, hidden, attachment) in [
+            (Delivery::Pending, false, false),
+            (Delivery::Failed, false, false),
+            (Delivery::Sent, true, false),
+            (Delivery::Sent, false, true),
+            (Delivery::Read, false, false),
+        ] {
+            let mut app = app();
+            let chat = "edit-source";
+            let known = Chat::new(chat.into(), "Fixture".into());
+            let key = app.later_key(&known);
+            app.chats.push(known);
+            app.open_chat = Some(chat.into());
+            let mut first = message(chat, "first", crate::util::now() - 2);
+            first.from_me = true;
+            first.status = Delivery::Sent;
+            first.content = Content::text("first");
+            let mut latest = first.clone();
+            latest.id = "latest".into();
+            latest.timestamp += 1;
+            latest.status = status;
+            if attachment {
+                latest.content = Content::Image {
+                    motion: None,
+                    caption: Some("caption".into()),
+                    media: Media {
+                        mime: "image/png".into(),
+                        size: 1,
+                        width: None,
+                        height: None,
+                        album: Some("album".into()),
+                        path: None,
+                        state: MediaState::Idle,
+                    },
+                };
+            }
+            app.conversations.entry(chat.into()).or_default().messages = vec![first, latest];
+            if hidden {
+                crate::hidden_messages::set(
+                    &mut app.settings.beeper.hidden_messages,
+                    key,
+                    "latest".into(),
+                    true,
+                );
+            }
+            let accepted =
+                !hidden && !attachment && !matches!(status, Delivery::Pending | Delivery::Failed);
+            assert_eq!(
+                app.previous_own_editable().as_deref(),
+                Some(if accepted { "latest" } else { "first" })
+            );
+            if matches!(status, Delivery::Pending | Delivery::Failed) {
+                assert!(!app.can_edit(
+                    app.chat(chat).unwrap(),
+                    &app.conversations[chat].messages[1]
+                ));
+            }
+        }
     }
 
     #[test]
