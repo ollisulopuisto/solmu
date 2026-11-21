@@ -5521,7 +5521,7 @@ pub fn with_bubble_ns<R>(ns: &'static str, f: impl FnOnce() -> R) -> R {
 /// ids (see `BUBBLE_NS`).
 pub const THREAD_BUBBLE_NS: &str = "thread";
 
-/// True while the thread's salted rendering pass runs (see [`BUBBLE_NS`]):
+/// True while the thread's salted rendering pass runs (see `BUBBLE_NS`):
 /// anchors the pass stores live under the salted bubble id, not the
 /// transcript's, and actions need to know which ones to read.
 pub fn in_thread_pass() -> bool {
