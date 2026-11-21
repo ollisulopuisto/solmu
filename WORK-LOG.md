@@ -269,6 +269,10 @@ explicit approval, and every size/hash must be recomputed from the published
 assets before merge. Docs and changelog updated to say so. Not run locally:
 no Rust toolchain on this box; fmt/check/clippy/tests run in CI.
 
+## Restore saved voice and video transcripts,20 November
+
+The private on-disk store already persisted transcripts. Bubble status only read hot memory, so after restart saved text could be searchable while the same bubble offered Transcribe again. Restore exact account/chat/message text asynchronously with bounded concurrent reads, versioned hit/miss cache, and deletion/drop checks. Use the archive reader for bubble text even with the speech engine off. Save/drop/reopen voice/video display and search regression failed against the old getter and passes after the fix. All focused worker tests pass in an isolated production-module harness; native test-target compilation passes. Full app/Mac runtime unverified. No new GUI or release.
+
 ## 2026-11-18: Recent grouped sections: activity order, unread filter, dim-on-read
 
 Branch feat/recent-unread-sections. Read README/WORK-LOG; no root agent/board

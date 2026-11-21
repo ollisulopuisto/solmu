@@ -235,6 +235,9 @@ impl Store {
         temporary.write_all(text.as_bytes())?;
         temporary.as_file().sync_all()?;
         temporary.persist(&file).map_err(|error| error.error)?;
+        // File sync protects bytes; directory sync makes the rename durable.
+        #[cfg(unix)]
+        std::fs::File::open(file.parent().unwrap())?.sync_all()?;
         self.evict()?;
         self.bump();
         Ok(())
