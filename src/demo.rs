@@ -11436,6 +11436,7 @@ mod tests {
         let sender = "4930111222333@s.whatsapp.net";
         for chat in app.chats.iter_mut() {
             if chat.id == group || chat.id == typing {
+                chat.network = None;
                 chat.last = Some(crate::model::LastMessage {
                     reaction: None,
                     labelled: false,
@@ -11479,10 +11480,7 @@ mod tests {
         // Rests the pointer on the preview line of `chat` past the tooltip
         // delay and returns every text painted in the last frame.
         let clock = std::cell::Cell::new(10.0);
-        let rest_on = |app: &mut App, chat: &str| -> Vec<String> {
-            let index = |id: &str| app.chats.iter().position(|row| row.id == id).unwrap();
-            let offset = (index(chat) as f32 - index(group) as f32) * crate::theme::ROW_HEIGHT;
-            let pos = long_area.left_center() + egui::vec2(20.0, offset);
+        let rest_at = |app: &mut App, pos: egui::Pos2| -> Vec<String> {
             let mut shapes = Vec::new();
             for step in 0..6 {
                 clock.set(clock.get() + 0.3);
@@ -11517,6 +11515,28 @@ mod tests {
                 })
                 .collect()
         };
+
+        let rest_on = |app: &mut App, chat: &str| -> Vec<String> {
+            let index = |id: &str| app.chats.iter().position(|row| row.id == id).unwrap();
+            let offset = (index(chat) as f32 - index(group) as f32) * crate::theme::ROW_HEIGHT;
+            rest_at(app, long_area.left_center() + egui::vec2(20.0, offset))
+        };
+        // Open the networkless row's title tooltip first, then move straight
+        // into its truncated preview without leaving the row.
+        let title_area = ctx
+            .read_response(crate::ui::chats::title_hover_id(group))
+            .unwrap()
+            .rect;
+        assert!(!title_area.intersects(long_area));
+        let full_title = app.chat_title(app.chats.iter().find(|chat| chat.id == group).unwrap());
+        let title_texts = rest_at(&mut app, title_area.left_center() + egui::vec2(20.0, 0.0));
+        assert!(
+            title_texts
+                .iter()
+                .filter(|text| *text == &full_title)
+                .count()
+                >= 2
+        );
 
         // A galley keeps its whole text however much of it shows, so the
         // row's own preview counts once and the tooltip adds a second.

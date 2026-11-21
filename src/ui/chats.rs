@@ -2898,10 +2898,15 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
         preview.paint(ui, pos2(x, line_y), preview_color);
     }
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let response = response.on_hover_text(chat_title_tooltip(
-        &app.chat_title(chat),
-        chat.network.as_deref(),
-    ));
+    let title_area = Rect::from_min_max(
+        pos2(rect.left(), chat_row_text_top(rect)),
+        pos2(rect.right(), chat_row_text_top(rect) + 20.0),
+    );
+    ui.interact(title_area, title_hover_id(&chat.id), Sense::hover())
+        .on_hover_text(chat_title_tooltip(
+            &app.chat_title(chat),
+            chat.network.as_deref(),
+        ));
     if let Some((area, prefix, full)) = full_preview {
         full_preview_tooltip(app, ui, &chat.id, area, &prefix, &full);
     }
@@ -2975,6 +2980,10 @@ const FULL_PREVIEW_ROWS: usize = 12;
 const FULL_PREVIEW_CHARS: usize = 2_000;
 
 /// Where a chat row's latest-message preview sits, for hover tests.
+pub fn title_hover_id(chat: &str) -> egui::Id {
+    egui::Id::new(("chat-title-hover", chat))
+}
+
 pub fn preview_id(chat: &str) -> egui::Id {
     egui::Id::new(("chat-preview", chat))
 }
