@@ -182,7 +182,20 @@ impl Store {
 
     pub fn remove_account(&self, account: &str) -> std::io::Result<()> {
         let result = if let Some(backend) = &self.encrypted {
-            backend.remove(account, None, None)
+            let mut result = backend.remove(account, None, None);
+            // Pending legacy plaintext goes too, or a later migration would
+            // resurrect the removed account's transcripts.
+            let path = self.root.join(encode(account));
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    if result.is_ok() {
+                        result = Err(error);
+                    }
+                }
+            }
+            result
         } else {
             let path = self.root.join(encode(account));
             if path.exists() {
@@ -221,9 +234,20 @@ impl Store {
     /// Removes one transcript, e.g. when its message is deleted.
     pub fn remove(&self, account_id: &str, chat_id: &str, message_id: &str) -> std::io::Result<()> {
         if let Some(backend) = &self.encrypted {
-            backend.remove(account_id, Some(chat_id), Some(message_id))?;
+            let mut result = backend.remove(account_id, Some(chat_id), Some(message_id));
+            // Pending legacy plaintext goes too, or a later migration would
+            // resurrect the deleted transcript.
+            match std::fs::remove_file(self.file_for(account_id, chat_id, message_id)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    if result.is_ok() {
+                        result = Err(error);
+                    }
+                }
+            }
             self.bump();
-            return Ok(());
+            return result;
         }
         match std::fs::remove_file(self.file_for(account_id, chat_id, message_id)) {
             Ok(()) => Ok(()),
@@ -237,9 +261,22 @@ impl Store {
     /// Privacy control: removes every transcript of one chat.
     pub fn remove_chat(&self, account_id: &str, chat_id: &str) -> std::io::Result<()> {
         if let Some(backend) = &self.encrypted {
-            backend.remove(account_id, Some(chat_id), None)?;
+            let mut result = backend.remove(account_id, Some(chat_id), None);
+            // Pending legacy plaintext goes too, or a later migration would
+            // resurrect the deleted chat's transcripts.
+            let file = self.file_for(account_id, chat_id, "_");
+            let dir = file.parent().map(Path::to_path_buf).unwrap_or(file);
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    if result.is_ok() {
+                        result = Err(error);
+                    }
+                }
+            }
             self.bump();
-            return Ok(());
+            return result;
         }
         let file = self.file_for(account_id, chat_id, "_");
         let dir = file.parent().map(Path::to_path_buf).unwrap_or(file);
@@ -1156,6 +1193,25 @@ mod tests {
         store.clear().unwrap();
         assert!(store.get("1", "chat", "voice").is_none());
         assert!(legacy.read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn encrypted_deletions_also_remove_pending_legacy_plaintext() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("state").join("transcripts");
+        let store = Store::encrypted(legacy.clone(), 1 << 20).unwrap();
+        let plaintext = Store::new(legacy.clone(), 1 << 20).unwrap();
+        plaintext.put("1", "chat", "voice", "legacy words").unwrap();
+        plaintext.put("1", "chat", "video", "more legacy").unwrap();
+        plaintext.put("1", "other", "voice", "other chat").unwrap();
+        // No account archive exists here, so the encrypted removal errors;
+        // the legacy plaintext must still be deleted.
+        let _ = store.remove("1", "chat", "voice");
+        assert!(plaintext.get("1", "chat", "voice").is_none());
+        let _ = store.remove_chat("1", "chat");
+        assert!(plaintext.get("1", "chat", "video").is_none());
+        let _ = store.remove_account("1");
+        assert!(plaintext.get("1", "other", "voice").is_none());
     }
 
     struct EchoEngine;
