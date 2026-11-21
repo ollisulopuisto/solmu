@@ -12,7 +12,7 @@ and UNKNOWN. Network, lookup, parsing, missing-tool and build errors are UNKNOWN
 never a clean result. Findings do not block merging. Logs remain subject to
 GitHub's ordinary retention; there is no separate result/artifact storage.
 
-Gitleaks scans all fetched history with complete redaction. Only locations and
+Gitleaks scans all fetched history, including merge-resolution patches, with complete redaction. Only locations and
 rule IDs are printed. Bandit covers every tracked Python file, including tests
 and packaging scripts, so assertion/subprocess findings need human triage.
 Every tracked npm lock is audited without installation or lifecycle scripts;
