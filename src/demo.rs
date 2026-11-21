@@ -11528,8 +11528,8 @@ mod tests {
             .unwrap()
             .rect;
         assert!(
-            title_area.bottom() <= long_area.top(),
-            "title and preview may share an edge but must not overlap"
+            crate::ui::chats::title_precedes_preview(title_area, long_area),
+            "title and preview hover targets must have a positive gap"
         );
         let full_title = app.chat_title(app.chats.iter().find(|chat| chat.id == group).unwrap());
         let title_texts = rest_at(&mut app, title_area.left_center() + egui::vec2(20.0, 0.0));

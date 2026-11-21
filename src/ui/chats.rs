@@ -2900,7 +2900,8 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let title_area = Rect::from_min_max(
         pos2(rect.left(), chat_row_text_top(rect)),
-        pos2(rect.right(), chat_row_text_top(rect) + 20.0),
+        // Leave a one-point neutral gap before the preview hover area.
+        pos2(rect.right(), chat_row_text_top(rect) + 19.0),
     );
     ui.interact(title_area, title_hover_id(&chat.id), Sense::hover())
         .on_hover_text(chat_title_tooltip(
@@ -2979,11 +2980,18 @@ const FULL_PREVIEW_ROWS: usize = 12;
 /// hold, so a very long message costs no more than a long one.
 const FULL_PREVIEW_CHARS: usize = 2_000;
 
-/// Where a chat row's latest-message preview sits, for hover tests.
+/// Strict ordering keeps tooltip hit targets unambiguous.
+#[cfg(test)]
+pub fn title_precedes_preview(title: Rect, preview: Rect) -> bool {
+    title.bottom() < preview.top()
+}
+
+/// Stable title hover target, separate from the click and preview targets.
 pub fn title_hover_id(chat: &str) -> egui::Id {
     egui::Id::new(("chat-title-hover", chat))
 }
 
+/// Where a chat row's latest-message preview sits, for hover tests.
 pub fn preview_id(chat: &str) -> egui::Id {
     egui::Id::new(("chat-preview", chat))
 }
@@ -3696,6 +3704,20 @@ fn advance_after_ticks(delivery: crate::model::Delivery) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn title_preview_gap_rejects_touching_and_overlapping_regions() {
+        use egui::{Rect, pos2};
+        let title = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 19.0));
+        let preview = |top| Rect::from_min_max(pos2(0.0, top), pos2(100.0, 40.0));
+        assert!(super::title_precedes_preview(title, preview(20.0)));
+        assert!(
+            !super::title_precedes_preview(title, preview(19.0)),
+            "touching edge is ambiguous"
+        );
+        assert!(!super::title_precedes_preview(title, preview(18.0)));
+        assert!(!super::title_precedes_preview(preview(20.0), title));
+    }
+
     #[test]
     fn linked_title_hover_keeps_full_name_without_network_subtitle() {
         let title = "A long linked person name that clips in the sidebar";

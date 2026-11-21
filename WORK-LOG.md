@@ -233,6 +233,8 @@ cannot build the crate (PipeWire headers too old) - fmt/clippy/tests and any
 visual check run in CI.
 ## 2026-11-21: Linked sidebar title hover follow-up (#411)
 
+Shared-boundary follow-up: reserve a one-point neutral gap between title and preview hover targets. The native handoff regression requires a strict positive gap; negative controls reject touching, overlapping and reversed regions. Click/drag still belongs to the full row.
+
 Hover arbitration follow-up: title tooltip uses its own non-overlapping top-line hover target, leaving the full row click/drag target unchanged. Extended preview regression opens a networkless name tooltip before moving directly into its message preview.
 
 Reviewer follow-up: retain the full-name hover tooltip without a network subtitle. Focused helper regression covers name-only and unchanged network cases. Formatting passes; runtime validation awaits CI.
