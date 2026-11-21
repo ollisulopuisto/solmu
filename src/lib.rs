@@ -92,6 +92,7 @@ pub mod suggest;
 
 pub mod whisper_runtime;
 
+pub mod media_tool_setup;
 pub mod media_tools;
 pub mod reply_graph;
 

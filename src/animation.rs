@@ -361,17 +361,20 @@ pub fn can_play_video() -> bool {
 
 /// Whether `ffmpeg` is available for other MP4 codecs.
 fn ffmpeg_present() -> bool {
-    static KNOWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *KNOWN.get_or_init(|| {
-        crate::media_tools::resolve("ffmpeg").is_ok_and(|path| {
-            Command::new(path)
-                .arg("-version")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success())
-        })
-    })
+    // Called only by a decoder thread. Do not permanently cache a missing
+    // executable, Preferences can select one during this session.
+    crate::media_tools::resolve("ffmpeg")
+        .is_ok_and(|path| crate::media_tools::verify(&path, "ffmpeg").is_ok())
+}
+
+/// Drop failures and old decoder inboxes when Preferences changes tools.
+/// In-flight old decoders retain their detached inbox, never poisoning retries.
+pub fn media_tools_changed(ctx: &egui::Context) {
+    ctx.data_mut(|data| {
+        data.remove::<Cache>(egui::Id::new("animations"));
+        data.remove::<Inbox>(egui::Id::new("animation-inbox"));
+    });
+    ctx.request_repaint();
 }
 
 /// Decodes up to `limit` frames.
@@ -1590,5 +1593,26 @@ mod probe {
             poster.seconds,
             started.elapsed()
         );
+    }
+}
+
+#[cfg(test)]
+mod media_tool_change_tests {
+    use super::*;
+    #[test]
+    fn changed_tool_retries_failed_media_and_detaches_late_old_failures() {
+        let ctx = egui::Context::default();
+        let path = PathBuf::from("failed-video.mp4");
+        cache(&ctx)
+            .0
+            .lock()
+            .unwrap()
+            .entries
+            .insert(path.clone(), Entry::Failed);
+        let old_inbox = inbox(&ctx);
+        media_tools_changed(&ctx);
+        assert!(cache(&ctx).0.lock().unwrap().entries.is_empty());
+        old_inbox.0.lock().unwrap().push((path, None, true));
+        assert!(inbox(&ctx).0.lock().unwrap().is_empty());
     }
 }

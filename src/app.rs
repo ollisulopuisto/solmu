@@ -469,6 +469,7 @@ pub struct App {
     pub local_ai: crate::backend::local_ai::State,
     pub dirs: AppDirs,
     pub settings: Settings,
+    pub media_tool_setup: crate::media_tool_setup::Setup,
     pub link_previews: Option<crate::preview_worker::Worker>,
     preview_context: Option<(String, Option<ChatId>, bool, bool, bool)>,
     preview_sources: HashSet<(ChatId, String, String)>,
@@ -1575,6 +1576,7 @@ impl App {
         active: usize,
         waker: Waker,
     ) -> Self {
+        crate::media_tools::configure(settings.ffmpeg_path.clone());
         let palette = settings
             .cached_palette()
             .unwrap_or_else(|| match settings.theme {
@@ -1587,6 +1589,7 @@ impl App {
         let app_lock = crate::app_lock::AppLock::new(settings.app_lock_hash.is_some());
         let tray_lockable = settings.app_lock_hash.is_some();
         let mut app = Self {
+            media_tool_setup: Default::default(),
             local_avatar_editor: None,
             beeper_signin: crate::beeper_signin::SignIn::startup(),
             beeper_network_filter: None,
@@ -15010,7 +15013,18 @@ impl App {
         self.toast_error(format!("Could not record: {error}"));
     }
 
+    pub fn check_media_tools(&mut self, request: crate::media_tool_setup::Request) {
+        self.media_tool_setup
+            .start(request, self.waker.clone(), self.locale);
+    }
+
     pub fn frame_ui(&mut self, ui: &mut egui::Ui) {
+        if let Some(choice) = self.media_tool_setup.poll() {
+            crate::media_tools::configure(choice.clone());
+            crate::animation::media_tools_changed(ui.ctx());
+            self.settings.ffmpeg_path = choice;
+            self.mark_settings_dirty();
+        }
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
         self.settle_pending_reply();
