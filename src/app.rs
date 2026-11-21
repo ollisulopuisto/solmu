@@ -12314,6 +12314,19 @@ impl App {
                     self.toast_error(crate::i18n::gettext(self.locale, "Send Later cannot include attachments. Remove the staged files before scheduling text.").into_owned());
                     return;
                 }
+                // Account.id identifies the local Solmu profile, not the
+                // bridge account owning this chat. Never substitute it (or
+                // another linked chat's preferred account) for a missing
+                // Beeper identity.
+                let Some(account) = self
+                    .chat(&chat)
+                    .and_then(|known| known.backend_account.as_ref())
+                    .filter(|account| !account.trim().is_empty())
+                    .cloned()
+                else {
+                    self.toast_error(crate::i18n::gettext(self.locale, "Send Later is unavailable until this chat's account is loaded. Refresh the chat and try again. Your draft is unchanged.").into_owned());
+                    return;
+                };
                 // The composer and quote stay until the scheduler confirms
                 // (`Event::ScheduledAccepted`); a failure loses nothing.
                 self.scheduling_draft = Some(crate::account::SchedulingDraft {
@@ -12325,7 +12338,7 @@ impl App {
                 self.backend.send(Command::ScheduleSend {
                     scheduler_url: self.settings.scheduler_url.clone(),
                     scheduler_token: self.scheduler_token(),
-                    account: self.account().id.to_string(),
+                    account,
                     chat,
                     text,
                     due_at,
@@ -34225,6 +34238,68 @@ mod linked_attachment_tests {
         assert_eq!(app.send_later_chat.as_ref(), Some(&id));
         assert_eq!(app.send_later_repeat, 1);
         assert_eq!(app.composer, "Draft stays here");
+    }
+
+    #[test]
+    fn scheduling_uses_the_selected_bridge_account_not_the_local_profile() {
+        let (_root, mut app, ctx, mut commands) = fixture();
+        app.composer = "Synthetic scheduled text".into();
+        app.apply(
+            Action::ScheduleSend {
+                chat: "visible".into(),
+                text: app.composer.clone(),
+                due_at: 9999999999,
+                quoting: Some("quoted-message".into()),
+                replaces: Some("old-schedule".into()),
+                repeat: None,
+            },
+            &ctx,
+        );
+        let command = commands.try_recv().unwrap();
+        match command {
+            Command::ScheduleSend {
+                account,
+                chat,
+                text,
+                quoting,
+                replaces,
+                ..
+            } => {
+                assert_eq!(account, "whatsapp");
+                assert_ne!(account, app.account().id.to_string());
+                assert_eq!(chat, "visible");
+                assert_eq!(text, "Synthetic scheduled text");
+                assert_eq!(quoting.as_deref(), Some("quoted-message"));
+                assert_eq!(replaces.as_deref(), Some("old-schedule"));
+            }
+            _ => panic!("expected a schedule command"),
+        }
+        assert_eq!(app.composer, "Synthetic scheduled text");
+    }
+
+    #[test]
+    fn scheduling_unknown_or_missing_bridge_identity_keeps_the_draft_and_sends_nothing() {
+        for account in [None, Some(""), Some("   ")] {
+            let (_root, mut app, ctx, mut commands) = fixture();
+            app.chats[0].backend_account = account.map(str::to_owned);
+            app.composer = "Keep this unscheduled draft".into();
+            for chat in ["visible", "unknown-chat"] {
+                app.apply(
+                    Action::ScheduleSend {
+                        chat: chat.into(),
+                        text: app.composer.clone(),
+                        due_at: 9999999999,
+                        quoting: None,
+                        replaces: None,
+                        repeat: None,
+                    },
+                    &ctx,
+                );
+                assert!(commands.try_recv().is_err());
+                assert!(app.scheduling_draft.is_none());
+                assert_eq!(app.composer, "Keep this unscheduled draft");
+            }
+        }
     }
 
     #[test]

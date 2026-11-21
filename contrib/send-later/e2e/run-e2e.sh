@@ -44,11 +44,15 @@ cat > "$HARNESS/src/lib.rs" <<'RS'
 pub mod scheduler {
     include!("scheduler.inc");
 }
+pub mod recurrence {
+    include!("recurrence.inc");
+}
 pub mod scheduler_api {
     include!("scheduler_api.inc");
 }
 RS
 sed 's|^//!|//|' "$REPO/src/scheduler.rs" > "$HARNESS/src/scheduler.inc"
+sed 's|^//!|//|' "$REPO/src/recurrence.rs" > "$HARNESS/src/recurrence.inc"
 sed 's|^//!|//|' "$REPO/src/scheduler_api.rs" > "$HARNESS/src/scheduler_api.inc"
 sed 's/solmu::/harness::/g' "$REPO/src/bin/solmu-scheduler.rs" > "$HARNESS/src/bin/solmu-scheduler.rs"
 (cd "$HARNESS" && cargo +1.98.0 build --release --bin solmu-scheduler)
@@ -56,3 +60,5 @@ export SL_E2E_BIN="$HARNESS/target/release/solmu-scheduler"
 
 echo "== running cases =="
 "$HERE/cases.sh"
+
+python3 "$HERE/closed_client.py" --binary "$SL_E2E_BIN"
