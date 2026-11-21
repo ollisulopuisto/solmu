@@ -11527,7 +11527,10 @@ mod tests {
             .read_response(crate::ui::chats::title_hover_id(group))
             .unwrap()
             .rect;
-        assert!(!title_area.intersects(long_area));
+        assert!(
+            title_area.bottom() <= long_area.top(),
+            "title and preview may share an edge but must not overlap"
+        );
         let full_title = app.chat_title(app.chats.iter().find(|chat| chat.id == group).unwrap());
         let title_texts = rest_at(&mut app, title_area.left_center() + egui::vec2(20.0, 0.0));
         assert!(
