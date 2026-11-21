@@ -21976,12 +21976,23 @@ mod tests {
             ),
             "the thread's menu stays open for its picker"
         );
+        // is_id_open only reads the memory that survives the frame, where a
+        // later open would replace an earlier one. A drawing menu publishes
+        // its rect, which no frame in this test has had a chance to store
+        // for the transcript copy unless that copy really drew a menu.
         assert!(
-            !egui::Popup::is_id_open(
-                &ctx,
-                crate::ui::conversation::bubble_id(&chat, "ada-voice").with("popup"),
-            ),
-            "the transcript copy does not open a second menu"
+            ctx.data(|data| data.get_temp::<egui::Rect>(
+                crate::ui::conversation::thread_bubble_id(&chat, "ada-voice").with("menu-rect")
+            ))
+            .is_some(),
+            "the thread's menu drew during the frame"
+        );
+        assert!(
+            ctx.data(|data| data.get_temp::<egui::Rect>(
+                crate::ui::conversation::bubble_id(&chat, "ada-voice").with("menu-rect")
+            ))
+            .is_none(),
+            "the transcript copy never drew a menu of its own"
         );
     }
 
