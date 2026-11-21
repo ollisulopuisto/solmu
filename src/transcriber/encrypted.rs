@@ -170,61 +170,81 @@ impl Encrypted {
     }
     /// One account transaction is committed and re-read before any source file
     /// is removed. Interrupted migration is safe to repeat; rows win on conflict.
-    pub fn migrate(&self, root: &Path) -> std::io::Result<usize> {
+    /// Migrates each legacy account directory independently: one failing
+    /// account (missing archive, conflicting row, unreadable file) keeps its
+    /// plaintext for the next launch and never blocks later accounts, whose
+    /// transcripts still move and purge. Returns how many transcripts moved
+    /// and the first per-account error, if any.
+    pub fn migrate(&self, root: &Path) -> (usize, Option<std::io::Error>) {
         let mut migrated = 0usize;
-        for encoded in super::subdirs(root) {
-            let account =
-                super::decode(&encoded).ok_or_else(|| io("Invalid legacy transcript account"))?;
-            let mut source = Vec::new();
-            for chat_dir in super::subdirs(&root.join(&encoded)) {
-                let chat =
-                    super::decode(&chat_dir).ok_or_else(|| io("Invalid legacy transcript chat"))?;
-                for entry in std::fs::read_dir(root.join(&encoded).join(&chat_dir))? {
-                    let entry = entry?;
-                    if !entry.file_type()?.is_file() {
-                        continue;
+        let mut first_error = None;
+        let mut encoded_accounts = super::subdirs(root);
+        encoded_accounts.sort();
+        for encoded in encoded_accounts {
+            match self.migrate_account(root, &encoded) {
+                Ok(count) => migrated += count,
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
                     }
-                    let name = entry.file_name();
-                    let Some(stem) = name.to_str().and_then(|n| n.strip_suffix(".txt")) else {
-                        continue;
-                    };
-                    let message = super::decode(stem)
-                        .ok_or_else(|| io("Invalid legacy transcript message"))?;
-                    if entry.metadata()?.len() > super::MAX_SOURCE_BYTES {
-                        return Err(io("Legacy transcript exceeds safe migration size"));
-                    }
-                    let text = std::fs::read_to_string(entry.path())?;
-                    let modified = entry
-                        .metadata()?
-                        .modified()?
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_err(io)?
-                        .as_secs() as i64;
-                    source.push((chat.clone(), message, text, modified, entry.path()));
                 }
-            }
-            if source.is_empty() {
-                continue;
-            }
-            self.with(&account, |c| {
-                let tx = c.transaction().map_err(io)?;
-                for (chat,message,text,modified,_) in &source {
-                    tx.execute("INSERT INTO local_transcripts(chat,message,text,modified) VALUES(?1,?2,?3,?4) ON CONFLICT(chat,message) DO NOTHING",params![chat,message,text,modified]).map_err(io)?;
-                }
-                tx.commit().map_err(io)?;
-                // Read back exact committed text before deleting any plaintext source.
-                for (chat,message,_text,_,_) in &source {
-                    let saved: String = c.query_row("SELECT text FROM local_transcripts WHERE chat=?1 AND message=?2", params![chat,message], |r| r.get(0)).map_err(io)?;
-                    if &saved != _text { return Err(io("Encrypted transcript migration verification failed")); }
-                }
-                Ok(())
-            })?;
-            migrated += source.len();
-            for (_, _, _, _, path) in source {
-                std::fs::remove_file(path)?;
             }
         }
-        Ok(migrated)
+        (migrated, first_error)
+    }
+
+    fn migrate_account(&self, root: &Path, encoded: &str) -> std::io::Result<usize> {
+        let account =
+            super::decode(encoded).ok_or_else(|| io("Invalid legacy transcript account"))?;
+        let mut source = Vec::new();
+        for chat_dir in super::subdirs(&root.join(encoded)) {
+            let chat =
+                super::decode(&chat_dir).ok_or_else(|| io("Invalid legacy transcript chat"))?;
+            for entry in std::fs::read_dir(root.join(encoded).join(&chat_dir))? {
+                let entry = entry?;
+                if !entry.file_type()?.is_file() {
+                    continue;
+                }
+                let name = entry.file_name();
+                let Some(stem) = name.to_str().and_then(|n| n.strip_suffix(".txt")) else {
+                    continue;
+                };
+                let message =
+                    super::decode(stem).ok_or_else(|| io("Invalid legacy transcript message"))?;
+                if entry.metadata()?.len() > super::MAX_SOURCE_BYTES {
+                    return Err(io("Legacy transcript exceeds safe migration size"));
+                }
+                let text = std::fs::read_to_string(entry.path())?;
+                let modified = entry
+                    .metadata()?
+                    .modified()?
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(io)?
+                    .as_secs() as i64;
+                source.push((chat.clone(), message, text, modified, entry.path()));
+            }
+        }
+        if source.is_empty() {
+            return Ok(0);
+        }
+        self.with(&account, |c| {
+            let tx = c.transaction().map_err(io)?;
+            for (chat,message,text,modified,_) in &source {
+                tx.execute("INSERT INTO local_transcripts(chat,message,text,modified) VALUES(?1,?2,?3,?4) ON CONFLICT(chat,message) DO NOTHING",params![chat,message,text,modified]).map_err(io)?;
+            }
+            tx.commit().map_err(io)?;
+            // Read back exact committed text before deleting any plaintext source.
+            for (chat,message,_text,_,_) in &source {
+                let saved: String = c.query_row("SELECT text FROM local_transcripts WHERE chat=?1 AND message=?2", params![chat,message], |r| r.get(0)).map_err(io)?;
+                if &saved != _text { return Err(io("Encrypted transcript migration verification failed")); }
+            }
+            Ok(())
+        })?;
+        let count = source.len();
+        for (_, _, _, _, path) in source {
+            std::fs::remove_file(path)?;
+        }
+        Ok(count)
     }
 }
 
@@ -338,26 +358,67 @@ mod tests {
             .put("1", "chat", "voice", "legacy private words")
             .unwrap();
         let backend = fixture(root.path(), &["1"]);
-        backend.migrate(&legacy).unwrap();
+        let (migrated, error) = backend.migrate(&legacy);
+        assert_eq!(migrated, 1);
+        assert!(error.is_none());
         assert!(store.get("1", "chat", "voice").is_none());
         assert_eq!(
             backend.get("1", "chat", "voice").as_deref(),
             Some("legacy private words")
         );
-        backend.migrate(&legacy).unwrap();
+        let (migrated, error) = backend.migrate(&legacy);
+        assert_eq!(migrated, 0);
+        assert!(error.is_none());
         store
             .put("1", "chat", "voice", "different source must not be lost")
             .unwrap();
-        assert!(backend.migrate(&legacy).is_err());
+        // A conflicting row keeps its account's plaintext, reports the
+        // failure, and leaves the migrated archive text alone.
+        let (migrated, error) = backend.migrate(&legacy);
+        assert_eq!(migrated, 0);
+        assert!(error.is_some());
         assert_eq!(
             store.get("1", "chat", "voice").as_deref(),
             Some("different source must not be lost")
         );
+        assert_eq!(
+            backend.get("1", "chat", "voice").as_deref(),
+            Some("legacy private words")
+        );
         store
             .put("2", "chat", "voice", "no account or key yet")
             .unwrap();
-        assert!(backend.migrate(&legacy).is_err());
+        let (migrated, error) = backend.migrate(&legacy);
+        assert_eq!(migrated, 0);
+        assert!(error.is_some());
         assert!(store.get("2", "chat", "voice").is_some());
+    }
+    #[test]
+    fn a_bad_legacy_account_never_blocks_later_accounts() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("transcripts");
+        let store = super::super::Store::new(legacy.clone(), 1 << 20).unwrap();
+        // "1" sorts first and has no account archive: its plaintext must stay.
+        store
+            .put("1", "chat", "stuck", "orphaned legacy words")
+            .unwrap();
+        store
+            .put("2", "chat", "voice", "later account words")
+            .unwrap();
+        let backend = fixture(root.path(), &["2"]);
+        let (migrated, error) = backend.migrate(&legacy);
+        assert_eq!(migrated, 1, "the later healthy account still migrates");
+        assert!(error.is_some(), "the first account's failure is reported");
+        assert_eq!(
+            backend.get("2", "chat", "voice").as_deref(),
+            Some("later account words")
+        );
+        assert!(store.get("2", "chat", "voice").is_none());
+        assert_eq!(
+            store.get("1", "chat", "stuck").as_deref(),
+            Some("orphaned legacy words"),
+            "the failing account's plaintext waits for the next attempt"
+        );
     }
     #[test]
     fn fresh_beeper_profile_initializes_only_within_existing_account_and_ignores_unavailable_other_account()
