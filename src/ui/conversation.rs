@@ -3001,7 +3001,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     // the pointer drifts off (#274), taken here for the same reason. The
     // thread modal scrolls its own view instead.
     let carried = if modal {
-        None
+        0.0
     } else {
         app.scroll_route.take(crate::app::ScrollPane::Messages)
     };
@@ -3989,7 +3989,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                         ui.ctx(),
                                         &chat.id,
                                         &message.id,
-                                        actions,
+                                        &mut actions,
                                     ) {
                                         actions.push(Action::SelectMessage(message.id.clone()));
                                     }
@@ -5466,12 +5466,11 @@ pub fn messages_list_id(chat: &str) -> egui::Id {
     egui::Id::new(("messages-list", chat))
 }
 
-/// Stable message-bubble id used by interaction tests.
+// Render-instance salt for bubble widget ids: the open thread's modal
+// redraws a visible bubble on a second layer, and egui rejects the same
+// id registered twice across layers, so that pass salts every id it
+// makes. None is the conversation itself; tests keep reading those ids.
 thread_local! {
-    /// Render-instance salt for bubble widget ids: the open thread's modal
-    /// redraws a visible bubble on a second layer, and egui rejects the same
-    /// id registered twice across layers, so that pass salts every id it
-    /// makes. None is the conversation itself; tests keep reading those ids.
     static BUBBLE_NS: std::cell::Cell<Option<&'static str>> =
         const { std::cell::Cell::new(None) };
 }

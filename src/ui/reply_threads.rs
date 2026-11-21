@@ -614,7 +614,7 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
     let pending = frame(ui.ctx()).and_then(|shared| {
         let f = shared.lock().unwrap_or_else(|e| e.into_inner());
         ui.ctx()
-            .data_mut(|d| d.remove_temp::<Key>(f.scope.with("thread-scroll-to")))
+            .data_mut(|d| d.remove::<Key>(f.scope.with("thread-scroll-to")))
     });
     let mut actions = vec![];
     let output = egui::ScrollArea::vertical()
@@ -716,7 +716,7 @@ pub fn modal_overlay(
             // Registered before the content, so clicks in the gaps between
             // widgets land here and never fall through to the dim backdrop.
             let _swallow = ui.interact(rect, ui.id().with("backdrop"), egui::Sense::click());
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                 egui::Frame::new()
                     .fill(tint)
                     .stroke(egui::Stroke::new(2.5, palette.accent))
