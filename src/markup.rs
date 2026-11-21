@@ -757,9 +757,14 @@ impl Prepared {
             &built.quotes,
             &breaks,
         );
-        // Breaks are hard newlines now; keep egui from re-wrapping a line
-        // that shaped a hair wider than the balancer measured.
-        job.wrap.max_width = f32::INFINITY;
+        // Prose keeps its planned breaks. Fenced code must also retain a
+        // hard shaping cap: token measurements can omit trailing whitespace,
+        // but those glyphs still take room before the panel's right inset.
+        if blocks.is_empty() {
+            job.wrap.max_width = f32::INFINITY;
+        } else {
+            job.wrap.max_width = cap;
+        }
         let galley = bidi::layout_job(ui, job.clone());
         let row_kinds = row_kinds(&galley, &blocks, &quotes);
         Self {
@@ -3706,7 +3711,8 @@ mod compact_list_tests {
             ] {
                 let built = build(ui, source, &[], &style, 180.0, false);
                 assert_eq!(built.list_indent, 0.0, "{source}");
-                assert_eq!(built.job.wrap.max_width, 180.0);
+                // Only the code panel's20pt inset, never list indentation.
+                assert_eq!(built.job.wrap.max_width, 160.0);
             }
             let built = build(
                 ui,
