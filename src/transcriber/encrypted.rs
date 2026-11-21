@@ -421,6 +421,69 @@ mod tests {
         );
     }
     #[test]
+    fn partial_migration_wakes_views_and_bumps_the_store_version() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("transcripts");
+        let mut store = super::super::Store::new(legacy.clone(), 1 << 20).unwrap();
+        store
+            .put("1", "chat", "stuck", "orphaned legacy words")
+            .unwrap();
+        store
+            .put("2", "chat", "voice", "later account words")
+            .unwrap();
+        store.encrypted = Some(std::sync::Arc::new(fixture(root.path(), &["2"])));
+        let before = store.version();
+
+        // The worker's migration thread wakes the view even though one
+        // account failed, so the migrated account's text becomes searchable.
+        let wakes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&wakes);
+        let _worker =
+            crate::transcribe_worker::Worker::archive_with_wake(store.clone(), move || {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while wakes.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "partial migration never woke the view"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            store.version() > before,
+            "cached results were not invalidated by the partial migration"
+        );
+        assert_eq!(
+            backend_get(&store, "2", "chat", "voice").as_deref(),
+            Some("later account words")
+        );
+        assert!(!store.file_for("2", "chat", "voice").exists());
+        assert!(store.file_for("1", "chat", "stuck").exists());
+
+        // Negative control: with nothing left to migrate, the retry still
+        // reports the failing account but does not bump the version again,
+        // so cached views are not invalidated a second time.
+        let settled = store.version();
+        let (migrated, error) = store.migrate_legacy();
+        assert_eq!(migrated, 0);
+        assert!(error.is_some());
+        assert_eq!(
+            store.version(),
+            settled,
+            "an empty retry must not invalidate cached views"
+        );
+    }
+
+    fn backend_get(
+        store: &super::super::Store,
+        account: &str,
+        chat: &str,
+        message: &str,
+    ) -> Option<String> {
+        store.encrypted.as_ref()?.get(account, chat, message)
+    }
+    #[test]
     fn fresh_beeper_profile_initializes_only_within_existing_account_and_ignores_unavailable_other_account()
      {
         let root = tempfile::tempdir().unwrap();

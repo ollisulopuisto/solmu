@@ -1146,3 +1146,7 @@ macOS CI caught two worker tests asserting exact scan counts failing after legac
 ## Per-account legacy migration isolation,21 November
 
 Reviewer follow-up on #420: `Encrypted::migrate` returned on the first failing legacy account directory (missing archive folder or conflicting archive row), so every later account's plaintext stayed on disk and the migration failed identically on each launch. Migration now runs per account: a failing account keeps its plaintext for the next attempt and its first error is reported, while later healthy accounts still migrate and purge. `Encrypted::migrate`/`Store::migrate_legacy` return the migrated count plus the first per-account error; the worker wakes the view when anything moved and logs an incomplete migration. Regression: a bad account sorted before a healthy one no longer blocks the healthy account, and the conflict case now proves the archive row survives.
+
+## Partial-migration view coverage,21 November
+
+Devin follow-up on #420: the per-account migration regression verified the archive and the source files but not the view invalidation path. New regression drives a partial migration through the worker's migration thread: with one failing account and one healthy account the view wake still fires and the store version bumps, so cached results are invalidated and migrated text becomes searchable; the failing account's plaintext stays. Negative control: a retry with nothing left to migrate reports the failing account but does not bump the version again.
