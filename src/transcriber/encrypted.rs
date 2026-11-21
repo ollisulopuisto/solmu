@@ -483,6 +483,56 @@ mod tests {
     ) -> Option<String> {
         store.encrypted.as_ref()?.get(account, chat, message)
     }
+
+    fn row_count(root: &tempfile::TempDir, account: &str) -> i64 {
+        let connection = crate::archive::transcript_connection_with_key(
+            &root.path().join(format!("accounts/{account}/archive.db")),
+            &KEY,
+        )
+        .unwrap();
+        connection
+            .query_row("SELECT count(*) FROM local_transcripts", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn clear_reports_a_failing_account_but_still_clears_the_others() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("transcripts");
+        let mut store = super::super::Store::new(legacy.clone(), 1 << 20).unwrap();
+        store
+            .put("1", "chat", "voice", "orphan legacy words")
+            .unwrap();
+        let backend = std::sync::Arc::new(fixture(root.path(), &["1", "2"]));
+        backend
+            .put("1", "chat", "kept", "failing account words", 1, 1 << 20)
+            .unwrap();
+        backend
+            .put("2", "chat", "voice", "healthy account words", 2, 1 << 20)
+            .unwrap();
+        // Force account 1's next access through the real keyring, which fails
+        // closed here: its archive rows must survive and its failure must be
+        // reported, without blocking account 2's deletion.
+        backend.connections.lock().unwrap().remove("1");
+        store.encrypted = Some(std::sync::Arc::clone(&backend));
+        let before = store.version();
+
+        let result = store.clear();
+        assert!(result.is_err(), "the failing account must be reported");
+        assert!(store.version() > before, "cached views still invalidate");
+        assert_eq!(
+            row_count(&root, "1"),
+            1,
+            "the failing account keeps its rows"
+        );
+        assert_eq!(row_count(&root, "2"), 0, "the healthy account was cleared");
+        assert!(
+            !store.file_for("1", "chat", "voice").exists(),
+            "pending legacy plaintext still went away"
+        );
+    }
     #[test]
     fn fresh_beeper_profile_initializes_only_within_existing_account_and_ignores_unavailable_other_account()
      {

@@ -1150,3 +1150,7 @@ Reviewer follow-up on #420: `Encrypted::migrate` returned on the first failing l
 ## Partial-migration view coverage,21 November
 
 Devin follow-up on #420: the per-account migration regression verified the archive and the source files but not the view invalidation path. New regression drives a partial migration through the worker's migration thread: with one failing account and one healthy account the view wake still fires and the store version bumps, so cached results are invalidated and migrated text becomes searchable; the failing account's plaintext stays. Negative control: a retry with nothing left to migrate reports the failing account but does not bump the version again.
+
+## Clear partial-failure coverage,21 November
+
+Adversarial pass over the #420 diff (state transitions across files: select/edit/clear/retry/partial failure/ordering/restore). Held up: queued transcriptions die only on their own generation mismatch, so remove_account's repaint signal cannot drop other accounts' jobs; migration and clear/remove serialize on store_io in either order with final-correct results; clear_legacy still purges pending plaintext when an archive removal fails. New coverage: clear() reports a failing account but still clears the healthy account, purges pending legacy plaintext, and bumps the store version so views invalidate.
