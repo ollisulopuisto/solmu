@@ -151,6 +151,8 @@ impl Store {
 
     /// Production storage uses only each account's existing encrypted archive.
     /// Legacy plaintext files are purged only after committed, verified migration.
+    /// Migration is keyring/database/file work: it runs on a worker thread via
+    /// `migrate_legacy`, never on the caller's (settings UI) thread.
     pub fn encrypted(root: PathBuf, max_bytes: u64) -> std::io::Result<Self> {
         if std::fs::symlink_metadata(&root).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err(std::io::Error::other(
@@ -163,9 +165,19 @@ impl Store {
                 .ok_or_else(|| std::io::Error::other("Transcript state directory unavailable"))?
                 .into(),
         );
-        backend.migrate(&root)?;
         store.encrypted = Some(Arc::new(backend));
         Ok(store)
+    }
+
+    /// Migrates legacy plaintext transcripts into the encrypted archives.
+    /// Safe to repeat; call off the UI thread. A failure leaves the legacy
+    /// files in place for the next attempt.
+    pub fn migrate_legacy(&self) -> std::io::Result<()> {
+        if let Some(backend) = &self.encrypted {
+            backend.migrate(&self.root)?;
+            self.bump();
+        }
+        Ok(())
     }
 
     pub fn remove_account(&self, account: &str) -> std::io::Result<()> {
@@ -240,14 +252,21 @@ impl Store {
         Ok(())
     }
 
-    /// Privacy control: removes every transcript of every chat.
+    /// Privacy control: removes every transcript of every chat. Every account
+    /// is attempted even when one fails, so one unreadable archive cannot hide
+    /// the survivors of the rest; the first failure is still reported.
     pub fn clear(&self) -> std::io::Result<()> {
         if let Some(backend) = &self.encrypted {
+            let mut result = Ok(());
             for account in backend.accounts() {
-                backend.remove(&account, None, None)?;
+                if let Err(error) = backend.remove(&account, None, None)
+                    && result.is_ok()
+                {
+                    result = Err(error);
+                }
             }
             self.bump();
-            return Ok(());
+            return result;
         }
         for entry in std::fs::read_dir(&self.root)?.flatten() {
             let path = entry.path();
@@ -445,16 +464,18 @@ impl Store {
         scope: Option<(&str, &str)>,
     ) -> Vec<Hit> {
         if let Some(backend) = &self.encrypted {
+            let needle = crate::util::search_key(query.trim());
+            // Match the file store: an unscoped empty query returns nothing;
+            // only the Voice panel's scoped empty query lists transcripts.
+            if needle.is_empty() && scope.is_none() {
+                return Vec::new();
+            }
             let mut hits = Vec::new();
             let accounts = scope
                 .map(|(a, _)| vec![a.to_owned()])
                 .unwrap_or_else(|| backend.accounts());
             for account in accounts {
-                hits.extend(
-                    backend
-                        .snapshot(query, &account, scope.map(|(_, c)| c), || true)
-                        .hits,
-                );
+                hits.extend(backend.search(query, &account, scope.map(|(_, c)| c)));
             }
             hits.sort_by_key(|hit| std::cmp::Reverse(hit.modified));
             hits.truncate(limit);

@@ -151,6 +151,23 @@ impl Encrypted {
             Snapshot::default()
         }
     }
+    /// Search hits carry the full transcript text, unclipped and uncapped; the
+    /// store sorts the merged accounts and applies the caller's limit itself.
+    pub fn search(&self, query: &str, account: &str, chat: Option<&str>) -> Vec<Hit> {
+        let needle = crate::util::search_key(query.trim());
+        self.with(account, |c| {
+            let mut statement = c.prepare("SELECT chat,message,text,modified FROM local_transcripts WHERE (?1 IS NULL OR chat=?1) ORDER BY modified DESC, chat, message").map_err(io)?;
+            let rows = statement.query_map(params![chat], |row| Ok(Hit { account_id: account.into(),chat_id: row.get(0)?,message_id: row.get(1)?,text:row.get(2)?,modified:row.get(3)? })).map_err(io)?;
+            let mut hits = Vec::new();
+            for row in rows {
+                let hit = row.map_err(io)?;
+                if !crate::util::search_key(&hit.text).contains(&needle) { continue; }
+                hits.push(hit);
+            }
+            Ok(hits)
+        })
+        .unwrap_or_default()
+    }
     /// One account transaction is committed and re-read before any source file
     /// is removed. Interrupted migration is safe to repeat; rows win on conflict.
     pub fn migrate(&self, root: &Path) -> std::io::Result<()> {
@@ -289,6 +306,20 @@ mod tests {
         assert!(backend.get("1", "chat", "voice").is_none());
         assert!(backend.get("2", "chat", "voice").is_some());
         backend.remove("2", None, None).unwrap();
+        // The removal closed the keyed fixture connection, so a snapshot now
+        // reopens through the real keyring and fails closed. Prove the rows are
+        // gone by reopening the database with the fixture key instead.
+        let connection = crate::archive::transcript_connection_with_key(
+            &root.path().join("accounts/2/archive.db"),
+            &KEY,
+        )
+        .unwrap();
+        let remaining: i64 = connection
+            .query_row("SELECT count(*) FROM local_transcripts", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(remaining, 0, "account deletion left transcripts behind");
         assert!(
             backend
                 .snapshot("fixture", "2", None, || true)

@@ -2174,11 +2174,11 @@ impl App {
         let Some(index) = self.accounts.iter().position(|account| account.id == id) else {
             return;
         };
-        if let Some(worker) = self.transcript_reader()
-            && let Err(_error) = worker.remove_account(id.0.clone())
-        {
-            self.toast_error(crate::i18n::gettext(self.locale, "Could not remove this account's saved transcripts. Its encrypted archive may still contain them.").into_owned());
-        }
+        // Transcripts are not purged here: the backend's removal command is
+        // unconfirmed, and destroying the encrypted archive while the account
+        // stays linked loses text the user never asked to delete. A confirmed
+        // logout purges (handle_link), a completed removal drops the account's
+        // whole encrypted archive folder (finish_removed).
         if self.accounts.len() <= 1 {
             self.accounts[index].backend.send(Command::Unlink);
             return;
@@ -27323,6 +27323,26 @@ mod tests {
         assert!(fading > 0.0 && fading < 1.0, "{fading}");
         assert_eq!(JumpHighlight::strength(JumpHighlight::DURATION), 0.0);
         assert_eq!(JumpHighlight::strength(10.0), 0.0);
+    }
+
+    #[test]
+    fn requested_account_removal_keeps_transcripts_until_logout_confirms() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _events) = two_accounts(root.path(), "chat");
+        let store =
+            crate::transcriber::Store::new(root.path().join("fixture-transcripts"), 1 << 20)
+                .unwrap();
+        store.put("1", "chat", "voice", "linked text").unwrap();
+        app.transcriber = Some(crate::transcribe_worker::Worker::stub_with_store(
+            store.clone(),
+        ));
+        let id = app.accounts[0].id.clone();
+        app.remove_account(id);
+        assert_eq!(
+            store.get("1", "chat", "voice").as_deref(),
+            Some("linked text"),
+            "an unconfirmed removal must not purge transcripts"
+        );
     }
 
     #[test]
