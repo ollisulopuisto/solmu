@@ -81,6 +81,20 @@ private-reply recovery, including refusals arriving after deletion.
 Double-click beside a message, or on its edge, to reply to it. A double-click
 on its text still selects the word.
 
+**Development builds** link replies without quoting the original above them.
+A small **N loaded replies ›** chip under a message opens its thread, and an
+**↑ Original** chip on a hovered reply jumps to the message it answers.
+Ctrl-click (Command-click on macOS) a reply to jump to its original, or a
+message with replies to cycle through them, with a fading "reply N of M" chip
+naming each landing; every message remembers how far its own cycle got. These
+clicks jump only between linked bubbles: Ctrl-click any other message still
+starts a selection, and Ctrl-click a link still opens the link. A thread
+opens as a panel over the chat, or fills the message area in a narrow window,
+with its own scrolling while the conversation behind it dims; **‹ Back to
+full chat**, Escape, or a click outside closes it. After a jump, **‹ Back to
+where you were** (or **‹ Back to thread**) at the top of the chat returns to
+where the jump started.
+
 Deleting a message asks which copies to remove. **Delete for everyone**
 revokes it through WhatsApp. In **0.19.0**, **Delete for me** removes only this
 computer's copy, and individual deletions do not sync to or from your phone.

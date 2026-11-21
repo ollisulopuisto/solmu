@@ -5193,6 +5193,22 @@ pub fn sample_ids() -> Vec<&'static str> {
     SAMPLES.iter().map(|sample| sample.id).collect()
 }
 
+/// `--demo-page thread`: open the first sample chat's thread on the first
+/// window frame, so headless captures show the reply redesign's modal.
+pub fn open_thread_shot(app: &App, ctx: &egui::Context) {
+    let chat = SAMPLES[0].id.to_owned();
+    let scope = crate::ui::reply_threads::scope(app, std::slice::from_ref(&chat));
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            scope,
+            crate::ui::reply_threads::Key {
+                chat,
+                id: "ada-voice".into(),
+            },
+        )
+    });
+}
+
 /// Puts a synthetic call on screen, for the call previews and their layout test.
 ///
 /// Demo mode has no engine, no peer, and no camera, so the surface is handed the same snapshot a

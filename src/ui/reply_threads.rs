@@ -187,11 +187,20 @@ pub fn prepare_jump_back(ctx: &egui::Context) {
     };
     let f = shared.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(root) = ctx.data(|d| d.get_temp::<Key>(f.scope)) {
-        ctx.data_mut(|d| d.insert_temp(f.scope.with("jump-back-thread"), root));
+        ctx.data_mut(|d| {
+            d.insert_temp(f.scope.with("jump-back-thread"), root);
+            // The chips prefer a saved transcript position, so leaving a
+            // thread must replace it: Back reopens the thread instead of
+            // scrolling the transcript to a stale point.
+            d.remove::<(egui::Id, egui::scroll_area::State)>(f.scope.with("jump-back"));
+        });
     } else if let Some(saved) = ctx
         .data(|d| d.get_temp::<(egui::Id, egui::scroll_area::State)>(f.scope.with("full-scroll")))
     {
-        ctx.data_mut(|d| d.insert_temp(f.scope.with("jump-back"), saved));
+        ctx.data_mut(|d| {
+            d.insert_temp(f.scope.with("jump-back"), saved);
+            d.remove::<Key>(f.scope.with("jump-back-thread"));
+        });
     }
 }
 
@@ -250,14 +259,13 @@ pub fn command_click(
         return true;
     }
     if let Some(replies) = f.replies.get(&key).filter(|r| !r.is_empty()).cloned() {
-        let last = ctx
-            .data(|d| d.get_temp::<(Key, usize)>(f.scope.with("cycle")))
-            .filter(|(parent, _)| *parent == key)
-            .map(|(_, i)| i);
+        // Each parent remembers its own position: coming back to a parent
+        // continues its cycle instead of restarting at the first reply.
+        let last = ctx.data(|d| d.get_temp::<usize>(f.scope.with(("cycle", &key))));
         let n = next_reply(&replies, last);
         let target = replies[n].clone();
         ctx.data_mut(|d| {
-            d.insert_temp(f.scope.with("cycle"), (key, n));
+            d.insert_temp(f.scope.with(("cycle", &key)), n);
             d.insert_temp(
                 f.scope.with("cycle-chip"),
                 (
@@ -283,7 +291,7 @@ pub fn command_click(
 
 /// The chips that follow a jump: a fading "reply N of M" at the landing,
 /// and the standing offer to go back to where the jump started.
-pub fn paint_jump_chips(ui: &egui::Ui) {
+pub fn paint_jump_chips(ui: &egui::Ui, locale: crate::i18n::Locale) {
     let Some(shared) = frame(ui.ctx()) else {
         return;
     };
@@ -313,14 +321,17 @@ pub fn paint_jump_chips(ui: &egui::Ui) {
                         .corner_radius(egui::CornerRadius::same(10))
                         .inner_margin(egui::Margin::symmetric(8, 4))
                         .show(ui, |ui| {
+                            let count = if total == 1 {
+                                crate::i18n::gettext(locale, "1 reply").into_owned()
+                            } else {
+                                crate::i18n::gettext(locale, "reply {n} of {total}")
+                                    .replace("{n}", &n.to_string())
+                                    .replace("{total}", &total.to_string())
+                            };
                             ui.label(
-                                egui::RichText::new(if total == 1 {
-                                    "1 reply".to_owned()
-                                } else {
-                                    format!("reply {n} of {total}")
-                                })
-                                .small()
-                                .color(ui.visuals().text_color().gamma_multiply(strength)),
+                                egui::RichText::new(count)
+                                    .small()
+                                    .color(ui.visuals().text_color().gamma_multiply(strength)),
                             );
                         });
                 });
@@ -334,11 +345,14 @@ pub fn paint_jump_chips(ui: &egui::Ui) {
         ctx.data(|d| d.get_temp(scope.with("jump-back")));
     let jump_back_thread: Option<Key> = ctx.data(|d| d.get_temp(scope.with("jump-back-thread")));
     let (label, show) = if jump_back.is_some() {
-        ("‹ Back to where you were", true)
+        (
+            crate::i18n::gettext(locale, "‹ Back to where you were"),
+            true,
+        )
     } else if jump_back_thread.is_some() {
-        ("‹ Back to thread", true)
+        (crate::i18n::gettext(locale, "‹ Back to thread"), true)
     } else {
-        ("", false)
+        ("".into(), false)
     };
     if !show {
         return;
@@ -444,7 +458,7 @@ pub fn includes(ctx: &egui::Context, m: &Message) -> bool {
         !f.active || f.included.contains(&Key::of(m))
     })
 }
-pub fn bar(ui: &mut egui::Ui) -> bool {
+pub fn bar(ui: &mut egui::Ui, locale: crate::i18n::Locale) -> bool {
     if !active(ui.ctx()) {
         return false;
     }
@@ -454,8 +468,13 @@ pub fn bar(ui: &mut egui::Ui) -> bool {
         .inner_margin(8)
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                back = ui.button("‹ Back to full chat").clicked();
-                ui.label("Thread · known loaded replies only");
+                back = ui
+                    .button(crate::i18n::gettext(locale, "‹ Back to full chat"))
+                    .clicked();
+                ui.label(crate::i18n::gettext(
+                    locale,
+                    "Thread · known loaded replies only",
+                ));
             });
         });
     if back {
@@ -469,6 +488,7 @@ pub fn row(
     response: &egui::Response,
     color: egui::Color32,
     actions: &mut Vec<crate::model::Action>,
+    locale: crate::i18n::Locale,
 ) {
     let key = Key::of(m);
     let Some(shared) = frame(ui.ctx()) else {
@@ -482,10 +502,11 @@ pub fn row(
     if !f.active
         && let Some(parent) = f.parents.get(&key)
         && ui
-            .small_button("↑ Original")
-            .on_hover_text(
+            .small_button(crate::i18n::gettext(locale, "↑ Original"))
+            .on_hover_text(crate::i18n::gettext(
+                locale,
                 "Jump to the original message. Available even when no clear connector route fits.",
-            )
+            ))
             .clicked()
     {
         actions.push(crate::model::Action::OpenMessage {
@@ -495,14 +516,15 @@ pub fn row(
     }
     if let Some(replies) = f.replies.get(&key).filter(|r| !r.is_empty()) {
         let n = replies.len();
-        let label = if n == 1 {
-            "1 loaded reply ›".into()
-        } else {
-            format!("{n} loaded replies ›")
-        };
+        let label =
+            crate::i18n::ngettext(locale, "{} loaded reply ›", "{} loaded replies ›", n as u32)
+                .replace("{}", &n.to_string());
         if ui
             .add(egui::Button::new(egui::RichText::new(label).color(color)).frame(false))
-            .on_hover_text("Only replies in loaded history are counted. Open this thread.")
+            .on_hover_text(crate::i18n::gettext(
+                locale,
+                "Only replies in loaded history are counted. Open this thread.",
+            ))
             .clicked()
         {
             ui.ctx().data_mut(|d| d.insert_temp(f.scope, key));
@@ -582,7 +604,7 @@ pub fn finish(ui: &egui::Ui, color: egui::Color32) {
         .line_segment([previous, *points.last().unwrap()], stroke);
 }
 pub fn ordinary(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat) -> bool {
-    if !bar(ui) {
+    if !bar(ui, app.locale) {
         return false;
     }
     let Some(root) = current(ui.ctx()) else {
@@ -627,7 +649,10 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
             super::conversation::with_bubble_ns(super::conversation::THREAD_BUBBLE_NS, || {
                 ui.set_min_width(ui.available_width());
                 if rows.is_empty() {
-                    ui.label("This thread is no longer available in loaded history.");
+                    ui.label(crate::i18n::gettext(
+                        app.locale,
+                        "This thread is no longer available in loaded history.",
+                    ));
                 }
                 let mut landing = None;
                 for m in rows {
@@ -678,10 +703,13 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
 /// The open thread as an inset modal over the dimmed chat: accent border and
 /// banner, its own scroll, a click on the dimmed backdrop or Esc to close.
 /// The composer stays outside, in the dimmed window below.
+/// `backdrop` is everything the dim veil covers, composer included; `area`
+/// is just the message region the modal panel insets itself into.
 pub fn modal_overlay(
     app: &mut App,
     ui: &mut egui::Ui,
     chat: &crate::model::Chat,
+    backdrop: egui::Rect,
     area: egui::Rect,
 ) {
     if !modal(app, ui) {
@@ -694,9 +722,9 @@ pub fn modal_overlay(
     let palette = app.conversation_palette();
     let dim = egui::Area::new(egui::Id::new("reply-thread-dim"))
         .order(egui::Order::Foreground)
-        .fixed_pos(area.min)
+        .fixed_pos(backdrop.min)
         .show(&ctx, |ui| {
-            let (rect, response) = ui.allocate_exact_size(area.size(), egui::Sense::click());
+            let (rect, response) = ui.allocate_exact_size(backdrop.size(), egui::Sense::click());
             ui.painter()
                 .rect_filled(rect, 0, egui::Color32::from_black_alpha(150));
             response
@@ -740,18 +768,22 @@ pub fn modal_overlay(
                                 ui.set_min_width(rect.width() - 4.0);
                                 ui.horizontal(|ui| {
                                     ui.label(
-                                        egui::RichText::new("IN THREAD")
-                                            .strong()
-                                            .color(palette.on_accent),
+                                        egui::RichText::new(crate::i18n::gettext(
+                                            app.locale,
+                                            "IN THREAD",
+                                        ))
+                                        .strong()
+                                        .color(palette.on_accent),
                                     );
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
                                             if ui
                                                 .button(
-                                                    egui::RichText::new(
+                                                    egui::RichText::new(crate::i18n::gettext(
+                                                        app.locale,
                                                         "‹ Back to full chat (Esc)",
-                                                    )
+                                                    ))
                                                     .color(palette.on_accent),
                                                 )
                                                 .clicked()
@@ -764,9 +796,12 @@ pub fn modal_overlay(
                             });
                         ui.add_space(2.0);
                         ui.label(
-                            egui::RichText::new("Thread · known loaded replies only")
-                                .small()
-                                .color(palette.secondary),
+                            egui::RichText::new(crate::i18n::gettext(
+                                app.locale,
+                                "Thread · known loaded replies only",
+                            ))
+                            .small()
+                            .color(palette.secondary),
                         );
                         ui.add_space(2.0);
                         thread_scroll(app, ui, chat, &root);
@@ -984,6 +1019,92 @@ mod tests {
             id: "unrelated".into(),
         };
         assert!(!jump_within_thread(&ctx, &outside));
+    }
+    #[test]
+    fn command_click_remembers_each_parents_own_cycle_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut app, _) =
+            App::headless(crate::paths::AppDirs::under(dir.path()), Default::default());
+        app.chats
+            .push(crate::model::Chat::new("a".into(), "Group".into()));
+        app.open_chat = Some("a".into());
+        app.conversations.insert(
+            "a".into(),
+            crate::app::Conversation {
+                messages: vec![
+                    m("a", "1", None),
+                    m("a", "2", Some(("a", "1"))),
+                    m("a", "3", Some(("a", "1"))),
+                    m("a", "4", None),
+                    m("a", "5", Some(("a", "4"))),
+                ],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["a".into()]));
+        output.textures_delta.clear();
+        let mut actions = vec![];
+        let mut clicked = |parent: &str| {
+            assert!(command_click(&ctx, "a", parent, &mut actions));
+            let Some(crate::model::Action::OpenMessage { message, .. }) = actions.last() else {
+                panic!("each click jumps to a reply");
+            };
+            message.clone()
+        };
+        assert_eq!(clicked("1"), "2");
+        assert_eq!(clicked("4"), "5");
+        assert_eq!(
+            clicked("1"),
+            "3",
+            "returning to the first parent continues its cycle",
+        );
+    }
+    #[test]
+    fn prepare_jump_back_replaces_the_older_return_point() {
+        let (_dir, _app, ctx) = seeded();
+        let f = frame(&ctx).unwrap();
+        let scope = f.lock().unwrap().scope;
+        // A jump out of the thread leaves only the thread as the way back:
+        // an older transcript position must not win in the chips.
+        ctx.data_mut(|d| {
+            d.insert_temp(
+                scope.with("jump-back"),
+                (egui::Id::new("scroll"), egui::scroll_area::State::default()),
+            );
+        });
+        prepare_jump_back(&ctx);
+        assert!(
+            ctx.data(|d| d.get_temp::<Key>(scope.with("jump-back-thread")))
+                .is_some()
+        );
+        assert!(
+            ctx.data(
+                |d| d.get_temp::<(egui::Id, egui::scroll_area::State)>(scope.with("jump-back"))
+            )
+            .is_none(),
+            "leaving a thread replaces the stale transcript return point",
+        );
+        // And the other way: a jump in the transcript clears the thread.
+        ctx.data_mut(|d| {
+            d.remove::<Key>(scope);
+            d.insert_temp(
+                scope.with("full-scroll"),
+                (egui::Id::new("scroll"), egui::scroll_area::State::default()),
+            );
+        });
+        prepare_jump_back(&ctx);
+        assert!(
+            ctx.data(
+                |d| d.get_temp::<(egui::Id, egui::scroll_area::State)>(scope.with("jump-back"))
+            )
+            .is_some()
+        );
+        assert!(
+            ctx.data(|d| d.get_temp::<Key>(scope.with("jump-back-thread")))
+                .is_none(),
+            "a transcript jump replaces the stale thread return point",
+        );
     }
     #[test]
     fn prepare_jump_back_captures_the_open_thread_or_the_full_scroll() {

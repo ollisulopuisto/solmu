@@ -182,6 +182,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 bar
             })
             .inner;
+        // Below the header to the window's edge: the dim veil also covers
+        // the composer, which stays outside the thread and inert under it.
+        let backdrop = ui.available_rect_before_wrap().with_min_y(bar.bottom());
         composer(app, ui, &chat);
         let list = ui.available_rect_before_wrap().with_min_y(bar.top());
         ui.scope_builder(egui::UiBuilder::new().max_rect(list), |ui| {
@@ -189,7 +192,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         });
         // An open thread floats over the messages, below the header; the
         // composer stays outside it, in the dimmed window.
-        super::reply_threads::modal_overlay(app, ui, &chat, list.with_min_y(bar.bottom()));
+        super::reply_threads::modal_overlay(
+            app,
+            ui,
+            &chat,
+            backdrop,
+            list.with_min_y(bar.bottom()),
+        );
         // A vibrant window is flat, as Messages is: no shadows over the chat.
         return;
     }
@@ -200,12 +209,15 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if message_pins_supported() {
         pin_banner(app, ui, &chat);
     }
+    // From below the banners to the window's edge: the dim veil also
+    // covers the composer, which stays outside the thread and inert under it.
+    let backdrop = ui.available_rect_before_wrap();
     composer(app, ui, &chat);
     let thread_area = ui.available_rect_before_wrap();
     messages(app, ui, &chat, 0.0);
     // An open thread floats over the messages; the composer stays outside
     // it, in the dimmed window.
-    super::reply_threads::modal_overlay(app, ui, &chat, thread_area);
+    super::reply_threads::modal_overlay(app, ui, &chat, backdrop, thread_area);
     // Over the messages, which scroll under the header.
     widgets::paint_shadow_below(
         ui,
@@ -4302,7 +4314,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                     .is_some_and(|pos| bar.contains(pos)))
     });
     super::reply_threads::finish(ui, palette.accent);
-    super::reply_threads::paint_jump_chips(ui);
+    super::reply_threads::paint_jump_chips(ui, app.locale);
     let restored_thread_scroll =
         super::reply_threads::complete_full_scroll(ui.ctx(), output.id, output.state);
     let complete = conversation.complete;
@@ -4705,6 +4717,7 @@ fn open_reaction_picker_action(chat: &str, message: &str) -> Action {
         chat: chat.to_owned(),
         message: message.to_owned(),
         beside_menu: false,
+        from_thread: in_thread_pass(),
     }
 }
 
@@ -5183,10 +5196,24 @@ fn bubble(
                 // Each member keeps its exact message identity for thread entry/jumps.
                 if let Some(items) = album {
                     for item in items {
-                        super::reply_threads::row(ui, item, &painted, view.palette.accent, actions);
+                        super::reply_threads::row(
+                            ui,
+                            item,
+                            &painted,
+                            view.palette.accent,
+                            actions,
+                            view.locale,
+                        );
                     }
                 } else {
-                    super::reply_threads::row(ui, message, &painted, view.palette.accent, actions);
+                    super::reply_threads::row(
+                        ui,
+                        message,
+                        &painted,
+                        view.palette.accent,
+                        actions,
+                        view.locale,
+                    );
                 }
             }
         },
@@ -5491,6 +5518,13 @@ pub fn with_bubble_ns<R>(ns: &'static str, f: impl FnOnce() -> R) -> R {
 /// The salt the open thread's second rendering pass uses for its bubble
 /// ids (see [`BUBBLE_NS`]).
 pub const THREAD_BUBBLE_NS: &str = "thread";
+
+/// True while the thread's salted rendering pass runs (see [`BUBBLE_NS`]):
+/// anchors the pass stores live under the salted bubble id, not the
+/// transcript's, and actions need to know which ones to read.
+pub fn in_thread_pass() -> bool {
+    BUBBLE_NS.with(|ns| ns.get() == Some(THREAD_BUBBLE_NS))
+}
 
 /// The bubble id under the thread's salt: app-level actions apply outside
 /// any render pass, where no salt is set, so both variants are named.
@@ -8283,6 +8317,7 @@ fn context_menu(
                     chat: chat.clone(),
                     message: message.id.clone(),
                     beside_menu: true,
+                    from_thread: in_thread_pass(),
                 });
             }
         },
@@ -13959,7 +13994,7 @@ mod tests {
         let action = open_reaction_picker_action("chat@example", "message-42");
         assert!(matches!(
             action,
-            Action::OpenReactionPicker { chat, message, beside_menu: false }
+            Action::OpenReactionPicker { chat, message, beside_menu: false, from_thread: false }
                 if chat == "chat@example" && message == "message-42"
         ));
     }
