@@ -1985,17 +1985,22 @@ pub(crate) fn guard_native_menu(app: &App, actions: Vec<Action>) -> Vec<Action> 
     actions
         .into_iter()
         .filter(|action| {
-            !matches!(
-                action,
-                Action::ShowDialog(_)
-                    | Action::Open(_)
-                    | Action::OpenChatSearch
-                    | Action::FocusSearch
-                    | Action::ToggleSidebar
-                    | Action::ToggleInfoSidebar
-                    | Action::ToggleFlatGroups
-                    | Action::MenuCommand(_)
-            )
+            !match action {
+                // The caret chords go on to the dispatcher, which hands them
+                // to a focused dialog or picker field; menu_actions still
+                // blocks the background chat jump while the window is owned.
+                Action::MenuCommand(id) => id != "chat-newest" && id != "chat-oldest",
+                action => matches!(
+                    action,
+                    Action::ShowDialog(_)
+                        | Action::Open(_)
+                        | Action::OpenChatSearch
+                        | Action::FocusSearch
+                        | Action::ToggleSidebar
+                        | Action::ToggleInfoSidebar
+                        | Action::ToggleFlatGroups
+                ),
+            }
         })
         .collect()
 }

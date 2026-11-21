@@ -206,7 +206,15 @@ mod tests {
             Action::ToggleInfoSidebar,
             Action::MenuCommand("go-bookmarks".into()),
         ];
-        let kept = vec![Action::Quit, Action::CloseWindow, Action::ShowWindow];
+        // The caret chords pass so the dispatcher can hand them to a focused
+        // dialog field; menu_actions still blocks the background jump.
+        let kept = vec![
+            Action::Quit,
+            Action::CloseWindow,
+            Action::ShowWindow,
+            Action::MenuCommand("chat-oldest".into()),
+            Action::MenuCommand("chat-newest".into()),
+        ];
         let mut all = guarded.clone();
         all.extend(kept.iter().cloned());
         // Nothing owns the window: every action passes through.
