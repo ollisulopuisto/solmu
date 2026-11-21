@@ -26065,6 +26065,41 @@ mod tests {
     }
 
     #[test]
+    fn removing_a_cropped_attachment_reclaims_its_output_but_not_its_source() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        let source = root.path().join("original.png");
+        image::RgbaImage::from_pixel(8, 6, image::Rgba([20, 40, 80, 255]))
+            .save(&source)
+            .unwrap();
+        let target = app.stage(Pending::File(source.clone()));
+        let output = crate::backend::picture_edit::write_temporary(
+            &crate::model::PictureSource::File(source.clone()),
+            8,
+            6,
+            crate::model::PictureCrop::full(8, 6),
+            0,
+            &root.path().join("cache"),
+        )
+        .unwrap();
+        app.apply_backend_event(
+            Event::PictureEdited {
+                target,
+                result: Ok(output.clone()),
+            },
+            true,
+        );
+        assert!(matches!(&app.pending[0].item, Pending::File(path) if path == &output));
+        assert!(output.exists());
+        app.apply(Action::RemovePending(0), &egui::Context::default());
+        crate::backend::beeper::flush_temp_cleanup();
+        assert!(app.pending.is_empty());
+        assert!(!output.exists(), "the discarded crop is reclaimed");
+        assert!(source.exists(), "the user's original stays untouched");
+        assert!(!app.attachment_temporary_paths.contains_key(&target));
+    }
+
+    #[test]
     fn a_crop_that_lands_after_its_attachment_was_removed_is_dropped() {
         let root = tempfile::tempdir().unwrap();
         let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
