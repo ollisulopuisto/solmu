@@ -2624,6 +2624,14 @@ fn quiet_tint(
     Some(theme::readable_on(palette.panel, faded, palette.text, 4.5))
 }
 
+/// A full name remains discoverable even without a network subtitle.
+fn chat_title_tooltip(title: &str, network: Option<&str>) -> String {
+    match network {
+        Some(network) => format!("{title}\n{network}"),
+        None => title.to_owned(),
+    }
+}
+
 pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
     let palette = app.palette;
     let title = app.chat_title(chat);
@@ -2890,11 +2898,10 @@ pub(super) fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Respon
         preview.paint(ui, pos2(x, line_y), preview_color);
     }
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let response = if let Some(network) = &chat.network {
-        response.on_hover_text(format!("{}\n{}", app.chat_title(chat), network))
-    } else {
-        response
-    };
+    let response = response.on_hover_text(chat_title_tooltip(
+        &app.chat_title(chat),
+        chat.network.as_deref(),
+    ));
     if let Some((area, prefix, full)) = full_preview {
         full_preview_tooltip(app, ui, &chat.id, area, &prefix, &full);
     }
@@ -3680,6 +3687,16 @@ fn advance_after_ticks(delivery: crate::model::Delivery) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn linked_title_hover_keeps_full_name_without_network_subtitle() {
+        let title = "A long linked person name that clips in the sidebar";
+        assert_eq!(super::chat_title_tooltip(title, None), title);
+        assert_eq!(
+            super::chat_title_tooltip(title, Some("Signal")),
+            format!("{title}\nSignal")
+        );
+    }
+
     #[test]
     fn favorite_marker_fits_left_gutter_without_covering_avatar_or_networks() {
         for height in [56.0, 80.0] {

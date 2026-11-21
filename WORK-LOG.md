@@ -231,6 +231,8 @@ fenced_code_rows_fit_the_layout_width (wrap.rs already force-breaks overlong
 tokens); verified only by rustc parse-check locally, since this Ubuntu box
 cannot build the crate (PipeWire headers too old) - fmt/clippy/tests and any
 visual check run in CI.
+Reviewer follow-up: retain the full-name hover tooltip without a network subtitle. Focused helper regression covers name-only and unchanged network cases. Formatting passes; runtime validation awaits CI.
+
 ## 2026-11-18: Failed link previews stay quiet (fix/preview-fail-quiet)
 
 local_link_previews (src/ui/conversation.rs) painted a prominent "Preview
