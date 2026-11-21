@@ -16173,6 +16173,87 @@ mod reaction_tests {
             "the cross does not open the editor: {actions:?}"
         );
     }
+
+    /// A GIF or HEIC tile is not clickable: the editor cannot keep a GIF's
+    /// animation and cannot decode HEIC, so neither offers the pencil.
+    #[test]
+    fn a_gif_or_heic_tile_does_not_offer_the_pencil() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        app.stage(crate::app::Pending::File(std::path::PathBuf::from(
+            "/fixture/clip.gif",
+        )));
+        app.stage(crate::app::Pending::File(std::path::PathBuf::from(
+            "/fixture/photo.heic",
+        )));
+        app.stage(crate::app::Pending::File(std::path::PathBuf::from(
+            "/fixture/photo.png",
+        )));
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let origin = std::cell::Cell::new(egui::Pos2::ZERO);
+        let run = |app: &mut App, events: Vec<egui::Event>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 120.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    origin.set(ui.cursor().min);
+                    pending_strip(app, ui);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        run(&mut app, vec![]);
+        let click = |at: egui::Pos2| {
+            vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        let start = origin.get();
+        for tile in [0.0, 72.0 + 8.0] {
+            run(&mut app, click(start + egui::vec2(tile + 36.0, 36.0)));
+            assert!(
+                app.actions
+                    .iter()
+                    .all(|action| !matches!(action, Action::EditPicture(_))),
+                "a GIF or HEIC tile opened the cropper: {:?}",
+                app.actions
+            );
+            app.actions.clear();
+        }
+        run(
+            &mut app,
+            click(start + egui::vec2(2.0 * (72.0 + 8.0) + 36.0, 36.0)),
+        );
+        assert!(
+            app.actions
+                .iter()
+                .any(|action| matches!(action, Action::EditPicture(_))),
+            "the plain picture still offers the pencil: {:?}",
+            app.actions
+        );
+    }
 }
 
 /// Pending attachment tiles above the composer.
@@ -16188,7 +16269,9 @@ fn pending_strip(app: &mut App, ui: &mut egui::Ui) {
             // cannot, and does not pretend to be clickable.
             let editable = match &item.item {
                 crate::app::Pending::Picture { .. } => true,
-                crate::app::Pending::File(path) => crate::app::Pending::is_picture_file(path),
+                crate::app::Pending::File(path) => {
+                    crate::app::Pending::is_crop_supported_file(path)
+                }
                 // A document goes as the file it is, so it is not edited here.
                 crate::app::Pending::Document(_) => false,
             };

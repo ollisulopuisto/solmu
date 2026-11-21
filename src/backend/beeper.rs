@@ -667,6 +667,12 @@ fn trim_cache(dirs: &AccountDirs, budget: u64) -> std::io::Result<()> {
         if size <= budget {
             break;
         }
+        // A registered temp upload is still referenced by a staged draft or
+        // an in-flight send; deleting it would lose an unsent crop or paste
+        // that retrying cannot recover.
+        if keeps_temp_upload(&path) {
+            continue;
+        }
         std::fs::remove_file(path)?;
         size = size.saturating_sub(bytes);
     }
@@ -834,6 +840,17 @@ fn temp_cleanup() -> &'static std::sync::mpsc::Sender<TempCleanup> {
             .expect("media cleanup worker");
         sender
     })
+}
+
+/// Only looks, unlike `take_temp_upload`: the file stays claimed. Cache
+/// trimming uses it to leave files a staged draft or an in-flight send
+/// still references.
+fn keeps_temp_upload(path: &std::path::Path) -> bool {
+    TEMP_UPLOADS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|set| set.contains(path))
 }
 
 /// Claims a temporary file at most once; never deletes user originals.
@@ -6517,6 +6534,42 @@ mod tests {
         flush_temp_cleanup();
         assert!(!output.exists());
         assert!(original.exists());
+    }
+
+    #[test]
+    fn trimming_and_clearing_the_cache_keep_registered_temp_uploads() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = crate::paths::AppDirs::under(root.path()).as_account();
+        let cache = dirs.media_cache_dir();
+        std::fs::create_dir_all(&cache).unwrap();
+        // An older disposable download, then a staged crop output.
+        let old = cache.join("beeper-download-old");
+        std::fs::write(&old, vec![0u8; 64]).unwrap();
+        let original = root.path().join("original.png");
+        image::RgbaImage::from_pixel(8, 6, image::Rgba([20, 40, 80, 255]))
+            .save(&original)
+            .unwrap();
+        let output = crate::backend::picture_edit::write_temporary(
+            &crate::model::PictureSource::File(original),
+            8,
+            6,
+            crate::model::PictureCrop::full(8, 6),
+            0,
+            &cache,
+        )
+        .unwrap();
+        // Over budget, then an explicit Clear cache: the referenced crop
+        // survives both while the unreferenced download goes.
+        trim_cache(&dirs, 1).unwrap();
+        assert!(output.exists(), "a staged crop survives trimming");
+        assert!(!old.exists(), "the unreferenced download was trimmed");
+        trim_cache(&dirs, 0).unwrap();
+        assert!(output.exists(), "a staged crop survives Clear cache");
+        // Once discarded, the same clearing reclaims it.
+        discard_temp_upload(&output);
+        flush_temp_cleanup();
+        trim_cache(&dirs, 0).unwrap();
+        assert!(!output.exists());
     }
 
     #[test]
