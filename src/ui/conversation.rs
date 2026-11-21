@@ -5825,33 +5825,68 @@ fn bubble_frame(
     actions: &mut Vec<Action>,
 ) -> egui::Response {
     if view.hidden.is_some_and(|ids| ids.contains(&message.id)) {
-        return ui
-            .horizontal(|ui| {
-                ui.label(crate::i18n::gettext(view.locale, "Message hidden in Solmu"));
-                let unhide = ui.button(crate::i18n::gettext(view.locale, "Unhide"));
-                // Reveal while the conversation scroll area is still open,
-                // before Tab registration requests its re-layout pass.
-                theme::reveal_focus(&unhide);
-                if unhide.has_focus()
-                    && ui.ctx().data(|data| {
-                        data.get_temp::<bool>(theme::keyboard_focus_id())
-                            .unwrap_or(false)
-                    })
-                {
-                    view.keyboard_navigation.set(true);
-                }
-                if unhide
-                    .tab_stop(Stop::Unhide(bubble_id(&view.chat.id, &message.id).value()))
-                    .clicked()
-                {
-                    actions.push(Action::SetMessageHidden {
-                        chat: view.chat.id.clone(),
-                        message: message.id.clone(),
-                        hidden: false,
-                    });
-                }
-            })
-            .response;
+        let id = bubble_id(&view.chat.id, &message.id).with("unhide-placeholder");
+        let (rect, unhide) =
+            ui.allocate_exact_size(vec2(ui.available_width().min(320.0), 32.0), Sense::click());
+        let unhide = unhide.tab_stop(Stop::Unhide(bubble_id(&view.chat.id, &message.id).value()));
+        theme::reveal_focus(&unhide);
+        let active = unhide.hovered() || unhide.has_focus();
+        let centre = rect.center();
+        let ink = if active {
+            view.palette.text
+        } else {
+            view.palette.secondary
+        };
+        let hint = crate::i18n::gettext(view.locale, "Show message");
+        let label = if unhide.has_focus() {
+            hint.as_ref()
+        } else {
+            "···"
+        };
+        let line = widgets::line(
+            ui,
+            label,
+            theme::semibold(if unhide.has_focus() { 12.0 } else { 18.0 }),
+            ink,
+            (rect.width() - 24.0).max(1.0),
+            1,
+        );
+        let half_label = line.size().x / 2.0 + 10.0;
+        for (left, right) in [
+            (rect.left() + 12.0, centre.x - half_label),
+            (centre.x + half_label, rect.right() - 12.0),
+        ] {
+            if right > left {
+                ui.painter().line_segment(
+                    [pos2(left, centre.y), pos2(right, centre.y)],
+                    Stroke::new(1.0, view.palette.dim),
+                );
+            }
+        }
+        line.paint_decorative(ui, centre - line.size() / 2.0, ink);
+        if active {
+            unhide.clone().on_hover_text(hint.as_ref());
+        }
+        if unhide.has_focus() {
+            view.keyboard_navigation.set(true);
+        }
+        theme::focus_outline(ui, unhide.id, rect, 8.0);
+        unhide.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                crate::i18n::gettext(view.locale, "Show message").as_ref(),
+            )
+        });
+        ui.ctx().data_mut(|data| data.insert_temp(id, rect));
+        if unhide.clicked() {
+            actions.push(Action::SetMessageHidden {
+                chat: view.chat.id.clone(),
+                message: message.id.clone(),
+                hidden: false,
+            });
+        }
+        return unhide;
     }
     let outside_palette = view.palette;
     let own = message.from_me;
@@ -14890,6 +14925,57 @@ mod tests {
     }
 
     #[test]
+    fn hidden_placeholder_has_no_permanent_text_label() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let message = crate::archive::tests::message("1@s.whatsapp.net", "hidden", 0, false);
+            let hidden = HashSet::from([message.id.clone()]);
+            let view = View {
+                hidden: Some(&hidden),
+                ..*view
+            };
+            let mut row = Rect::NOTHING;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                row = bubble_frame(
+                    ui,
+                    &view,
+                    &message,
+                    None,
+                    false,
+                    false,
+                    400.0,
+                    &mut Vec::new(),
+                )
+                .rect;
+            });
+            fn labels(shape: &egui::Shape, texts: &mut Vec<String>) {
+                match shape {
+                    egui::Shape::Text(text) => texts.push(text.galley.text().into()),
+                    egui::Shape::Vec(parts) => {
+                        for part in parts {
+                            labels(part, texts);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let mut texts = Vec::new();
+            for shape in &output.shapes {
+                labels(&shape.shape, &mut texts);
+            }
+            assert!(texts.iter().any(|text| text == "···"));
+            assert!(
+                !texts
+                    .iter()
+                    .any(|text| text.contains("Message hidden") || text == "Unhide")
+            );
+            output.textures_delta.clear();
+            assert_eq!(row.height(), 32.0);
+        });
+    }
+
+    #[test]
     fn overlap_repaint_stays_in_bottom_padding_for_both_skins() {
         let message = crate::archive::tests::message("1@s.whatsapp.net", "padding", 0, false);
         for style in [theme::BubbleStyle::WhatsApp, theme::BubbleStyle::Messages] {
@@ -14898,6 +14984,190 @@ mod tests {
             assert!(
                 f32::from(bubble_margin(&palette, &message, false).bottom) >= STREAK_REPAINT_INSET
             );
+        }
+    }
+
+    fn hidden_restore_announcements(tree: &egui::accesskit::TreeUpdate) -> Vec<&str> {
+        tree.nodes
+            .iter()
+            .flat_map(|(_, node)| [node.label(), node.value()])
+            .flatten()
+            .filter(|text| *text == "Show message" || *text == "···")
+            .collect()
+    }
+
+    fn has_one_named_restore_button(tree: &egui::accesskit::TreeUpdate) -> bool {
+        hidden_restore_announcements(tree) == ["Show message"]
+            && tree
+                .nodes
+                .iter()
+                .filter(|(_, node)| {
+                    node.role() == egui::accesskit::Role::Button
+                        && node.label() == Some("Show message")
+                })
+                .count()
+                == 1
+    }
+
+    #[test]
+    fn restore_check_rejects_static_text_in_place_of_named_button() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            // A clickable but unnamed target plus a separately exposed hint
+            // must not stand in for the named restore button.
+            ui.allocate_exact_size(vec2(160.0, 32.0), Sense::click());
+            widgets::line(
+                ui,
+                "Show message",
+                theme::regular(12.0),
+                Color32::WHITE,
+                200.0,
+                1,
+            )
+            .paint(ui, pos2(20.0, 50.0), Color32::WHITE);
+        });
+        let tree = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .expect("accessibility tree");
+        assert_eq!(hidden_restore_announcements(tree), ["Show message"]);
+        assert!(!has_one_named_restore_button(tree));
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn restore_announcement_check_detects_decorative_static_text() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.button("Show message").widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Show message")
+            });
+            let line = widgets::line(
+                ui,
+                "Show message",
+                theme::regular(12.0),
+                Color32::WHITE,
+                200.0,
+                1,
+            );
+            // Negative control: reproduce the old extra static-text node.
+            line.paint(ui, pos2(20.0, 50.0), Color32::WHITE);
+        });
+        let tree = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .expect("accessibility tree");
+        assert!(
+            tree.nodes
+                .iter()
+                .any(|(_, node)| node.value() == Some("Show message"))
+        );
+        assert_eq!(
+            hidden_restore_announcements(tree),
+            ["Show message", "Show message"]
+        );
+        assert!(!has_one_named_restore_button(tree));
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn focused_hidden_hint_stays_inside_narrow_incoming_and_outgoing_rows() {
+        for own in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            crate::theme::install(&ctx);
+            with_still_view(|view| {
+                let message = crate::archive::tests::message("1@s.whatsapp.net", "hidden", 0, own);
+                let hidden = HashSet::from([message.id.clone()]);
+                let view = View {
+                    hidden: Some(&hidden),
+                    ..*view
+                };
+                let mut final_hint_count = 0;
+                for _ in 0..3 {
+                    let mut row = Rect::NOTHING;
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(190.0, 100.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            ui.with_layout(
+                                if own {
+                                    egui::Layout::right_to_left(egui::Align::TOP)
+                                } else {
+                                    egui::Layout::left_to_right(egui::Align::TOP)
+                                },
+                                |ui| {
+                                    let response = bubble_frame(
+                                        ui,
+                                        &view,
+                                        &message,
+                                        None,
+                                        false,
+                                        false,
+                                        160.0,
+                                        &mut Vec::new(),
+                                    );
+                                    row = response.rect;
+                                    response.request_focus();
+                                },
+                            );
+                        },
+                    );
+                    fn hints(shape: &egui::Shape, rects: &mut Vec<Rect>) {
+                        match shape {
+                            egui::Shape::Text(text) if text.galley.text() == "Show message" => {
+                                assert!(!text.galley.elided, "focused hint must not be truncated");
+                                let painted: String = text
+                                    .galley
+                                    .rows
+                                    .iter()
+                                    .flat_map(|row| row.glyphs.iter().map(|glyph| glyph.chr))
+                                    .collect();
+                                assert_eq!(painted, "Show message");
+                                rects.push(Rect::from_min_size(text.pos, text.galley.size()))
+                            }
+                            egui::Shape::Vec(parts) => {
+                                for part in parts {
+                                    hints(part, rects);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let mut rects = Vec::new();
+                    for shape in &output.shapes {
+                        hints(&shape.shape, &mut rects);
+                    }
+                    final_hint_count = rects.len();
+                    if ctx.memory(|memory| memory.focused()).is_some() && !rects.is_empty() {
+                        assert!(rects.iter().all(|hint| row.contains_rect(*hint)));
+                    }
+                    let tree = output
+                        .platform_output
+                        .accesskit_update
+                        .as_ref()
+                        .expect("accessibility tree");
+                    assert!(
+                        has_one_named_restore_button(tree),
+                        "one named Button and no separately announced hint are required"
+                    );
+                    output.textures_delta.clear();
+                }
+                // The focus frame must paint the readable hint, not suppress it.
+                assert_eq!(final_hint_count, 1);
+                assert!(view.keyboard_navigation.get());
+            });
         }
     }
 

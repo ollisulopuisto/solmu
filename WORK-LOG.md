@@ -56,6 +56,16 @@ avatar-tail synthetic demo page with short and tall heads plus two followers.
 Inspected actual dark wide and light narrow captures: heads meet the avatar at
 the requested height; followers remain tailless. No external image hosting or
 screenshot waiver assumed. Parent has captures and the waiver/audience question.
+## Quiet hidden placeholder,20 November
+
+Implement approved artboard4: no permanent visible label, compact32px seam/ellipsis target with Show message on hover and keyboard focus, click restores. Accessible button name remains explicit; custom Tab/reveal logic retained. Added no-label layout regression; existing keyboard restore/reveal regressions retained. Full native test execution and both-theme pixels await CI. No network delete or hide semantics changed.
+
+Keyboard review follow-up: focused restoration text now replaces the ellipsis inside the seam, never outside the row where outgoing alignment could clip it. Narrow incoming/outgoing focus-label coverage added. Native test-target compilation passes. Actual Linux keyboard navigation exercised from the composer through Tab stops; Show message is visible within the focused seam in dark and light captures. Mac execution remains unverified.
+
+Regression follow-up: inspect both accessibility label and value, with a negative control that recreates a separately painted static-text announcement and proves detection.
+
+Reviewer follow-up: the seam paints its visual hint without a second accessibility label. The focused regression rejects elided galleys, checks painted glyphs, and asserts one accessible restore name. Formatting passes; local Clippy exceeded the bounded run without diagnostics, so execution and compile validation await fresh CI.
+
 ## 2026-11-20: One receipt per automation request, bounded receipt history
 
 The follow-on review found HTTP and the shared write handler both recording a
