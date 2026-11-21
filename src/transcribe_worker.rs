@@ -99,7 +99,7 @@ pub struct Worker {
     /// Search memo: (store version, query, hits).
     search_cache: SearchCache,
     scoped_search_cache: ScopedSearchCache,
-    restored: Arc<Mutex<VecDeque<(u64, Key, Option<Option<String>>)>>>,
+    restored: RestoredCache,
     active_scans: Arc<AtomicUsize>,
     restore_scans: Arc<AtomicUsize>,
     wake_search: Arc<dyn Fn() + Send + Sync>,
@@ -109,6 +109,8 @@ pub struct Worker {
 
 /// Search memo: (store version, query, hits).
 type SearchCache = Arc<Mutex<Option<(u64, String, Vec<Hit>)>>>;
+// Store-versioned restoration entries: None is in flight; Some(None) is absent.
+type RestoredCache = Arc<Mutex<VecDeque<(u64, Key, Option<Option<String>>)>>>;
 const SCOPED_CACHE_SLOTS: usize = 4;
 struct ScopedSnapshot {
     version: u64,
@@ -704,11 +706,8 @@ impl Worker {
             return None;
         }
         if cache.len() >= 128 {
-            if let Some(index) = cache.iter().position(|(_, _, text)| text.is_some()) {
-                cache.remove(index);
-            } else {
-                return None;
-            }
+            let index = cache.iter().position(|(_, _, text)| text.is_some())?;
+            cache.remove(index);
         }
         if self
             .restore_scans
