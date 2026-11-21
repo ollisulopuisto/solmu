@@ -1188,6 +1188,19 @@ impl Pending {
     /// Whether the crop editor can open this file. It has to decode here and
     /// come back as a still: HEIC and AVIF do not decode, and a cropped GIF
     /// would silently lose its animation, so the pencil is not offered.
+    /// Whether the installed image loaders can show this file: JPEG, PNG,
+    /// WebP, GIF and SVG. Preview eligibility is wider than crop eligibility.
+    pub fn is_preview_supported_file(path: &std::path::Path) -> bool {
+        mime_guess2::from_path(path)
+            .first_raw()
+            .is_some_and(|mime| {
+                matches!(
+                    mime,
+                    "image/jpeg" | "image/png" | "image/webp" | "image/gif" | "image/svg+xml"
+                )
+            })
+    }
+
     pub fn is_crop_supported_file(path: &std::path::Path) -> bool {
         mime_guess2::from_path(path)
             .first_raw()
@@ -15970,13 +15983,42 @@ mod tests {
     }
 
     #[test]
-    fn drops_and_pastes_go_nowhere_while_a_preview_owns_the_window() {
+    fn drops_and_pastes_go_nowhere_while_a_preview_or_crop_owns_the_window() {
         let root = tempfile::tempdir().unwrap();
-        let (mut app, _) = App::headless(
-            crate::paths::AppDirs::under(root.path()),
-            Default::default(),
-        );
-        assert!(!app.drops_go_nowhere());
+        let (mut app, _) = App::headless(AppDirs::under(root.path()), Settings::default());
+        app.chats.push(Chat::new("c".into(), "C".into()));
+        app.open_chat("c".into());
+        app.link = crate::backend::LinkStatus::Connected;
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        app.attach(&ctx);
+        let dropped = root.path().join("clip.png");
+        std::fs::write(&dropped, b"fixture").unwrap();
+        let frame = |app: &mut App, input: egui::RawInput| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1180.0, 780.0),
+                    )),
+                    ..input
+                },
+                |ui| app.frame_ui(ui),
+            );
+            output.textures_delta.clear();
+        };
+        let drop_input = || egui::RawInput {
+            dropped_files: vec![egui::DroppedFile {
+                path: Some(dropped.clone()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        // Negative control: with nothing owning the window, the drop stages.
+        frame(&mut app, drop_input());
+        assert_eq!(app.pending.len(), 1, "the control drop staged nothing");
+
+        // A full-window preview owns the window: the same drop goes nowhere.
         let id = app.stage(Pending::Picture {
             width: 2,
             height: 2,
@@ -15984,9 +16026,35 @@ mod tests {
             texture: None,
         });
         app.pending_picture_preview = Some(id);
-        assert!(app.drops_go_nowhere());
+        frame(&mut app, drop_input());
+        assert_eq!(app.pending.len(), 2, "a drop landed behind the preview");
+        // A paste behind the preview goes nowhere either.
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new("fixture-clipboard-files"),
+                vec![dropped.clone()],
+            )
+        });
+        frame(
+            &mut app,
+            egui::RawInput {
+                events: vec![egui::Event::Paste("fixture".into())],
+                ..Default::default()
+            },
+        );
+        assert_eq!(app.pending.len(), 2, "a paste landed behind the preview");
         app.pending_picture_preview = None;
-        assert!(!app.drops_go_nowhere());
+
+        // The crop editor owns the window the same way.
+        app.picture_edit = Some(crate::model::PictureEdit::new(
+            id,
+            crate::model::PictureSource::Pasted(std::sync::Arc::from(vec![255u8; 16])),
+            2,
+            2,
+        ));
+        frame(&mut app, drop_input());
+        assert_eq!(app.pending.len(), 2, "a drop landed behind the crop editor");
+        app.picture_edit = None;
     }
 
     #[test]
@@ -26454,6 +26522,28 @@ mod tests {
         ] {
             assert_eq!(
                 Pending::is_crop_supported_file(std::path::Path::new(name)),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_preview_covers_displayable_pictures_even_uncroppable_ones() {
+        for (name, expected) in [
+            ("photo.jpeg", true),
+            ("photo.png", true),
+            ("photo.webp", true),
+            // Displayable, though a crop would silently drop the animation.
+            ("photo.gif", true),
+            ("icon.svg", true),
+            // No loader decodes these here.
+            ("photo.heic", false),
+            ("photo.avif", false),
+            ("notes.pdf", false),
+        ] {
+            assert_eq!(
+                Pending::is_preview_supported_file(std::path::Path::new(name)),
                 expected,
                 "{name}"
             );

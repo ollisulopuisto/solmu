@@ -9,7 +9,9 @@ use egui::{Align, Layout, Rect, Sense, Vec2, pos2};
 pub fn is_picture(item: &Pending) -> bool {
     match item {
         Pending::Picture { .. } => true,
-        Pending::File(path) => Pending::is_picture_file(path),
+        // Only what the loaders can show; anything else would open on an
+        // error message.
+        Pending::File(path) => Pending::is_preview_supported_file(path),
         Pending::Document(_) => false,
     }
 }
@@ -200,6 +202,7 @@ mod tests {
         );
         let guarded = vec![
             Action::ShowDialog(Dialog::NewChat),
+            Action::OpenUrl("https://zapfast.rocks/using-zapfast/".into()),
             Action::OpenChatSearch,
             Action::FocusSearch,
             Action::ToggleSidebar,
@@ -231,6 +234,63 @@ mod tests {
         app.pending_picture_preview = Some(id);
         // The preview owns the window: only window management survives.
         assert_eq!(super::super::keys::guard_native_menu(&app, all), kept);
+    }
+    #[test]
+    fn a_native_caret_chord_reaches_a_focused_dialog_field() {
+        use crate::model::Dialog;
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        app.chats.push(Chat::new("target".into(), "Target".into()));
+        app.open_chat = Some("target".into());
+        // The New Message dialog owns the window, and its draft field holds
+        // focus with text in it.
+        app.dialog = Some(Dialog::NewChat);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut draft = String::from("a draft");
+        let field = egui::Id::new("new-message-draft");
+        ctx.memory_mut(|memory| memory.request_focus(field));
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.add(egui::TextEdit::multiline(&mut draft).id(field));
+        });
+        output.textures_delta.clear();
+        // The native menu accelerator passes the guard...
+        let actions = super::super::keys::guard_native_menu(
+            &app,
+            vec![Action::MenuCommand("chat-oldest".into())],
+        );
+        assert_eq!(actions, vec![Action::MenuCommand("chat-oldest".into())]);
+        // ...and the dispatcher hands the chord back to the field instead of
+        // jumping the chat behind the dialog.
+        let mut jumped = false;
+        let mut reached_field = false;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.add(egui::TextEdit::multiline(&mut draft).id(field));
+            assert!(ui.ctx().text_edit_focused(), "the draft field lost focus");
+            app.apply(Action::MenuCommand("chat-oldest".into()), ui.ctx());
+            jumped = app
+                .actions
+                .iter()
+                .any(|action| matches!(action, Action::ScrollPage(_)));
+            reached_field = ui.ctx().input(|input| {
+                input.events.iter().any(|event| {
+                    matches!(
+                        event,
+                        egui::Event::Key {
+                            key: egui::Key::ArrowUp,
+                            modifiers,
+                            ..
+                        } if modifiers.command
+                    )
+                })
+            });
+        });
+        output.textures_delta.clear();
+        assert!(!jumped, "the chord jumped the chat behind the dialog");
+        assert!(reached_field, "the chord never reached the field");
     }
     #[test]
     fn full_view_preview_tab_and_send_chords_never_reach_background_composer() {

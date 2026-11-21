@@ -1990,10 +1990,13 @@ pub(crate) fn guard_native_menu(app: &App, actions: Vec<Action>) -> Vec<Action> 
                 // to a focused dialog or picker field; menu_actions still
                 // blocks the background chat jump while the window is owned.
                 Action::MenuCommand(id) => id != "chat-newest" && id != "chat-oldest",
+                // Help opens an external browser behind the preview, so it
+                // is blocked like the dialogs.
                 action => matches!(
                     action,
                     Action::ShowDialog(_)
                         | Action::Open(_)
+                        | Action::OpenUrl(_)
                         | Action::OpenChatSearch
                         | Action::FocusSearch
                         | Action::ToggleSidebar

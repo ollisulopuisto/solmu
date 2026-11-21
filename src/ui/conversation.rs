@@ -16518,9 +16518,10 @@ mod reaction_tests {
         );
     }
 
-    /// Every picture tile opens the preview, never the cropper directly;
-    /// crop eligibility is the preview's Crop button and the EditPicture
-    /// guard's business.
+    /// A displayable picture tile opens the preview, never the cropper
+    /// directly; crop eligibility is the preview's Crop button and the
+    /// EditPicture guard's business. A HEIC tile stays inert: no loader
+    /// here decodes it, so a preview would only show an error.
     #[test]
     fn a_tile_click_opens_the_preview_never_the_cropper() {
         let directory = tempfile::tempdir().unwrap();
@@ -16575,8 +16576,10 @@ mod reaction_tests {
                 },
             ]
         };
+        // GIF: previewable but not croppable. HEIC: not even displayable.
+        // PNG: previewable and croppable.
         let start = origin.get();
-        for tile in [0.0, 72.0 + 8.0, 2.0 * (72.0 + 8.0)] {
+        for (tile, previewable) in [(0.0, true), (72.0 + 8.0, false), (2.0 * (72.0 + 8.0), true)] {
             run(&mut app, click(start + egui::vec2(tile + 36.0, 36.0)));
             assert!(
                 app.actions
@@ -16585,11 +16588,12 @@ mod reaction_tests {
                 "a tile opened the cropper directly: {:?}",
                 app.actions
             );
-            assert!(
+            assert_eq!(
                 app.actions
                     .iter()
                     .any(|action| matches!(action, Action::PreviewPendingPicture(_))),
-                "a picture tile did not open the preview: {:?}",
+                previewable,
+                "tile {tile}: {:?}",
                 app.actions
             );
             app.actions.clear();

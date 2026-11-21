@@ -83,6 +83,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if app.pending_picture_preview.is_some() {
         keys::handle(app, ctx);
         pending_picture_preview::show(app, ctx);
+        // A refused action (say, a second crop while one is being written)
+        // answers with a toast; it must not wait for the preview to close.
+        toasts(app, ctx);
         focus_ring(app, ctx);
         announce(app, ctx);
         window_chrome(app, ui);
