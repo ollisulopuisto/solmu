@@ -784,6 +784,14 @@ history and search continuation. Tests cover disconnected inventory without a
 Chats replacement event, legitimate empty inventory, malformed history, and
 search retaining results/cursor across refusal and successful retry.
 No real Server query or UI-layout changes; native/live acceptance unverified.
+## 2026-11-20 - Unknown reconciliation on malformed Server search
+
+The Server reliability audit found that the scheduler interpreted a missing
+search items array as NotFound. That is not evidence that an uncertain send
+has no existing copy. Require items so malformed search leaves reconciliation
+Unknown. A failing-first real-HTTP regression reproduced NotFound before the
+fix; valid-empty pages still report NotFound. No automatic resend policy is
+changed, and no real messages or Server configuration were touched.
 
 
 ## Shortcut edit targets,20 November
