@@ -108,7 +108,10 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                     .max_rect(controls)
                     .layout(Layout::top_down(Align::Min)),
                 |ui| {
-                    ui.label(format!("{name} · {} / {}", index + 1, pictures.len()));
+                    ui.add(
+                        egui::Label::new(format!("{name} · {} / {}", index + 1, pictures.len()))
+                            .truncate(),
+                    );
                     ui.horizontal_wrapped(|ui| {
                         if ui
                             .add_enabled(index > 0, egui::Button::new(gettext(locale, "Previous")))
@@ -170,10 +173,47 @@ mod tests {
         );
         output.textures_delta.clear();
         assert!(app.actions.is_empty());
-        assert!(super::super::keys::menu_actions(&app, "send").is_empty());
+        // "go-bookmarks" is a real menu command: blocked during the preview,
+        // back once it closes.
+        assert!(super::super::keys::menu_actions(&app, "go-bookmarks").is_empty());
         app.pending.clear();
         show(&mut app, &ctx);
         assert!(app.pending_picture_preview.is_none());
+        assert!(!super::super::keys::menu_actions(&app, "go-bookmarks").is_empty());
+    }
+    #[test]
+    fn native_menu_actions_stay_out_of_an_owned_window() {
+        use crate::model::Dialog;
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        let guarded = vec![
+            Action::ShowDialog(Dialog::NewChat),
+            Action::OpenChatSearch,
+            Action::FocusSearch,
+            Action::ToggleSidebar,
+            Action::ToggleInfoSidebar,
+            Action::MenuCommand("go-bookmarks".into()),
+        ];
+        let kept = vec![Action::Quit, Action::CloseWindow, Action::ShowWindow];
+        let mut all = guarded.clone();
+        all.extend(kept.iter().cloned());
+        // Nothing owns the window: every action passes through.
+        assert_eq!(
+            super::super::keys::guard_native_menu(&app, all.clone()),
+            all
+        );
+        let id = app.stage(Pending::Picture {
+            width: 2,
+            height: 2,
+            rgba: std::sync::Arc::from(vec![255u8; 16]),
+            texture: None,
+        });
+        app.pending_picture_preview = Some(id);
+        // The preview owns the window: only window management survives.
+        assert_eq!(super::super::keys::guard_native_menu(&app, all), kept);
     }
     #[test]
     fn full_view_preview_tab_and_send_chords_never_reach_background_composer() {

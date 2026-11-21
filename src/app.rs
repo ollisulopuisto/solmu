@@ -14274,7 +14274,7 @@ impl App {
         #[cfg(target_os = "macos")]
         self.actions.extend(crate::ui::keys::route_native_actions(
             ctx,
-            crate::macos::drain(self.window_hidden),
+            crate::ui::keys::guard_native_menu(self, crate::macos::drain(self.window_hidden)),
         ));
         self.handle_control_commands();
         self.poll_custom_themes();
@@ -15164,8 +15164,9 @@ impl App {
         }
         self.window_focused = focused;
         self.report_presence();
-        if locked || self.local_avatar_editor.is_some() {
-            // Files dropped or pasted on the lock screen or avatar editor go nowhere.
+        if locked || self.drops_go_nowhere() {
+            // Files dropped or pasted on the lock screen, avatar editor, picture
+            // preview or crop editor go nowhere.
             self.dropping = false;
         } else {
             self.scrolling.apply(ctx);
@@ -15327,6 +15328,15 @@ impl App {
     }
 
     /// Handles dropped files and pasted images for the open chat.
+    /// True while a surface owns the window so completely that a dropped or
+    /// pasted file would land behind it: the avatar editor, picture preview
+    /// or crop editor. The lock screen is covered by the caller's `locked`.
+    fn drops_go_nowhere(&self) -> bool {
+        self.local_avatar_editor.is_some()
+            || self.pending_picture_preview.is_some()
+            || self.picture_edit.is_some()
+    }
+
     fn take_drops_and_pastes(&mut self, ctx: &egui::Context) {
         let (dropped, hovering) = ctx.input(|input| {
             let dropped: Vec<PathBuf> = input
@@ -15957,6 +15967,26 @@ mod tests {
             preview.network.is_none(),
             "source badges replace the count suffix"
         );
+    }
+
+    #[test]
+    fn drops_and_pastes_go_nowhere_while_a_preview_owns_the_window() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        assert!(!app.drops_go_nowhere());
+        let id = app.stage(Pending::Picture {
+            width: 2,
+            height: 2,
+            rgba: std::sync::Arc::from(vec![255u8; 16]),
+            texture: None,
+        });
+        app.pending_picture_preview = Some(id);
+        assert!(app.drops_go_nowhere());
+        app.pending_picture_preview = None;
+        assert!(!app.drops_go_nowhere());
     }
 
     #[test]

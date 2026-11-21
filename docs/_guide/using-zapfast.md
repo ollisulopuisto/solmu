@@ -281,9 +281,11 @@ or clearing it keeps its draft priority until you leave again. Within each
 group, chats keep their usual latest-message order. The Favorites chip keeps
 the phone's favorites order below pins.
 
-Click a picture above the composer to crop it before you send it. The picture
-opens over the window with the region to keep marked, and you can drag that
-region by its edges and corners or move it whole. **Turn left** and **Turn
+Click a picture above the composer to look at it closely before you send it.
+The preview opens over the window, and with several pictures staged **Previous**
+and **Next** move between them. **Crop / rotate** takes the picture to the
+cropper with the region to keep marked, and you can drag that region by its
+edges and corners or move it whole. **Turn left** and **Turn
 right** turn the picture a quarter at a time, and **Reset** puts it back the way
 it started. Press Enter or click the check to keep the crop, or Escape or the
 close button to leave the picture as it was.
