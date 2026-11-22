@@ -6959,7 +6959,7 @@ fn natural_body_width(
     cap: f32,
     grow: bool,
 ) -> f32 {
-    if text.contains("```") {
+    if text.len() > markup::BALANCED_BODY_MAX_BYTES || text.contains("```") {
         return markup::layout_balanced(ui, text, mentions, style, cap, grow)
             .galley
             .size()

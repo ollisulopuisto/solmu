@@ -1222,3 +1222,33 @@ unavailable sudo access. Native suite, Clippy and docs are not claimed passed.
 Rustfmt and diff check pass. Public CI must run the complete native checks.
 Version bumped to26.11.4. No UI layout change, real-account reproduction, release
 or merge. Olli's explicit word is required before merging this PR.
+
+## 2026-11-22: Bound large-message layout work
+
+Branch fix/long-message-layout from main91f596a, independent of diagnostics PR442.
+A reported startup/constant beachball was tied to a newly pasted ~377KB message;
+the owner reports deleting it restored responsiveness. Current and yesterday's
+manual69 sources share the same quadratic balancer. Manual70 only adds441, not
+a new text shaping path. No commit regression is proven. The supplied macOS
+sample shows sustained main-thread work but stripped frames prevent naming its
+Rust function. No real message or sample is included here.
+
+A synthetic420KB multiline log took~3.1s for layout in an isolated optimized
+Linux harness using current production markup/wrap and pinned egui, with
+unrelated emoji/theme/bidi leaves stubbed. The deterministic failing-first
+assertion verified the expensive path was taken. The fixed same layout took
+~81ms. A 504KB single paragraph exceeded a40s bound before paragraph partitioning;
+afterward~68ms. A400KB single word laid out in~45ms. These are isolated numbers,
+not macOS acceptance or a complete native app benchmark.
+
+Above8KiB, use cached greedy layout for painting AND natural-width planning.
+Only for these large bodies, partition shaping paragraphs every1024graphemes
+in the display job using existing inserted-break/copy/link remapping; full
+stored text, copy text, markup and actions remain intact. Borrow inline URL
+parser suffixes rather than allocating the remainder at every word. Normal
+messages keep balanced wrapping. Regression groups cover complete text/copy,
+links, cache reuse, Unicode and long paragraphs. Two source regression groups
+pass in the isolated harness. Native suite/Clippy/docs still require public CI
+because this environment lacks PipeWire development files and sudo access.
+Version26.11.5 avoids colliding with26.11.4 on the independent diagnostics PR.
+No merge without explicit owner word.
