@@ -3704,20 +3704,28 @@ fn load_until_message(
     let mut seen = HashSet::new();
     let mut pending: Vec<Message> = Vec::new();
     let mut complete = false;
+    let exhausted = "Search result not reached: Beeper reported no older messages. The result may no longer be available in this chat's returned history.";
+    // Only exhausting the loop budget means the local safety cap was reached.
+    // Preserve a more specific terminal cause on every other exit path.
+    let mut stop_error = format!(
+        "Search result not reached: Solmu stopped at its {SEARCH_JUMP_MAX_PAGES}-page safety limit. Click the result again to continue."
+    );
     // The jump target may be one part of a split multi-attachment message;
     // history pages carry the bridge id every part shares.
     let target_wire = crate::model::attachment_part(target).0;
     for page_no in 0..SEARCH_JUMP_MAX_PAGES {
         let state = cursors.get(chat);
         if state.is_some_and(|state| !state.has_more_older) {
+            stop_error = exhausted.into();
             break;
         }
         let cursor = state.and_then(|state| state.oldest.clone());
         let Some(cursor) = cursor else {
-            emit(Event::BeeperHistoryState { chat: chat.into(), error: Some("Cannot reach the search result: older-history cursor unavailable. Retry after history recovers.".into()) });
+            stop_error = "Cannot reach the search result: older-history cursor unavailable. Retry after history recovers.".into();
             break;
         };
         if !seen.insert(cursor.clone()) {
+            stop_error = "Search result not reached: an older-history cursor repeated. Retry after history recovers.".into();
             break;
         }
         match api.list_messages(chat, Some(&cursor), Some("before")) {
@@ -3749,11 +3757,11 @@ fn load_until_message(
                 {
                     flush_jump_pages(emit, chat, &mut pending, complete);
                 }
-                emit(Event::BeeperHistoryState {
-                    chat: chat.into(),
-                    error: error.clone(),
-                });
                 if found {
+                    emit(Event::BeeperHistoryState {
+                        chat: chat.into(),
+                        error,
+                    });
                     emit(Event::OlderFetched {
                         chat: chat.into(),
                         more: page.has_more,
@@ -3761,15 +3769,21 @@ fn load_until_message(
                     });
                     return;
                 }
-                if error.is_some() || !page.has_more {
+                if let Some(error) = error {
+                    stop_error = error;
                     break;
                 }
-            }
-            Err(error) => {
+                if !page.has_more {
+                    stop_error = exhausted.into();
+                    break;
+                }
                 emit(Event::BeeperHistoryState {
                     chat: chat.into(),
-                    error: Some(format!("Search result history unavailable: {error}")),
+                    error: None,
                 });
+            }
+            Err(error) => {
+                stop_error = format!("Search result history unavailable: {error}");
                 break;
             }
         }
@@ -3777,9 +3791,7 @@ fn load_until_message(
     flush_jump_pages(emit, chat, &mut pending, complete);
     emit(Event::BeeperHistoryState {
         chat: chat.into(),
-        error: Some(format!(
-            "Search result not reached. History may be incomplete or the {SEARCH_JUMP_MAX_PAGES}-page safety limit was reached. Click the result again to continue."
-        )),
+        error: Some(stop_error),
     });
     emit(Event::OlderFetched {
         chat: chat.into(),
@@ -9352,6 +9364,190 @@ mod tests {
             .sum();
         assert_eq!(delivered, TARGET_PAGE, "batching drops no messages");
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn load_until_reports_the_actual_stop_without_a_false_page_limit() {
+        let cases = [
+            (
+                500,
+                r#"{"error":"fixture unavailable"}"#,
+                "Search result history unavailable",
+            ),
+            (
+                200,
+                r#"{"items":[],"hasMore":true,"oldestCursor":"start"}"#,
+                "cursor did not advance",
+            ),
+            (200, r#"{"items":[],"hasMore":false}"#, "no older messages"),
+        ];
+        for (status, body, expected) in cases {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let worker = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                write!(stream, "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            });
+            let api = Api::new(&BeeperConfig {
+                base_url,
+                token: "fixture".into(),
+            })
+            .unwrap();
+            let mut cursors = HashMap::from([(
+                "chat".into(),
+                ChatCursors {
+                    oldest: Some("start".into()),
+                    newest: None,
+                    has_more_older: true,
+                },
+            )]);
+            let events = std::sync::Mutex::new(Vec::new());
+            load_until_message(&api, &mut cursors, "chat", "target", &|event| {
+                events.lock().unwrap().push(event)
+            });
+            let events = events.into_inner().unwrap();
+            let errors: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::BeeperHistoryState {
+                        error: Some(error), ..
+                    } => Some(error.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                errors.len(),
+                1,
+                "one terminal cause, not a replacement: {errors:?}"
+            );
+            assert!(errors[0].contains(expected), "{errors:?}");
+            assert!(
+                !errors[0].contains("400-page"),
+                "not a page-limit failure: {errors:?}"
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, Event::OlderFetched { .. }))
+            );
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn load_until_distinguishes_missing_cursor_from_exhausted_history() {
+        let api = Api::new(&BeeperConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            token: "fixture".into(),
+        })
+        .unwrap();
+        for (has_more_older, expected) in
+            [(true, "cursor unavailable"), (false, "no older messages")]
+        {
+            let mut cursors = HashMap::from([(
+                "chat".into(),
+                ChatCursors {
+                    oldest: None,
+                    newest: None,
+                    has_more_older,
+                },
+            )]);
+            let events = std::sync::Mutex::new(Vec::new());
+            load_until_message(&api, &mut cursors, "chat", "target", &|event| {
+                events.lock().unwrap().push(event)
+            });
+            let events = events.into_inner().unwrap();
+            let errors: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::BeeperHistoryState {
+                        error: Some(error), ..
+                    } => Some(error.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(errors.len(), 1);
+            assert!(errors[0].contains(expected), "{errors:?}");
+            assert!(!errors[0].contains("400-page"), "{errors:?}");
+        }
+    }
+
+    #[test]
+    fn load_until_preserves_pages_and_distinguishes_cycle_from_real_limit() {
+        for cycle in [false, true] {
+            let count = if cycle { 2 } else { SEARCH_JUMP_MAX_PAGES };
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let worker = std::thread::spawn(move || {
+                for page in 0..count {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut request = [0u8; 4096];
+                    let _ = stream.read(&mut request).unwrap();
+                    let next = if cycle && page == 1 {
+                        "start".into()
+                    } else {
+                        format!("c{page}")
+                    };
+                    let body = format!(
+                        r#"{{"items":[{{"id":"m{page}","chatID":"chat","text":"fixture","timestamp":"2026-06-01T00:00:00Z"}}],"hasMore":true,"oldestCursor":"{next}"}}"#
+                    );
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .unwrap();
+                }
+            });
+            let api = Api::new(&BeeperConfig {
+                base_url,
+                token: "fixture".into(),
+            })
+            .unwrap();
+            let mut cursors = HashMap::from([(
+                "chat".into(),
+                ChatCursors {
+                    oldest: Some("start".into()),
+                    newest: None,
+                    has_more_older: true,
+                },
+            )]);
+            let events = std::sync::Mutex::new(Vec::new());
+            load_until_message(&api, &mut cursors, "chat", "target", &|event| {
+                events.lock().unwrap().push(event)
+            });
+            let events = events.into_inner().unwrap();
+            let errors: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::BeeperHistoryState {
+                        error: Some(error), ..
+                    } => Some(error.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(errors.len(), 1);
+            assert!(
+                errors[0].contains(if cycle { "repeated" } else { "400-page" }),
+                "{errors:?}"
+            );
+            let delivered: usize = events
+                .iter()
+                .map(|event| match event {
+                    Event::Messages { messages, .. } => messages.len(),
+                    _ => 0,
+                })
+                .sum();
+            assert_eq!(delivered, count, "no good page lost at the stop");
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, Event::OlderFetched { more: true, .. }))
+            );
+            worker.join().unwrap();
+        }
     }
 
     #[test]

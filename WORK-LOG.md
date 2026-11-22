@@ -1197,3 +1197,28 @@ Devin follow-up on #420: the clear partial-failure test depended on filesystem d
 Review: Instinct, branch `agent/security-pilot-free`, isolated security-pilot worktree. Adds report-only, pinned scanners and weekly staggered public-hosted runs. See `docs/security-pilot.md` for coverage, output and limits. No app behavior/version change, fixes, releases, private CI, or merges.
 
 Security pilot review follow-up: include merge-resolution patches, tolerate null RustSec advisory warnings, fix native Go scan tags, and conform to repository lint. Added two regressions (both failed against the old implementation). CodeQL pin resolves in hosted CI; no change based solely on an external 404 claim.
+
+
+## 2026-11-22: Preserve history jump stop reasons
+
+Branch `fix/search-history-stop-reason`, based on main 91f596a. Owner screenshot
+showed a partial-timeline warning, without logs. No private conversation content
+was used in fixtures or copied here. The 400-page budget belongs to Solmu's
+search/quote jump, not a WhatsApp/bridge quota. The old loop replaced every
+unsuccessful exit with one generic possible-budget warning, including exhausted
+history, unavailable/nonadvancing/repeating cursors and HTTP failures. Preserve
+one real terminal cause, mentioning the local cap only after 400 pages. Keep
+loaded pages and retry cursor, no budget increase or new network behavior.
+The screenshot cannot reveal which underlying stop actually occurred, and this
+patch does not claim to restore history the upstream service does not return.
+
+Added synthetic HTTP fixtures for error causes, missing cursor/exhaustion,
+cycles, the real budget and retained pages. An isolated Rust harness extracted
+the exact production loop with stubbed transport; three meaningful test groups
+failed before the change and pass after it. This is not the native app suite.
+Native Rust 1.98 compilation reached libspa-sys and failed because the local
+libpipewire-0.3 development package is absent. Installing prerequisites needs
+unavailable sudo access. Native suite, Clippy and docs are not claimed passed.
+Rustfmt and diff check pass. Public CI must run the complete native checks.
+Version bumped to26.11.4. No UI layout change, real-account reproduction, release
+or merge. Olli's explicit word is required before merging this PR.
