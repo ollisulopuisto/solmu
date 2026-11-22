@@ -1316,3 +1316,96 @@ The hook-order note is informational: native setup registers CopyAnnotator
 before DetachedLinks removes URL commands on Linux/BSD. No current defect was
 reported there. Full native demo captures remain unrun, not claimed satisfied.
 Fresh CI and Devin are requested on this new head; do not use de8c3c3 checks.
+
+
+## 2026-11-22: Expire accepted-delete receipt notices
+
+Branch fix/delete-result-banner from main91f596a, independent of442 and443.
+The accepted/unconfirmed batch-delete banner had no later confirmed state and
+persisted until manually dismissed. Owner requested a banner PR. Keep honest
+receipt wording and clear only accepted message-delete notices after10seconds.
+Start the per-item monotonic timer on the matched successful backend result,
+not on submission. Both delete-for-me/everyone are covered. Pending, failed,
+uncertain, untimed, archive and previous-connection results are retained.
+No remote completion is asserted and no mutation/retry/network request is added.
+
+One repaint is scheduled for the next expiry, no animation/polling timer.
+The existing account/request/item guards stay unchanged; the hidden-account
+result test now also checks the acceptance timestamp. An exact-source Rust1.98
+model harness showed the new expiry test failing first, then passing with the
+existing session-replacement test. Boundary and mixed-batch assertions cover
+expired/recent accepted notices and retained pending/failed/archive/history.
+Inspected before/after actual egui meshes from isolated source archive_bar
+rendering: the expired receipt disappears, pending/error rows remain. This is
+not a full-app demo capture or real-Mac test. Full native suite/Clippy/docs await
+public CI because local PipeWire development files and sudo are unavailable.
+Version26.11.6 is distinct from442/443. No merge without explicit owner word.
+
+
+2026-11-22 18:23: Native Mac and Ubuntu tests passed for444; quality rejected
+only field_reassign_with_default in the new expiry test fixture. Initialize
+both fixture vectors in BatchState directly, no lint allowance or production
+change. Prepared locally pending the required rebase after443 merges; fresh
+CI on that final rebased head remains mandatory.
+
+2026-11-22 20:18: Rebased444 onto merged443 at38ab029, following the owner's
+442/443/444 order. Preserved the earlier changelog/work-log sections and the
+sequential26.11.6 version. Included the prepared direct-initialization lint fix.
+Re-read the acceptance timestamp guards and expiry path after the rebase: only
+matched successful message-delete receipts acquire a timer; retained pending,
+failed, archive, untimed and previous-session results cannot expire here.
+Current-source model/session tests pass in the isolated Rust1.98 harness, with
+rustfmt and diff checks. Full native app tests and Clippy require fresh public
+CI on this rebased head; previous native passes do not validate it. No release
+or merge in this update.
+
+## 2026-11-22: Keep delete-failure disclosures stable during expiry
+
+Reviewed all three current Devin notes on444. Expiring an earlier accepted
+receipt shifted positional disclosure IDs, closing an expanded failure or
+moving expansion to another failure. Current results now key the disclosure by
+account owner, request and exact chat/message/action target. Previous-session
+history keeps its existing separate namespace and indexing; it is not expired.
+
+Added a real archive_bar input/render regression: click the first failure's
+Technical details, expire an earlier accepted receipt, then check that the same
+failure stays open and the second stays closed. The exact production-function
+harness failed that final assertion before the fix and passes after it. Both
+model tests also pass. This isolates the UI/model code with a minimal App, not
+the complete native application. Full native tests remain for fresh CI. Local
+rustfmt and diff checks pass. Native before/after demo captures remain unrun.
+
+The narrow-window note is a timer-policy tradeoff: chat-list notices can age
+while the conversation hides that pane. Kept the existing explicit acceptance-
+time contract rather than silently change it to first-visible time. No new
+network request, deletion or retry is introduced.
+
+## 2026-11-22: Trace receipt-removal consumers and keep keyboard focus
+
+The original review verified retained contents and static pixels but missed
+state carried across removal. Traced every production batch_ui, acceptance-
+timestamp and expiry reference, including current/previous disclosures,
+dismiss controls, following header controls, selection/ghost-group consumers,
+pending guards and session replacement. The PR body has the consumer ledger
+and explicitly separates source tracing from executed interaction coverage.
+
+A corrected failing-first Tab regression reproduces focus moving away from
+both dismiss controls and a following control on7473e42. It allows another
+layout pass before reading hit-test rectangles. Explicit persistent IDs are
+needed for the dismiss buttons: this egui revision mixes position into auto
+IDs even in a salt-scoped child. An isolated bar child reserves a constant
+parent ID sequence, including when its final receipt disappears. A regression
+also caught and prevents an empty child adding3px of header spacing.
+
+Five exact-function/model tests and isolated Clippy with warnings denied pass.
+The interaction tests include pointer-driven disclosure preservation, Tab focus
+with retained rows and an empty result list, and empty-bar layout. They use the
+app's non-selectable-label setting. Native full-app tests, complete header/
+scroll/accessibility integration and native demo captures remain unrun locally.
+Previous-history disclosure slots remain index-keyed in their append/whole-clear
+collection; expiry does not reorder or remove those rows. No blanket identity-
+keyed or whole-app validation claim is made. Acceptance-time policy is unchanged.
+
+For future collection/state changes, list and trace consumers outside the diff,
+check positional IDs/selection/expansion/scroll/focus, add failing-first
+interaction coverage for defects, and state untraced scope before review.

@@ -4828,6 +4828,8 @@ impl App {
                             && item.result.is_none()
                     })
                 {
+                    item.accepted_delete_at =
+                        (item.message.is_some() && result.is_ok()).then(Instant::now);
                     item.result = Some(result);
                 }
             }
@@ -17549,6 +17551,7 @@ mod tests {
             chat: "same-chat".into(),
             message: Some("message".into()),
             everyone: false,
+            accepted_delete_at: None,
             result: None,
         }];
         app.switch_account(&first);
@@ -17571,6 +17574,7 @@ mod tests {
         app.switch_account(&second);
         assert_eq!(app.batch_ui.request, Some(42));
         assert_eq!(app.batch_ui.results[0].result, Some(Ok(())));
+        assert!(app.batch_ui.results[0].accepted_delete_at.is_some());
         assert!(app.batch_ui.selected_chats.is_empty());
     }
 

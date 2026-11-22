@@ -1739,6 +1739,7 @@ fn confirm_delete_messages(
                         chat: chat.into(),
                         message: Some(id.clone()),
                         everyone: for_everyone,
+                        accepted_delete_at: None,
                         result: None,
                     })
                     .collect();
