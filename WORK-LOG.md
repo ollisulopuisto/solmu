@@ -1379,3 +1379,33 @@ The narrow-window note is a timer-policy tradeoff: chat-list notices can age
 while the conversation hides that pane. Kept the existing explicit acceptance-
 time contract rather than silently change it to first-visible time. No new
 network request, deletion or retry is introduced.
+
+## 2026-11-22: Trace receipt-removal consumers and keep keyboard focus
+
+The original review verified retained contents and static pixels but missed
+state carried across removal. Traced every production batch_ui, acceptance-
+timestamp and expiry reference, including current/previous disclosures,
+dismiss controls, following header controls, selection/ghost-group consumers,
+pending guards and session replacement. The PR body has the consumer ledger
+and explicitly separates source tracing from executed interaction coverage.
+
+A corrected failing-first Tab regression reproduces focus moving away from
+both dismiss controls and a following control on7473e42. It allows another
+layout pass before reading hit-test rectangles. Explicit persistent IDs are
+needed for the dismiss buttons: this egui revision mixes position into auto
+IDs even in a salt-scoped child. An isolated bar child reserves a constant
+parent ID sequence, including when its final receipt disappears. A regression
+also caught and prevents an empty child adding3px of header spacing.
+
+Five exact-function/model tests and isolated Clippy with warnings denied pass.
+The interaction tests include pointer-driven disclosure preservation, Tab focus
+with retained rows and an empty result list, and empty-bar layout. They use the
+app's non-selectable-label setting. Native full-app tests, complete header/
+scroll/accessibility integration and native demo captures remain unrun locally.
+Previous-history disclosure slots remain index-keyed in their append/whole-clear
+collection; expiry does not reorder or remove those rows. No blanket identity-
+keyed or whole-app validation claim is made. Acceptance-time policy is unchanged.
+
+For future collection/state changes, list and trace consumers outside the diff,
+check positional IDs/selection/expansion/scroll/focus, add failing-first
+interaction coverage for defects, and state untraced scope before review.
