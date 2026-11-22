@@ -17193,3 +17193,106 @@ mod history_warning_tests {
         output.textures_delta.clear();
     }
 }
+
+#[cfg(test)]
+mod history_header_integration_tests {
+    use super::*;
+
+    fn text(shape: &egui::Shape, result: &mut String) {
+        match shape {
+            egui::Shape::Text(shape) => result.push_str(shape.galley.text()),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    text(shape, result);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn both_full_conversation_headers_show_only_the_current_chat_history_error() {
+        for palette in [
+            Palette::light(),
+            Palette::dark(),
+            Palette::messages_light(),
+            Palette::messages(),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let (mut app, _) = App::headless(
+                crate::paths::AppDirs::under(directory.path()),
+                crate::settings::Settings::default(),
+            );
+            let chat = "1@s.whatsapp.net";
+            app.chats
+                .push(Chat::new(chat.into(), "Synthetic conversation".into()));
+            app.open_chat = Some(chat.into());
+            app.palette = palette;
+            app.conversations.insert(
+                chat.into(),
+                Conversation {
+                    requested: true,
+                    complete: true,
+                    messages: vec![crate::archive::tests::message(
+                        chat,
+                        "fixture-message",
+                        0,
+                        false,
+                    )],
+                    ..Default::default()
+                },
+            );
+            let error = "Search result history unavailable: header-stop-fixture-503";
+            app.beeper_history_errors.insert(chat.into(), error.into());
+            app.beeper_history_errors
+                .insert("other".into(), "other-chat-stop-fixture-404".into());
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            let (backend, mut commands) = crate::backend::Backend::recording();
+            app.backend = backend;
+            let render = |app: &mut App| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(900.0, 700.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| show(app, ui),
+                );
+                let mut rendered = String::new();
+                for shape in &output.shapes {
+                    text(&shape.shape, &mut rendered);
+                }
+                output.textures_delta.clear();
+                rendered
+            };
+            // Exercise show itself, so removing either plain/vibrant call fails.
+            for _ in 0..2 {
+                let rendered = render(&mut app);
+                assert!(
+                    rendered.contains(
+                        "History: Search result history unavailable: header-stop-fixture-503"
+                    ),
+                    "vibrant={}: {rendered}",
+                    palette.vibrant()
+                );
+                assert!(!rendered.contains("other-chat-stop-fixture-404"));
+                assert_eq!(
+                    app.beeper_history_errors.get(chat).map(String::as_str),
+                    Some(error)
+                );
+                assert!(
+                    commands.try_recv().is_err(),
+                    "painting must not retry history"
+                );
+            }
+            app.beeper_history_errors.remove(chat);
+            let rendered = render(&mut app);
+            assert!(!rendered.contains("header-stop-fixture-503"));
+            assert!(!rendered.contains("other-chat-stop-fixture-404"));
+            assert!(commands.try_recv().is_err());
+        }
+    }
+}

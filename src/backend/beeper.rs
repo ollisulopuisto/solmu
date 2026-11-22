@@ -3708,7 +3708,7 @@ fn load_until_message(
     // Only exhausting the loop budget means the local safety cap was reached.
     // Preserve a more specific terminal cause on every other exit path.
     let mut stop_error = format!(
-        "Search result not reached: Solmu stopped at its {SEARCH_JUMP_MAX_PAGES}-page safety limit. Click the result again to continue."
+        "Search result not reached: Solmu stopped at its {SEARCH_JUMP_MAX_PAGES}-page safety limit."
     );
     // The jump target may be one part of a split multi-attachment message;
     // history pages carry the bridge id every part shares.
@@ -9554,6 +9554,10 @@ mod tests {
                 assert!(
                     errors[0].contains(if cycle { "repeated" } else { "400-page" }),
                     "{errors:?}"
+                );
+                assert!(
+                    !errors[0].contains("again to continue"),
+                    "the current open-chat path restarts, not resumes: {errors:?}"
                 );
             }
             let delivered: usize = events

@@ -1261,3 +1261,38 @@ Version26.11.7 is reserved after approved443(.5) and444(.6); rebase this separat
 PR after those land before considering a merge. Ready-for-review PR only for
 this follow-up, not covered by the three-PR merge instruction. Own adversarial
 review and Devin requested on the final pushed head. Exact-head full CI awaited.
+
+
+### Follow-up review: truthful cap copy, remaining wrappers, real header entry points
+
+Validated the three additional review notes. The existing OpenMessage path calls
+open_chat, which refetches the first page and replaces the backend cursor. Remove
+the claim that another click continues a capped jump. This PR stays diagnostics-only:
+no new requests, cursor/reset changes, or larger budget. Track resumable jumps as
+an unscheduled ROADMAP item, not an implementation promise.
+
+Route the ordinary older-page missing-cursor message and history_error_copy's
+404/general wrappers through gettext. A translation-spy test checks the actual
+keys and preserves raw upstream details. Expand visibility coverage through the
+full conversation::show entry point in plain/vibrant light/dark palettes, with
+per-chat isolation, error removal, and no retry from painting. Native full-app
+captures remain unrun, and gettext routing still needs normal catalog updates for
+new translated wording.
+
+
+Follow-up validation: the cap-copy regression fails against exact previous-head
+backend source (three groups pass, one fails on the false resume promise); all
+four exact-source backend groups pass now. Three warning-module tests, including
+a translation-key spy, pass against the pinned egui. Isolated Rust1.98 Clippy,
+rustfmt and diff checks pass. The generic stable alias lacks rustfmt/Clippy here;
+the installed1.98 toolchain supplied those checks. Own adversarial review caught
+that renaming the injected gettext callback could hide literals from catalog
+extraction; keep its gettext name and the normal locale/text argument shape.
+Full conversation::show integration is added for native CI, not claimed run
+locally. The earlier statement about preserving the loop's saved retry cursor
+must not be read as working UI resume: reopening the result resets it; the new
+ROADMAP item records that separate, unimplemented gap.
+
+Inspected updated isolated egui cap-warning pixels: the entire notice is readable,
+contains no resume promise, and the synthetic retained-message text remains below
+it. This still does not substitute for full native-app demo captures.
