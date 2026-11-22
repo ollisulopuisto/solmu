@@ -2961,8 +2961,8 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 if part == "image-burst-before" {
                     if let Some(rows) = app
                         .open_chat
-                        .as_ref()
-                        .and_then(|chat| app.conversations.get_mut(chat))
+                        .clone()
+                        .and_then(|chat| app.conversations.get_mut(&chat))
                     {
                         for (index, row) in rows.messages.iter_mut().enumerate() {
                             row.timestamp += index as i64 * 10;
@@ -3055,8 +3055,8 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 media_album_sample(app, false);
                 if let Some(rows) = app
                     .open_chat
-                    .as_ref()
-                    .and_then(|chat| app.conversations.get_mut(chat))
+                    .clone()
+                    .and_then(|chat| app.conversations.get_mut(&chat))
                 {
                     for (index, row) in rows.messages.iter_mut().enumerate() {
                         row.timestamp += index as i64 * 10;
