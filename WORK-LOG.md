@@ -1222,3 +1222,42 @@ unavailable sudo access. Native suite, Clippy and docs are not claimed passed.
 Rustfmt and diff check pass. Public CI must run the complete native checks.
 Version bumped to26.11.4. No UI layout change, real-account reproduction, release
 or merge. Olli's explicit word is required before merging this PR.
+
+
+## 2026-11-22: Follow up the history-diagnostic review
+
+Separate follow-up to merged442, branch fix/history-diagnostics-review. All
+three review items are real: a returned cycle on page400 was classified as the
+cap because cycle detection waited for another iteration; new English stop
+reasons bypassed gettext inside the linked wrapper; ordinary chats did not
+render the existing saved history error at all. The last visibility gap and
+some older untranslated reasons predate442.
+
+Check the returned cursor before leaving its page without treating a target
+found on that same page as a failed search. Preserve every fetched page and
+cursor, and the existing400-page bound. Add the read-only warning in both plain
+and vibrant ordinary headers. Existing search/quote actions own retry; painting
+does not start another request. Translate Solmu-owned reasons at the existing
+string boundary, keeping unknown/upstream details literal and leaving catalogs
+for the normal maintainer regeneration.
+
+Expanded the real HTTP fixture to short cycle, last-page cycle, true budget
+stop and target found on the final cyclic page. Exact load_until_message source
+failed first on the400th-page cycle, then all four isolated regression groups
+passed. Two exact warning-module tests and isolated Rust1.98 Clippy passed against
+the pinned egui: literal
+details preserved and the complete warning painted within240/720px viewports.
+Added native ordinary-state test for visible error, unrelated chat exclusion,
+no request on paint, no clearing on paint, and removal when state clears. Full
+native integration remains for CI, not claimed run locally: previous native
+builds are blocked here by missing PipeWire development headers/no sudo.
+
+Inspected before/after pixels from the exact new warning widget in a synthetic
+standalone egui fixture, not a full native-app screenshot. Warning text wraps
+and the fixture messages remain visible below it. No private data or screenshot
+files enter this repository. No dependency or network behavior change.
+
+Version26.11.7 is reserved after approved443(.5) and444(.6); rebase this separate
+PR after those land before considering a merge. Ready-for-review PR only for
+this follow-up, not covered by the three-PR merge instruction. Own adversarial
+review and Devin requested on the final pushed head. Exact-head full CI awaited.

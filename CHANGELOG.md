@@ -15,6 +15,10 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+## 26.11.7
+
+- History jumps identify a repeated cursor even on the final allowed page. Ordinary chats now show the saved stop reason too, and Solmu-owned reasons use the translation path. Previously loaded messages remain available; no automatic retry is added.
+
 ## 26.11.4
 
 - History jumps preserve the actual stop reason instead of replacing every failure with a possible 400-page limit. The limit is local to Solmu, unchanged, and only reported when reached. Good pages remain loaded.

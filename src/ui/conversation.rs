@@ -141,6 +141,15 @@ pub(crate) fn connection_status(app: &App, ui: &mut egui::Ui, chats: &[&str]) {
     });
 }
 
+/// Display the same stored stop cause in ordinary chats as in linked views.
+/// Rendering is read-only: retry still comes from the explicit search/quote
+/// action, not from a frame repaint.
+fn history_warning(app: &App, ui: &mut egui::Ui, chat: &str) -> Option<egui::Response> {
+    app.beeper_history_errors.get(chat).map(|error| {
+        super::history_warning::show(ui, app.locale, error, app.conversation_palette().warning)
+    })
+}
+
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let Some(chat) = app.current_chat().cloned() else {
         if theme::chrome_in_headers(ui.ctx()) {
@@ -166,6 +175,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 let glass = ui.painter().add(egui::Shape::Noop);
                 let veil = ui.painter().add(egui::Shape::Noop);
                 header(app, ui, &chat);
+                let _ = history_warning(app, ui, &chat.id);
                 if theme::chrome_in_headers(ui.ctx()) {
                     super::banner(app, ui);
                 }
@@ -203,6 +213,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let header = header(app, ui, &chat);
+    let _ = history_warning(app, ui, &chat.id);
     if theme::chrome_in_headers(ui.ctx()) {
         super::banner(app, ui);
     }
@@ -17142,5 +17153,43 @@ mod card_width_tests {
                 "natural {natural}, cap {cap}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod history_warning_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_history_error_is_visible_without_retrying_or_clearing_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        let (backend, mut commands) = crate::backend::Backend::recording();
+        app.backend = backend;
+        app.beeper_history_errors.insert(
+            "fixture".into(),
+            "Search result history unavailable: fixture 503".into(),
+        );
+        let ctx = egui::Context::default();
+        let mut seen = false;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            seen = history_warning(&app, ui, "fixture").is_some();
+            assert!(history_warning(&app, ui, "other").is_none());
+        });
+        output.textures_delta.clear();
+        assert!(seen);
+        assert!(
+            commands.try_recv().is_err(),
+            "painting a warning must not retry"
+        );
+        assert!(app.beeper_history_errors.contains_key("fixture"));
+        app.beeper_history_errors.remove("fixture");
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert!(history_warning(&app, ui, "fixture").is_none());
+        });
+        output.textures_delta.clear();
     }
 }

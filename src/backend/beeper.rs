@@ -3736,7 +3736,14 @@ fn load_until_message(
                     .any(|m| m.id == target_wire && !m.is_hidden && !m.is_deleted);
                 let next =
                     history_cursor(page.oldest_cursor.as_deref(), Some(&cursor), page.has_more);
-                let error = next.as_ref().err().cloned();
+                // Check the returned cursor on this page, including the last
+                // budgeted page. Waiting for the next iteration mislabels a
+                // cycle at the limit as a resumable safety-cap stop. A target
+                // found on this page still succeeds.
+                let error = next.as_ref().err().cloned().or_else(|| {
+                    (!found && page.has_more && next.as_ref().ok().and_then(|c| c.as_ref()).is_some_and(|c| seen.contains(c)))
+                        .then(|| "Search result not reached: an older-history cursor repeated. Retry after history recovers.".into())
+                });
                 if let Some(state) = cursors.get_mut(chat) {
                     if let Ok(next) = next {
                         state.oldest = next;
@@ -9476,8 +9483,12 @@ mod tests {
 
     #[test]
     fn load_until_preserves_pages_and_distinguishes_cycle_from_real_limit() {
-        for cycle in [false, true] {
-            let count = if cycle { 2 } else { SEARCH_JUMP_MAX_PAGES };
+        for (cycle, count, target_last) in [
+            (false, SEARCH_JUMP_MAX_PAGES, false),
+            (true, 2, false),
+            (true, SEARCH_JUMP_MAX_PAGES, false),
+            (true, SEARCH_JUMP_MAX_PAGES, true),
+        ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let base_url = format!("http://{}", listener.local_addr().unwrap());
             let worker = std::thread::spawn(move || {
@@ -9485,13 +9496,18 @@ mod tests {
                     let (mut stream, _) = listener.accept().unwrap();
                     let mut request = [0u8; 4096];
                     let _ = stream.read(&mut request).unwrap();
-                    let next = if cycle && page == 1 {
+                    let next = if cycle && page + 1 == count {
                         "start".into()
                     } else {
                         format!("c{page}")
                     };
+                    let id = if target_last && page + 1 == count {
+                        "target".into()
+                    } else {
+                        format!("m{page}")
+                    };
                     let body = format!(
-                        r#"{{"items":[{{"id":"m{page}","chatID":"chat","text":"fixture","timestamp":"2026-06-01T00:00:00Z"}}],"hasMore":true,"oldestCursor":"{next}"}}"#
+                        r#"{{"items":[{{"id":"{id}","chatID":"chat","text":"fixture","timestamp":"2026-06-01T00:00:00Z"}}],"hasMore":true,"oldestCursor":"{next}"}}"#
                     );
                     write!(
                         stream,
@@ -9528,11 +9544,18 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(errors.len(), 1);
-            assert!(
-                errors[0].contains(if cycle { "repeated" } else { "400-page" }),
-                "{errors:?}"
-            );
+            if target_last {
+                assert!(
+                    errors.is_empty(),
+                    "a found target is not a failed search: {errors:?}"
+                );
+            } else {
+                assert_eq!(errors.len(), 1);
+                assert!(
+                    errors[0].contains(if cycle { "repeated" } else { "400-page" }),
+                    "{errors:?}"
+                );
+            }
             let delivered: usize = events
                 .iter()
                 .map(|event| match event {
