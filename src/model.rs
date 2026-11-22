@@ -4929,25 +4929,27 @@ mod delete_notice_tests {
             result,
             accepted_delete_at: Some(now - std::time::Duration::from_secs(age)),
         };
-        let mut state = BatchState::default();
-        state.results = vec![
-            item(Some("old-for-everyone"), Some(Ok(())), 10, true),
-            item(Some("old-for-me"), Some(Ok(())), 11, false),
-            item(Some("recent"), Some(Ok(())), 4, true),
-            item(Some("pending"), None, 99, true),
-            item(Some("failed"), Some(Err("uncertain".into())), 99, true),
-            item(None, Some(Ok(())), 99, false),
-            BatchItem {
-                accepted_delete_at: None,
-                ..item(Some("untimed"), Some(Ok(())), 99, true)
-            },
-        ];
-        state.previous_session_results = vec![item(
-            Some("previous"),
-            Some(Err("check previous connection".into())),
-            99,
-            true,
-        )];
+        let mut state = BatchState {
+            results: vec![
+                item(Some("old-for-everyone"), Some(Ok(())), 10, true),
+                item(Some("old-for-me"), Some(Ok(())), 11, false),
+                item(Some("recent"), Some(Ok(())), 4, true),
+                item(Some("pending"), None, 99, true),
+                item(Some("failed"), Some(Err("uncertain".into())), 99, true),
+                item(None, Some(Ok(())), 99, false),
+                BatchItem {
+                    accepted_delete_at: None,
+                    ..item(Some("untimed"), Some(Ok(())), 99, true)
+                },
+            ],
+            previous_session_results: vec![item(
+                Some("previous"),
+                Some(Err("check previous connection".into())),
+                99,
+                true,
+            )],
+            ..Default::default()
+        };
         assert_eq!(
             state.expire_delete_notices(now),
             Some(std::time::Duration::from_secs(6))

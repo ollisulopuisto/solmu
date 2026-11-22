@@ -1340,3 +1340,10 @@ rendering: the expired receipt disappears, pending/error rows remain. This is
 not a full-app demo capture or real-Mac test. Full native suite/Clippy/docs await
 public CI because local PipeWire development files and sudo are unavailable.
 Version26.11.6 is distinct from442/443. No merge without explicit owner word.
+
+
+2026-11-22 18:23: Native Mac and Ubuntu tests passed for444; quality rejected
+only field_reassign_with_default in the new expiry test fixture. Initialize
+both fixture vectors in BatchState directly, no lint allowance or production
+change. Prepared locally pending the required rebase after443 merges; fresh
+CI on that final rebased head remains mandatory.
