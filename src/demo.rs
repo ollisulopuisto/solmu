@@ -2577,6 +2577,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     chat: "ada".into(),
                     message: Some("402555".into()),
                     everyone: false,
+                    accepted_delete_at: Some(std::time::Instant::now()),
                     result: Some(Ok(())),
                 }];
                 if let Some(chat) = app.chats.iter().find(|chat| !chat.is_group()) {
@@ -2589,6 +2590,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     chat: "Synthetic previous chat".into(),
                     message: Some("Synthetic message".into()),
                     everyone: true,
+                    accepted_delete_at: None,
                     result: Some(Err("Accepted request, confirmation unavailable".into())),
                 }];
             }
@@ -2624,6 +2626,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                         chat: app.batch_ui.selected_chats[0].clone(),
                         message: None,
                         everyone: false,
+                        accepted_delete_at: None,
                         result: Some(Ok(())),
                     }];
                 }
@@ -2953,6 +2956,19 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.scroll_to_bottom = true;
             }
             "media-album" => media_album_sample(app, true),
+            "image-burst" | "image-burst-before" => {
+                media_album_sample(app, false);
+                if part == "image-burst-before"
+                    && let Some(rows) = app
+                        .open_chat
+                        .clone()
+                        .and_then(|chat| app.conversations.get_mut(&chat))
+                {
+                    for (index, row) in rows.messages.iter_mut().enumerate() {
+                        row.timestamp += index as i64 * 10;
+                    }
+                }
+            }
             "bridge-album" | "bridge-album-before" => {
                 // One bridge message with three attachments, through the real
                 // Beeper mapping; the "before" page truncates to the first
@@ -3034,7 +3050,18 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     message.timestamp = midnight + offset;
                 }
             }
-            "media-album-before" => media_album_sample(app, false),
+            "media-album-before" => {
+                media_album_sample(app, false);
+                if let Some(rows) = app
+                    .open_chat
+                    .clone()
+                    .and_then(|chat| app.conversations.get_mut(&chat))
+                {
+                    for (index, row) in rows.messages.iter_mut().enumerate() {
+                        row.timestamp += index as i64 * 10;
+                    }
+                }
+            }
             "shared-contact" => {
                 let chat = SAMPLES[0].id;
                 let now = crate::util::now();
@@ -10039,6 +10066,10 @@ mod tests {
             "carousel-viewer",
             "media-album",
             "media-album-before",
+            "image-burst,dark",
+            "image-burst,light",
+            "image-burst-before,dark",
+            "image-burst-before,light",
             "bridge-album",
             "bridge-album-before",
             "media-album-oversized",
@@ -13554,6 +13585,38 @@ mod tests {
         assert!(app.new_contact_pending);
     }
 
+    /// Timestamp fallback uses the existing tile/menu/selection machinery.
+    #[test]
+    fn timestamp_gallery_keeps_member_menu_and_selection_identity() {
+        let mut app = app();
+        media_album_sample(&mut app, false);
+        let chat = app.open_chat.clone().unwrap();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        render(&mut app, &ctx);
+        assert_eq!(app.conversations[&chat].rows["album-1"].height, 0.0);
+        let tile_id = crate::ui::conversation::album_tile_id(&chat, "album-2");
+        assert!(ctx.data(|d| d.get_temp::<egui::Rect>(tile_id)).is_some());
+        ctx.memory_mut(|m| m.request_focus(tile_id));
+        render(&mut app, &ctx);
+        assert_eq!(ctx.memory(|m| m.focused()), Some(tile_id));
+        // Inserting an earlier burst member moves the focused tile to another cell.
+        let conversation = app.conversations.get_mut(&chat).unwrap();
+        let mut inserted = conversation.messages[0].clone();
+        inserted.id = "burst-earlier".into();
+        conversation.messages.insert(0, inserted);
+        render(&mut app, &ctx);
+        render(&mut app, &ctx);
+        assert_eq!(ctx.memory(|m| m.focused()), Some(tile_id));
+        // Selection keeps every original message actionable, as protocol albums do.
+        app.selection = Some((chat.clone(), vec!["album-2".into()]));
+        render(&mut app, &ctx);
+        for id in ["burst-earlier", "album-0", "album-1", "album-2", "album-3"] {
+            assert!(app.conversations[&chat].rows[id].height > 0.0);
+        }
+    }
+
     /// Checks that navigation to an individual album member scrolls its grouped row into view.
     #[test]
     fn a_jump_to_an_album_member_reaches_the_group_and_finishes() {
@@ -13602,6 +13665,64 @@ mod tests {
 
     /// A right-click on one album tile opens the menu for that member, so
     /// Reply quotes the picture under the pointer rather than the first.
+    #[test]
+    fn timestamp_gallery_menu_acts_on_the_clicked_image() {
+        let mut app = app();
+        media_album_sample(&mut app, false);
+        let chat = app.open_chat.clone().unwrap();
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        app.attach(&ctx);
+        render(&mut app, &ctx);
+        render(&mut app, &ctx);
+        let tile = ctx
+            .data(|data| {
+                data.get_temp::<egui::Rect>(crate::ui::conversation::album_tile_id(
+                    &chat, "album-2",
+                ))
+            })
+            .expect("the third member's tile was drawn");
+        let press = |pressed| egui::Event::PointerButton {
+            pos: tile.center(),
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerMoved(tile.center()), press(true)],
+        );
+        frame_with(&mut app, &ctx, vec![press(false)]);
+        let popup = crate::ui::conversation::bubble_id(&chat, "album-0").with("popup");
+        assert!(
+            egui::Popup::is_id_open(&ctx, popup),
+            "the album's menu opened"
+        );
+        let reply = accessible_nodes(&mut app, &ctx, Vec::new())
+            .into_iter()
+            .find(|(label, _, _)| label == "Reply")
+            .expect("the menu offers Reply")
+            .2;
+        for pressed in [true, false] {
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![
+                    egui::Event::PointerMoved(reply),
+                    egui::Event::PointerButton {
+                        pos: reply,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        render(&mut app, &ctx);
+        assert_eq!(app.reply_to.as_deref(), Some("album-2"));
+    }
+
     #[test]
     fn the_menu_of_an_album_tile_acts_on_that_member() {
         let mut app = app();
@@ -23895,7 +24016,7 @@ mod tests {
                     &chat,
                     &format!("picture-{index}"),
                     false,
-                    1_700_000_000 + index,
+                    1_700_000_000 + index * 10,
                     Content::Image {
                         motion: None,
                         caption: None,
@@ -23917,6 +24038,57 @@ mod tests {
         assert!(
             asked < 15,
             "only the rows on screen should be decoded, {asked} of 40 were"
+        );
+    }
+
+    #[test]
+    fn gallery_tiles_out_of_view_are_not_decoded() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let loads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        ctx.add_image_loader(std::sync::Arc::new(CountingImages(std::sync::Arc::clone(
+            &loads,
+        ))));
+
+        // One forty-image burst is a single virtual row. Each offscreen tile
+        // must still avoid decoding, independently of row virtualization.
+        let chat = app.chats[0].id.clone();
+        app.open_chat = Some(chat.clone());
+        let rows: Vec<Message> = (0..40)
+            .map(|index| {
+                let mut media = media("image/jpeg", 1_000, Some(900), Some(1200));
+                media.path = Some(std::path::PathBuf::from(format!(
+                    "/nonexistent/demo-picture-{index}.jpg"
+                )));
+                message(
+                    &chat,
+                    &format!("picture-{index}"),
+                    false,
+                    1_700_000_000 + index,
+                    Content::Image {
+                        motion: None,
+                        caption: None,
+                        media,
+                    },
+                )
+            })
+            .collect();
+        app.conversations.entry(chat).or_default().messages = rows;
+
+        render(&mut app, &ctx);
+
+        let asked = loads
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let pictures: Vec<_> = asked
+            .iter()
+            .filter(|uri| uri.contains("demo-picture-"))
+            .collect();
+        assert!(!pictures.is_empty(), "visible gallery tiles should decode");
+        assert!(
+            pictures.len() < 40,
+            "offscreen gallery tiles must not decode"
         );
     }
 

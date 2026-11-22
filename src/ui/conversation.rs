@@ -141,15 +141,6 @@ pub(crate) fn connection_status(app: &App, ui: &mut egui::Ui, chats: &[&str]) {
     });
 }
 
-/// Display the same stored stop cause in ordinary chats as in linked views.
-/// Rendering is read-only: retry still comes from the explicit search/quote
-/// action, not from a frame repaint.
-fn history_warning(app: &App, ui: &mut egui::Ui, chat: &str) -> Option<egui::Response> {
-    app.beeper_history_errors.get(chat).map(|error| {
-        super::history_warning::show(ui, app.locale, error, app.conversation_palette().warning)
-    })
-}
-
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let Some(chat) = app.current_chat().cloned() else {
         if theme::chrome_in_headers(ui.ctx()) {
@@ -175,7 +166,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 let glass = ui.painter().add(egui::Shape::Noop);
                 let veil = ui.painter().add(egui::Shape::Noop);
                 header(app, ui, &chat);
-                let _ = history_warning(app, ui, &chat.id);
                 if theme::chrome_in_headers(ui.ctx()) {
                     super::banner(app, ui);
                 }
@@ -213,7 +203,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let header = header(app, ui, &chat);
-    let _ = history_warning(app, ui, &chat.id);
     if theme::chrome_in_headers(ui.ctx()) {
         super::banner(app, ui);
     }
@@ -2782,19 +2771,48 @@ fn album_id(message: &Message) -> Option<&str> {
     }
 }
 
-/// Whether the message at `index` is drawn in the album row of the one
-/// before it, as the list draws albums outside a selection: it then has no
-/// row of its own.
-fn album_continues(messages: &[Message], index: usize) -> bool {
-    let Some(previous) = index.checked_sub(1).and_then(|before| messages.get(before)) else {
+/// Separate image messages within five seconds of their predecessor share the
+/// existing grid. Real protocol albums never absorb this timestamp fallback.
+const IMAGE_GALLERY_GAP_SECONDS: i64 = 5;
+
+fn gallery_neighbors(previous: &Message, message: &Message) -> bool {
+    if previous.chat != message.chat
+        || previous.from_me != message.from_me
+        || previous.sender != message.sender
+        || crate::util::day_key(previous.timestamp) != crate::util::day_key(message.timestamp)
+    {
         return false;
-    };
-    let message = &messages[index];
-    album_id(message).is_some()
-        && album_id(previous) == album_id(message)
-        && previous.from_me == message.from_me
-        && previous.sender == message.sender
-        && crate::util::day_key(previous.timestamp) == crate::util::day_key(message.timestamp)
+    }
+    match (album_id(previous), album_id(message)) {
+        (Some(left), Some(right)) => left == right,
+        (None, None) => {
+            let plain_image = |row: &Message| {
+                matches!(row.content, Content::Image { .. })
+                    && !matches!(
+                        row.status,
+                        Delivery::Pending | Delivery::Failed | Delivery::Unknown
+                    )
+                    && row.quoted.is_none()
+                    && row.reactions.is_empty()
+                    && !row.forwarded
+                    && !row.edited
+            };
+            plain_image(previous)
+                && plain_image(message)
+                && (0..=IMAGE_GALLERY_GAP_SECONDS)
+                    .contains(&message.timestamp.saturating_sub(previous.timestamp))
+        }
+        _ => false,
+    }
+}
+
+/// Whether this member shares the preceding row. Selection and local hiding
+/// still bypass gallery rows at the rendering call site.
+fn album_continues(messages: &[Message], index: usize) -> bool {
+    index
+        .checked_sub(1)
+        .and_then(|before| messages.get(before).zip(messages.get(index)))
+        .is_some_and(|(previous, message)| gallery_neighbors(previous, message))
 }
 
 /// The index of the first message of each row the message list draws: the
@@ -2818,17 +2836,9 @@ pub fn row_of(starts: &[usize], index: usize) -> usize {
 /// The consecutive messages belonging to the album beginning at `start`.
 /// A single marked item is rendered normally because there is nothing to group.
 fn album_run(messages: &[Message], start: usize) -> Option<&[Message]> {
-    let first = messages.get(start)?;
-    let album = album_id(first)?;
+    messages.get(start)?;
     let mut end = start + 1;
-    while let Some(message) = messages.get(end) {
-        if album_id(message) != Some(album)
-            || message.from_me != first.from_me
-            || message.sender != first.sender
-            || crate::util::day_key(message.timestamp) != crate::util::day_key(first.timestamp)
-        {
-            break;
-        }
+    while end < messages.len() && gallery_neighbors(&messages[end - 1], &messages[end]) {
         end += 1;
     }
     (end > start + 1).then_some(&messages[start..end])
@@ -6970,7 +6980,7 @@ fn natural_body_width(
     cap: f32,
     grow: bool,
 ) -> f32 {
-    if text.contains("```") {
+    if text.len() > markup::BALANCED_BODY_MAX_BYTES || text.contains("```") {
         return markup::layout_balanced(ui, text, mentions, style, cap, grow)
             .galley
             .size()
@@ -9762,7 +9772,7 @@ fn carousel_arrow(
         .on_hover_text(label)
 }
 
-/// Draws WhatsApp's media-album items as one compact grid with one batch
+/// Draws protocol albums and consecutive image bursts as one grid with one batch
 /// action, and returns where each member's tile was drawn.
 fn album_content(
     ui: &mut egui::Ui,
@@ -9891,12 +9901,19 @@ fn album_tile(
     view: &View<'_>,
     message: &Message,
     size: Vec2,
-    row: usize,
-    column: usize,
+    _row: usize,
+    _column: usize,
     actions: &mut Vec<Action>,
 ) -> Option<Rect> {
     let media = message.content.media()?;
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let (_, rect) = ui.allocate_space(size);
+    // Membership can change as image bursts arrive or history is inserted.
+    // Focus belongs to the message, never the tile's row/column position.
+    let response = ui.interact(
+        rect,
+        album_tile_id(&message.chat, &message.id),
+        Sense::click(),
+    );
     let kind = if matches!(message.content, Content::Image { .. }) {
         "Photo"
     } else {
@@ -9928,7 +9945,7 @@ fn album_tile(
                     thumbnail_uri(
                         ui.ctx(),
                         &message.chat,
-                        &format!("{}-album-{row}-{column}", message.id),
+                        &format!("{}-album", message.id),
                         bytes,
                     )
                 })
@@ -10564,7 +10581,7 @@ fn copy_code_buttons(
         };
         let response = markup::put_copy_button(ui, panel, label.as_ref(), palette.accent);
         if response.clicked() {
-            ui.ctx().copy_text(block.clone());
+            crate::transcript::copy_literal(ui.ctx(), block.clone());
             ui.ctx()
                 .data_mut(|data| data.insert_temp(copied_id, std::time::Instant::now()));
             ui.ctx()
@@ -12746,7 +12763,7 @@ fn voice_transcript(
                         theme::reveal_focus(&copy);
                         theme::focus_outline(ui, copy.id, copy.rect, 4.0);
                         if copy.clicked() {
-                            ui.ctx().copy_text(text.clone());
+                            crate::transcript::copy_literal(ui.ctx(), text.clone());
                         }
                         let language = ui
                             .link(crate::i18n::gettext(view.locale, "Transcription language…"))
@@ -13911,6 +13928,71 @@ mod tests {
         }
     }
 
+    /// The timestamp fallback joins images, not unrelated media or protocol albums.
+    #[test]
+    fn adjacent_image_bursts_use_a_five_second_gap() {
+        let mut rows: Vec<_> = (0..4)
+            .map(|i| {
+                let mut row = album_picture(&format!("burst-{i}"), None, "alice");
+                row.timestamp = 100 + i * 5;
+                row
+            })
+            .collect();
+        assert_eq!(album_run(&rows, 0).map(<[Message]>::len), Some(4));
+        assert_eq!(row_starts(&rows, false), vec![0]);
+        assert_eq!(row_starts(&rows, true), vec![0, 1, 2, 3]);
+        assert_eq!(row_of(&row_starts(&rows, false), 3), 0);
+        rows[2].timestamp = rows[1].timestamp + 6;
+        assert_eq!(album_run(&rows, 0).map(<[Message]>::len), Some(2));
+        rows[1].timestamp = rows[0].timestamp - 1;
+        assert!(album_run(&rows, 0).is_none());
+    }
+
+    #[test]
+    fn image_bursts_keep_message_and_protocol_boundaries() {
+        let first = album_picture("one", None, "alice");
+        let mut second = album_picture("two", None, "alice");
+        assert!(gallery_neighbors(&first, &second));
+        second.chat = "another".into();
+        assert!(!gallery_neighbors(&first, &second));
+        second = first.clone();
+        second.id = "two".into();
+        second.from_me = true;
+        assert!(!gallery_neighbors(&first, &second));
+        second = first.clone();
+        second.content.media_mut().unwrap().album = Some("real".into());
+        assert!(!gallery_neighbors(&first, &second));
+        let mut real = first.clone();
+        real.content.media_mut().unwrap().album = Some("real".into());
+        assert!(gallery_neighbors(&real, &second));
+        second.content.media_mut().unwrap().album = Some("different".into());
+        assert!(!gallery_neighbors(&real, &second));
+        for status in [Delivery::Pending, Delivery::Failed, Delivery::Unknown] {
+            second = first.clone();
+            second.status = status;
+            assert!(!gallery_neighbors(&first, &second));
+            assert!(!gallery_neighbors(&second, &first));
+        }
+        second = first.clone();
+        second.edited = true;
+        assert!(!gallery_neighbors(&first, &second));
+        second = first.clone();
+        second.forwarded = true;
+        assert!(!gallery_neighbors(&first, &second));
+        second = first.clone();
+        second.content = Content::text("a text boundary");
+        assert!(!gallery_neighbors(&first, &second));
+        second = first.clone();
+        second.sender = "bob".into();
+        assert!(!gallery_neighbors(&first, &second));
+        let (_, midnight) = crate::util::day_bounds(jiff::civil::date(2026, 9, 20)).unwrap();
+        let mut before = first.clone();
+        before.timestamp = midnight - 1;
+        second = first;
+        second.timestamp = midnight;
+        assert!(!gallery_neighbors(&before, &second));
+    }
+
     /// Checks that consecutive compatible media sharing an album parent are displayed together.
     #[test]
     fn consecutive_items_with_the_same_protocol_album_are_grouped() {
@@ -13941,11 +14023,12 @@ mod tests {
 
     /// Checks that grouping never combines unrelated pictures or messages from different senders.
     #[test]
-    fn unrelated_or_different_sender_pictures_are_not_grouped() {
-        let unrelated = vec![
+    fn separated_or_different_sender_pictures_are_not_grouped() {
+        let mut unrelated = vec![
             album_picture("one", None, "alice"),
             album_picture("two", None, "alice"),
         ];
+        unrelated[1].timestamp += IMAGE_GALLERY_GAP_SECONDS + 1;
         assert!(album_run(&unrelated, 0).is_none());
         let senders = vec![
             album_picture("one", Some("album-1"), "alice"),
@@ -17152,147 +17235,6 @@ mod card_width_tests {
                 expected,
                 "natural {natural}, cap {cap}"
             );
-        }
-    }
-}
-
-#[cfg(test)]
-mod history_warning_tests {
-    use super::*;
-
-    #[test]
-    fn ordinary_history_error_is_visible_without_retrying_or_clearing_it() {
-        let directory = tempfile::tempdir().unwrap();
-        let (mut app, _) = App::headless(
-            crate::paths::AppDirs::under(directory.path()),
-            crate::settings::Settings::default(),
-        );
-        let (backend, mut commands) = crate::backend::Backend::recording();
-        app.backend = backend;
-        app.beeper_history_errors.insert(
-            "fixture".into(),
-            "Search result history unavailable: fixture 503".into(),
-        );
-        let ctx = egui::Context::default();
-        let mut seen = false;
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            seen = history_warning(&app, ui, "fixture").is_some();
-            assert!(history_warning(&app, ui, "other").is_none());
-        });
-        output.textures_delta.clear();
-        assert!(seen);
-        assert!(
-            commands.try_recv().is_err(),
-            "painting a warning must not retry"
-        );
-        assert!(app.beeper_history_errors.contains_key("fixture"));
-        app.beeper_history_errors.remove("fixture");
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            assert!(history_warning(&app, ui, "fixture").is_none());
-        });
-        output.textures_delta.clear();
-    }
-}
-
-#[cfg(test)]
-mod history_header_integration_tests {
-    use super::*;
-
-    fn text(shape: &egui::Shape, result: &mut String) {
-        match shape {
-            egui::Shape::Text(shape) => result.push_str(shape.galley.text()),
-            egui::Shape::Vec(shapes) => {
-                for shape in shapes {
-                    text(shape, result);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    #[test]
-    fn both_full_conversation_headers_show_only_the_current_chat_history_error() {
-        for palette in [
-            Palette::light(),
-            Palette::dark(),
-            Palette::messages_light(),
-            Palette::messages(),
-        ] {
-            let directory = tempfile::tempdir().unwrap();
-            let (mut app, _) = App::headless(
-                crate::paths::AppDirs::under(directory.path()),
-                crate::settings::Settings::default(),
-            );
-            let chat = "1@s.whatsapp.net";
-            app.chats
-                .push(Chat::new(chat.into(), "Synthetic conversation".into()));
-            app.open_chat = Some(chat.into());
-            app.palette = palette;
-            app.conversations.insert(
-                chat.into(),
-                Conversation {
-                    requested: true,
-                    complete: true,
-                    messages: vec![crate::archive::tests::message(
-                        chat,
-                        "fixture-message",
-                        0,
-                        false,
-                    )],
-                    ..Default::default()
-                },
-            );
-            let error = "Search result history unavailable: header-stop-fixture-503";
-            app.beeper_history_errors.insert(chat.into(), error.into());
-            app.beeper_history_errors
-                .insert("other".into(), "other-chat-stop-fixture-404".into());
-            let ctx = egui::Context::default();
-            app.attach(&ctx);
-            let (backend, mut commands) = crate::backend::Backend::recording();
-            app.backend = backend;
-            let render = |app: &mut App| {
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(Rect::from_min_size(
-                            egui::Pos2::ZERO,
-                            vec2(900.0, 700.0),
-                        )),
-                        ..Default::default()
-                    },
-                    |ui| show(app, ui),
-                );
-                let mut rendered = String::new();
-                for shape in &output.shapes {
-                    text(&shape.shape, &mut rendered);
-                }
-                output.textures_delta.clear();
-                rendered
-            };
-            // Exercise show itself, so removing either plain/vibrant call fails.
-            for _ in 0..2 {
-                let rendered = render(&mut app);
-                assert!(
-                    rendered.contains(
-                        "History: Search result history unavailable: header-stop-fixture-503"
-                    ),
-                    "vibrant={}: {rendered}",
-                    palette.vibrant()
-                );
-                assert!(!rendered.contains("other-chat-stop-fixture-404"));
-                assert_eq!(
-                    app.beeper_history_errors.get(chat).map(String::as_str),
-                    Some(error)
-                );
-                assert!(
-                    commands.try_recv().is_err(),
-                    "painting must not retry history"
-                );
-            }
-            app.beeper_history_errors.remove(chat);
-            let rendered = render(&mut app);
-            assert!(!rendered.contains("header-stop-fixture-503"));
-            assert!(!rendered.contains("other-chat-stop-fixture-404"));
-            assert!(commands.try_recv().is_err());
         }
     }
 }

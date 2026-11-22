@@ -10,7 +10,6 @@ pub mod flat_groups;
 pub(crate) mod focus;
 pub mod ghost_groups;
 mod glass;
-mod history_warning;
 pub mod image_editor;
 pub mod image_preview;
 pub mod info;

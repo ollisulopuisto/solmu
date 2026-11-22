@@ -1,5 +1,18 @@
 # Work log
 
+## 2026-11-23: Keep cursor fix, remove new header warnings
+
+Reworked existing PR445 per maintainer direction. Merged current main f7216d9,
+removed the added history-warning widget/module and ordinary/linked header
+changes. Kept final-page cycle detection, found-target precedence, retained-page
+HTTP regressions and truthful internal cap copy. No new user-facing surface,
+autoretry implementation or larger history budget in this patch. Existing
+linked-history errors predate this PR and remain separate quiet-recovery work.
+Version26.11.8 follows gallery26.11.7. Four exact-source harness groups pass; the main-source run fails before the fix.
+Native lib check passes, fmt/diff checks pass. Full native HTTP fixture tests
+remain for CI, not claimed executed locally. Full CI and current-head review required.
+No direct main push or merge.
+
 ## 2026-11-20: Thread navigation and visible right-click target
 
 Latest Mac CI passed 2461 tests, failed ordinary OpenMessage thread-exit and the
@@ -1223,76 +1236,212 @@ Rustfmt and diff check pass. Public CI must run the complete native checks.
 Version bumped to26.11.4. No UI layout change, real-account reproduction, release
 or merge. Olli's explicit word is required before merging this PR.
 
+## 2026-11-22: Bound large-message layout work
 
-## 2026-11-22: Follow up the history-diagnostic review
+Branch fix/long-message-layout from main91f596a, independent of diagnostics PR442.
+A reported startup/constant beachball was tied to a newly pasted ~377KB message;
+the owner reports deleting it restored responsiveness. Current and yesterday's
+manual69 sources share the same quadratic balancer. Manual70 only adds441, not
+a new text shaping path. No commit regression is proven. The supplied macOS
+sample shows sustained main-thread work but stripped frames prevent naming its
+Rust function. No real message or sample is included here.
 
-Separate follow-up to merged442, branch fix/history-diagnostics-review. All
-three review items are real: a returned cycle on page400 was classified as the
-cap because cycle detection waited for another iteration; new English stop
-reasons bypassed gettext inside the linked wrapper; ordinary chats did not
-render the existing saved history error at all. The last visibility gap and
-some older untranslated reasons predate442.
+A synthetic420KB multiline log took~3.1s for layout in an isolated optimized
+Linux harness using current production markup/wrap and pinned egui, with
+unrelated emoji/theme/bidi leaves stubbed. The deterministic failing-first
+assertion verified the expensive path was taken. The fixed same layout took
+~81ms. A 504KB single paragraph exceeded a40s bound before paragraph partitioning;
+afterward~68ms. A400KB single word laid out in~45ms. These are isolated numbers,
+not macOS acceptance or a complete native app benchmark.
 
-Check the returned cursor before leaving its page without treating a target
-found on that same page as a failed search. Preserve every fetched page and
-cursor, and the existing400-page bound. Add the read-only warning in both plain
-and vibrant ordinary headers. Existing search/quote actions own retry; painting
-does not start another request. Translate Solmu-owned reasons at the existing
-string boundary, keeping unknown/upstream details literal and leaving catalogs
-for the normal maintainer regeneration.
-
-Expanded the real HTTP fixture to short cycle, last-page cycle, true budget
-stop and target found on the final cyclic page. Exact load_until_message source
-failed first on the400th-page cycle, then all four isolated regression groups
-passed. Two exact warning-module tests and isolated Rust1.98 Clippy passed against
-the pinned egui: literal
-details preserved and the complete warning painted within240/720px viewports.
-Added native ordinary-state test for visible error, unrelated chat exclusion,
-no request on paint, no clearing on paint, and removal when state clears. Full
-native integration remains for CI, not claimed run locally: previous native
-builds are blocked here by missing PipeWire development headers/no sudo.
-
-Inspected before/after pixels from the exact new warning widget in a synthetic
-standalone egui fixture, not a full native-app screenshot. Warning text wraps
-and the fixture messages remain visible below it. No private data or screenshot
-files enter this repository. No dependency or network behavior change.
-
-Version26.11.7 is reserved after approved443(.5) and444(.6); rebase this separate
-PR after those land before considering a merge. Ready-for-review PR only for
-this follow-up, not covered by the three-PR merge instruction. Own adversarial
-review and Devin requested on the final pushed head. Exact-head full CI awaited.
+Above8KiB, use cached greedy layout for painting AND natural-width planning.
+Only for these large bodies, partition shaping paragraphs every1024graphemes
+in the display job using existing inserted-break/copy/link remapping; full
+stored text, copy text, markup and actions remain intact. Borrow inline URL
+parser suffixes rather than allocating the remainder at every word. Normal
+messages keep balanced wrapping. Regression groups cover complete text/copy,
+links, cache reuse, Unicode and long paragraphs. Two source regression groups
+pass in the isolated harness. Native suite/Clippy/docs still require public CI
+because this environment lacks PipeWire development files and sudo access.
+Version26.11.5 avoids colliding with26.11.4 on the independent diagnostics PR.
+No merge without explicit owner word.
 
 
-### Follow-up review: truthful cap copy, remaining wrappers, real header entry points
-
-Validated the three additional review notes. The existing OpenMessage path calls
-open_chat, which refetches the first page and replaces the backend cursor. Remove
-the claim that another click continues a capped jump. This PR stays diagnostics-only:
-no new requests, cursor/reset changes, or larger budget. Track resumable jumps as
-an unscheduled ROADMAP item, not an implementation promise.
-
-Route the ordinary older-page missing-cursor message and history_error_copy's
-404/general wrappers through gettext. A translation-spy test checks the actual
-keys and preserves raw upstream details. Expand visibility coverage through the
-full conversation::show entry point in plain/vibrant light/dark palettes, with
-per-chat isolation, error removal, and no retry from painting. Native full-app
-captures remain unrun, and gettext routing still needs normal catalog updates for
-new translated wording.
+2026-11-22 18:20: Rebased443 after442 merged at4f9cfe5 under the owner's
+explicit merge-order instruction. Kept sequential26.11.5 and preserved26.11.4
+release notes without duplication. Previous full native CI failed only the new
+cache pointer assertion: parallel font reinstalls invalidate cached bodies by
+global generation. Default Mac native tests passed; all-features Mac/Ubuntu/Nix
+reached the pointer assertion. Match existing cache tests by checking reuse only
+in an unchanged epoch, with bounded retries and a failure if none stays stable.
+No production test expectation or performance path is weakened. Added an exact
+1024-grapheme boundary/combining-mark/hard-newline regression. Fresh CI required.
 
 
-Follow-up validation: the cap-copy regression fails against exact previous-head
-backend source (three groups pass, one fails on the false resume promise); all
-four exact-source backend groups pass now. Three warning-module tests, including
-a translation-key spy, pass against the pinned egui. Isolated Rust1.98 Clippy,
-rustfmt and diff checks pass. The generic stable alias lacks rustfmt/Clippy here;
-the installed1.98 toolchain supplied those checks. Own adversarial review caught
-that renaming the injected gettext callback could hide literals from catalog
-extraction; keep its gettext name and the normal locale/text argument shape.
-Full conversation::show integration is added for native CI, not claimed run
-locally. The earlier statement about preserving the loop's saved retry cursor
-must not be read as working UI resume: reopening the result resets it; the new
-ROADMAP item records that separate, unimplemented gap.
+2026-11-22: Current-head Devin review of443 found two real follow-ups. A literal
+Copy code command could collide with a synthetic-break occurrence in a visible
+body; the global transcript hook then removed a real newline from copied code.
+Distinguish explicit app copies from selection cleanup with per-viewport,
+per-pass command-index/value exemptions. Pair input/output hook scopes, including nested viewports, hidden logic and
+multipass coverage; logic-only copies create no pending exemption. All existing explicit
+app copy routes use the literal helper; unmarked selections still restore
+emoji, inserted breaks and transcript boundaries. No new clipboard retention
+outside transient context state, logging, request or dependency.
 
-Inspected updated isolated egui cap-warning pixels: the entire notice is readable,
-contains no resume promise, and the synthetic retained-message text remains below
-it. This still does not substitute for full native-app demo captures.
+A long list item also ran a backwards paragraph scan for every visual row,
+including cached draws. The earlier plain-text harness stubbed list_layout and
+did not validate that path. Index logical paragraph prefixes once per draw,
+look up rows independently, and binary-search ordered format sections. Keep
+real versus synthetic boundaries, continuation indentation and copy bytes.
+With the actual list leaf, a synthetic420KB list measured715ms first layout
+and647ms cached before,65ms first and0.63ms cached after. These remain isolated
+Linux numbers, not native Mac acceptance. A separate old/new exact-list-layout
+fixture compared all6667 visual row positions, text and bounds: identical.
+Before/after pixels were inspected, synthetic isolated list fixture only.
+
+Copy-output and actual large-body/code-block collision tests failed first;
+then37 focused tests passed using exact production markup/list/transcript/wrap
+sources and the pinned egui, with only the peripheral theme/emoji/bidi leaves
+stubbed. Old unrelated native-font tests were excluded from this focused
+harness, not patched into fake passes. Isolated Rust1.98 Clippy passes, with
+warnings denied. Added per-pass, next-frame and hidden-logic exemption tests,
+long-list geometry/copy checks and real-versus-display-boundary indexing.
+
+Devin's third note is the disclosed lack of native light/dark demo captures.
+Isolated pixels are not claimed to satisfy that evidence request. No additional
+screenshot waiver inferred; the owner's existing Solmu green-merge instruction
+was recovered with its follow-up to read/fix Devin comments first. Fresh
+current-head native CI remains mandatory, and Devin is requested again.
+
+Own pre-push review also caught egui popping its viewport stack before output
+hooks. A nested-child literal-copy test failed first. Pair input/output pass
+scopes instead of looking up the already-popped viewport in the output hook;
+this preserves the parent exemption too. All37 focused tests then passed.
+
+
+2026-11-22: The next443 review marks the copy/list defects fixed and finds a
+narrow marker-only display-line difference. Confirmed with a failing-first
+geometry regression: a synthetic break after "12. " added26px to the next row,
+where the original code kept0px. Keep the original first-display-line prefix
+check inside the once-per-logical-paragraph index. Covers ordered, ASCII and
+Unicode bullets, real versus synthetic breaks, without changing copy bytes.
+The hook-order note is informational: native setup registers CopyAnnotator
+before DetachedLinks removes URL commands on Linux/BSD. No current defect was
+reported there. Full native demo captures remain unrun, not claimed satisfied.
+Fresh CI and Devin are requested on this new head; do not use de8c3c3 checks.
+
+
+## 2026-11-22: Expire accepted-delete receipt notices
+
+Branch fix/delete-result-banner from main91f596a, independent of442 and443.
+The accepted/unconfirmed batch-delete banner had no later confirmed state and
+persisted until manually dismissed. Owner requested a banner PR. Keep honest
+receipt wording and clear only accepted message-delete notices after10seconds.
+Start the per-item monotonic timer on the matched successful backend result,
+not on submission. Both delete-for-me/everyone are covered. Pending, failed,
+uncertain, untimed, archive and previous-connection results are retained.
+No remote completion is asserted and no mutation/retry/network request is added.
+
+One repaint is scheduled for the next expiry, no animation/polling timer.
+The existing account/request/item guards stay unchanged; the hidden-account
+result test now also checks the acceptance timestamp. An exact-source Rust1.98
+model harness showed the new expiry test failing first, then passing with the
+existing session-replacement test. Boundary and mixed-batch assertions cover
+expired/recent accepted notices and retained pending/failed/archive/history.
+Inspected before/after actual egui meshes from isolated source archive_bar
+rendering: the expired receipt disappears, pending/error rows remain. This is
+not a full-app demo capture or real-Mac test. Full native suite/Clippy/docs await
+public CI because local PipeWire development files and sudo are unavailable.
+Version26.11.6 is distinct from442/443. No merge without explicit owner word.
+
+
+2026-11-22 18:23: Native Mac and Ubuntu tests passed for444; quality rejected
+only field_reassign_with_default in the new expiry test fixture. Initialize
+both fixture vectors in BatchState directly, no lint allowance or production
+change. Prepared locally pending the required rebase after443 merges; fresh
+CI on that final rebased head remains mandatory.
+
+2026-11-22 20:18: Rebased444 onto merged443 at38ab029, following the owner's
+442/443/444 order. Preserved the earlier changelog/work-log sections and the
+sequential26.11.6 version. Included the prepared direct-initialization lint fix.
+Re-read the acceptance timestamp guards and expiry path after the rebase: only
+matched successful message-delete receipts acquire a timer; retained pending,
+failed, archive, untimed and previous-session results cannot expire here.
+Current-source model/session tests pass in the isolated Rust1.98 harness, with
+rustfmt and diff checks. Full native app tests and Clippy require fresh public
+CI on this rebased head; previous native passes do not validate it. No release
+or merge in this update.
+
+## 2026-11-22: Keep delete-failure disclosures stable during expiry
+
+Reviewed all three current Devin notes on444. Expiring an earlier accepted
+receipt shifted positional disclosure IDs, closing an expanded failure or
+moving expansion to another failure. Current results now key the disclosure by
+account owner, request and exact chat/message/action target. Previous-session
+history keeps its existing separate namespace and indexing; it is not expired.
+
+Added a real archive_bar input/render regression: click the first failure's
+Technical details, expire an earlier accepted receipt, then check that the same
+failure stays open and the second stays closed. The exact production-function
+harness failed that final assertion before the fix and passes after it. Both
+model tests also pass. This isolates the UI/model code with a minimal App, not
+the complete native application. Full native tests remain for fresh CI. Local
+rustfmt and diff checks pass. Native before/after demo captures remain unrun.
+
+The narrow-window note is a timer-policy tradeoff: chat-list notices can age
+while the conversation hides that pane. Kept the existing explicit acceptance-
+time contract rather than silently change it to first-visible time. No new
+network request, deletion or retry is introduced.
+
+## 2026-11-22: Trace receipt-removal consumers and keep keyboard focus
+
+The original review verified retained contents and static pixels but missed
+state carried across removal. Traced every production batch_ui, acceptance-
+timestamp and expiry reference, including current/previous disclosures,
+dismiss controls, following header controls, selection/ghost-group consumers,
+pending guards and session replacement. The PR body has the consumer ledger
+and explicitly separates source tracing from executed interaction coverage.
+
+A corrected failing-first Tab regression reproduces focus moving away from
+both dismiss controls and a following control on7473e42. It allows another
+layout pass before reading hit-test rectangles. Explicit persistent IDs are
+needed for the dismiss buttons: this egui revision mixes position into auto
+IDs even in a salt-scoped child. An isolated bar child reserves a constant
+parent ID sequence, including when its final receipt disappears. A regression
+also caught and prevents an empty child adding3px of header spacing.
+
+Five exact-function/model tests and isolated Clippy with warnings denied pass.
+The interaction tests include pointer-driven disclosure preservation, Tab focus
+with retained rows and an empty result list, and empty-bar layout. They use the
+app's non-selectable-label setting. Native full-app tests, complete header/
+scroll/accessibility integration and native demo captures remain unrun locally.
+Previous-history disclosure slots remain index-keyed in their append/whole-clear
+collection; expiry does not reorder or remove those rows. No blanket identity-
+keyed or whole-app validation claim is made. Acceptance-time policy is unchanged.
+
+For future collection/state changes, list and trace consumers outside the diff,
+check positional IDs/selection/expansion/scroll/focus, add failing-first
+interaction coverage for defects, and state untraced scope before review.
+
+2026-11-22: Consecutive-image gallery fallback, owner requested22:14.
+Duplicate check before code: current main38ab029, all open PRs444/445,100
+recently updated PRs through Nov16, and every current branch name. Merged402
+already maps multi-attachment bridge messages into the existing gallery. This
+change extends that row planner, not mapper/data/transport/gallery duplication.
+Five-second adjacent gap, same chat/sender/direction/local day; protocol IDs
+never mix with fallback images. Failed/pending/unknown, quotes, reactions,
+forwarded and edited images remain separate to preserve independent metadata.
+Consumer trace covers row_starts/row_of, anchor membership, navigation, menus,
+selection/hidden paths, captions, accessibility labels and member tile IDs.
+Found position-derived tile focus IDs; use persistent chat/message IDs and
+remove row/column from thumbnail cache identity. Native tests cover insertion
+retaining tile focus, individual selection and clicked-member Reply. Pure
+exact grouping test fails on main, passes after;2 extracted tests passed with
+minimal Message scaffolding. Full native tests not run locally, CI required.
+Existing Mac smoke loop gains synthetic light/dark before/after burst scenes.
+No artifact upload setting enabled, no new workflow or upload path. Not yet
+validated: native interaction tests/captures, live WhatsApp bridge payloads,
+full keyboard traversal after splitting a burst, scrollback during paging,
+linked thread timelines (existing linked path draws individual messages).
+No Solmu threading implementation. Version26.11.7 awaits ordered444 merge
+and rebase before merge; held445 will need next version on its own rebase.

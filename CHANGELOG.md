@@ -15,9 +15,22 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+## 26.11.8
+
+- History jumps recognize a repeated cursor on the last allowed page without losing fetched messages or misreporting a found target. No new header warnings or retry controls.
+
 ## 26.11.7
 
-- History jumps identify a repeated cursor even on the final allowed page. Ordinary chats now show the saved stop reason too, and Solmu-owned reasons use the translation path. Previously loaded messages remain available; no automatic retry is added. The safety-limit notice no longer promises that another click resumes the jump, which is not implemented.
+- Consecutive image messages from one sender, at most five seconds apart, share the existing gallery. Protocol albums stay separate; selecting or locally hiding messages keeps the existing individual-message view.
+
+## 26.11.6
+
+- Accepted message-delete notices clear after ten seconds. Pending, failed and uncertain outcomes remain visible; clearing a receipt notice does not confirm remote completion.
+
+## 26.11.5
+
+- Keep very large pasted messages responsive: use greedy wrapping above 8 KiB and bound long shaping paragraphs without changing stored or copied text.
+- Keep explicit code/transcript copies literal, including real newlines, and avoid repeated paragraph scans when drawing long list items.
 
 ## 26.11.4
 

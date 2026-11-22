@@ -15,6 +15,11 @@ use crate::bidi;
 use crate::emoji;
 use crate::theme;
 
+/// Balanced wrapping is quadratic in the number of break opportunities. Large
+/// pasted logs use egui's ordinary greedy wrapping instead, including during
+/// width planning. This is a work limit, not a message or copy limit.
+pub const BALANCED_BODY_MAX_BYTES: usize = 8 * 1024;
+
 /// WhatsApp mention id and display name.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mention {
@@ -698,6 +703,30 @@ impl PreparedKey {
     }
 }
 
+/// Bound a large body's shaping paragraphs without breaking a Unicode grapheme.
+/// These display-only newlines use the same offset/copy mapping as balanced
+/// breaks. Existing short log lines do not change at all.
+fn bounded_shape_breaks(text: &str) -> Vec<crate::wrap::LineBreak> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut breaks = Vec::new();
+    let mut count = 0;
+    for (byte, cluster) in text.grapheme_indices(true) {
+        if cluster.contains(['\n', '\r']) {
+            count = 0;
+            continue;
+        }
+        if count == 1024 {
+            breaks.push(crate::wrap::LineBreak {
+                byte,
+                hyphen: false,
+            });
+            count = 0;
+        }
+        count += 1;
+    }
+    breaks
+}
+
 /// A prepared body: the final job and everything around it, but no galley.
 /// The galley comes from egui's own cache on every pass (`draw`), so painted
 /// glyphs always match the live font atlas, across reloads and resets. The
@@ -742,6 +771,41 @@ impl Prepared {
                 }),
             }
         };
+        if text.len() > BALANCED_BODY_MAX_BYTES {
+            // Some shapers also become expensive on one enormous paragraph.
+            // Partition only the display job, never stored/copied content.
+            let breaks = bounded_shape_breaks(&built.job.text);
+            if breaks.is_empty() {
+                return whole(built);
+            }
+            let unbroken = built.job.text.clone();
+            let copy_links = built.links.clone();
+            let (job, links, blocks, quotes, inserted) = insert_breaks(
+                built.job,
+                &built.links,
+                &built.blocks,
+                &built.quotes,
+                &breaks,
+            );
+            let galley = bidi::layout_job(ui, job.clone());
+            let row_kinds = row_kinds(&galley, &blocks, &quotes);
+            return Self {
+                text: text.into(),
+                mentions: mentions.into(),
+                job,
+                links,
+                big: built.big,
+                shared: Arc::new(Shared {
+                    placements: built.placements,
+                    list_indent: built.list_indent,
+                    copy_links,
+                    accessible_text: built.accessible_text,
+                    unbroken: Some(unbroken),
+                    inserted,
+                    row_kinds,
+                }),
+            };
+        }
         if built.big || max_width <= 0.0 {
             // Emoji-only text never balances; a zero cap leaves nothing to do.
             return whole(built);
@@ -1596,6 +1660,7 @@ fn named_link_line(mut line: Vec<Span>) -> Vec<Span> {
 /// Inline markers within one line.
 fn inline(line: &str) -> Vec<Span> {
     let chars: Vec<char> = line.chars().collect();
+    let bytes: Vec<usize> = line.char_indices().map(|(at, _)| at).collect();
     let mut spans = Vec::new();
     let mut run = String::new();
     // bold, italic, strike
@@ -1641,8 +1706,10 @@ fn inline(line: &str) -> Vec<Span> {
         // paths commonly contain paired underscores which must remain bytes
         // of the click target, not italic delimiters.
         if c.is_ascii_alphanumeric() && (i == 0 || !chars[i - 1].is_alphanumeric()) {
-            let rest: String = chars[i..].iter().collect();
-            if let Some((end, _)) = link_at(&rest, 0) {
+            // Borrow the original suffix. Copying the remaining line at every
+            // word made a long unbroken prose paragraph quadratic to parse.
+            let rest = &line[bytes[i]..];
+            if let Some((end, _)) = link_at(rest, 0) {
                 let token = &rest[..end];
                 // Decode literal hints while keeping URLs in one run. This
                 // preserves their underscores and avoids rescanning a long
@@ -3794,6 +3861,165 @@ mod compact_list_tests {
                     250.0
                 ),
                 0.0
+            );
+        });
+        output.textures_delta.clear();
+    }
+}
+
+#[cfg(test)]
+mod large_body_tests {
+    use super::*;
+
+    #[test]
+    fn large_body_code_copy_survives_a_matching_synthetic_break() {
+        let line = "a".repeat(1024);
+        let literal = format!("{line}\nb");
+        let text = format!("{line}b\n```\n{literal}\n```\n{}", "padding ".repeat(900));
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let rows = Arc::new(std::sync::Mutex::new(Vec::new()));
+        ctx.add_plugin(crate::transcript::CopyAnnotator { rows: rows.clone() });
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let laid = layout_balanced(
+                ui,
+                &text,
+                &[],
+                &Style {
+                    size: 16.0,
+                    color: Color32::WHITE,
+                    secondary: Color32::GRAY,
+                    link: Color32::BLUE,
+                    mention: Color32::WHITE,
+                },
+                400.0,
+                false,
+            );
+            assert!(!laid.inserted().is_empty());
+            rows.lock().unwrap().push(crate::transcript::Row {
+                body: laid.unbroken_text().into(),
+                broken: laid.broken_text().map(str::to_owned),
+                inserted: laid.inserted().to_vec(),
+                ..Default::default()
+            });
+            assert_eq!(
+                code_blocks(&text).as_slice(),
+                std::slice::from_ref(&literal)
+            );
+            assert!(
+                crate::transcript::refine(&literal, &rows.lock().unwrap())
+                    .is_some_and(|copy| copy != literal),
+                "fixture must collide with selection cleanup"
+            );
+            crate::transcript::copy_literal(ui.ctx(), literal.clone());
+        });
+        assert!(
+            output.platform_output.commands.iter().any(
+                |command| matches!(command, egui::OutputCommand::CopyText(copy) if copy == &literal)
+            ),
+            "Copy code must keep every real newline"
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn pasted_log_uses_greedy_wrap_without_losing_copy_or_links() {
+        let text = format!(
+            "{}https://example.com/end",
+            "synthetic function in Framework + 684 [0x18836fa34] waiting for an event\n"
+                .repeat(6000)
+        );
+        assert!(text.len() > 400_000);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let style = Style {
+            size: 16.0,
+            color: Color32::WHITE,
+            secondary: Color32::GRAY,
+            link: Color32::BLUE,
+            mention: Color32::WHITE,
+        };
+        // Other parallel UI tests reinstall fonts process-wide. A changed
+        // generation must invalidate this cache, so assert reuse only across
+        // an unchanged epoch, just like the existing cache tests above.
+        let mut stable = false;
+        for _ in 0..8 {
+            let generation = crate::theme::font_generation();
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let laid = layout_balanced(ui, &text, &[], &style, 400.0, true);
+                assert!(
+                    laid.broken_text().is_none(),
+                    "large bodies must not run the quadratic balancer"
+                );
+                assert!(laid.inserted().is_empty());
+                assert_eq!(laid.unbroken_text(), text);
+                assert!(laid.galley.rows.len() > 6000);
+                assert_eq!(laid.links.last().unwrap().1, "https://example.com/end");
+                let cached = layout_balanced(ui, &text, &[], &style, 400.0, true);
+                if crate::theme::font_generation() == generation {
+                    assert!(Arc::ptr_eq(&laid.shared, &cached.shared));
+                    stable = true;
+                }
+            });
+            output.textures_delta.clear();
+            if stable {
+                break;
+            }
+        }
+        assert!(
+            stable,
+            "the font generation kept changing during cache checks"
+        );
+    }
+
+    #[test]
+    fn shaping_boundaries_keep_graphemes_and_reset_at_hard_breaks() {
+        let exact = "a".repeat(1024);
+        assert!(bounded_shape_breaks(&exact).is_empty());
+        let text = format!("{exact}e\u{301}z\n{exact}界");
+        let breaks = bounded_shape_breaks(&text);
+        assert_eq!(breaks.len(), 2);
+        assert_eq!(breaks[0].byte, 1024);
+        assert_eq!(breaks[1].byte, text.len() - "界".len());
+        assert!(
+            breaks
+                .iter()
+                .all(|b| text.is_char_boundary(b.byte) && !b.hyphen)
+        );
+        assert!(text[breaks[0].byte..].starts_with("e\u{301}"));
+    }
+
+    #[test]
+    fn long_single_line_and_unicode_keep_original_bytes() {
+        let text = format!(
+            "{}https://example.com/end",
+            "ääkkönen synthetic words with no newline ".repeat(11000)
+        );
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let laid = layout_balanced(
+                ui,
+                &text,
+                &[],
+                &Style {
+                    size: 16.0,
+                    color: Color32::WHITE,
+                    secondary: Color32::GRAY,
+                    link: Color32::BLUE,
+                    mention: Color32::WHITE,
+                },
+                400.0,
+                false,
+            );
+            assert!(
+                !laid.inserted().is_empty(),
+                "shaping paragraphs are bounded"
+            );
+            assert_eq!(laid.unbroken_text(), text);
+            assert_eq!(
+                laid.link_copy_text(laid.links.len() - 1),
+                "https://example.com/end"
             );
         });
         output.textures_delta.clear();

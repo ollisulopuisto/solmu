@@ -4828,6 +4828,8 @@ impl App {
                             && item.result.is_none()
                     })
                 {
+                    item.accepted_delete_at =
+                        (item.message.is_some() && result.is_ok()).then(Instant::now);
                     item.result = Some(result);
                 }
             }
@@ -10952,7 +10954,7 @@ impl App {
                 }
             }
             Action::CopyLink(url) => {
-                ctx.copy_text(self.link_action_url(&url));
+                crate::transcript::copy_literal(ctx, self.link_action_url(&url));
                 self.toast("Copied");
             }
             Action::LinkPreviewPreferences => {
@@ -11003,7 +11005,7 @@ impl App {
                 }
             }
             Action::CopyText(text) => {
-                ctx.copy_text(text);
+                crate::transcript::copy_literal(ctx, text);
                 self.toast("Copied");
             }
             Action::CopyImage(path) => {
@@ -13614,7 +13616,7 @@ impl App {
                     .as_ref()
                     .filter(|(shown, _)| shown == &chat)
                 {
-                    ctx.copy_text(link.as_str().to_owned());
+                    crate::transcript::copy_literal(ctx, link.as_str().to_owned());
                     let said = crate::i18n::gettext(self.locale, "Invite link copied");
                     self.toast(said.into_owned());
                 }
@@ -17549,6 +17551,7 @@ mod tests {
             chat: "same-chat".into(),
             message: Some("message".into()),
             everyone: false,
+            accepted_delete_at: None,
             result: None,
         }];
         app.switch_account(&first);
@@ -17571,6 +17574,7 @@ mod tests {
         app.switch_account(&second);
         assert_eq!(app.batch_ui.request, Some(42));
         assert_eq!(app.batch_ui.results[0].result, Some(Ok(())));
+        assert!(app.batch_ui.results[0].accepted_delete_at.is_some());
         assert!(app.batch_ui.selected_chats.is_empty());
     }
 

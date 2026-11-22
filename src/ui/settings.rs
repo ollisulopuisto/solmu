@@ -524,7 +524,7 @@ fn sections(app: &App) -> Vec<Section> {
         if !app.local_ai.output.is_empty() {
             ui.label("Generated translation (review, may be wrong):");
             ui.add(egui::TextEdit::multiline(&mut app.local_ai.output).desired_width(f32::INFINITY).desired_rows(5));
-            if ui.button("Copy translation").clicked() { ui.ctx().copy_text(app.local_ai.output.clone()); }
+            if ui.button("Copy translation").clicked() { crate::transcript::copy_literal(ui.ctx(), app.local_ai.output.clone()); }
         }
     });
     // Voice-note transcription is not Beeper-specific: every mode that

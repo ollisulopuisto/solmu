@@ -514,7 +514,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     for member in &valid {
         if let Some(error) = app.person_history_error(&member.chat) {
             let source = source_label(app, &valid, member);
-            let error = super::history_warning::reason(app.locale, &error);
             ui.horizontal(|ui| {
                 ui.colored_label(
                     egui::Color32::YELLOW,
