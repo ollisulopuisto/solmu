@@ -1347,3 +1347,14 @@ only field_reassign_with_default in the new expiry test fixture. Initialize
 both fixture vectors in BatchState directly, no lint allowance or production
 change. Prepared locally pending the required rebase after443 merges; fresh
 CI on that final rebased head remains mandatory.
+
+2026-11-22 20:18: Rebased444 onto merged443 at38ab029, following the owner's
+442/443/444 order. Preserved the earlier changelog/work-log sections and the
+sequential26.11.6 version. Included the prepared direct-initialization lint fix.
+Re-read the acceptance timestamp guards and expiry path after the rebase: only
+matched successful message-delete receipts acquire a timer; retained pending,
+failed, archive, untimed and previous-session results cannot expire here.
+Current-source model/session tests pass in the isolated Rust1.98 harness, with
+rustfmt and diff checks. Full native app tests and Clippy require fresh public
+CI on this rebased head; previous native passes do not validate it. No release
+or merge in this update.
