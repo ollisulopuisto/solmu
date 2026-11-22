@@ -1257,8 +1257,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         .inner;
     super::reply_threads::finish(ui, app.conversation_palette().accent);
     // The linked timeline shows the thread in place, so it never gets the
-    // modal; the jump chips still apply.
-    super::reply_threads::paint_jump_chips(ui, app.locale);
+    // modal; the jump chips still apply, and a way back into another chat
+    // becomes plain navigation.
+    if let Some(key) = super::reply_threads::paint_jump_chips(ui, app.locale) {
+        actions.push(Action::OpenMessage {
+            chat: key.chat,
+            message: key.id,
+        });
+    }
     if thread_root.is_none() {
         super::reply_threads::complete_full_scroll(ui.ctx(), output.id, output.state);
     }

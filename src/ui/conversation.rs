@@ -3182,7 +3182,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             .map(|(_, message)| message.as_str()),
         // Only the pass that opened the picker keeps its menu open beside
         // it; the other view renders the same bubble without claiming it.
-        reaction_menu: app.reaction_beside_menu && !app.reaction_from_thread,
+        reaction_menu: app.reaction_beside_menu && claims_reaction(app.reaction_from_thread, false),
         reaction_emoji: &app.settings.reaction_emoji,
         keyboard_navigation: &keyboard_navigation,
         names_or: &names_or,
@@ -4316,7 +4316,14 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                     .is_some_and(|pos| bar.contains(pos)))
     });
     super::reply_threads::finish(ui, palette.accent);
-    super::reply_threads::paint_jump_chips(ui, app.locale);
+    // A way back whose origin sits in another chat arrives as a navigation
+    // request the chips cannot perform themselves.
+    if let Some(key) = super::reply_threads::paint_jump_chips(ui, app.locale) {
+        actions.push(Action::OpenMessage {
+            chat: key.chat,
+            message: key.id,
+        });
+    }
     let restored_thread_scroll =
         super::reply_threads::complete_full_scroll(ui.ctx(), output.id, output.state);
     let complete = conversation.complete;
@@ -5526,6 +5533,14 @@ pub const THREAD_BUBBLE_NS: &str = "thread";
 /// transcript's, and actions need to know which ones to read.
 pub fn in_thread_pass() -> bool {
     BUBBLE_NS.with(|ns| ns.get() == Some(THREAD_BUBBLE_NS))
+}
+
+/// Exactly one rendering pass claims the reaction picker's target: the
+/// thread's salted pass when the picker opened there, the transcript
+/// otherwise. Both passes render the target's bubble, and a double claim
+/// leaves the dimmed background list acting as the picker's owner.
+fn claims_reaction(from_thread: bool, thread_pass: bool) -> bool {
+    from_thread == thread_pass
 }
 
 /// The bubble id under the thread's salt: app-level actions apply outside
@@ -7104,7 +7119,13 @@ fn quote_chip(
         // Inside an open thread that already shows the target, the jump
         // scrolls the thread itself; otherwise leave and land on it.
         if !super::reply_threads::jump_within_thread(ui.ctx(), &target) {
-            super::reply_threads::prepare_jump_back(ui.ctx());
+            super::reply_threads::prepare_jump_back(
+                ui.ctx(),
+                &crate::reply_graph::Key {
+                    chat: message.chat.clone(),
+                    id: message.id.clone(),
+                },
+            );
             if let Some(chat) = &quoted.chat {
                 actions.push(Action::OpenMessage {
                     chat: chat.clone(),
@@ -8026,10 +8047,10 @@ pub(crate) fn linked_bubble(
         reaction: app
             .reaction_target
             .as_ref()
-            .filter(|_| app.reaction_from_thread)
+            .filter(|_| claims_reaction(app.reaction_from_thread, true))
             .filter(|(id, _)| id == &chat.id)
             .map(|(_, message)| message.as_str()),
-        reaction_menu: app.reaction_beside_menu && app.reaction_from_thread,
+        reaction_menu: app.reaction_beside_menu && claims_reaction(app.reaction_from_thread, true),
         reaction_emoji: &app.settings.reaction_emoji,
         keyboard_navigation: &keyboard_navigation,
         names_or: &names_or,
@@ -14015,6 +14036,23 @@ mod tests {
             Action::OpenReactionPicker { chat, message, beside_menu: false, from_thread: false }
                 if chat == "chat@example" && message == "message-42"
         ));
+    }
+
+    /// Both passes render the picker's target bubble; exactly one may own
+    /// the target state, or the dimmed background list keeps acting as the
+    /// picker's owner while the thread modal floats above it.
+    #[test]
+    fn exactly_one_pass_claims_the_reaction_target() {
+        assert!(claims_reaction(false, false), "the transcript owns its own");
+        assert!(claims_reaction(true, true), "the thread owns its own");
+        assert!(
+            !claims_reaction(true, false),
+            "a thread-opened picker is not the transcript's",
+        );
+        assert!(
+            !claims_reaction(false, true),
+            "a transcript-opened picker is not the thread's",
+        );
     }
 
     #[test]
