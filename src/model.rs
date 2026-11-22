@@ -4805,6 +4805,8 @@ pub struct BatchItem {
     pub message: Option<String>,
     pub everyone: bool,
     pub result: Option<Result<(), String>>,
+    /// Starts only after an accepted delete, never pending or failed work.
+    pub accepted_delete_at: Option<Instant>,
 }
 #[derive(Default)]
 pub struct BatchState {
@@ -4816,7 +4818,32 @@ pub struct BatchState {
     pub results: Vec<BatchItem>,
     pub previous_session_results: Vec<BatchItem>,
 }
+/// A short receipt notice, not a claim of remote deletion completion.
+pub const DELETE_RESULT_NOTICE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(10);
+
 impl BatchState {
+    /// Remove only accepted delete notices once their receipt notice expires.
+    /// Return the next expiry so the UI schedules one repaint, not a poll loop.
+    pub fn expire_delete_notices(&mut self, now: Instant) -> Option<std::time::Duration> {
+        let mut next = None;
+        self.results.retain(|item| {
+            let Some(accepted) = item
+                .accepted_delete_at
+                .filter(|_| item.message.is_some() && matches!(item.result, Some(Ok(()))))
+            else {
+                return true;
+            };
+            let remaining = DELETE_RESULT_NOTICE_LIFETIME
+                .saturating_sub(now.saturating_duration_since(accepted));
+            if remaining.is_zero() {
+                return false;
+            }
+            next = Some(next.map_or(remaining, |wait: std::time::Duration| wait.min(remaining)));
+            true
+        });
+        next
+    }
+
     /// A new connection cannot inherit current outcomes. Preserve only unresolved
     /// work, explicitly separated as uncertain history of the old connection.
     pub fn replace_session(&mut self) {
@@ -4850,12 +4877,14 @@ mod batch_session_tests {
                 chat: "old".into(),
                 message: None,
                 everyone: false,
+                accepted_delete_at: None,
                 result: Some(Ok(())),
             },
             BatchItem {
                 chat: "pending".into(),
                 message: None,
                 everyone: false,
+                accepted_delete_at: None,
                 result: None,
             },
         ];
@@ -4863,6 +4892,7 @@ mod batch_session_tests {
             chat: "uncertain".into(),
             message: Some("message".into()),
             everyone: true,
+            accepted_delete_at: None,
             result: Some(Err("POST accepted but confirmation failed".into())),
         });
         state.replace_session();
@@ -4882,6 +4912,63 @@ mod batch_session_tests {
                 .as_ref()
                 .unwrap()
                 .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod delete_notice_tests {
+    use super::*;
+    #[test]
+    fn only_accepted_delete_notices_expire_and_the_next_deadline_is_reported() {
+        let now = Instant::now();
+        let item = |message: Option<&str>, result, age, everyone| BatchItem {
+            chat: "synthetic".into(),
+            message: message.map(String::from),
+            everyone,
+            result,
+            accepted_delete_at: Some(now - std::time::Duration::from_secs(age)),
+        };
+        let mut state = BatchState::default();
+        state.results = vec![
+            item(Some("old-for-everyone"), Some(Ok(())), 10, true),
+            item(Some("old-for-me"), Some(Ok(())), 11, false),
+            item(Some("recent"), Some(Ok(())), 4, true),
+            item(Some("pending"), None, 99, true),
+            item(Some("failed"), Some(Err("uncertain".into())), 99, true),
+            item(None, Some(Ok(())), 99, false),
+            BatchItem {
+                accepted_delete_at: None,
+                ..item(Some("untimed"), Some(Ok(())), 99, true)
+            },
+        ];
+        state.previous_session_results = vec![item(
+            Some("previous"),
+            Some(Err("check previous connection".into())),
+            99,
+            true,
+        )];
+        assert_eq!(
+            state.expire_delete_notices(now),
+            Some(std::time::Duration::from_secs(6))
+        );
+        assert_eq!(state.results.len(), 5);
+        assert!(state.results.iter().all(|r| !matches!(
+            r.message.as_deref(),
+            Some("old-for-everyone" | "old-for-me")
+        )));
+        assert_eq!(state.previous_session_results.len(), 1);
+        assert_eq!(
+            state.expire_delete_notices(now + std::time::Duration::from_secs(6)),
+            None
+        );
+        assert_eq!(state.results.len(), 4);
+        assert!(state.results.iter().any(|r| r.result.is_none()));
+        assert!(
+            state
+                .results
+                .iter()
+                .any(|r| matches!(r.result, Some(Err(_))))
         );
     }
 }

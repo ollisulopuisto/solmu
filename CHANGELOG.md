@@ -15,6 +15,10 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+## 26.11.6
+
+- Accepted message-delete notices clear after ten seconds. Pending, failed and uncertain outcomes remain visible; clearing a receipt notice does not confirm remote completion.
+
 ## 26.11.5
 
 - Keep very large pasted messages responsive: use greedy wrapping above 8 KiB and bound long shaping paragraphs without changing stored or copied text.

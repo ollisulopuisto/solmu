@@ -1316,3 +1316,27 @@ The hook-order note is informational: native setup registers CopyAnnotator
 before DetachedLinks removes URL commands on Linux/BSD. No current defect was
 reported there. Full native demo captures remain unrun, not claimed satisfied.
 Fresh CI and Devin are requested on this new head; do not use de8c3c3 checks.
+
+
+## 2026-11-22: Expire accepted-delete receipt notices
+
+Branch fix/delete-result-banner from main91f596a, independent of442 and443.
+The accepted/unconfirmed batch-delete banner had no later confirmed state and
+persisted until manually dismissed. Owner requested a banner PR. Keep honest
+receipt wording and clear only accepted message-delete notices after10seconds.
+Start the per-item monotonic timer on the matched successful backend result,
+not on submission. Both delete-for-me/everyone are covered. Pending, failed,
+uncertain, untimed, archive and previous-connection results are retained.
+No remote completion is asserted and no mutation/retry/network request is added.
+
+One repaint is scheduled for the next expiry, no animation/polling timer.
+The existing account/request/item guards stay unchanged; the hidden-account
+result test now also checks the acceptance timestamp. An exact-source Rust1.98
+model harness showed the new expiry test failing first, then passing with the
+existing session-replacement test. Boundary and mixed-batch assertions cover
+expired/recent accepted notices and retained pending/failed/archive/history.
+Inspected before/after actual egui meshes from isolated source archive_bar
+rendering: the expired receipt disappears, pending/error rows remain. This is
+not a full-app demo capture or real-Mac test. Full native suite/Clippy/docs await
+public CI because local PipeWire development files and sudo are unavailable.
+Version26.11.6 is distinct from442/443. No merge without explicit owner word.

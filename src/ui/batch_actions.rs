@@ -60,6 +60,14 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
     if app.batch_ui.owner != app.account().id.0 {
         return;
     }
+    // A receipt notice is useful briefly; it is not a persistent task or
+    // proof that every remote participant has received the deletion.
+    if let Some(wait) = app
+        .batch_ui
+        .expire_delete_notices(std::time::Instant::now())
+    {
+        ui.ctx().request_repaint_after(wait);
+    }
     if !app.batch_ui.selected_chats.is_empty() {
         ui.horizontal_wrapped(|ui| {
             ui.label(
@@ -264,6 +272,7 @@ pub fn dialogs(app: &mut App, ctx: &egui::Context) {
                         chat: chat.clone(),
                         message: None,
                         everyone: false,
+                        accepted_delete_at: None,
                         result: None,
                     })
                     .collect();
@@ -372,6 +381,7 @@ mod tests {
             chat: "!raw:bridge.localhost".into(),
             message: Some("402555".into()),
             everyone: false,
+            accepted_delete_at: None,
             result: Some(Ok(())),
         };
         let line = result_line(&app, &item);

@@ -2577,6 +2577,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     chat: "ada".into(),
                     message: Some("402555".into()),
                     everyone: false,
+                    accepted_delete_at: Some(std::time::Instant::now()),
                     result: Some(Ok(())),
                 }];
                 if let Some(chat) = app.chats.iter().find(|chat| !chat.is_group()) {
@@ -2589,6 +2590,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     chat: "Synthetic previous chat".into(),
                     message: Some("Synthetic message".into()),
                     everyone: true,
+                    accepted_delete_at: None,
                     result: Some(Err("Accepted request, confirmation unavailable".into())),
                 }];
             }
@@ -2624,6 +2626,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                         chat: app.batch_ui.selected_chats[0].clone(),
                         message: None,
                         everyone: false,
+                        accepted_delete_at: None,
                         result: Some(Ok(())),
                     }];
                 }
