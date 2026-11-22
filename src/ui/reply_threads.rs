@@ -14,6 +14,7 @@ use crate::reply_graph::chain;
 #[derive(Clone)]
 struct Frame {
     scope: egui::Id,
+    account: String,
     ids: Vec<String>,
     replies: HashMap<Key, Vec<Key>>,
     parents: HashMap<Key, Key>,
@@ -26,6 +27,7 @@ impl Default for Frame {
     fn default() -> Self {
         Self {
             scope: egui::Id::NULL,
+            account: String::new(),
             ids: vec![],
             replies: HashMap::new(),
             parents: HashMap::new(),
@@ -35,6 +37,21 @@ impl Default for Frame {
             included: HashSet::new(),
         }
     }
+}
+/// A jump's way back, kept outside any view's scope so it survives the
+/// cross-chat navigation the jump itself triggers. The first view whose
+/// chats include the jump's origin adopts it into its own scope, where the
+/// chips restore in place; any other view offers plain navigation back to
+/// the origin message instead (see `pending_nav`).
+#[derive(Clone)]
+struct Pending {
+    account: String,
+    source: Key,
+    scroll: Option<(egui::Id, egui::scroll_area::State)>,
+    thread: Option<Key>,
+}
+fn pending_id() -> egui::Id {
+    egui::Id::new("reply-jump-back-pending")
 }
 type Shared = std::sync::Arc<std::sync::Mutex<Frame>>;
 fn frame(ctx: &egui::Context) -> Option<Shared> {
@@ -101,6 +118,7 @@ pub fn begin(app: &App, ui: &egui::Ui, ids: &[String]) {
             frame_id(),
             std::sync::Arc::new(std::sync::Mutex::new(Frame {
                 scope,
+                account: app.account().id.0.clone(),
                 ids: ids.to_vec(),
                 replies,
                 parents,
@@ -110,6 +128,29 @@ pub fn begin(app: &App, ui: &egui::Ui, ids: &[String]) {
             })),
         )
     });
+    // A jump's way back travels out of band because the jump itself may
+    // switch chats. The view whose chats contain the jump's origin adopts
+    // it into its own scope, replacing any older return point there; a
+    // leftover from another account is stale and dropped. Any other view
+    // leaves it for `pending_nav` to offer as plain navigation.
+    let pending = ui.ctx().data(|d| d.get_temp::<Pending>(pending_id()));
+    if let Some(pending) = pending {
+        if pending.account != app.account().id.0 {
+            ui.ctx().data_mut(|d| d.remove::<Pending>(pending_id()));
+        } else if ids.iter().any(|id| id == &pending.source.chat) {
+            ui.ctx().data_mut(|d| {
+                d.remove::<Pending>(pending_id());
+                d.remove::<(egui::Id, egui::scroll_area::State)>(scope.with("jump-back"));
+                d.remove::<Key>(scope.with("jump-back-thread"));
+                if let Some(scroll) = pending.scroll {
+                    d.insert_temp(scope.with("jump-back"), scroll);
+                }
+                if let Some(thread) = pending.thread {
+                    d.insert_temp(scope.with("jump-back-thread"), thread);
+                }
+            });
+        }
+    }
 }
 pub fn current(ctx: &egui::Context) -> Option<Key> {
     frame(ctx).and_then(|f| {
@@ -182,27 +223,43 @@ fn next_reply(replies: &[Key], last: Option<usize>) -> usize {
 
 /// Remember where a jump started, for the chip that offers the way back:
 /// the full-chat scroll position, or the open thread the jump leaves.
-pub fn prepare_jump_back(ctx: &egui::Context) {
+/// `source` is the bubble the jump started from; it becomes the navigation
+/// target when the jump lands in another chat (see `Pending`).
+pub fn prepare_jump_back(ctx: &egui::Context, source: &Key) {
     let Some(shared) = frame(ctx) else {
         return;
     };
     let f = shared.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(root) = ctx.data(|d| d.get_temp::<Key>(f.scope)) {
-        ctx.data_mut(|d| {
-            d.insert_temp(f.scope.with("jump-back-thread"), root);
-            // The chips prefer a saved transcript position, so leaving a
-            // thread must replace it: Back reopens the thread instead of
-            // scrolling the transcript to a stale point.
-            d.remove::<(egui::Id, egui::scroll_area::State)>(f.scope.with("jump-back"));
-        });
-    } else if let Some(saved) = ctx
-        .data(|d| d.get_temp::<(egui::Id, egui::scroll_area::State)>(f.scope.with("full-scroll")))
-    {
-        ctx.data_mut(|d| {
-            d.insert_temp(f.scope.with("jump-back"), saved);
-            d.remove::<Key>(f.scope.with("jump-back-thread"));
-        });
+    // The open thread is the way back when the jump leaves one; otherwise
+    // the saved full-chat scroll position.
+    let (scroll, thread) = if let Some(root) = ctx.data(|d| d.get_temp::<Key>(f.scope)) {
+        (None, Some(root))
+    } else {
+        (
+            ctx.data(|d| {
+                d.get_temp::<(egui::Id, egui::scroll_area::State)>(f.scope.with("full-scroll"))
+            }),
+            None,
+        )
+    };
+    if scroll.is_none() && thread.is_none() {
+        return;
     }
+    // Kept outside this view's scope: the jump may land in another chat,
+    // whose begin adopts it or offers it as navigation (see `Pending`).
+    // Replacing the slot wholesale keeps one way back, never a stale pair.
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            pending_id(),
+            Pending {
+                account: f.account.clone(),
+                source: source.clone(),
+                scroll,
+                thread,
+            },
+        )
+    });
+    ctx.request_repaint();
 }
 
 /// Jump to a message the open thread already shows: queue an in-thread
@@ -251,7 +308,7 @@ pub fn command_click(
     if let Some(parent) = f.parents.get(&key).cloned() {
         drop(f);
         if !jump_within_thread(ctx, &parent) {
-            prepare_jump_back(ctx);
+            prepare_jump_back(ctx, &key);
             actions.push(crate::model::Action::OpenMessage {
                 chat: parent.chat,
                 message: parent.id,
@@ -279,7 +336,7 @@ pub fn command_click(
         });
         drop(f);
         if !jump_within_thread(ctx, &target) {
-            prepare_jump_back(ctx);
+            prepare_jump_back(ctx, &key);
             actions.push(crate::model::Action::OpenMessage {
                 chat: target.chat,
                 message: target.id,
@@ -290,12 +347,25 @@ pub fn command_click(
     false
 }
 
+/// The way back a pending jump offers while the user stands outside its
+/// origin chat: plain navigation to the message the jump started from.
+/// `None` once the origin view has adopted the pending state (its chips
+/// restore in place), or when there is none.
+fn pending_nav(ctx: &egui::Context) -> Option<Key> {
+    let shared = frame(ctx)?;
+    let f = shared.lock().unwrap_or_else(|e| e.into_inner());
+    ctx.data(|d| d.get_temp::<Pending>(pending_id()))
+        .filter(|p| !f.ids.contains(&p.source.chat))
+        .map(|p| p.source.clone())
+}
+
 /// The chips that follow a jump: a fading "reply N of M" at the landing,
-/// and the standing offer to go back to where the jump started.
-pub fn paint_jump_chips(ui: &egui::Ui, locale: crate::i18n::Locale) {
-    let Some(shared) = frame(ui.ctx()) else {
-        return;
-    };
+/// and the standing offer to go back to where the jump started. Returns
+/// the origin message when the way back needs a cross-chat navigation the
+/// chips cannot perform themselves; the caller turns it into an
+/// `OpenMessage` action.
+pub fn paint_jump_chips(ui: &egui::Ui, locale: crate::i18n::Locale) -> Option<Key> {
+    let shared = frame(ui.ctx())?;
     let (scope, rects, active) = {
         let f = shared.lock().unwrap_or_else(|e| e.into_inner());
         (f.scope, f.rects.clone(), f.active)
@@ -340,12 +410,16 @@ pub fn paint_jump_chips(ui: &egui::Ui, locale: crate::i18n::Locale) {
         }
     }
     if active {
-        return;
+        return None;
     }
     let jump_back: Option<(egui::Id, egui::scroll_area::State)> =
         ctx.data(|d| d.get_temp(scope.with("jump-back")));
     let jump_back_thread: Option<Key> = ctx.data(|d| d.get_temp(scope.with("jump-back-thread")));
-    let (label, show) = if jump_back.is_some() {
+    // A jump that landed in another chat offers the way back as plain
+    // navigation to the origin message; the chips cannot restore a
+    // scroll position or a thread in a view they are not part of.
+    let nav = pending_nav(ctx);
+    let (label, show) = if jump_back.is_some() || nav.is_some() {
         (
             crate::i18n::gettext(locale, "‹ Back to where you were"),
             true,
@@ -356,7 +430,7 @@ pub fn paint_jump_chips(ui: &egui::Ui, locale: crate::i18n::Locale) {
         ("".into(), false)
     };
     if !show {
-        return;
+        return None;
     }
     let top = ui.clip_rect().center_top() + egui::vec2(0.0, 8.0);
     let outcome = egui::Area::new(egui::Id::new(("reply-jump-back", scope)))
@@ -394,13 +468,18 @@ pub fn paint_jump_chips(ui: &egui::Ui, locale: crate::i18n::Locale) {
                 d.insert_temp(scope, root);
             });
             ctx.request_repaint();
+        } else if let Some(key) = nav {
+            ctx.data_mut(|d| d.remove::<Pending>(pending_id()));
+            return Some(key);
         }
     } else if dismiss {
         ctx.data_mut(|d| {
             d.remove::<(egui::Id, egui::scroll_area::State)>(scope.with("jump-back"));
             d.remove::<Key>(scope.with("jump-back-thread"));
+            d.remove::<Pending>(pending_id());
         });
     }
+    None
 }
 pub fn complete_full_scroll(
     ctx: &egui::Context,
@@ -1070,9 +1149,12 @@ mod tests {
     }
     #[test]
     fn prepare_jump_back_replaces_the_older_return_point() {
-        let (_dir, _app, ctx) = seeded();
-        let f = frame(&ctx).unwrap();
-        let scope = f.lock().unwrap().scope;
+        let (_dir, app, ctx) = seeded();
+        let source = Key {
+            chat: "a".into(),
+            id: "2".into(),
+        };
+        let scope = scope(&app, &["a".into()]);
         // A jump out of the thread leaves only the thread as the way back:
         // an older transcript position must not win in the chips.
         ctx.data_mut(|d| {
@@ -1081,7 +1163,10 @@ mod tests {
                 (egui::Id::new("scroll"), egui::scroll_area::State::default()),
             );
         });
-        prepare_jump_back(&ctx);
+        prepare_jump_back(&ctx, &source);
+        // The way back settles into the view's scope across a frame.
+        let mut output = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["a".into()]));
+        output.textures_delta.clear();
         assert!(
             ctx.data(|d| d.get_temp::<Key>(scope.with("jump-back-thread")))
                 .is_some()
@@ -1101,7 +1186,9 @@ mod tests {
                 (egui::Id::new("scroll"), egui::scroll_area::State::default()),
             );
         });
-        prepare_jump_back(&ctx);
+        prepare_jump_back(&ctx, &source);
+        let mut output = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["a".into()]));
+        output.textures_delta.clear();
         assert!(
             ctx.data(
                 |d| d.get_temp::<(egui::Id, egui::scroll_area::State)>(scope.with("jump-back"))
@@ -1116,11 +1203,16 @@ mod tests {
     }
     #[test]
     fn prepare_jump_back_captures_the_open_thread_or_the_full_scroll() {
-        let (_dir, _app, ctx) = seeded();
-        let f = frame(&ctx).unwrap();
-        let scope = f.lock().unwrap().scope;
+        let (_dir, app, ctx) = seeded();
+        let source = Key {
+            chat: "a".into(),
+            id: "2".into(),
+        };
+        let scope = scope(&app, &["a".into()]);
         // The seeded frame has an open thread: the way back is the thread.
-        prepare_jump_back(&ctx);
+        prepare_jump_back(&ctx, &source);
+        let mut output = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["a".into()]));
+        output.textures_delta.clear();
         assert!(
             ctx.data(|d| d.get_temp::<Key>(scope.with("jump-back-thread")))
                 .is_some()
@@ -1133,12 +1225,103 @@ mod tests {
                 (egui::Id::new("scroll"), egui::scroll_area::State::default()),
             );
         });
-        prepare_jump_back(&ctx);
+        prepare_jump_back(&ctx, &source);
+        let mut output = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["a".into()]));
+        output.textures_delta.clear();
         assert!(
             ctx.data(
                 |d| d.get_temp::<(egui::Id, egui::scroll_area::State)>(scope.with("jump-back"))
             )
             .is_some()
+        );
+    }
+    /// A jump that lands in another chat cannot restore in place there:
+    /// the chip offers plain navigation back to the origin message.
+    #[test]
+    fn a_cross_chat_jump_offers_navigation_back() {
+        let (_dir, app, ctx) = seeded();
+        let source = Key {
+            chat: "a".into(),
+            id: "2".into(),
+        };
+        prepare_jump_back(&ctx, &source);
+        // The jump lands in chat b: its frame must not adopt a's way back.
+        let mut output = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["b".into()]));
+        output.textures_delta.clear();
+        assert_eq!(
+            pending_nav(&ctx),
+            Some(source),
+            "another chat offers navigation back to the origin message",
+        );
+        let scope_b = scope(&app, &["b".into()]);
+        assert!(
+            ctx.data(|d| d.get_temp::<Key>(scope_b.with("jump-back-thread")))
+                .is_none()
+        );
+        assert!(
+            ctx.data(
+                |d| d.get_temp::<(egui::Id, egui::scroll_area::State)>(scope_b.with("jump-back"))
+            )
+            .is_none(),
+            "a non-origin view never adopts the way back",
+        );
+    }
+    /// The origin view adopts the pending way back into its own scope,
+    /// where the same-chat restore reads it.
+    #[test]
+    fn the_origin_view_adopts_a_pending_jump_back() {
+        let (_dir, app, ctx) = seeded();
+        let source = Key {
+            chat: "a".into(),
+            id: "2".into(),
+        };
+        prepare_jump_back(&ctx, &source);
+        let mut output = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["a".into()]));
+        output.textures_delta.clear();
+        let scope_a = scope(&app, &["a".into()]);
+        assert!(
+            ctx.data(|d| d.get_temp::<Pending>(pending_id())).is_none(),
+            "adopted, not pending",
+        );
+        assert!(
+            ctx.data(|d| d.get_temp::<Key>(scope_a.with("jump-back-thread")))
+                .is_some()
+        );
+        assert!(
+            pending_nav(&ctx).is_none(),
+            "the origin restores in place, no navigation offer",
+        );
+    }
+    /// A pending way back from another account is stale: dropped, never
+    /// adopted, never shown.
+    #[test]
+    fn a_pending_jump_back_from_another_account_is_dropped() {
+        let (_dir, app, ctx) = seeded();
+        ctx.data_mut(|d| {
+            d.insert_temp(
+                pending_id(),
+                Pending {
+                    account: "another-account".into(),
+                    source: Key {
+                        chat: "a".into(),
+                        id: "2".into(),
+                    },
+                    scroll: None,
+                    thread: Some(Key {
+                        chat: "a".into(),
+                        id: "1".into(),
+                    }),
+                },
+            )
+        });
+        let mut output = ctx.run_ui(Default::default(), |ui| begin(&app, ui, &["a".into()]));
+        output.textures_delta.clear();
+        let scope_a = scope(&app, &["a".into()]);
+        assert!(ctx.data(|d| d.get_temp::<Pending>(pending_id())).is_none());
+        assert!(
+            ctx.data(|d| d.get_temp::<Key>(scope_a.with("jump-back-thread")))
+                .is_none(),
+            "another account's way back is never adopted",
         );
     }
 }
