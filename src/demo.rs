@@ -2958,15 +2958,14 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "media-album" => media_album_sample(app, true),
             "image-burst" | "image-burst-before" => {
                 media_album_sample(app, false);
-                if part == "image-burst-before" {
-                    if let Some(rows) = app
+                if part == "image-burst-before"
+                    && let Some(rows) = app
                         .open_chat
                         .clone()
                         .and_then(|chat| app.conversations.get_mut(&chat))
-                    {
-                        for (index, row) in rows.messages.iter_mut().enumerate() {
-                            row.timestamp += index as i64 * 10;
-                        }
+                {
+                    for (index, row) in rows.messages.iter_mut().enumerate() {
+                        row.timestamp += index as i64 * 10;
                     }
                 }
             }
@@ -24017,7 +24016,7 @@ mod tests {
                     &chat,
                     &format!("picture-{index}"),
                     false,
-                    1_700_000_000 + index,
+                    1_700_000_000 + index * 10,
                     Content::Image {
                         motion: None,
                         caption: None,
@@ -24039,6 +24038,63 @@ mod tests {
         assert!(
             asked < 15,
             "only the rows on screen should be decoded, {asked} of 40 were"
+        );
+    }
+
+    #[test]
+    fn gallery_tiles_out_of_view_are_not_decoded() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let loads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        ctx.add_image_loader(std::sync::Arc::new(CountingImages(std::sync::Arc::clone(
+            &loads,
+        ))));
+
+        // One forty-image burst is a single virtual row. Each offscreen tile
+        // must still avoid decoding, independently of row virtualization.
+        let chat = app.chats[0].id.clone();
+        app.open_chat = Some(chat.clone());
+        let rows: Vec<Message> = (0..40)
+            .map(|index| {
+                let mut media = media("image/jpeg", 1_000, Some(900), Some(1200));
+                media.path = Some(std::path::PathBuf::from(format!(
+                    "/nonexistent/demo-picture-{index}.jpg"
+                )));
+                message(
+                    &chat,
+                    &format!("picture-{index}"),
+                    false,
+                    1_700_000_000 + index,
+                    Content::Image {
+                        motion: None,
+                        caption: None,
+                        media,
+                    },
+                )
+            })
+            .collect();
+        app.conversations.entry(chat).or_default().messages = rows;
+
+        render(&mut app, &ctx);
+
+        let asked = loads
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let pictures: Vec<_> = asked
+            .iter()
+            .filter(|uri| uri.contains("demo-picture-"))
+            .collect();
+        assert!(!pictures.is_empty(), "visible gallery tiles should decode");
+        assert!(
+            pictures.len() < 40,
+            "offscreen gallery tiles must not decode"
+        );
+        assert!(
+            !pictures
+                .iter()
+                .any(|uri| uri.contains("demo-picture-39.jpg")),
+            "the last tile is below the viewport, even inside one virtual row"
         );
     }
 
