@@ -103,6 +103,13 @@ pub fn hanging(
 /// row. Inserted byte ranges are sorted/nonoverlapping, as insert_breaks emits
 /// them. Even an enormous single list item has only one logical prefix.
 fn paragraph_prefixes(text: &str, inserted: &[(usize, usize)]) -> Vec<(usize, Option<usize>)> {
+    // Preserve the old first-display-line check. If that line contains only
+    // a marker and spaces, a shaping/balancing break must not turn it into
+    // a newly indented item. This still scans only once per real paragraph.
+    let prefix = |start: usize, end: usize| {
+        prefix_end(text[start..end].split('\n').next().unwrap_or_default())
+            .map(|prefix| start + prefix)
+    };
     let mut prefixes = Vec::new();
     let mut start = 0;
     for (at, _) in text.match_indices('\n') {
@@ -113,16 +120,10 @@ fn paragraph_prefixes(text: &str, inserted: &[(usize, usize)]) -> Vec<(usize, Op
         {
             continue;
         }
-        prefixes.push((
-            start,
-            prefix_end(&text[start..at]).map(|prefix| start + prefix),
-        ));
+        prefixes.push((start, prefix(start, at)));
         start = at + 1;
     }
-    prefixes.push((
-        start,
-        prefix_end(&text[start..]).map(|prefix| start + prefix),
-    ));
+    prefixes.push((start, prefix(start, text.len())));
     prefixes
 }
 
@@ -192,6 +193,24 @@ fn galley_sections_mono(sections: &[egui::text::LayoutSection], at: usize) -> bo
 #[cfg(test)]
 mod large_list_tests {
     use super::*;
+
+    #[test]
+    fn marker_only_display_row_keeps_legacy_continuation_alignment() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            for marker in ["12. ", "- ", "•  "] {
+                let text = format!("{marker}\nitem text\nordinary");
+                for inserted in [vec![], vec![(marker.len(), 1)]] {
+                    let mut galley = ui.painter().layout_no_wrap(text.clone(), egui::FontId::proportional(16.0), egui::Color32::WHITE);
+                    let before: Vec<_> = galley.rows.iter().map(|row| row.pos.x).collect();
+                    hanging(&mut galley, &inserted, 26.0);
+                    assert_eq!(galley.text(), text);
+                    assert_eq!(galley.rows.iter().map(|row| row.pos.x).collect::<Vec<_>>(), before, "marker-only display row should not gain indentation: {marker:?}, {inserted:?}");
+                }
+            }
+        });
+        output.textures_delta.clear();
+    }
 
     #[test]
     fn display_breaks_keep_one_prefix_until_a_real_paragraph_boundary() {

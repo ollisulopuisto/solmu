@@ -1304,3 +1304,15 @@ Own pre-push review also caught egui popping its viewport stack before output
 hooks. A nested-child literal-copy test failed first. Pair input/output pass
 scopes instead of looking up the already-popped viewport in the output hook;
 this preserves the parent exemption too. All37 focused tests then passed.
+
+
+2026-11-22: The next443 review marks the copy/list defects fixed and finds a
+narrow marker-only display-line difference. Confirmed with a failing-first
+geometry regression: a synthetic break after "12. " added26px to the next row,
+where the original code kept0px. Keep the original first-display-line prefix
+check inside the once-per-logical-paragraph index. Covers ordered, ASCII and
+Unicode bullets, real versus synthetic breaks, without changing copy bytes.
+The hook-order note is informational: native setup registers CopyAnnotator
+before DetachedLinks removes URL commands on Linux/BSD. No current defect was
+reported there. Full native demo captures remain unrun, not claimed satisfied.
+Fresh CI and Devin are requested on this new head; do not use de8c3c3 checks.
