@@ -225,27 +225,41 @@ fn next_reply(replies: &[Key], last: Option<usize>) -> usize {
 /// the full-chat scroll position, or the open thread the jump leaves.
 /// `source` is the bubble the jump started from; it becomes the navigation
 /// target when the jump lands in another chat (see `Pending`).
-pub fn prepare_jump_back(ctx: &egui::Context, _source: &Key) {
+pub fn prepare_jump_back(ctx: &egui::Context, source: &Key) {
     let Some(shared) = frame(ctx) else {
         return;
     };
     let f = shared.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(root) = ctx.data(|d| d.get_temp::<Key>(f.scope)) {
-        ctx.data_mut(|d| {
-            d.insert_temp(f.scope.with("jump-back-thread"), root);
-            // The chips prefer a saved transcript position, so leaving a
-            // thread must replace it: Back reopens the thread instead of
-            // scrolling the transcript to a stale point.
-            d.remove::<(egui::Id, egui::scroll_area::State)>(f.scope.with("jump-back"));
-        });
-    } else if let Some(saved) = ctx
-        .data(|d| d.get_temp::<(egui::Id, egui::scroll_area::State)>(f.scope.with("full-scroll")))
-    {
-        ctx.data_mut(|d| {
-            d.insert_temp(f.scope.with("jump-back"), saved);
-            d.remove::<Key>(f.scope.with("jump-back-thread"));
-        });
+    // The open thread is the way back when the jump leaves one; otherwise
+    // the saved full-chat scroll position.
+    let (scroll, thread) = if let Some(root) = ctx.data(|d| d.get_temp::<Key>(f.scope)) {
+        (None, Some(root))
+    } else {
+        (
+            ctx.data(|d| {
+                d.get_temp::<(egui::Id, egui::scroll_area::State)>(f.scope.with("full-scroll"))
+            }),
+            None,
+        )
+    };
+    if scroll.is_none() && thread.is_none() {
+        return;
     }
+    // Kept outside this view's scope: the jump may land in another chat,
+    // whose begin adopts it or offers it as navigation (see `Pending`).
+    // Replacing the slot wholesale keeps one way back, never a stale pair.
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            pending_id(),
+            Pending {
+                account: f.account.clone(),
+                source: source.clone(),
+                scroll,
+                thread,
+            },
+        )
+    });
+    ctx.request_repaint();
 }
 
 /// Jump to a message the open thread already shows: queue an in-thread
@@ -351,9 +365,7 @@ fn pending_nav(ctx: &egui::Context) -> Option<Key> {
 /// chips cannot perform themselves; the caller turns it into an
 /// `OpenMessage` action.
 pub fn paint_jump_chips(ui: &egui::Ui, locale: crate::i18n::Locale) -> Option<Key> {
-    let Some(shared) = frame(ui.ctx()) else {
-        return None;
-    };
+    let shared = frame(ui.ctx())?;
     let (scope, rects, active) = {
         let f = shared.lock().unwrap_or_else(|e| e.into_inner());
         (f.scope, f.rects.clone(), f.active)

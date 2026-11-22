@@ -3178,6 +3178,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         reaction: app
             .reaction_target
             .as_ref()
+            .filter(|_| claims_reaction(app.reaction_from_thread, false))
             .filter(|(id, _)| id == &chat.id)
             .map(|(_, message)| message.as_str()),
         // Only the pass that opened the picker keeps its menu open beside
