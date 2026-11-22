@@ -3888,20 +3888,54 @@ mod large_body_tests {
             link: Color32::BLUE,
             mention: Color32::WHITE,
         };
-        let mut output = ctx.run_ui(Default::default(), |ui| {
-            let laid = layout_balanced(ui, &text, &[], &style, 400.0, true);
-            assert!(
-                laid.broken_text().is_none(),
-                "large bodies must not run the quadratic balancer"
-            );
-            assert!(laid.inserted().is_empty());
-            assert_eq!(laid.unbroken_text(), text);
-            assert!(laid.galley.rows.len() > 6000);
-            assert_eq!(laid.links.last().unwrap().1, "https://example.com/end");
-            let cached = layout_balanced(ui, &text, &[], &style, 400.0, true);
-            assert!(Arc::ptr_eq(&laid.shared, &cached.shared));
-        });
-        output.textures_delta.clear();
+        // Other parallel UI tests reinstall fonts process-wide. A changed
+        // generation must invalidate this cache, so assert reuse only across
+        // an unchanged epoch, just like the existing cache tests above.
+        let mut stable = false;
+        for _ in 0..8 {
+            let generation = crate::theme::font_generation();
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let laid = layout_balanced(ui, &text, &[], &style, 400.0, true);
+                assert!(
+                    laid.broken_text().is_none(),
+                    "large bodies must not run the quadratic balancer"
+                );
+                assert!(laid.inserted().is_empty());
+                assert_eq!(laid.unbroken_text(), text);
+                assert!(laid.galley.rows.len() > 6000);
+                assert_eq!(laid.links.last().unwrap().1, "https://example.com/end");
+                let cached = layout_balanced(ui, &text, &[], &style, 400.0, true);
+                if crate::theme::font_generation() == generation {
+                    assert!(Arc::ptr_eq(&laid.shared, &cached.shared));
+                    stable = true;
+                }
+            });
+            output.textures_delta.clear();
+            if stable {
+                break;
+            }
+        }
+        assert!(
+            stable,
+            "the font generation kept changing during cache checks"
+        );
+    }
+
+    #[test]
+    fn shaping_boundaries_keep_graphemes_and_reset_at_hard_breaks() {
+        let exact = "a".repeat(1024);
+        assert!(bounded_shape_breaks(&exact).is_empty());
+        let text = format!("{exact}e\u{301}z\n{exact}界");
+        let breaks = bounded_shape_breaks(&text);
+        assert_eq!(breaks.len(), 2);
+        assert_eq!(breaks[0].byte, 1024);
+        assert_eq!(breaks[1].byte, text.len() - "界".len());
+        assert!(
+            breaks
+                .iter()
+                .all(|b| text.is_char_boundary(b.byte) && !b.hyphen)
+        );
+        assert!(text[breaks[0].byte..].starts_with("e\u{301}"));
     }
 
     #[test]

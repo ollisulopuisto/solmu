@@ -1252,3 +1252,14 @@ pass in the isolated harness. Native suite/Clippy/docs still require public CI
 because this environment lacks PipeWire development files and sudo access.
 Version26.11.5 avoids colliding with26.11.4 on the independent diagnostics PR.
 No merge without explicit owner word.
+
+
+2026-11-22 18:20: Rebased443 after442 merged at4f9cfe5 under the owner's
+explicit merge-order instruction. Kept sequential26.11.5 and preserved26.11.4
+release notes without duplication. Previous full native CI failed only the new
+cache pointer assertion: parallel font reinstalls invalidate cached bodies by
+global generation. Default Mac native tests passed; all-features Mac/Ubuntu/Nix
+reached the pointer assertion. Match existing cache tests by checking reuse only
+in an unchanged epoch, with bounded retries and a failure if none stays stable.
+No production test expectation or performance path is weakened. Added an exact
+1024-grapheme boundary/combining-mark/hard-newline regression. Fresh CI required.
