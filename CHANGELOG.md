@@ -15,6 +15,11 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+## 26.11.5
+
+- Keep very large pasted messages responsive: use greedy wrapping above 8 KiB and bound long shaping paragraphs without changing stored or copied text.
+- Keep explicit code/transcript copies literal, including real newlines, and avoid repeated paragraph scans when drawing long list items.
+
 ## 26.11.4
 
 - History jumps preserve the actual stop reason instead of replacing every failure with a possible 400-page limit. The limit is local to Solmu, unchanged, and only reported when reached. Good pages remain loaded.

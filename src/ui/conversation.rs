@@ -6959,7 +6959,7 @@ fn natural_body_width(
     cap: f32,
     grow: bool,
 ) -> f32 {
-    if text.contains("```") {
+    if text.len() > markup::BALANCED_BODY_MAX_BYTES || text.contains("```") {
         return markup::layout_balanced(ui, text, mentions, style, cap, grow)
             .galley
             .size()
@@ -10553,7 +10553,7 @@ fn copy_code_buttons(
         };
         let response = markup::put_copy_button(ui, panel, label.as_ref(), palette.accent);
         if response.clicked() {
-            ui.ctx().copy_text(block.clone());
+            crate::transcript::copy_literal(ui.ctx(), block.clone());
             ui.ctx()
                 .data_mut(|data| data.insert_temp(copied_id, std::time::Instant::now()));
             ui.ctx()
@@ -12735,7 +12735,7 @@ fn voice_transcript(
                         theme::reveal_focus(&copy);
                         theme::focus_outline(ui, copy.id, copy.rect, 4.0);
                         if copy.clicked() {
-                            ui.ctx().copy_text(text.clone());
+                            crate::transcript::copy_literal(ui.ctx(), text.clone());
                         }
                         let language = ui
                             .link(crate::i18n::gettext(view.locale, "Transcription language…"))

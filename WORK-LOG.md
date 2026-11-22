@@ -1222,3 +1222,97 @@ unavailable sudo access. Native suite, Clippy and docs are not claimed passed.
 Rustfmt and diff check pass. Public CI must run the complete native checks.
 Version bumped to26.11.4. No UI layout change, real-account reproduction, release
 or merge. Olli's explicit word is required before merging this PR.
+
+## 2026-11-22: Bound large-message layout work
+
+Branch fix/long-message-layout from main91f596a, independent of diagnostics PR442.
+A reported startup/constant beachball was tied to a newly pasted ~377KB message;
+the owner reports deleting it restored responsiveness. Current and yesterday's
+manual69 sources share the same quadratic balancer. Manual70 only adds441, not
+a new text shaping path. No commit regression is proven. The supplied macOS
+sample shows sustained main-thread work but stripped frames prevent naming its
+Rust function. No real message or sample is included here.
+
+A synthetic420KB multiline log took~3.1s for layout in an isolated optimized
+Linux harness using current production markup/wrap and pinned egui, with
+unrelated emoji/theme/bidi leaves stubbed. The deterministic failing-first
+assertion verified the expensive path was taken. The fixed same layout took
+~81ms. A 504KB single paragraph exceeded a40s bound before paragraph partitioning;
+afterward~68ms. A400KB single word laid out in~45ms. These are isolated numbers,
+not macOS acceptance or a complete native app benchmark.
+
+Above8KiB, use cached greedy layout for painting AND natural-width planning.
+Only for these large bodies, partition shaping paragraphs every1024graphemes
+in the display job using existing inserted-break/copy/link remapping; full
+stored text, copy text, markup and actions remain intact. Borrow inline URL
+parser suffixes rather than allocating the remainder at every word. Normal
+messages keep balanced wrapping. Regression groups cover complete text/copy,
+links, cache reuse, Unicode and long paragraphs. Two source regression groups
+pass in the isolated harness. Native suite/Clippy/docs still require public CI
+because this environment lacks PipeWire development files and sudo access.
+Version26.11.5 avoids colliding with26.11.4 on the independent diagnostics PR.
+No merge without explicit owner word.
+
+
+2026-11-22 18:20: Rebased443 after442 merged at4f9cfe5 under the owner's
+explicit merge-order instruction. Kept sequential26.11.5 and preserved26.11.4
+release notes without duplication. Previous full native CI failed only the new
+cache pointer assertion: parallel font reinstalls invalidate cached bodies by
+global generation. Default Mac native tests passed; all-features Mac/Ubuntu/Nix
+reached the pointer assertion. Match existing cache tests by checking reuse only
+in an unchanged epoch, with bounded retries and a failure if none stays stable.
+No production test expectation or performance path is weakened. Added an exact
+1024-grapheme boundary/combining-mark/hard-newline regression. Fresh CI required.
+
+
+2026-11-22: Current-head Devin review of443 found two real follow-ups. A literal
+Copy code command could collide with a synthetic-break occurrence in a visible
+body; the global transcript hook then removed a real newline from copied code.
+Distinguish explicit app copies from selection cleanup with per-viewport,
+per-pass command-index/value exemptions. Pair input/output hook scopes, including nested viewports, hidden logic and
+multipass coverage; logic-only copies create no pending exemption. All existing explicit
+app copy routes use the literal helper; unmarked selections still restore
+emoji, inserted breaks and transcript boundaries. No new clipboard retention
+outside transient context state, logging, request or dependency.
+
+A long list item also ran a backwards paragraph scan for every visual row,
+including cached draws. The earlier plain-text harness stubbed list_layout and
+did not validate that path. Index logical paragraph prefixes once per draw,
+look up rows independently, and binary-search ordered format sections. Keep
+real versus synthetic boundaries, continuation indentation and copy bytes.
+With the actual list leaf, a synthetic420KB list measured715ms first layout
+and647ms cached before,65ms first and0.63ms cached after. These remain isolated
+Linux numbers, not native Mac acceptance. A separate old/new exact-list-layout
+fixture compared all6667 visual row positions, text and bounds: identical.
+Before/after pixels were inspected, synthetic isolated list fixture only.
+
+Copy-output and actual large-body/code-block collision tests failed first;
+then37 focused tests passed using exact production markup/list/transcript/wrap
+sources and the pinned egui, with only the peripheral theme/emoji/bidi leaves
+stubbed. Old unrelated native-font tests were excluded from this focused
+harness, not patched into fake passes. Isolated Rust1.98 Clippy passes, with
+warnings denied. Added per-pass, next-frame and hidden-logic exemption tests,
+long-list geometry/copy checks and real-versus-display-boundary indexing.
+
+Devin's third note is the disclosed lack of native light/dark demo captures.
+Isolated pixels are not claimed to satisfy that evidence request. No additional
+screenshot waiver inferred; the owner's existing Solmu green-merge instruction
+was recovered with its follow-up to read/fix Devin comments first. Fresh
+current-head native CI remains mandatory, and Devin is requested again.
+
+Own pre-push review also caught egui popping its viewport stack before output
+hooks. A nested-child literal-copy test failed first. Pair input/output pass
+scopes instead of looking up the already-popped viewport in the output hook;
+this preserves the parent exemption too. All37 focused tests then passed.
+
+
+2026-11-22: The next443 review marks the copy/list defects fixed and finds a
+narrow marker-only display-line difference. Confirmed with a failing-first
+geometry regression: a synthetic break after "12. " added26px to the next row,
+where the original code kept0px. Keep the original first-display-line prefix
+check inside the once-per-logical-paragraph index. Covers ordered, ASCII and
+Unicode bullets, real versus synthetic breaks, without changing copy bytes.
+The hook-order note is informational: native setup registers CopyAnnotator
+before DetachedLinks removes URL commands on Linux/BSD. No current defect was
+reported there. Full native demo captures remain unrun, not claimed satisfied.
+Fresh CI and Devin are requested on this new head; do not use de8c3c3 checks.
