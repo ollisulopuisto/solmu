@@ -15,19 +15,78 @@ impl egui::plugin::Plugin for CopyAnnotator {
         "solmu-transcript"
     }
 
-    fn output_hook(&mut self, _ctx: &egui::Context, output: &mut egui::FullOutput) {
+    fn input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        let viewport = input.viewport_id;
+        ctx.data_mut(|data| {
+            data.get_temp_mut_or_default::<LiteralCopyPasses>(literal_copy_id())
+                .0
+                .push(LiteralCopyPass {
+                    viewport,
+                    copies: Vec::new(),
+                })
+        });
+    }
+
+    fn output_hook(&mut self, ctx: &egui::Context, output: &mut egui::FullOutput) {
+        // egui has already popped its viewport stack before output hooks.
+        // Pair begin/end hooks instead of consulting ctx.viewport_id here.
+        let literal = ctx
+            .data_mut(|data| {
+                data.get_temp_mut_or_default::<LiteralCopyPasses>(literal_copy_id())
+                    .0
+                    .pop()
+            })
+            .unwrap_or_default();
         let rows = self.rows.lock().unwrap_or_else(|p| p.into_inner());
         if rows.is_empty() {
             return;
         }
-        for command in &mut output.platform_output.commands {
+        for (index, command) in output.platform_output.commands.iter_mut().enumerate() {
             if let egui::OutputCommand::CopyText(text) = command
+                && !literal
+                    .copies
+                    .iter()
+                    .any(|(at, value)| *at == index && value == text)
                 && let Some(refined) = refine(text, &rows)
             {
                 *text = refined;
             }
         }
     }
+}
+
+/// Explicit app copies are literal, not text-selection output.
+pub(crate) fn copy_literal(ctx: &egui::Context, text: String) {
+    let value = text.clone();
+    let index = ctx.output_mut(|output| {
+        let index = output.commands.len();
+        output.commands.push(egui::OutputCommand::CopyText(text));
+        index
+    });
+    let viewport = ctx.viewport_id();
+    ctx.data_mut(|data| {
+        if let Some(pass) = data
+            .get_temp_mut_or_default::<LiteralCopyPasses>(literal_copy_id())
+            .0
+            .last_mut()
+            && pass.viewport == viewport
+        {
+            pass.copies.push((index, value));
+        }
+    });
+}
+
+#[derive(Clone, Default)]
+struct LiteralCopyPasses(Vec<LiteralCopyPass>);
+
+#[derive(Clone, Default)]
+struct LiteralCopyPass {
+    viewport: egui::ViewportId,
+    copies: Vec<(usize, String)>,
+}
+
+fn literal_copy_id() -> egui::Id {
+    egui::Id::new("solmu-literal-copy-passes")
 }
 
 /// One drawn message body with its copy header and emoji placeholders.
@@ -461,5 +520,132 @@ mod tests {
                 "[9:00, 1/2/2026] Ada: [photo] at this (❤️ You)\n[9:05, 1/2/2026] You: (replying to Ada: \"look at this\") lovely"
             )
         );
+    }
+}
+
+#[cfg(test)]
+mod literal_copy_tests {
+    use super::*;
+
+    #[test]
+    fn nested_viewport_copies_keep_their_own_pass_exemptions() {
+        let ctx = egui::Context::default();
+        ctx.add_plugin(CopyAnnotator {
+            rows: std::sync::Arc::new(std::sync::Mutex::new(vec![Row {
+                body: "ab".into(),
+                broken: Some("a\nb".into()),
+                inserted: vec![(1, 1)],
+                ..Default::default()
+            }])),
+        });
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            copy_literal(ui.ctx(), "a\nb".into());
+            let child = egui::ViewportId::from_hash_of("literal-copy-child");
+            let mut input = egui::RawInput { viewport_id: child, ..Default::default() };
+            input.viewports.insert(child, egui::ViewportInfo { parent: Some(egui::ViewportId::ROOT), ..Default::default() });
+            let mut nested = ctx.run_ui(input, |ui| { copy_literal(ui.ctx(), "a\nb".into()); });
+            assert!(nested.platform_output.commands.iter().any(|command| matches!(command, egui::OutputCommand::CopyText(text) if text == "a\nb")), "child literal copy stays literal");
+            nested.textures_delta.clear();
+            ui.ctx().copy_text("a\nb".into());
+        });
+        let copies: Vec<_> = output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(copies, ["a\nb", "ab"]);
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn literal_marks_are_per_pass_and_do_not_survive_hidden_logic() {
+        let ctx = egui::Context::default();
+        ctx.add_plugin(CopyAnnotator {
+            rows: std::sync::Arc::new(std::sync::Mutex::new(vec![Row {
+                body: "ab and a\nb".into(),
+                broken: Some("a\nb and a\nb".into()),
+                inserted: vec![(1, 1)],
+                ..Default::default()
+            }])),
+        });
+        let mut passes = 0;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            copy_literal(ui.ctx(), "a\nb".into());
+            ui.ctx().copy_text("a\nb".into());
+            if passes == 0 {
+                ui.ctx().request_discard("literal-copy fixture");
+            }
+            passes += 1;
+        });
+        assert_eq!(passes, 2);
+        let copies: Vec<_> = output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(copies, ["a\nb", "ab", "a\nb", "ab"]);
+        output.textures_delta.clear();
+        let logic = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            copy_literal(ctx, "a\nb".into());
+        });
+        assert!(logic.platform_output.commands.iter().any(
+            |command| matches!(command, egui::OutputCommand::CopyText(text) if text == "a\nb")
+        ));
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.ctx().copy_text("a\nb".into());
+        });
+        assert!(
+            output.platform_output.commands.iter().any(
+                |command| matches!(command, egui::OutputCommand::CopyText(text) if text == "ab")
+            )
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn explicit_copies_keep_real_newlines_and_selection_cleanup_still_runs() {
+        let ctx = egui::Context::default();
+        let rows = std::sync::Arc::new(std::sync::Mutex::new(vec![Row {
+            body: "ab and a\nb".into(),
+            broken: Some("a\nb and a\nb".into()),
+            inserted: vec![(1, 1)],
+            ..Default::default()
+        }]));
+        ctx.add_plugin(CopyAnnotator { rows });
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.ctx().copy_text("unrelated".into());
+            copy_literal(ui.ctx(), "a\nb".into());
+            // An unmarked selection in the same frame still needs cleanup.
+            ui.ctx().copy_text("a\nb".into());
+        });
+        let copies: Vec<_> = output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(copies, ["unrelated", "a\nb", "ab"]);
+        output.textures_delta.clear();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            ui.ctx().copy_text("a\nb".into());
+        });
+        assert!(
+            output.platform_output.commands.iter().any(
+                |command| matches!(command, egui::OutputCommand::CopyText(text) if text == "ab")
+            ),
+            "literal exemptions must not survive into another frame"
+        );
+        output.textures_delta.clear();
     }
 }

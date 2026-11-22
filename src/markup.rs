@@ -3872,6 +3872,57 @@ mod large_body_tests {
     use super::*;
 
     #[test]
+    fn large_body_code_copy_survives_a_matching_synthetic_break() {
+        let line = "a".repeat(1024);
+        let literal = format!("{line}\nb");
+        let text = format!("{line}b\n```\n{literal}\n```\n{}", "padding ".repeat(900));
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let rows = Arc::new(std::sync::Mutex::new(Vec::new()));
+        ctx.add_plugin(crate::transcript::CopyAnnotator { rows: rows.clone() });
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let laid = layout_balanced(
+                ui,
+                &text,
+                &[],
+                &Style {
+                    size: 16.0,
+                    color: Color32::WHITE,
+                    secondary: Color32::GRAY,
+                    link: Color32::BLUE,
+                    mention: Color32::WHITE,
+                },
+                400.0,
+                false,
+            );
+            assert!(!laid.inserted().is_empty());
+            rows.lock().unwrap().push(crate::transcript::Row {
+                body: laid.unbroken_text().into(),
+                broken: laid.broken_text().map(str::to_owned),
+                inserted: laid.inserted().to_vec(),
+                ..Default::default()
+            });
+            assert_eq!(
+                code_blocks(&text).as_slice(),
+                std::slice::from_ref(&literal)
+            );
+            assert!(
+                crate::transcript::refine(&literal, &rows.lock().unwrap())
+                    .is_some_and(|copy| copy != literal),
+                "fixture must collide with selection cleanup"
+            );
+            crate::transcript::copy_literal(ui.ctx(), literal.clone());
+        });
+        assert!(
+            output.platform_output.commands.iter().any(
+                |command| matches!(command, egui::OutputCommand::CopyText(copy) if copy == &literal)
+            ),
+            "Copy code must keep every real newline"
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn pasted_log_uses_greedy_wrap_without_losing_copy_or_links() {
         let text = format!(
             "{}https://example.com/end",

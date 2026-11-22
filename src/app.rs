@@ -10952,7 +10952,7 @@ impl App {
                 }
             }
             Action::CopyLink(url) => {
-                ctx.copy_text(self.link_action_url(&url));
+                crate::transcript::copy_literal(ctx, self.link_action_url(&url));
                 self.toast("Copied");
             }
             Action::LinkPreviewPreferences => {
@@ -11003,7 +11003,7 @@ impl App {
                 }
             }
             Action::CopyText(text) => {
-                ctx.copy_text(text);
+                crate::transcript::copy_literal(ctx, text);
                 self.toast("Copied");
             }
             Action::CopyImage(path) => {
@@ -13614,7 +13614,7 @@ impl App {
                     .as_ref()
                     .filter(|(shown, _)| shown == &chat)
                 {
-                    ctx.copy_text(link.as_str().to_owned());
+                    crate::transcript::copy_literal(ctx, link.as_str().to_owned());
                     let said = crate::i18n::gettext(self.locale, "Invite link copied");
                     self.toast(said.into_owned());
                 }

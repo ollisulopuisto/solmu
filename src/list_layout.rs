@@ -68,26 +68,22 @@ pub fn hanging(
     if indent <= 0.0 {
         return;
     }
-    let text = galley.job.text.clone();
-    let sections = galley.job.sections.clone();
+    let job = galley.job.clone();
+    let prefixes = paragraph_prefixes(&job.text, inserted);
     let rows = &mut std::sync::Arc::make_mut(galley).rows;
     for placed in rows.iter_mut() {
         let Some(first) = placed.row.glyphs.first().map(|g| g.cluster as usize) else {
             continue;
         };
-        if galley_sections_mono(&sections, first) {
+        if galley_sections_mono(&job.sections, first) {
             continue;
         }
-        let start = text[..first]
-            .char_indices()
-            .rev()
-            .find_map(|(at, ch)| {
-                (ch == '\n' && !inserted.iter().any(|(a, n)| *a <= at && at < a + n))
-                    .then_some(at + 1)
-            })
-            .unwrap_or(0);
-        let end = text[start..].find('\n').map_or(text.len(), |n| start + n);
-        if prefix_end(&text[start..end]).is_some_and(|prefix| first >= start + prefix) {
+        // Visual rows need not have monotonically increasing glyph clusters.
+        // Index logical paragraphs once, then look up each row independently.
+        let index = prefixes
+            .partition_point(|(start, _)| *start <= first)
+            .saturating_sub(1);
+        if prefixes[index].1.is_some_and(|content| first >= content) {
             placed.pos.x += indent;
         }
     }
@@ -101,6 +97,33 @@ pub fn hanging(
     galley.mesh_bounds = galley.rows.iter().fold(egui::Rect::NOTHING, |bounds, row| {
         bounds.union(row.row.visuals.mesh_bounds.translate(row.pos.to_vec2()))
     });
+}
+
+/// One prefix lookup per real paragraph, never one backward scan per visual
+/// row. Inserted byte ranges are sorted/nonoverlapping, as insert_breaks emits
+/// them. Even an enormous single list item has only one logical prefix.
+fn paragraph_prefixes(text: &str, inserted: &[(usize, usize)]) -> Vec<(usize, Option<usize>)> {
+    let mut prefixes = Vec::new();
+    let mut start = 0;
+    for (at, _) in text.match_indices('\n') {
+        let index = inserted.partition_point(|(pos, len)| pos + len <= at);
+        if inserted
+            .get(index)
+            .is_some_and(|(pos, len)| *pos <= at && at < pos + len)
+        {
+            continue;
+        }
+        prefixes.push((
+            start,
+            prefix_end(&text[start..at]).map(|prefix| start + prefix),
+        ));
+        start = at + 1;
+    }
+    prefixes.push((
+        start,
+        prefix_end(&text[start..]).map(|prefix| start + prefix),
+    ));
+    prefixes
 }
 
 #[cfg(test)]
@@ -157,8 +180,56 @@ mod geometry_tests {
 }
 
 fn galley_sections_mono(sections: &[egui::text::LayoutSection], at: usize) -> bool {
+    // LayoutJob sections are ordered ranges. Do not rescan all earlier spans
+    // for every row of a richly formatted list item.
+    let index = sections.partition_point(|section| section.byte_range.end.0 <= at);
     sections
-        .iter()
-        .find(|section| section.byte_range.start.0 <= at && at < section.byte_range.end.0)
+        .get(index)
+        .filter(|section| section.byte_range.start.0 <= at)
         .is_some_and(|section| section.format.font_id.family == egui::FontFamily::Monospace)
+}
+
+#[cfg(test)]
+mod large_list_tests {
+    use super::*;
+
+    #[test]
+    fn display_breaks_keep_one_prefix_until_a_real_paragraph_boundary() {
+        let text = format!("12. {}\ncontinued\nplain\n- second", "ää ".repeat(5000));
+        let display = text.find("\ncontinued").unwrap();
+        let plain = text.find("plain").unwrap();
+        let second = text.find("- second").unwrap();
+        assert_eq!(
+            paragraph_prefixes(&text, &[(display, 1)]),
+            vec![(0, Some(4)), (plain, None), (second, Some(second + 2))]
+        );
+    }
+
+    #[test]
+    fn large_wrapped_list_keeps_every_continuation_indent_and_copy_byte() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let text = format!("12. {}", "list words ".repeat(3000));
+            let mut galley = ui.painter().layout(
+                text.clone(),
+                egui::FontId::proportional(16.0),
+                egui::Color32::WHITE,
+                140.0,
+            );
+            let before: Vec<_> = galley.rows.iter().map(|row| row.pos.x).collect();
+            assert!(before.len() > 500);
+            hanging(&mut galley, &[], 26.0);
+            assert_eq!(galley.text(), text);
+            assert_eq!(galley.rows[0].pos.x, before[0]);
+            assert!(
+                galley
+                    .rows
+                    .iter()
+                    .zip(before)
+                    .skip(1)
+                    .all(|(row, x)| row.pos.x == x + 26.0)
+            );
+        });
+        output.textures_delta.clear();
+    }
 }

@@ -1263,3 +1263,44 @@ reached the pointer assertion. Match existing cache tests by checking reuse only
 in an unchanged epoch, with bounded retries and a failure if none stays stable.
 No production test expectation or performance path is weakened. Added an exact
 1024-grapheme boundary/combining-mark/hard-newline regression. Fresh CI required.
+
+
+2026-11-22: Current-head Devin review of443 found two real follow-ups. A literal
+Copy code command could collide with a synthetic-break occurrence in a visible
+body; the global transcript hook then removed a real newline from copied code.
+Distinguish explicit app copies from selection cleanup with per-viewport,
+per-pass command-index/value exemptions. Pair input/output hook scopes, including nested viewports, hidden logic and
+multipass coverage; logic-only copies create no pending exemption. All existing explicit
+app copy routes use the literal helper; unmarked selections still restore
+emoji, inserted breaks and transcript boundaries. No new clipboard retention
+outside transient context state, logging, request or dependency.
+
+A long list item also ran a backwards paragraph scan for every visual row,
+including cached draws. The earlier plain-text harness stubbed list_layout and
+did not validate that path. Index logical paragraph prefixes once per draw,
+look up rows independently, and binary-search ordered format sections. Keep
+real versus synthetic boundaries, continuation indentation and copy bytes.
+With the actual list leaf, a synthetic420KB list measured715ms first layout
+and647ms cached before,65ms first and0.63ms cached after. These remain isolated
+Linux numbers, not native Mac acceptance. A separate old/new exact-list-layout
+fixture compared all6667 visual row positions, text and bounds: identical.
+Before/after pixels were inspected, synthetic isolated list fixture only.
+
+Copy-output and actual large-body/code-block collision tests failed first;
+then37 focused tests passed using exact production markup/list/transcript/wrap
+sources and the pinned egui, with only the peripheral theme/emoji/bidi leaves
+stubbed. Old unrelated native-font tests were excluded from this focused
+harness, not patched into fake passes. Isolated Rust1.98 Clippy passes, with
+warnings denied. Added per-pass, next-frame and hidden-logic exemption tests,
+long-list geometry/copy checks and real-versus-display-boundary indexing.
+
+Devin's third note is the disclosed lack of native light/dark demo captures.
+Isolated pixels are not claimed to satisfy that evidence request. No additional
+screenshot waiver inferred; the owner's existing Solmu green-merge instruction
+was recovered with its follow-up to read/fix Devin comments first. Fresh
+current-head native CI remains mandatory, and Devin is requested again.
+
+Own pre-push review also caught egui popping its viewport stack before output
+hooks. A nested-child literal-copy test failed first. Pair input/output pass
+scopes instead of looking up the already-popped viewport in the output hook;
+this preserves the parent exemption too. All37 focused tests then passed.
