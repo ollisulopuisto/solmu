@@ -15,6 +15,10 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+## 26.11.4
+
+- History jumps preserve the actual stop reason instead of replacing every failure with a possible 400-page limit. The limit is local to Solmu, unchanged, and only reported when reached. Good pages remain loaded.
+
 - Wrapped list items use hanging indentation, keeping continuation lines under the item text rather than the bullet or number.
 - Chat-list reaction previews distinguish your reaction from reactions to your messages, without showing the original sender or delivery ticks as though the reaction were a new message. English wording first.
 - Preserve rich-text headings, paragraphs, code breaks, table fallback, compact HTML lists, literal markers and reversed numbering; safely reconstruct nested-list and hard-break edits.
