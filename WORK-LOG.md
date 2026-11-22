@@ -1358,3 +1358,24 @@ Current-source model/session tests pass in the isolated Rust1.98 harness, with
 rustfmt and diff checks. Full native app tests and Clippy require fresh public
 CI on this rebased head; previous native passes do not validate it. No release
 or merge in this update.
+
+## 2026-11-22: Keep delete-failure disclosures stable during expiry
+
+Reviewed all three current Devin notes on444. Expiring an earlier accepted
+receipt shifted positional disclosure IDs, closing an expanded failure or
+moving expansion to another failure. Current results now key the disclosure by
+account owner, request and exact chat/message/action target. Previous-session
+history keeps its existing separate namespace and indexing; it is not expired.
+
+Added a real archive_bar input/render regression: click the first failure's
+Technical details, expire an earlier accepted receipt, then check that the same
+failure stays open and the second stays closed. The exact production-function
+harness failed that final assertion before the fix and passes after it. Both
+model tests also pass. This isolates the UI/model code with a minimal App, not
+the complete native application. Full native tests remain for fresh CI. Local
+rustfmt and diff checks pass. Native before/after demo captures remain unrun.
+
+The narrow-window note is a timer-policy tradeoff: chat-list notices can age
+while the conversation hides that pane. Kept the existing explicit acceptance-
+time contract rather than silently change it to first-visible time. No new
+network request, deletion or retry is introduced.

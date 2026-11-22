@@ -11,11 +11,11 @@ fn technical_details(
     ui: &mut egui::Ui,
     label: &str,
     section: &str,
-    index: usize,
+    identity: impl std::hash::Hash + std::fmt::Debug,
     error: &str,
 ) -> egui::collapsing_header::CollapsingResponse<()> {
     egui::CollapsingHeader::new(label)
-        .id_salt((section, index))
+        .id_salt((section, identity))
         .show(ui, |ui| {
             ui.add(egui::Label::new(error).wrap());
         })
@@ -94,14 +94,20 @@ pub fn archive_bar(app: &mut App, ui: &mut egui::Ui) {
             }
         });
     }
-    for (index, item) in app.batch_ui.results.iter().enumerate() {
+    for item in &app.batch_ui.results {
         ui.add(egui::Label::new(result_line(app, item)).wrap());
         if let Some(Err(error)) = &item.result {
             technical_details(
                 ui,
                 &gettext(app.locale, "Technical details"),
                 "batch-current",
-                index,
+                (
+                    &app.batch_ui.owner,
+                    app.batch_ui.request,
+                    &item.chat,
+                    &item.message,
+                    item.everyone,
+                ),
                 error,
             );
         }
@@ -331,6 +337,109 @@ pub fn refusal_text(locale: Locale, reason: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn expiring_a_receipt_keeps_the_same_failure_details_open() {
+        fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Pos2)>) {
+            match shape {
+                egui::Shape::Text(t) => {
+                    out.push((t.galley.text().to_owned(), t.pos + t.galley.size() / 2.0))
+                }
+                egui::Shape::Vec(items) => {
+                    for item in items {
+                        texts(item, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        let now = std::time::Instant::now();
+        let item = |id: &str, result, accepted_delete_at| Item {
+            chat: "synthetic".into(),
+            message: Some(id.into()),
+            everyone: true,
+            result: Some(result),
+            accepted_delete_at,
+        };
+        app.batch_ui = State {
+            owner: app.account().id.0.clone(),
+            request: Some(77),
+            results: vec![
+                item("accepted", Ok(()), Some(now)),
+                item("first", Err("FIRST_FAILURE_DETAIL".into()), None),
+                item("second", Err("SECOND_FAILURE_DETAIL".into()), None),
+            ],
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let draw = |app: &mut App, events| {
+            let mut input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .inner_rect = Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(520.0, 700.0),
+            ));
+            let mut output = ctx.run_ui(input, |ui| archive_bar(app, ui));
+            let mut result = Vec::new();
+            for shape in &output.shapes {
+                texts(&shape.shape, &mut result);
+            }
+            output.textures_delta.clear();
+            result
+        };
+        let label = gettext(app.locale, "Technical details").into_owned();
+        let initial = draw(&mut app, vec![]);
+        let point = initial.iter().find(|(text, _)| text == &label).unwrap().1;
+        draw(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        draw(
+            &mut app,
+            vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        let open = draw(&mut app, vec![]);
+        assert!(open.iter().any(|(text, _)| text == "FIRST_FAILURE_DETAIL"));
+        assert!(!open.iter().any(|(text, _)| text == "SECOND_FAILURE_DETAIL"));
+        app.batch_ui.results[0].accepted_delete_at = Some(now - std::time::Duration::from_secs(11));
+        let after = draw(&mut app, vec![]);
+        assert_eq!(app.batch_ui.results.len(), 2);
+        assert!(
+            after.iter().any(|(text, _)| text == "FIRST_FAILURE_DETAIL"),
+            "the same failure must stay expanded"
+        );
+        assert!(
+            !after
+                .iter()
+                .any(|(text, _)| text == "SECOND_FAILURE_DETAIL"),
+            "expansion must not move to another failure"
+        );
+    }
+
     #[test]
     fn technical_detail_expansion_is_independent_between_items_and_sessions() {
         let ctx = egui::Context::default();
