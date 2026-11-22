@@ -15,6 +15,10 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+## 26.11.7
+
+- Consecutive image messages from one sender, at most five seconds apart, share the existing gallery. Protocol albums stay separate; selecting or locally hiding messages keeps the existing individual-message view.
+
 ## 26.11.6
 
 - Accepted message-delete notices clear after ten seconds. Pending, failed and uncertain outcomes remain visible; clearing a receipt notice does not confirm remote completion.

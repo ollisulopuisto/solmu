@@ -1409,3 +1409,26 @@ keyed or whole-app validation claim is made. Acceptance-time policy is unchanged
 For future collection/state changes, list and trace consumers outside the diff,
 check positional IDs/selection/expansion/scroll/focus, add failing-first
 interaction coverage for defects, and state untraced scope before review.
+
+2026-11-22: Consecutive-image gallery fallback, owner requested22:14.
+Duplicate check before code: current main38ab029, all open PRs444/445,100
+recently updated PRs through Nov16, and every current branch name. Merged402
+already maps multi-attachment bridge messages into the existing gallery. This
+change extends that row planner, not mapper/data/transport/gallery duplication.
+Five-second adjacent gap, same chat/sender/direction/local day; protocol IDs
+never mix with fallback images. Failed/pending/unknown, quotes, reactions,
+forwarded and edited images remain separate to preserve independent metadata.
+Consumer trace covers row_starts/row_of, anchor membership, navigation, menus,
+selection/hidden paths, captions, accessibility labels and member tile IDs.
+Found position-derived tile focus IDs; use persistent chat/message IDs and
+remove row/column from thumbnail cache identity. Native tests cover insertion
+retaining tile focus, individual selection and clicked-member Reply. Pure
+exact grouping test fails on main, passes after;2 extracted tests passed with
+minimal Message scaffolding. Full native tests not run locally, CI required.
+Existing Mac smoke loop gains synthetic light/dark before/after burst scenes.
+No artifact upload setting enabled, no new workflow or upload path. Not yet
+validated: native interaction tests/captures, live WhatsApp bridge payloads,
+full keyboard traversal after splitting a burst, scrollback during paging,
+linked thread timelines (existing linked path draws individual messages).
+No Solmu threading implementation. Version26.11.7 awaits ordered444 merge
+and rebase before merge; held445 will need next version on its own rebase.
