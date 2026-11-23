@@ -18,3 +18,7 @@ The Beeper bundle launcher receives cold/running-app URL opens and forwards one 
 - In a linked timeline, verify the send destination is WhatsApp, including after a refused prefill.
 
 These are incoming URL links, not a native share extension. No iMessage deep-link support is added.
+
+## Finnish domestic numbers
+
+A domestic `040 123 4567` becomes `+358401234567`, including inside a send link. Bare `40 123 4567` does too. Explicit `+46…`, `0046…` and `358…` keep their country code. Nonzero digit-only WhatsApp URL targets retain their international meaning. For compatibility, bare digit-only numbers longer than ten digits also retain the existing international interpretation; use the Finnish leading zero for an unambiguous domestic number. This normalization does not broaden exact chat matching or create missing chats.

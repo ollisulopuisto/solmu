@@ -15,6 +15,8 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- WhatsApp links accept Finnish domestic numbers beginning with0, and short bare numbers default to+358. Explicit international formats and existing international link targets stay unchanged.
+
 ## 26.11.8
 
 - History jumps recognize a repeated cursor on the last allowed page without losing fetched messages or misreporting a found target. No new header warnings or retry controls.

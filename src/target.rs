@@ -113,7 +113,20 @@ fn number_of(target: &str) -> Option<String> {
         Some(_) => &head["wa.me/".len()..],
         None => head,
     };
-    number_in(bare)
+    let number = number_in(bare)?;
+    let explicit = bare.trim_start().starts_with('+')
+        || bare.trim_start().starts_with("00")
+        || bare.trim_start().starts_with('0')
+        || number.starts_with("358")
+        || lower.starts_with("wa.me/");
+    // Legacy long international bare numbers stay compatible. Short bare
+    // country-code-free input follows the owner's Finnish default.
+    let number = if !explicit && number.len() <= 10 {
+        format!("358{number}")
+    } else {
+        number
+    };
+    is_a_number(&number).then_some(number)
 }
 
 /// Splits a target at its query, so a query never lends its digits to a
@@ -162,6 +175,27 @@ fn number_in(text: &str) -> Option<String> {
             return None;
         }
     }
+    let initial_digits = if !text.trim_start().starts_with('+') {
+        digits.strip_prefix("00").unwrap_or(&digits)
+    } else {
+        &digits
+    };
+    if !is_a_number(initial_digits) {
+        return None;
+    }
+    // Explicit + and international 00 prefixes retain their country code.
+    // Country-code-free Finnish numbers may include the domestic trunk zero.
+    let digits = if text.trim_start().starts_with('+') {
+        digits
+    } else if let Some(international) = digits.strip_prefix("00") {
+        international.to_owned()
+    } else if let Some(domestic) = digits.strip_prefix('0') {
+        format!("358{domestic}")
+    } else {
+        // Nonzero digit-only values in WhatsApp URL fields are international.
+        // Bare domestic input is normalized by the caller after this helper.
+        digits
+    };
     is_a_number(&digits).then_some(digits)
 }
 
@@ -592,5 +626,50 @@ mod whatsapp_routing_tests {
         chats[1].kind = ChatKind::Direct;
         chats[1].backend_account = None;
         assert!(whatsapp_matches(&chats, &request).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod finnish_number_tests {
+    use super::*;
+    #[test]
+    fn domestic_numbers_default_to_finland_without_changing_explicit_codes() {
+        for input in [
+            "040 123 4567",
+            "40 123 4567",
+            "+358 40 123 4567",
+            "00358 40 123 4567",
+            "358401234567",
+            "whatsapp://send?phone=0401234567&text=hello",
+            "https://wa.me/0401234567",
+        ] {
+            assert_eq!(
+                parse(input).unwrap().chat,
+                "358401234567@s.whatsapp.net",
+                "{input}"
+            );
+        }
+        for input in ["+46 70 123 4567", "0046701234567", "46701234567"] {
+            assert_eq!(
+                parse(input).unwrap().chat,
+                "46701234567@s.whatsapp.net",
+                "{input}"
+            );
+        }
+        assert_eq!(
+            parse("https://wa.me/4670123456").unwrap().chat,
+            "4670123456@s.whatsapp.net"
+        );
+        assert_eq!(
+            parse("whatsapp://send?phone=4670123456").unwrap().chat,
+            "4670123456@s.whatsapp.net"
+        );
+        assert_eq!(
+            parse("00123456789012345").unwrap().chat,
+            "123456789012345@s.whatsapp.net"
+        );
+        for input in ["112", "040x1234567", "+1234567890123456"] {
+            assert!(parse(input).is_none(), "{input}");
+        }
     }
 }
