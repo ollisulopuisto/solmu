@@ -1445,3 +1445,7 @@ full keyboard traversal after splitting a burst, scrollback during paging,
 linked thread timelines (existing linked path draws individual messages).
 No Solmu threading implementation. Version26.11.7 awaits ordered444 merge
 and rebase before merge; held445 will need next version on its own rebase.
+
+## 2026-11-23: Finnish domestic WhatsApp link numbers
+
+User requested+358default after domestic040test. Normalize0prefix,00international,andshortbareinput, preserve explicit international codes and established nonzero URL targets/longbareinternational input. Exact source parser/routing harness22tests pass; theme/model/server are stubbed, full app and actual Mac matching remain unverified. Own review traced parse/IPC roundtrip/exact destination/draft behavior and foreign-link compatibility. No speculative phone metadata fallback, account guessing, default handler change or automatic send. Latest runtime unavailable toast remains unexplained and separate.
