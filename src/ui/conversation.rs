@@ -1678,6 +1678,11 @@ pub(crate) fn composer_with_capabilities(
                     None => app.reply_to = None,
                 }
             }
+            if app.editing.is_none()
+                && let Some(preview) = draft_preview(&app.composer)
+            {
+                draft_label(app, ui, &preview);
+            }
             app.prepare_composer_undo(ui.ctx());
             let id = egui::Id::new("composer-text");
             let has_focus = ui.memory(|memory| memory.has_focus(id));
@@ -2592,6 +2597,38 @@ fn unsent_voice_strip(app: &mut App, ui: &mut egui::Ui, samples: usize) {
                 }
             });
         });
+    });
+    strip_gap(ui);
+}
+
+/// The first non-blank line of the unsent text, for the one-line preview in
+/// the draft label. `None` while the composer holds nothing worth calling a
+/// draft.
+fn draft_preview(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    Some(line.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// A small "Draft" label above the composer with the draft's first line
+/// beside it, so unsent text is never mistaken for a sent message. It has
+/// no frame: the chat list keeps its normal last-message preview.
+fn draft_label(app: &App, ui: &mut egui::Ui, preview: &str) {
+    let palette = app.conversation_palette();
+    let label = crate::i18n::gettext(app.locale, "Draft");
+    ui.horizontal(|ui| {
+        ui.add_space(6.0);
+        theme::icon(ui, Icon::Pencil, 14.0, palette.accent);
+        theme::text(ui, &label, theme::semibold(12.5), palette.accent);
+        let line = widgets::line(
+            ui,
+            preview,
+            theme::regular(12.5),
+            palette.secondary,
+            ui.available_width().max(0.0),
+            1,
+        );
+        let (rect, _) = ui.allocate_exact_size(line.size(), Sense::hover());
+        line.paint(ui, rect.min, palette.secondary);
     });
     strip_gap(ui);
 }
@@ -16503,6 +16540,16 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert!(seen.len() >= 9, "{} different steps", seen.len());
+    }
+
+    #[test]
+    fn draft_preview_is_the_first_non_blank_line_on_one_row() {
+        assert_eq!(draft_preview(""), None);
+        assert_eq!(draft_preview(" \n\t "), None);
+        assert_eq!(
+            draft_preview("\n  Yes,   after the chart fix.  \nsecond line"),
+            Some("Yes, after the chart fix.".to_owned())
+        );
     }
 
     #[test]
