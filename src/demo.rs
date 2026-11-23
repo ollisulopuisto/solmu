@@ -2781,6 +2781,19 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                         Content::text("Thanks. I will read them this afternoon."),
                     ),
                 ];
+                for index in 0..5 {
+                    app.conversations
+                        .get_mut(chat)
+                        .unwrap()
+                        .messages
+                        .push(message(
+                            chat,
+                            &format!("hover-evidence-following-{index}"),
+                            true,
+                            crate::util::now() + 120 + index * 60,
+                            Content::text("A later note keeps room below the hovered message."),
+                        ));
+                }
                 app.open_chat = Some(chat.into());
                 app.scroll_to_bottom = false;
             }
