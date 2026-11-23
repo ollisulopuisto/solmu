@@ -2468,8 +2468,11 @@ fn html_code_language(tag: &str) -> Option<String> {
             .find_map(|class| class.strip_prefix("language-"))
     })?;
     let language = decode_entities(language);
-    (!language.is_empty() && crate::markup::opens_fence(&format!("```{language}")))
-        .then_some(language)
+    (!language.is_empty()
+        && language
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '#' | '.')))
+    .then_some(language)
 }
 
 fn plain_rich_text(raw: &str) -> String {
@@ -13227,14 +13230,10 @@ mod code_language_bridge_tests {
             r#"<pre data-language="zsh">echo hello</pre>"#,
         ] {
             let mapped = plain_rich_text(html);
-            let blocks = crate::markup::code_block_details(&mapped);
-            assert_eq!(blocks[0].language.as_deref(), Some("zsh"));
-            assert_eq!(blocks[0].text, "echo hello");
+            assert_eq!(mapped, "```zsh\necho hello\n```");
         }
         let mapped = plain_rich_text("<pre>zsh\necho hello</pre>");
-        let blocks = crate::markup::code_block_details(&mapped);
-        assert_eq!(blocks[0].language, None);
-        assert_eq!(blocks[0].text, "zsh\necho hello");
+        assert_eq!(mapped, "```\nzsh\necho hello\n```");
         assert!(html_code_language(r#"code class="language-zsh`bad""#).is_none());
     }
 }

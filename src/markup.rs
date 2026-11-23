@@ -1292,7 +1292,7 @@ pub fn editable_mentions(text: &str, mentions: &[Mention]) -> String {
 
 /// Bare fences close a block. A single language token is opening metadata,
 /// never code content. Do not consume WhatsApp's inline ```text``` form.
-pub(crate) fn opens_fence(line: &str) -> bool {
+fn opens_fence(line: &str) -> bool {
     let Some(info) = line.trim().strip_prefix("```") else {
         return false;
     };
