@@ -1,4 +1,5 @@
 //! A reserved, exact-message thread entry. Hidden ink never changes geometry.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
     rect: egui::Rect,
