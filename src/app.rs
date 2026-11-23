@@ -859,6 +859,7 @@ pub struct App {
     /// reader never changed is not their draft, so a chat they leave does not
     /// store it in place of the one they wrote.
     prefilled: Option<(ChatId, String)>,
+    pending_whatsapp: Option<(crate::target::Request, std::time::Instant, AccountId)>,
     /// Actions queued by a backend event, applied on that account after the frame.
     deferred_account_actions: Vec<(AccountId, Action)>,
     /// Set while the events of an account that is not on screen are being
@@ -1825,6 +1826,7 @@ impl App {
             actions: Vec::new(),
             composer_undo_epoch: 0,
             prefilled: None,
+            pending_whatsapp: None,
             deferred_account_actions: Vec::new(),
             events_hidden: false,
             update: None,
@@ -2460,6 +2462,82 @@ impl App {
         }
     }
 
+    /// Resolve by exact server-reported phone handle and real WhatsApp identity.
+    /// Never create a placeholder or choose among accounts from a name or list order.
+    fn resolve_whatsapp(&mut self, ctx: &egui::Context) {
+        if self.app_lock.is_locked() {
+            return;
+        }
+        let Some((request, started, owner)) = self.pending_whatsapp.as_ref() else {
+            return;
+        };
+        if owner != &self.account().id {
+            self.pending_whatsapp = None;
+            return;
+        }
+        // Do not navigate away from an edit/recording/armed reply to prefill.
+        if self.editing.is_some() || self.recording.is_some() || self.reply_to.is_some() {
+            self.pending_whatsapp = None;
+            self.toast_error(
+                "Finish your current edit, recording or reply before opening this link.",
+            );
+            return;
+        }
+        let matches = crate::target::whatsapp_matches(&self.chats, request);
+        if matches.len() > 1 {
+            self.pending_whatsapp = None;
+            self.toast_error("More than one WhatsApp chat matches this number. Open the intended chat and paste the message.");
+            return;
+        }
+        let Some(member) = matches.first().cloned() else {
+            if started.elapsed() >= std::time::Duration::from_secs(30) {
+                self.pending_whatsapp = None;
+                self.toast_error(
+                    "WhatsApp chat unavailable. Open the intended chat and paste the message.",
+                );
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+            return;
+        };
+        let (request, _, _) = self.pending_whatsapp.take().unwrap();
+        if self.chats.iter().filter(|c| c.id == member.chat).count() != 1
+            || self.chat(&member.chat).is_none_or(|c| c.locked)
+            || crate::ui::merged::has_reply(self, ctx, &member)
+        {
+            return;
+        }
+        self.open_chat(member.chat.clone());
+        let Some(composer_chat) = self.open_chat.clone() else {
+            return;
+        };
+        if composer_chat != member.chat
+            && !self.settings.beeper.people.iter().any(|p| {
+                p.members.contains(&member)
+                    && p.members.iter().any(|m| {
+                        m.chat == composer_chat
+                            && self.chat(&composer_chat).is_some_and(|c| m.matches(c))
+                    })
+            })
+        {
+            return;
+        }
+        if let Some(text) = request.text {
+            self.apply(
+                Action::PrefillComposer {
+                    chat: composer_chat.clone(),
+                    text: text.clone(),
+                    mentions: Vec::new(),
+                },
+                ctx,
+            );
+            // Never reroute an existing linked-person draft when prefill refused.
+            if self.is_untouched_prefill(&composer_chat, &text) {
+                crate::ui::merged::prepare_destination(self, ctx, &member);
+            }
+        }
+    }
+
     fn handle_control_commands(&mut self) {
         let Some(queue) = &self.control_commands else {
             return;
@@ -2481,18 +2559,7 @@ impl App {
                     // The chat is only visible in a window, so a run
                     // started into the tray shows one first.
                     self.actions.push(Action::ShowWindow);
-                    self.actions.push(Action::StartChat {
-                        dismiss_dialog: true,
-                        name: request.display_name(),
-                        id: request.chat.clone(),
-                    });
-                    if let Some(text) = request.text {
-                        self.actions.push(Action::PrefillComposer {
-                            chat: request.chat.clone(),
-                            text,
-                            mentions: Vec::new(),
-                        });
-                    }
+                    self.actions.push(Action::OpenWhatsApp(request));
                 }
             }
         }
@@ -10069,6 +10136,9 @@ impl App {
                         },
                     ));
                 }
+                Action::OpenWhatsApp(request) => self
+                    .app_lock
+                    .defer(crate::app_lock::Deferred::WhatsApp(request)),
                 Action::StartChat { id, .. } => {
                     // The name is the number, which the chat carries, so
                     // nothing extra has to be kept for the replay.
@@ -10370,6 +10440,14 @@ impl App {
                     self.dialog = None;
                 }
             }
+            Action::OpenWhatsApp(request) => {
+                self.pending_whatsapp = Some((
+                    request,
+                    std::time::Instant::now(),
+                    self.account().id.clone(),
+                ));
+                self.resolve_whatsapp(ctx);
+            }
             Action::PrefillComposer {
                 chat,
                 text,
@@ -10388,6 +10466,7 @@ impl App {
                     && self.recording.is_none()
                     && self.reply_to.is_none()
                     && !self.drafts.contains_key(&chat)
+                    && self.pending.is_empty()
                 {
                     self.composer = text.clone();
                     self.prefilled = Some((chat, text));
@@ -14329,6 +14408,12 @@ impl App {
         self.wallpaper_image.sync(wallpaper.as_deref(), &self.waker);
         self.handle_notification_opens();
         self.handle_events();
+        #[cfg(target_os = "macos")]
+        for request in crate::macos::drain_whatsapp() {
+            self.actions.push(Action::ShowWindow);
+            self.actions.push(Action::OpenWhatsApp(request));
+        }
+        self.resolve_whatsapp(ctx);
         for uri in std::mem::take(&mut self.stale_images) {
             crate::image_cache::forget(ctx, &uri);
         }
@@ -14521,7 +14606,7 @@ impl App {
         use crate::app_lock::Deferred;
         let account = match &request {
             Deferred::Message(target) => target.account.clone(),
-            Deferred::Chat(_) | Deferred::Invite(_) => here.clone(),
+            Deferred::Chat(_) | Deferred::WhatsApp(_) | Deferred::Invite(_) => here.clone(),
         };
         self.actions.push(Action::SwitchAccount(account));
         match request {
@@ -14534,6 +14619,10 @@ impl App {
                         message,
                     });
                 }
+            }
+            Deferred::WhatsApp(request) => {
+                self.actions.push(Action::ShowWindow);
+                self.actions.push(Action::OpenWhatsApp(request));
             }
             Deferred::Chat(request) => {
                 self.actions.push(Action::ShowWindow);
@@ -35536,5 +35625,115 @@ mod chat_row_follows_messages_tests {
             assert_eq!(app.reaction_anchor, Some(expected));
             assert_eq!(app.reaction_from_thread, from_thread);
         }
+    }
+}
+
+#[cfg(test)]
+mod whatsapp_handoff_tests {
+    use super::*;
+    fn fixture() -> App {
+        let root = std::env::temp_dir().join(format!("solmu-wa-handoff-{}", std::process::id()));
+        let mut app = App::headless(AppDirs::under(&root), Settings::default()).0;
+        let mut c = Chat::new("!real-chat".into(), "Actual DM".into());
+        c.backend_origin = Some("http://localhost:23374".into());
+        c.backend_account = Some("wa-work".into());
+        c.backend_network = Some("WhatsApp".into());
+        c.handles = vec!["+16508702892".into()];
+        app.chats = vec![c];
+        app
+    }
+    fn request() -> Action {
+        Action::OpenWhatsApp(
+            crate::target::parse(
+                "whatsapp://send?phone=16508702892&text=Item%20%231%0Ahttps%3A%2F%2Fexample.com",
+            )
+            .unwrap(),
+        )
+    }
+    #[test]
+    fn real_chat_prefills_and_repeated_link_preserves_the_draft() {
+        let mut app = fixture();
+        let ctx = egui::Context::default();
+        app.apply(request(), &ctx);
+        assert_eq!(app.open_chat.as_deref(), Some("!real-chat"));
+        assert_eq!(app.composer, "Item #1\nhttps://example.com");
+        app.composer = "My own draft".into();
+        app.apply(request(), &ctx);
+        assert_eq!(app.composer, "My own draft");
+        assert_eq!(app.chats.len(), 1, "no phone-JID placeholder");
+    }
+    #[test]
+    fn ambiguous_and_not_yet_loaded_chat_never_open_a_placeholder() {
+        let mut app = fixture();
+        let ctx = egui::Context::default();
+        let mut duplicate = app.chats[0].clone();
+        duplicate.id = "!personal".into();
+        duplicate.backend_account = Some("personal".into());
+        app.chats.push(duplicate);
+        app.apply(request(), &ctx);
+        assert!(app.open_chat.is_none());
+        assert!(app.composer.is_empty());
+        app.chats.clear();
+        app.apply(request(), &ctx);
+        assert!(app.pending_whatsapp.is_some());
+        assert!(app.chats.is_empty());
+        let loaded = fixture().chats.clone();
+        app.chats = loaded;
+        app.resolve_whatsapp(&ctx);
+        assert_eq!(app.open_chat.as_deref(), Some("!real-chat"));
+    }
+    #[test]
+    fn a_linked_timeline_uses_shared_composer_but_pins_the_whatsapp_source() {
+        let mut app = fixture();
+        let ctx = egui::Context::default();
+        let wa = crate::merged::Member::of(&app.chats[0]).unwrap();
+        let mut im = app.chats[0].clone();
+        im.id = "!imessage".into();
+        im.backend_network = Some("iMessage".into());
+        let im_member = crate::merged::Member::of(&im).unwrap();
+        app.chats.insert(0, im);
+        app.settings.beeper.people.push(crate::merged::Person {
+            name: "Person".into(),
+            members: vec![im_member, wa.clone()],
+            primary: None,
+        });
+        app.apply(request(), &ctx);
+        assert_eq!(app.open_chat.as_deref(), Some("!imessage"));
+        assert_eq!(app.composer, "Item #1\nhttps://example.com");
+        assert_eq!(
+            crate::ui::merged::attachment_destination(&app, &ctx).unwrap(),
+            Some(wa.chat)
+        );
+    }
+    #[test]
+    fn the_app_lock_holds_the_whole_request_for_resolution_after_unlock() {
+        let mut app = fixture();
+        let ctx = egui::Context::default();
+        app.app_lock.lock();
+        app.apply(request(), &ctx);
+        assert!(app.open_chat.is_none());
+        assert!(app.composer.is_empty());
+        assert!(matches!(
+            app.app_lock.deferred.as_slice(),
+            [crate::app_lock::Deferred::WhatsApp(_)]
+        ));
+        let held = app.app_lock.deferred.pop().unwrap();
+        app.app_lock.release();
+        let owner = app.account().id.clone();
+        app.replay_deferred(held, &owner);
+        app.apply_queued_for_test(&ctx);
+        assert_eq!(app.open_chat.as_deref(), Some("!real-chat"));
+        assert_eq!(app.composer, "Item #1\nhttps://example.com");
+    }
+    #[test]
+    fn active_edit_is_not_discarded_by_navigation() {
+        let mut app = fixture();
+        let ctx = egui::Context::default();
+        app.editing = Some("message-being-edited".into());
+        app.composer = "Edited words".into();
+        app.apply(request(), &ctx);
+        assert!(app.open_chat.is_none());
+        assert!(app.editing.is_some());
+        assert_eq!(app.composer, "Edited words");
     }
 }

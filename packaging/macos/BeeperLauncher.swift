@@ -35,6 +35,20 @@ func diag(_ line: String) {
 
 final class Forwarder: NSObject, NSApplicationDelegate {
     var clientPID: Int32 = 0
+    var pendingURLs: [String] = []
+    var deliverURL: ((String) -> Void)?
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.scheme?.lowercased() == "whatsapp" && url.absoluteString.utf8.count <= 32768 {
+            if pendingURLs.count < 32 { pendingURLs.append(url.absoluteString) }
+        }
+        flushURLs()
+    }
+    func flushURLs() {
+        guard let deliver = deliverURL else { return }
+        let urls = pendingURLs
+        pendingURLs.removeAll()
+        for url in urls { deliver(url) }
+    }
     var onClientExit: () -> Void = {}
     func applicationDidFinishLaunching(_ notification: Notification) {
         // The bundle starts as an agent; keep the tunnel owner out of Cmd-Tab.
@@ -486,6 +500,18 @@ func launch(_ connection: Connection) throws {
     client.standardError = FileHandle.nullDevice
     try client.run()
     forwarder.clientPID = client.processIdentifier
+    // Forward only as a single argument to the existing instance protocol.
+    // No shell, automatic sends, raw URL logging or new tunnel per link.
+    forwarder.deliverURL = { url in
+        let helper = Process()
+        helper.executableURL = binary
+        helper.arguments = [url]
+        helper.environment = env
+        helper.standardOutput = FileHandle.nullDevice
+        helper.standardError = FileHandle.nullDevice
+        do { try helper.run() } catch { NSSound.beep() }
+    }
+    forwarder.flushURLs()
     client.terminationHandler = { _ in
         DispatchQueue.main.async { NSApp.terminate(nil) }
     }

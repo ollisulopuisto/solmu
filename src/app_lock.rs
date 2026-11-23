@@ -227,6 +227,7 @@ pub enum Deferred {
     Message(crate::notify::NotificationTarget),
     /// A chat a link named, with the text it carried.
     Chat(crate::target::Request),
+    WhatsApp(crate::target::Request),
     /// The code of a group invite a link named.
     Invite(String),
 }
