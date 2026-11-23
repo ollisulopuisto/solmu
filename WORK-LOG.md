@@ -1474,3 +1474,11 @@ geometry, narrow gutters, selection, pending media, focus and exact cross-chat
 routing. Isolated exact egui helper tests pass pointer/keyboard and mirrored
 geometry (2 tests); full-app target/source, album and native visuals pending
 CI. Local exact paint inspected as geometry only, not native acceptance.
+
+PR453 native regression follow-up: after removing nested focus-lock access,
+2655 Mac tests passed and two real text gestures failed. Traced downstream
+rich_body_full selection expansion: it still treated cached quote geometry
+as an internal card, clipping the first body line below the now-external
+tail. Removed that stale quote exclusion; preview-card exclusion stays.
+Existing failing command-link and cross-message-copy tests are the regression
+gates. This is an observed consumer bug, not a retry or weaker assertion.
