@@ -1,5 +1,9 @@
 # Work log
 
+## 2026-11-23: Passive linked-network overflow badge
+
+Approved two overlapping service marks then a plain plus on the right. Reused exact existing badge geometry and timer slot offset. Distinct-network collection remains unchanged; third and later distinct networks cause the passive mark. No click/focus/tooltip/list. Own adversarial review traced all three chat-row callers, timer-slot preservation, source-index ordering and unlimited linked member counts. Local exact-source harness covers slots0..9 with timer/no timer and passive paint allocating no widget; native CI pending. Separate from floating action bar and older threading controls.
+
 ## 2026-11-23: Keep cursor fix, remove new header warnings
 
 Reworked existing PR445 per maintainer direction. Merged current main f7216d9,
@@ -1449,3 +1453,7 @@ and rebase before merge; held445 will need next version on its own rebase.
 ## 2026-11-23: Finnish domestic WhatsApp link numbers
 
 User requested+358default after domestic040test. Normalize0prefix,00international,andshortbareinput, preserve explicit international codes and established nonzero URL targets/longbareinternational input. Exact source parser/routing harness22tests pass; theme/model/server are stubbed, full app and actual Mac matching remain unverified. Own review traced parse/IPC roundtrip/exact destination/draft behavior and foreign-link compatibility. No speculative phone metadata fallback, account guessing, default handler change or automatic send. Latest runtime unavailable toast remains unexplained and separate.
+
+Avatar final review: preserve original service mark paint order for count0/1/2and overflow, rather than reversing the existing overlap layering. Plus alone paints last on right.
+
+Native evidence follow-up: dedicated existing demo page adds a synthetic third distinct source to the linked avatar, dark/light captures in existing smoke loop. No new workflow/job/upload setting. Fresh exact-head checks required; generic two-service capture was not overflow proof.
