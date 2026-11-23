@@ -6093,6 +6093,8 @@ fn bubble_frame(
     if view.covered_top.is_some() {
         margin.top += STREAK_OVERLAP as i8;
     }
+    ui.ctx()
+        .data_mut(|d| d.remove::<Rect>(bubble_id.with("sender-name")));
     let inner = Frame::new().inner_margin(margin).show(ui, |ui| {
         ui.set_max_width(max_width);
         ui.spacing_mut().item_spacing.y = 4.0;
@@ -6114,6 +6116,8 @@ fn bubble_frame(
                     Sense::CLICK,
                 )
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(bubble_id.with("sender-name"), response.rect));
             if response.clicked() {
                 actions.push(Action::OpenInfo(message.sender.clone()));
             }
@@ -10652,6 +10656,14 @@ fn rich_body_full(
                 .unwrap_or(bubble);
             if matches!(message.content, Content::Text { .. }) {
                 let mut target = bubble.union(rect);
+                // Sender names remain independent clickable controls above
+                // the body, even without an internal quote card separating them.
+                if let Some(sender) = ui
+                    .ctx()
+                    .data(|d| d.get_temp::<Rect>(id.with("sender-name")))
+                {
+                    target.min.y = target.min.y.max(sender.bottom());
+                }
                 // Only an internal preview clips this selection target. The
                 // reply tail is outside the body and must not erase the first
                 // text line or intercept its link/selection gestures.

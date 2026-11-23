@@ -1482,3 +1482,10 @@ as an internal card, clipping the first body line below the now-external
 tail. Removed that stale quote exclusion; preview-card exclusion stays.
 Existing failing command-link and cross-message-copy tests are the regression
 gates. This is an observed consumer bug, not a retry or weaker assertion.
+
+PR453 next native pass confirms both earlier link/copy regressions now pass.
+Two sender-name Info click tests exposed the enlarged text hit target covering
+the sender header after removal of the internal quote card. Cache the actual
+current-frame sender-name rectangle (clear it before each bubble) and exclude
+only that header from text selection. Existing Info/locked-member tests stay
+unchanged, no speculative delay or weakened assertion.
