@@ -1,5 +1,7 @@
 # Changelog
 
+- Replace duplicate reply-jump controls with one attached chain-tail per reply.
+
 Newest first. One `## <version>` section per release, bullets under it;
 - Send Later: composer clock expands into four upward presets (8am nearest, parsed message time, custom calendar, recurring); Cmd/Ctrl+Shift+Enter opens it, arrows and 1–4 choose, Esc returns to the draft.
 the app shows the sections newer than the version the user last

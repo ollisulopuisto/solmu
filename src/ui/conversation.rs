@@ -5018,8 +5018,15 @@ fn bubble(
     let mut area = ui.available_rect_before_wrap();
     // Tails are part of the painted bounds, including beside a linked chip.
     area.max.x = area.max.x.min(footer_right);
-    area.min.x += widgets::TAIL_WIDTH;
-    area.max.x -= widgets::TAIL_WIDTH;
+    let tail_room = if message.quoted.is_some()
+        || album.is_some_and(|items| items.iter().any(|m| m.quoted.is_some()))
+    {
+        32.0
+    } else {
+        widgets::TAIL_WIDTH
+    };
+    area.min.x += tail_room;
+    area.max.x -= tail_room;
     ui.scope_builder(
         egui::UiBuilder::new()
             .max_rect(area)
@@ -6068,11 +6075,15 @@ fn bubble_frame(
     let backdrop = ui.painter().add(egui::Shape::Noop);
     // Group messages share a straight bubble-body column, including follow-ups.
     // A protruding incoming tail made the first bubble look offset from the run.
-    let tail = (tailed && fill != Color32::TRANSPARENT).then_some(if own {
-        widgets::Side::Right
-    } else {
-        widgets::Side::Left
-    });
+    let tail = (tailed
+        && message.quoted.is_none()
+        && !album.is_some_and(|items| items.iter().any(|m| m.quoted.is_some()))
+        && fill != Color32::TRANSPARENT)
+        .then_some(if own {
+            widgets::Side::Right
+        } else {
+            widgets::Side::Left
+        });
     let mut tiles: Vec<(Rect, String)> = Vec::new();
     let mut margin = bubble_margin(&palette, message, false);
     ui.ctx().data_mut(|d| {
@@ -6206,23 +6217,11 @@ fn bubble_frame(
             }
             None
         } else if let Some(messages) = album {
-            ui.horizontal_wrapped(|ui| {
-                for member in messages {
-                    if let Some(quoted) = &member.quoted {
-                        quote_chip(ui, view, member, quoted, actions);
-                    }
-                }
-            });
             tiles = album_content(ui, view, messages, settled.unwrap_or(cap), actions);
             None
         } else {
             match settled {
-                Some(width) => {
-                    if let Some(quoted) = &message.quoted {
-                        quote_chip(ui, view, message, quoted, actions);
-                    }
-                    content(ui, view, message, width, reserve, actions)
-                }
+                Some(width) => content(ui, view, message, width, reserve, actions),
                 None => content(ui, view, message, cap, reserve, actions),
             }
         };
@@ -6354,6 +6353,55 @@ fn bubble_frame(
     let paint_pass = ui.ctx().cumulative_pass_nr();
     ui.ctx()
         .data_mut(|data| data.insert_temp(bubble_id.with("paint-pass"), paint_pass));
+    ui.ctx().data_mut(|data| {
+        data.remove::<Rect>(bubble_id.with("quote"));
+        if let Some(items) = album {
+            for item in items {
+                data.remove::<Rect>(self::bubble_id(&item.chat, &item.id).with("quote"));
+            }
+        }
+    });
+    if !view.selecting
+        && !matches!(message.content, Content::Revoked)
+        && !view.pending_media.is_some_and(|records| {
+            records
+                .values()
+                .any(|record| record.visible == message.id && record.job.member.matches(view.chat))
+        })
+    {
+        if let Some(items) = album {
+            for (index, item) in items.iter().enumerate() {
+                if let Some(quoted) = &item.quoted {
+                    // Each two-column media row has at least 80 points. Stack
+                    // its two independent reply tails beside that row, never
+                    // beside a later message or on top of another member.
+                    let top = tiles
+                        .iter()
+                        .find(|(_, id)| id == &item.id)
+                        .map_or(inner.response.rect.top(), |(tile, _)| tile.top())
+                        + (index % 2) as f32 * 32.0;
+                    let anchor = inner
+                        .response
+                        .rect
+                        .translate(vec2(0.0, top - inner.response.rect.top()));
+                    quote_chip(ui, view, item, quoted, anchor, actions);
+                }
+            }
+        } else if let Some(quoted) = &message.quoted {
+            quote_chip(ui, view, message, quoted, inner.response.rect, actions);
+        }
+    }
+    let mut painted_with_replies = painted;
+    for member in album.unwrap_or(std::slice::from_ref(message)) {
+        if let Some(rect) = ui
+            .ctx()
+            .data(|d| d.get_temp::<Rect>(self::bubble_id(&member.chat, &member.id).with("quote")))
+        {
+            painted_with_replies = painted_with_replies.union(rect);
+        }
+    }
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(bubble_id.with("painted-rect"), painted_with_replies));
     let bubble =
         early.unwrap_or_else(|| ui.interact(exposed(inner.response.rect), bubble_id, Sense::CLICK));
     if view.selecting
@@ -6992,45 +7040,6 @@ fn natural_body_width(
     if plan.lines == 0 { 0.0 } else { plan.width }
 }
 
-/// Width of a quote's accent bar.
-const QUOTE_BAR: f32 = 4.0;
-/// Corner radius of a quote.
-const QUOTE_RADIUS: u8 = 6;
-
-/// Draws a stored quote and routes navigation to its source conversation.
-/// How a quoted reply is coloured inside its bubble.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct QuoteColours {
-    fill: Color32,
-    bar: Color32,
-    name: Color32,
-    text: Color32,
-}
-
-/// The quote's colours. On your own Messages balloon, iMessage blue, it is
-/// all white, as Messages draws what sits on that blue: a bold white name,
-/// its text at Apple's secondary 60% white
-/// (`CKUITheme.blue_balloonTranslationSecondaryTextColor`), the bar at 60%
-/// and the fill a 15% white wash over the bubble. Elsewhere the bar and name
-/// take `tint`, the quoted sender's colour, over the window's.
-fn quote_colours(palette: &Palette, own: bool, tint: impl FnOnce() -> Color32) -> QuoteColours {
-    if own && palette.bubbles == theme::BubbleStyle::Messages {
-        return QuoteColours {
-            fill: Color32::WHITE.gamma_multiply(0.15),
-            bar: Color32::WHITE.gamma_multiply(0.6),
-            name: Color32::WHITE,
-            text: Color32::WHITE.gamma_multiply(0.6),
-        };
-    }
-    let tint = tint();
-    QuoteColours {
-        fill: palette.window.gamma_multiply(0.35),
-        bar: tint,
-        name: tint,
-        text: palette.secondary,
-    }
-}
-
 /// Whether a quote is of one of our own messages.
 fn quotes_me(view: &View<'_>, quoted: &crate::model::Quoted) -> bool {
     view.me == Some(quoted.sender.as_str())
@@ -7047,80 +7056,52 @@ fn quoted_sender_name(view: &View<'_>, quoted: &crate::model::Quoted, you: &str)
     }
 }
 
-/// The compact reply chip that replaced the full quote block: the quoted
-/// sender's bar and a jump glyph, no quoted text. The link itself reads from
-/// the hover route `reply_threads` draws and from this chip's tooltip; the
-/// quoted sender and summary still read from the bubble's label.
+/// The reply's single connected tail, outside the body. Its exact source,
+/// tooltip and accessible label retain the original quote navigation.
 fn quote_chip(
     ui: &mut egui::Ui,
     view: &View<'_>,
     message: &Message,
     quoted: &crate::model::Quoted,
+    body: Rect,
     actions: &mut Vec<Action>,
 ) {
     let palette = view.palette;
-    let mine = quotes_me(view, quoted);
-    // As in WhatsApp, the bar and glyph take the quoted sender's colour, the
-    // one their name has in groups, kept readable on this bubble.
-    let bubble = if message.from_me {
+    let fill = if message.from_me {
         palette.bubble_out
     } else {
         palette.bubble_in
     };
-    let colours = quote_colours(&palette, message.from_me, || {
-        theme::readable_on(
-            bubble,
-            if mine {
-                palette.accent
-            } else {
-                palette.sender(crate::util::hue(&quoted.sender))
-            },
-            palette.text,
-            3.0,
-        )
-    });
-    let response = Frame::new()
-        .fill(colours.fill)
-        .corner_radius(CornerRadius::same(QUOTE_RADIUS))
-        .inner_margin(Margin {
-            left: QUOTE_BAR as i8 + 5,
-            right: 7,
-            top: 3,
-            bottom: 4,
-        })
-        .show(ui, |ui| {
-            widgets::rich_text(ui, "↩", theme::semibold(14.0), colours.name);
-        })
-        .response;
-    // The bar runs the chip's full height along its rounded left edge.
-    let bar = Rect::from_min_size(response.rect.min, vec2(QUOTE_BAR, response.rect.height()));
-    ui.painter().rect_filled(
-        bar,
-        CornerRadius {
-            nw: QUOTE_RADIUS,
-            sw: QUOTE_RADIUS,
-            ne: 0,
-            se: 0,
-        },
-        colours.bar,
-    );
+    let rect = super::reply_tail::geometry(body, message.from_me);
+    let quoted_own = quotes_me(view, quoted);
+    let ink = if quoted_own {
+        palette.text
+    } else {
+        palette.sender(crate::util::hue(&quoted.sender))
+    };
+    let ink = theme::readable_on(fill, ink, palette.text, 3.0);
+    super::reply_tail::paint(ui.painter(), body, message.from_me, fill, ink);
     ui.ctx().data_mut(|data| {
-        data.insert_temp(
-            bubble_id(&view.chat.id, &message.id).with("quote"),
-            response.rect,
-        );
+        data.insert_temp(bubble_id(&view.chat.id, &message.id).with("quote"), rect);
     });
-    let response = ui
-        .interact(
-            response.rect,
-            ui.id().with(("quote", &message.id, &quoted.id)),
-            Sense::click(),
-        )
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(crate::i18n::gettext(
-            view.locale,
-            "Jump to the original message",
-        ));
+    let response = super::reply_tail::interact(
+        ui,
+        rect,
+        bubble_id(&message.chat, &message.id).with(("quote", &quoted.chat, &quoted.id)),
+    )
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
+    .on_hover_text(crate::i18n::gettext(
+        view.locale,
+        "Jump to the original message",
+    ));
+    let paint_pass = ui.ctx().cumulative_pass_nr();
+    ui.ctx().data_mut(|data| {
+        let id = bubble_id(&message.chat, &message.id);
+        data.insert_temp(id.with("quote-pass"), paint_pass);
+        data.insert_temp(id.with("quote-focus"), response.has_focus());
+    });
+    theme::reveal_focus(&response);
+    theme::focus_outline(ui, response.id, rect, 6.0);
     let who = quoted_sender_name(view, quoted, &crate::i18n::gettext(view.locale, "You"));
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
@@ -16231,30 +16212,6 @@ mod reaction_tests {
         // Another day starts another run, from the same sender too.
         assert!(last_of_run(&run, 2));
         assert!(last_of_run(&run, 3));
-    }
-
-    /// Messages draws a photo alone in its message without a bubble, with
-    /// a bubble's corners; anything else in the message keeps the bubble.
-    /// A quote on your own Messages balloon is white on its blue, in both
-    /// appearances; on others' balloons and in WhatsApp's style it keeps the
-    /// quoted sender's colour.
-    #[test]
-    fn quotes_on_own_messages_balloons_are_white() {
-        let tint = Color32::from_rgb(0x80, 0x40, 0xc0);
-        for palette in [Palette::messages(), Palette::messages_light()] {
-            let own = quote_colours(&palette.on_bubble(true), true, || tint);
-            assert_eq!(own.name, Color32::WHITE);
-            assert_eq!(own.text, Color32::WHITE.gamma_multiply(0.6));
-            assert_eq!(own.bar, Color32::WHITE.gamma_multiply(0.6));
-            assert_eq!(own.fill, Color32::WHITE.gamma_multiply(0.15));
-            let theirs = quote_colours(&palette.on_bubble(false), false, || tint);
-            assert_eq!((theirs.name, theirs.bar), (tint, tint));
-        }
-        for palette in [Palette::dark(), Palette::light()] {
-            let own = quote_colours(&palette.on_bubble(true), true, || tint);
-            assert_eq!((own.name, own.bar), (tint, tint));
-            assert_eq!(own.fill, palette.window.gamma_multiply(0.35));
-        }
     }
 
     #[test]

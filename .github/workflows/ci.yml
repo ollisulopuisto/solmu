@@ -193,7 +193,7 @@ jobs:
           wait "$demo_pid"
           test -s "$RUNNER_TEMP/solmu-content.png"
           # Synthetic evidence: stamps, receipts, linked loading and shortcuts.
-          for page in avatar-overflow,dark avatar-overflow,light image-burst,dark image-burst,light image-burst-before,dark image-burst-before,light hidden-message hidden-message,light edit edit,light group-stacks group-stacks,light history-date message-info-direct linked linked-loading shortcuts linked,rail linked,rail,light flat-groups,dark flat-groups,light info-media info-videos info-voice info-voice,theme=Catppuccin.json voice-transcripts voice-transcripts-search chat-transcript-search settings-search=voice whisper-setup whisper-setup,light; do
+          for page in refined-thread,dark refined-thread,light avatar-overflow,dark avatar-overflow,light image-burst,dark image-burst,light image-burst-before,dark image-burst-before,light hidden-message hidden-message,light edit edit,light group-stacks group-stacks,light history-date message-info-direct linked linked-loading shortcuts linked,rail linked,rail,light flat-groups,dark flat-groups,light info-media info-videos info-voice info-voice,theme=Catppuccin.json voice-transcripts voice-transcripts-search chat-transcript-search settings-search=voice whisper-setup whisper-setup,light; do
             target/debug/solmu --demo --demo-page "$page" \
               --demo-shot "$RUNNER_TEMP/solmu-$page.png" --demo-shot-delay 8000
             test -s "$RUNNER_TEMP/solmu-$page.png"
@@ -255,7 +255,7 @@ jobs:
           wait "$demo_pid"
           test -s "$RUNNER_TEMP/solmu-content.png"
           # Synthetic evidence: stamps, receipts, linked loading and shortcuts.
-          for page in avatar-overflow,dark avatar-overflow,light image-burst,dark image-burst,light image-burst-before,dark image-burst-before,light hidden-message hidden-message,light edit edit,light group-stacks group-stacks,light history-date message-info-direct linked linked-loading shortcuts linked,rail linked,rail,light flat-groups,dark flat-groups,light info-media info-videos info-voice info-voice,theme=Catppuccin.json voice-transcripts voice-transcripts-search chat-transcript-search settings-search=voice whisper-setup whisper-setup,light; do
+          for page in refined-thread,dark refined-thread,light avatar-overflow,dark avatar-overflow,light image-burst,dark image-burst,light image-burst-before,dark image-burst-before,light hidden-message hidden-message,light edit edit,light group-stacks group-stacks,light history-date message-info-direct linked linked-loading shortcuts linked,rail linked,rail,light flat-groups,dark flat-groups,light info-media info-videos info-voice info-voice,theme=Catppuccin.json voice-transcripts voice-transcripts-search chat-transcript-search settings-search=voice whisper-setup whisper-setup,light; do
             target/debug/solmu --demo --demo-page "$page" \
               --demo-shot "$RUNNER_TEMP/solmu-$page.png" --demo-shot-delay 8000
             test -s "$RUNNER_TEMP/solmu-$page.png"

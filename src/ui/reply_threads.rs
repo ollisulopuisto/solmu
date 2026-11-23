@@ -576,23 +576,18 @@ pub fn row(
     };
     let mut f = shared.lock().unwrap_or_else(|e| e.into_inner());
     f.rects.insert(key.clone(), response.rect);
-    if response.hovered() || response.contains_pointer() || response.has_focus() {
+    let marker_active = ui.ctx().data(|d| {
+        let id = super::conversation::bubble_id(&m.chat, &m.id);
+        d.get_temp::<u64>(id.with("quote-pass")) == Some(ui.ctx().cumulative_pass_nr())
+            && (d.get_temp::<bool>(id.with("quote-focus")).unwrap_or(false)
+                || d.get_temp::<egui::Rect>(id.with("quote"))
+                    .is_some_and(|rect| {
+                        ui.input(|i| i.pointer.hover_pos())
+                            .is_some_and(|p| rect.contains(p))
+                    }))
+    });
+    if marker_active {
         f.hover = Some(key.clone());
-    }
-    if !f.active
-        && let Some(parent) = f.parents.get(&key)
-        && ui
-            .small_button(crate::i18n::gettext(locale, "↑ Original"))
-            .on_hover_text(crate::i18n::gettext(
-                locale,
-                "Jump to the original message. Available even when no clear connector route fits.",
-            ))
-            .clicked()
-    {
-        actions.push(crate::model::Action::OpenMessage {
-            chat: parent.chat.clone(),
-            message: parent.id.clone(),
-        });
     }
     if let Some(replies) = f.replies.get(&key).filter(|r| !r.is_empty()) {
         let n = replies.len();

@@ -1457,3 +1457,20 @@ User requested+358default after domestic040test. Normalize0prefix,00internationa
 Avatar final review: preserve original service mark paint order for count0/1/2and overflow, rather than reversing the existing overlap layering. Plus alone paints last on right.
 
 Native evidence follow-up: dedicated existing demo page adds a synthetic third distinct source to the linked avatar, dark/light captures in existing smoke loop. No new workflow/job/upload setting. Fresh exact-head checks required; generic two-service capture was not overflow proof.
+
+2026-11-23: Focused refined reply tails, branch feat/refined-reply-tail.
+Replaces the internal enter-sign quote chip and separate Original button with
+one attached chain-tail per actual quoted reply, preserving the connecting
+pipe and exact source jump/back behavior. No chronology or overlap redesign;
+loaded-reply footer remains separate. Albums anchor each exact member to its
+own two-column media row. Stable source-aware keyboard IDs, current-pass
+pointer/focus evidence, selection/pending suppression, source-name accessible
+labels and quoted-sender contrast remain. No new state collection, transport,
+network calls, dependencies, jobs or upload mechanisms. Existing public demo
+smoke gains dark/light refined-thread scenes.
+Duplicate check: live main fe3e8b5 and open449/451/452, all separate scopes.
+Own review traced ordinary/linked/thread callers, album membership, cached
+geometry, narrow gutters, selection, pending media, focus and exact cross-chat
+routing. Isolated exact egui helper tests pass pointer/keyboard and mirrored
+geometry (2 tests); full-app target/source, album and native visuals pending
+CI. Local exact paint inspected as geometry only, not native acceptance.

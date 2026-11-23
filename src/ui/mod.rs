@@ -29,6 +29,7 @@ pub(crate) mod pending_picture_preview;
 pub mod picker;
 pub mod polls;
 pub mod rail;
+mod reply_tail;
 pub(crate) mod reply_threads;
 pub(crate) mod send_later;
 pub mod settings;
