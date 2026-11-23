@@ -2459,6 +2459,22 @@ fn decode_entities(text: &str) -> String {
     decoded
 }
 
+// Preserve only explicit language metadata. A first code line named zsh
+// is still code, not evidence of a language label.
+fn html_code_language(tag: &str) -> Option<String> {
+    let language = html_attribute(tag, "data-language").or_else(|| {
+        html_attribute(tag, "class")?
+            .split_whitespace()
+            .find_map(|class| class.strip_prefix("language-"))
+    })?;
+    let language = decode_entities(language);
+    (!language.is_empty()
+        && language
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '#' | '.')))
+    .then_some(language)
+}
+
 fn plain_rich_text(raw: &str) -> String {
     let lower = raw.to_ascii_lowercase();
     let known = [
@@ -2634,6 +2650,17 @@ fn plain_rich_text(raw: &str) -> String {
                             }
                         }
                     }
+                    if name == "code"
+                        && !closing
+                        && in_pre
+                        && pre_content.is_empty()
+                        && let Some(language) = html_code_language(tag)
+                        && out.ends_with("```\n")
+                    {
+                        out.pop();
+                        out.push_str(&language);
+                        out.push('\n');
+                    }
                     if name == "pre" {
                         if closing {
                             if in_pre {
@@ -2676,7 +2703,11 @@ fn plain_rich_text(raw: &str) -> String {
                             if !out.ends_with('\n') {
                                 out.push('\n');
                             }
-                            out.push_str("```\n");
+                            out.push_str("```");
+                            if let Some(language) = html_code_language(tag) {
+                                out.push_str(&language);
+                            }
+                            out.push('\n');
                         }
                     }
                     if name == "blockquote" && !in_pre {
@@ -13186,5 +13217,23 @@ mod tests {
     #[test]
     fn chat_ids_are_url_encoded() {
         assert_eq!(encode_segment("!a:b.c/d e"), "%21a%3Ab.c%2Fd%20e");
+    }
+}
+
+#[cfg(test)]
+mod code_language_bridge_tests {
+    use super::*;
+    #[test]
+    fn explicit_html_language_survives_but_a_shell_first_line_is_code() {
+        for html in [
+            r#"<pre><code class="language-zsh">echo hello</code></pre>"#,
+            r#"<pre data-language="zsh">echo hello</pre>"#,
+        ] {
+            let mapped = plain_rich_text(html);
+            assert_eq!(mapped, "```zsh\necho hello\n```");
+        }
+        let mapped = plain_rich_text("<pre>zsh\necho hello</pre>");
+        assert_eq!(mapped, "```\nzsh\necho hello\n```");
+        assert!(html_code_language(r#"code class="language-zsh`bad""#).is_none());
     }
 }

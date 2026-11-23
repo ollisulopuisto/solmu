@@ -1290,6 +1290,18 @@ pub fn editable_mentions(text: &str, mentions: &[Mention]) -> String {
     out
 }
 
+/// Bare fences close a block. A single language token is opening metadata,
+/// never code content. Do not consume WhatsApp's inline ```text``` form.
+fn opens_fence(line: &str) -> bool {
+    let Some(info) = line.trim().strip_prefix("```") else {
+        return false;
+    };
+    info.is_empty()
+        || info
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '#' | '.'))
+}
+
 fn parse(text: &str, mentions: &[Mention]) -> Vec<Span> {
     let mut spans = Vec::new();
     let mut in_block = false;
@@ -1329,8 +1341,9 @@ fn parse(text: &str, mentions: &[Mention]) -> Vec<Span> {
         }
         first = false;
         let trimmed = line.trim_end();
-        // A standalone ``` toggles a block. Inline ``` is handled below.
-        if trimmed.trim() == "```" {
+        // Only a bare fence closes. Language-labelled lines inside code
+        // remain literal, matching the copy extractor below.
+        if trimmed.trim() == "```" || (!in_block && opens_fence(trimmed)) {
             if in_block {
                 close_fence(
                     &mut spans,
@@ -1566,32 +1579,94 @@ pub fn paint_row_panels(
     panels
 }
 
-/// The exact contents of each fenced code block in `text`, in order: no
-/// fences, no surrounding prose, with the bridge's fence escape resolved.
-/// An unterminated fence runs to the end of the text, as it paints.
+/// Display/copy content with optional explicit opening-fence metadata.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CodeBlock {
+    pub text: String,
+    pub language: Option<String>,
+}
+
+/// The exact contents of each fenced block, excluding metadata and prose.
+/// Unterminated blocks run to the end, matching their painted contents.
+#[cfg_attr(not(test), allow(dead_code))] // Compatibility helper for exact-content callers.
 pub fn code_blocks(text: &str) -> Vec<String> {
+    code_block_details(text)
+        .into_iter()
+        .map(|block| block.text)
+        .collect()
+}
+
+/// Metadata shares the extractor's exact empty-block/index rules.
+pub fn code_block_details(text: &str) -> Vec<CodeBlock> {
     let mut blocks = Vec::new();
-    let mut current: Option<Vec<String>> = None;
+    let mut current: Option<(Vec<String>, Option<String>)> = None;
     for line in text.split('\n') {
-        let trimmed = line.trim_end();
-        if trimmed.trim() == "```" {
+        let trimmed = line.trim();
+        if trimmed == "```" || (current.is_none() && opens_fence(line)) {
             match current.take() {
-                Some(lines) => blocks.push(lines.join("\n")),
-                None => current = Some(Vec::new()),
+                Some((lines, language)) => blocks.push(CodeBlock {
+                    text: lines.join("\n"),
+                    language,
+                }),
+                None => {
+                    current = Some((
+                        Vec::new(),
+                        trimmed
+                            .strip_prefix("```")
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_owned),
+                    ))
+                }
             }
             continue;
         }
-        if let Some(lines) = current.as_mut() {
+        if let Some((lines, _)) = current.as_mut() {
             lines.push(fenced_line(line).into_owned());
         }
     }
-    if let Some(lines) = current {
-        blocks.push(lines.join("\n"));
+    if let Some((lines, language)) = current {
+        blocks.push(CodeBlock {
+            text: lines.join("\n"),
+            language,
+        });
     }
-    // An empty fence paints no row and gets no panel; drop it so panel and
-    // block indices stay aligned. Blank lines inside a block survive.
-    blocks.retain(|block| !block.is_empty());
+    blocks.retain(|block| !block.text.is_empty());
     blocks
+}
+
+/// A passive label across the panel edge. Its bottom meets, never covers,
+/// the first code row; the existing header band reserves the upper half.
+pub fn put_code_language(
+    ui: &egui::Ui,
+    panel: Rect,
+    language: &str,
+    fill: Color32,
+    text: Color32,
+) -> Option<Rect> {
+    let max_width = (copy_button_rect(panel).left() - panel.left() - 20.0).min(160.0);
+    if max_width < 28.0 {
+        return None;
+    }
+    let mut job = LayoutJob::simple(
+        language.to_owned(),
+        FontId::monospace(12.0),
+        text,
+        max_width - 14.0,
+    );
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    let galley = ui.painter().layout_job(job);
+    let rect = Rect::from_min_size(
+        Pos2::new(panel.left() + 8.0, panel.top() - 12.0),
+        egui::vec2(galley.size().x + 14.0, 20.0),
+    );
+    ui.painter().rect_filled(rect, 10.0, fill);
+    ui.painter().galley(
+        Pos2::new(rect.left() + 7.0, rect.center().y - galley.size().y / 2.0),
+        galley,
+        text,
+    );
+    Some(rect)
 }
 
 /// Collapse a trailing `Title (url)` only for painting. The source, plain
@@ -4023,5 +4098,87 @@ mod large_body_tests {
             );
         });
         output.textures_delta.clear();
+    }
+}
+
+#[cfg(test)]
+mod fence_language_regression {
+    use super::*;
+    #[test]
+    fn language_label_is_metadata_for_display_and_copy() {
+        let command = "git pull --ff-only && npm ci && WRANGLER_SEND_METRICS=false npm run deploy";
+        for label in ["zsh", "bash", "rust", "c++", "c#", "shell-session"] {
+            let text = format!("```{label}\n{command}\n```");
+            assert_eq!(plain(&text, &[]).trim(), command);
+            assert_eq!(code_blocks(&text), [command]);
+            let spans = parse(&text, &[]);
+            assert!(
+                spans
+                    .iter()
+                    .any(|s| s.block && s.block_id == 0 && s.text == command)
+            );
+        }
+    }
+    #[test]
+    fn metadata_indices_and_pill_geometry_follow_visible_blocks() {
+        let text = "```zsh\n```\n```rust\nlet answer = 42;\n```\n```\nplain\n```";
+        let details = code_block_details(text);
+        assert_eq!(details[0].language.as_deref(), Some("rust"));
+        assert_eq!(details[1].language, None);
+        assert_eq!(
+            details.iter().map(|b| b.text.clone()).collect::<Vec<_>>(),
+            code_blocks(text)
+        );
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let style = Style {
+                size: 16.0,
+                color: Color32::WHITE,
+                secondary: Color32::GRAY,
+                link: Color32::BLUE,
+                mention: Color32::WHITE,
+            };
+            for width in [140.0, 220.0, 480.0] {
+                let laid = layout_balanced(ui, text, &[], &style, width, false);
+                for (index, panel) in code_panel_rects(
+                    Rect::from_min_size(Pos2::ZERO, laid.galley.size()),
+                    Pos2::ZERO,
+                    &laid,
+                    None,
+                ) {
+                    if let Some(language) = &details[index].language
+                        && let Some(pill) = put_code_language(
+                            ui,
+                            panel,
+                            language,
+                            Color32::DARK_GRAY,
+                            Color32::WHITE,
+                        )
+                    {
+                        assert!(!pill.intersects(copy_button_rect(panel)));
+                        assert!(pill.right() <= panel.right());
+                        let first = laid
+                            .galley
+                            .rows
+                            .iter()
+                            .zip(laid.row_kinds())
+                            .find(|(_, kind)| **kind == RowKind::Code(index))
+                            .unwrap()
+                            .0;
+                        assert!(pill.bottom() <= first.pos.y + 0.1);
+                    }
+                }
+            }
+        });
+        output.textures_delta.clear();
+    }
+    #[test]
+    fn labels_only_open_fences_and_inline_triples_stay_inline() {
+        let text = "```zsh\nfirst\n```rust\nlast\n```\n```python\nsecond\n```";
+        assert_eq!(code_blocks(text), ["first\n```rust\nlast", "second"]);
+        assert_eq!(plain("```hello```", &[]), "hello");
+        assert!(code_blocks("```hello```").is_empty());
+        assert_eq!(code_blocks("```zsh\n```\n```bash\nnext\n```"), ["next"]);
+        assert_eq!(code_blocks("```zsh\nnot closed"), ["not closed"]);
     }
 }
