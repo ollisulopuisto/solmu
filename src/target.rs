@@ -175,7 +175,12 @@ fn number_in(text: &str) -> Option<String> {
             return None;
         }
     }
-    if !is_a_number(&digits) {
+    let initial_digits = if !text.trim_start().starts_with('+') {
+        digits.strip_prefix("00").unwrap_or(&digits)
+    } else {
+        &digits
+    };
+    if !is_a_number(initial_digits) {
         return None;
     }
     // Explicit + and international 00 prefixes retain their country code.
@@ -658,6 +663,10 @@ mod finnish_number_tests {
         assert_eq!(
             parse("whatsapp://send?phone=4670123456").unwrap().chat,
             "4670123456@s.whatsapp.net"
+        );
+        assert_eq!(
+            parse("00123456789012345").unwrap().chat,
+            "123456789012345@s.whatsapp.net"
         );
         for input in ["112", "040x1234567", "+1234567890123456"] {
             assert!(parse(input).is_none(), "{input}");
