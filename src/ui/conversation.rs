@@ -10562,11 +10562,14 @@ fn copy_code_buttons(
     if panels.is_empty() {
         return;
     }
-    let blocks = markup::code_blocks(text);
+    let blocks = markup::code_block_details(text);
     for &(index, panel) in panels {
         let Some(block) = blocks.get(index) else {
             continue;
         };
+        if let Some(language) = &block.language {
+            markup::put_code_language(ui, panel, language, palette.surface_active, palette.text);
+        }
         let copied_id = id.with(("copied", index));
         let copied_at: Option<std::time::Instant> = ui.ctx().data(|data| data.get_temp(copied_id));
         let copied = copied_at.is_some_and(|at| at.elapsed().as_secs_f32() < 1.2);
@@ -10581,7 +10584,7 @@ fn copy_code_buttons(
         };
         let response = markup::put_copy_button(ui, panel, label.as_ref(), palette.accent);
         if response.clicked() {
-            crate::transcript::copy_literal(ui.ctx(), block.clone());
+            crate::transcript::copy_literal(ui.ctx(), block.text.clone());
             ui.ctx()
                 .data_mut(|data| data.insert_temp(copied_id, std::time::Instant::now()));
             ui.ctx()
