@@ -186,6 +186,8 @@ impl Drop for RemoveOnDrop {
 }
 
 fn main() -> eframe::Result<()> {
+    #[cfg(target_os = "macos")]
+    solmu::macos::install_whatsapp_handler();
     solmu::version::initialize();
     let result = run();
     // A Windows release has no console, so an error that ends the start
@@ -384,18 +386,8 @@ fn run() -> eframe::Result<()> {
     // The first launch owns the slot, so no verb reached a running copy and
     // the chat is opened here. The app drains its queue after the frame.
     if let Some(request) = &target {
-        app.actions.push(solmu::model::Action::StartChat {
-            name: request.display_name(),
-            id: request.chat.clone(),
-            dismiss_dialog: true,
-        });
-        if let Some(text) = &request.text {
-            app.actions.push(solmu::model::Action::PrefillComposer {
-                chat: request.chat.clone(),
-                text: text.clone(),
-                mentions: Vec::new(),
-            });
-        }
+        app.actions
+            .push(solmu::model::Action::OpenWhatsApp(request.clone()));
     }
     if let Some(code) = &invite {
         app.actions.push(solmu::model::Action::OpenUrl(format!(

@@ -2839,6 +2839,7 @@ pub enum Action {
     /// Puts a template in the named chat's composer without sending it, the
     /// way a share link's `text=` asks. Carries the chat it belongs to, since
     /// a chat the app refuses to open must not put its text in another one.
+    OpenWhatsApp(crate::target::Request),
     PrefillComposer {
         chat: ChatId,
         text: String,

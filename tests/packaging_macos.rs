@@ -35,3 +35,32 @@ fn the_bundle_carries_the_agent_that_starts_in_the_tray() {
         fastframe_autostart::macos_agent_plist_name(id)
     );
 }
+
+#[test]
+fn whatsapp_links_are_registered_and_forwarded_without_a_shell() {
+    let plist = packaging("Info.plist");
+    assert!(plist.contains("CFBundleURLTypes"));
+    assert!(plist.contains("<string>whatsapp</string>"));
+    let launcher = packaging("BeeperLauncher.swift");
+    assert!(launcher.contains("func application(_ application: NSApplication, open urls: [URL])"));
+    assert!(launcher.contains("helper.arguments = [url]"));
+    assert!(launcher.contains("forwarder.flushURLs()"));
+    assert!(launcher.contains("url.scheme?.lowercased() == \"whatsapp\""));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_beeper_url_launcher_typechecks_on_macos() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/macos/BeeperLauncher.swift");
+    let output = std::process::Command::new("xcrun")
+        .args(["swiftc", "-typecheck"])
+        .arg(path)
+        .output()
+        .expect("Xcode Swift compiler");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -517,3 +517,80 @@ mod tests {
         );
     }
 }
+
+/// Exact loaded WhatsApp direct-chat destinations. Ambiguity is retained.
+pub fn whatsapp_matches(
+    chats: &[crate::model::Chat],
+    request: &Request,
+) -> Vec<crate::merged::Member> {
+    let Some(number) = number_of_jid(&request.chat) else {
+        return Vec::new();
+    };
+    let phone = format!("+{number}");
+    chats
+        .iter()
+        .filter(|chat| {
+            chat.kind == crate::model::ChatKind::Direct
+                && chat
+                    .backend_network
+                    .as_deref()
+                    .is_some_and(|n| n.eq_ignore_ascii_case("whatsapp"))
+                && chat
+                    .handles
+                    .iter()
+                    .any(|h| crate::suggest::normalized_phone(h).as_deref() == Some(phone.as_str()))
+        })
+        .filter_map(crate::merged::Member::of)
+        .collect()
+}
+
+#[cfg(test)]
+mod whatsapp_routing_tests {
+    use super::*;
+    use crate::model::{Chat, ChatKind};
+    fn chat(id: &str, account: &str, network: &str, phone: &str) -> Chat {
+        let mut c = Chat::new(id.into(), "Same name".into());
+        c.backend_origin = Some("http://localhost:23374".into());
+        c.backend_account = Some(account.into());
+        c.backend_network = Some(network.into());
+        c.handles = vec![phone.into()];
+        c
+    }
+    #[test]
+    fn exact_phone_and_network_not_jid_or_name_choose_the_real_member() {
+        let request =
+            parse("whatsapp://send?phone=16508702892&text=Hei%20%26%20%E2%9C%93").unwrap();
+        let chats = vec![
+            chat("!opaque", "work", "WhatsApp", "+1 (650) 870-2892"),
+            chat("!im", "im", "iMessage", "+16508702892"),
+            chat(
+                "16508702892@s.whatsapp.net",
+                "other",
+                "WhatsApp",
+                "+16508702893",
+            ),
+        ];
+        let matches = whatsapp_matches(&chats, &request);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].chat, "!opaque");
+        assert_eq!(matches[0].account, "work");
+        assert_eq!(request.text.as_deref(), Some("Hei & ✓"));
+    }
+    #[test]
+    fn ambiguity_including_locked_matches_is_retained_but_groups_and_unbound_chats_are_excluded() {
+        let request = parse("16508702892").unwrap();
+        let mut chats = vec![
+            chat("!a", "one", "WhatsApp", "+16508702892"),
+            chat("!b", "two", "WhatsApp", "+16508702892"),
+        ];
+        assert_eq!(whatsapp_matches(&chats, &request).len(), 2);
+        chats[0].locked = true;
+        assert_eq!(whatsapp_matches(&chats, &request).len(), 2);
+        chats[0].kind = ChatKind::Group;
+        chats[1].kind = ChatKind::Group;
+        assert!(whatsapp_matches(&chats, &request).is_empty());
+        chats[1].kind = ChatKind::Direct;
+        chats[1].backend_account = None;
+        assert!(whatsapp_matches(&chats, &request).is_empty());
+    }
+}

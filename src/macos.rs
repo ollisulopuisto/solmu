@@ -918,3 +918,82 @@ pub fn vibrancy(frame: &eframe::Frame, palette: &crate::theme::Palette, on: bool
         }
     });
 }
+
+// A separate Apple-event target survives window/tray delegate replacement.
+static WHATSAPP_URLS: Mutex<Vec<crate::target::Request>> = Mutex::new(Vec::new());
+thread_local! {
+    static URL_HANDLER: RefCell<Option<objc2::rc::Retained<objc2::runtime::AnyObject>>> = const { RefCell::new(None) };
+}
+extern "C-unwind" fn receive_whatsapp_url(
+    _this: &objc2::runtime::AnyObject,
+    _sel: objc2::runtime::Sel,
+    event: &objc2::runtime::AnyObject,
+    _reply: &objc2::runtime::AnyObject,
+) {
+    // keyDirectObject = '----'. URL contents are data, never commands or logs.
+    let descriptor: Option<objc2::rc::Retained<objc2::runtime::AnyObject>> =
+        unsafe { objc2::msg_send![event, paramDescriptorForKeyword: u32::from_be_bytes(*b"----")] };
+    let Some(descriptor) = descriptor else {
+        return;
+    };
+    let value: Option<objc2::rc::Retained<objc2_foundation::NSString>> =
+        unsafe { objc2::msg_send![&*descriptor, stringValue] };
+    let Some(value) = value else {
+        return;
+    };
+    let value = value.to_string();
+    if value.len() > 32 * 1024 || !value.to_ascii_lowercase().starts_with("whatsapp:") {
+        return;
+    }
+    if let Some(request) = crate::target::parse(&value) {
+        let mut queue = WHATSAPP_URLS.lock().unwrap_or_else(|p| p.into_inner());
+        if queue.len() < 32 {
+            queue.push(request);
+        }
+        if let Some(ctx) = REPAINT.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+            ctx.request_repaint();
+        }
+    }
+}
+
+/// Install before the first AppKit event pump, including cold/hidden launch.
+pub fn install_whatsapp_handler() {
+    use objc2::ClassType;
+    URL_HANDLER.with(|slot| {
+        if slot.borrow().is_some() {
+            return;
+        }
+        let Some(mut builder) = objc2::runtime::ClassBuilder::new(
+            c"SolmuWhatsAppURLHandler",
+            objc2_foundation::NSObject::class(),
+        ) else {
+            return;
+        };
+        unsafe {
+            builder.add_method(
+                objc2::sel!(handleURL:withReplyEvent:),
+                receive_whatsapp_url as extern "C-unwind" fn(_, _, _, _),
+            );
+        }
+        let class = builder.register();
+        let handler: objc2::rc::Retained<objc2::runtime::AnyObject> =
+            unsafe { objc2::msg_send![class, new] };
+        let Some(manager_class) = objc2::runtime::AnyClass::get(c"NSAppleEventManager") else {
+            return;
+        };
+        let manager: &objc2::runtime::AnyObject =
+            unsafe { objc2::msg_send![manager_class, sharedAppleEventManager] };
+        unsafe {
+            let _: () = objc2::msg_send![manager,
+            setEventHandler: &*handler,
+            andSelector: objc2::sel!(handleURL:withReplyEvent:),
+            forEventClass: u32::from_be_bytes(*b"GURL"),
+            andEventID: u32::from_be_bytes(*b"GURL")];
+        }
+        *slot.borrow_mut() = Some(handler);
+    });
+}
+
+pub fn drain_whatsapp() -> Vec<crate::target::Request> {
+    std::mem::take(&mut *WHATSAPP_URLS.lock().unwrap_or_else(|p| p.into_inner()))
+}
