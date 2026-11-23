@@ -4680,6 +4680,26 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "networks" => networks_sample(app),
             // Ada's WhatsApp chat linked with her Signal one: one person
             // row in the list, one mixed-source timeline in the chat.
+            "avatar-overflow" => {
+                linked_sample(app);
+                let mut third = app
+                    .chats
+                    .iter()
+                    .find(|chat| chat.id == "393331234567@signal")
+                    .unwrap()
+                    .clone();
+                third.id = "ada-telegram-overflow".into();
+                third.backend_network = Some("Telegram".into());
+                third.backend_account = Some("telegram".into());
+                app.settings
+                    .beeper
+                    .people
+                    .last_mut()
+                    .unwrap()
+                    .members
+                    .push(crate::merged::Member::of(&third).unwrap());
+                app.chats.push(third);
+            }
             "linked" => linked_sample(app),
             // Capture the linked timeline while an older-history request runs.
             "linked-loading" => {

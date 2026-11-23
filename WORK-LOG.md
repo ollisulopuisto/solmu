@@ -1455,3 +1455,5 @@ and rebase before merge; held445 will need next version on its own rebase.
 User requested+358default after domestic040test. Normalize0prefix,00international,andshortbareinput, preserve explicit international codes and established nonzero URL targets/longbareinternational input. Exact source parser/routing harness22tests pass; theme/model/server are stubbed, full app and actual Mac matching remain unverified. Own review traced parse/IPC roundtrip/exact destination/draft behavior and foreign-link compatibility. No speculative phone metadata fallback, account guessing, default handler change or automatic send. Latest runtime unavailable toast remains unexplained and separate.
 
 Avatar final review: preserve original service mark paint order for count0/1/2and overflow, rather than reversing the existing overlap layering. Plus alone paints last on right.
+
+Native evidence follow-up: dedicated existing demo page adds a synthetic third distinct source to the linked avatar, dark/light captures in existing smoke loop. No new workflow/job/upload setting. Fresh exact-head checks required; generic two-service capture was not overflow proof.
