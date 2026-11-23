@@ -5222,21 +5222,13 @@ fn bubble(
                                 if last.from_me && !visible_status {
                                     width -= 19.0;
                                 }
-                                let (slot, _) = ui.allocate_exact_size(
-                                    vec2(
-                                        width.max(1.0) + thread_width,
-                                        if reacted { 26.0 } else { 15.0 },
-                                    ),
-                                    Sense::hover(),
-                                );
                                 let pointer = ui.input(|i| i.pointer.hover_pos());
-                                let hovered =
-                                    pointer.is_some_and(|p| body.rect.union(slot).contains(p));
+                                let hovered = pointer.is_some_and(|p| body.rect.contains(p));
                                 let each = thread_width / thread_members.len().max(1) as f32;
-                                for (index, member) in thread_members.iter().enumerate() {
-                                    let target = Rect::from_min_size(
-                                        slot.min + vec2(index as f32 * each, 0.0),
-                                        vec2(each, slot.height()),
+                                for member in &thread_members {
+                                    let (target, _) = ui.allocate_exact_size(
+                                        vec2(each, if reacted { 26.0 } else { 15.0 }),
+                                        Sense::hover(),
                                     );
                                     super::reply_threads::footer_entry(
                                         ui,
@@ -5247,7 +5239,10 @@ fn bubble(
                                         view.locale,
                                     );
                                 }
-                                let time_slot = slot.with_min_x(slot.left() + thread_width);
+                                let (time_slot, _) = ui.allocate_exact_size(
+                                    vec2(width.max(1.0), if reacted { 26.0 } else { 15.0 }),
+                                    Sense::hover(),
+                                );
                                 footer(
                                     ui,
                                     view,
@@ -5264,7 +5259,7 @@ fn bubble(
                                 });
                             }
                         };
-                        if reacted {
+                        if reacted || !thread_members.is_empty() {
                             ui.horizontal_wrapped(draw);
                         } else {
                             draw(ui);
