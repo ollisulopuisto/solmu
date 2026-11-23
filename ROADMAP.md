@@ -35,3 +35,18 @@ What a standalone mode would need:
 This is a large project, not a small feature.
 
 Not verified: nothing here was run, and Beeper's current API and login options were not checked against their documentation.
+
+## Resume a capped search-result jump
+
+Status: follow-up idea, not scheduled. No implementation in the history-diagnostics change.
+
+A search-result jump currently stops after Solmu's local 400-page safety budget.
+Opening that result again reloads the first page and resets the older-history
+cursor, so it does not resume where the capped jump stopped. The diagnostic must
+not promise otherwise.
+
+A future resumable-jump design needs an explicit continuation path that preserves
+loaded pages and the correct backend cursor, without bypassing locked-chat checks,
+reopening stale account state, or skipping pages after inactive transcript caches
+are trimmed. Keep the safety budget, distinguish upstream failures from that local
+limit, and test retry after switching chats, cache trimming, and reconnects.

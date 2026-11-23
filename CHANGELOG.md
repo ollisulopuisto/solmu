@@ -15,6 +15,10 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+## 26.11.8
+
+- History jumps recognize a repeated cursor on the last allowed page without losing fetched messages or misreporting a found target. No new header warnings or retry controls.
+
 ## 26.11.7
 
 - Consecutive image messages from one sender, at most five seconds apart, share the existing gallery. Protocol albums stay separate; selecting or locally hiding messages keeps the existing individual-message view.

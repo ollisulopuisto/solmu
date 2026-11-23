@@ -1,5 +1,18 @@
 # Work log
 
+## 2026-11-23: Keep cursor fix, remove new header warnings
+
+Reworked existing PR445 per maintainer direction. Merged current main f7216d9,
+removed the added history-warning widget/module and ordinary/linked header
+changes. Kept final-page cycle detection, found-target precedence, retained-page
+HTTP regressions and truthful internal cap copy. No new user-facing surface,
+autoretry implementation or larger history budget in this patch. Existing
+linked-history errors predate this PR and remain separate quiet-recovery work.
+Version26.11.8 follows gallery26.11.7. Four exact-source harness groups pass; the main-source run fails before the fix.
+Native lib check passes, fmt/diff checks pass. Full native HTTP fixture tests
+remain for CI, not claimed executed locally. Full CI and current-head review required.
+No direct main push or merge.
+
 ## 2026-11-20: Thread navigation and visible right-click target
 
 Latest Mac CI passed 2461 tests, failed ordinary OpenMessage thread-exit and the
