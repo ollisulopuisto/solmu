@@ -26,12 +26,21 @@ impl Geometry {
         let reactions = Rect::from_min_size(pos2(x, y), vec2(width, BAND));
         let stem_x = reactions.right() - STEM;
         let vertical = Rect::from_min_size(pos2(stem_x, y - STEM), vec2(STEM, height));
-        Some(Self {
+        let placed = Self {
             reactions,
             vertical,
             reply: Rect::from_min_size(vertical.min, Vec2::splat(STEM)),
             star: Rect::from_min_size(pos2(stem_x, reactions.bottom()), Vec2::splat(STEM)),
-        })
+        };
+        // Edge clamping must never turn hover chrome into a cover over the
+        // message's own links, voice controls or double-click padding.
+        if [placed.reactions, placed.reply, placed.star]
+            .into_iter()
+            .any(|rect| rect.shrink(0.01).intersects(bubble))
+        {
+            return None;
+        }
+        Some(placed)
     }
     pub fn bounds(self) -> Rect {
         self.reactions.union(self.vertical)
@@ -86,8 +95,10 @@ mod tests {
                     Rect::from_min_size(pos2(x, y), vec2(100.0, 50.0)),
                     bounds,
                     7,
-                )
-                .unwrap();
+                );
+                let Some(g) = g else {
+                    continue;
+                };
                 assert!(bounds.contains_rect(g.bounds()));
                 assert!(!g.reply.shrink(0.01).intersects(g.reactions));
                 assert!(!g.star.shrink(0.01).intersects(g.reactions));
@@ -101,6 +112,28 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn edge_clamp_never_covers_the_hovered_message() {
+        let bounds = Rect::from_min_size(egui::Pos2::ZERO, vec2(420.0, 640.0));
+        for x in (0..400).step_by(20) {
+            for y in (0..620).step_by(20) {
+                let bubble = Rect::from_min_size(pos2(x as f32, y as f32), vec2(120.0, 50.0));
+                if let Some(g) = Geometry::place(bubble, bounds, 7) {
+                    for r in [g.reactions, g.reply, g.star] {
+                        assert!(!r.shrink(0.01).intersects(bubble));
+                    }
+                }
+            }
+        }
+        assert!(
+            Geometry::place(
+                Rect::from_min_max(pos2(220.0, 580.0), pos2(410.0, 630.0)),
+                bounds,
+                7
+            )
+            .is_none()
+        );
     }
     #[test]
     fn tiny_viewports_keep_existing_affordance_instead_of_overflowing() {

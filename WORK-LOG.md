@@ -1501,3 +1501,4 @@ reserved timestamp-adjacent slot. Hover/focus changes ink only, not layout.
 Added exact production helper pointer/Enter/geometry regression and full-app
 exact-thread/timestamp-stability regression. Helper passes, nonclickable
 mutation fails, restored passes. Full-app/native verification pending.
+Floating actions follow-up: native second run 2646 passed, five failed. A failing-first real-egui lower-edge click test received zero of two clicks with clamped overlapping geometry and both clicks with a no-overlap placement guard. Full bar now falls back if edge clamping covers its own message. Added equivalent native helper regression; original full-app failures remain the acceptance gate, not waived.

@@ -14400,6 +14400,60 @@ mod tests {
     }
 
     #[test]
+    fn cross_toolbar_edge_clamp_preserves_message_input() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let message = crate::archive::tests::message(&view.chat.id, "empty-corner", 0, false);
+            let pos = pos2(250.0, 280.0);
+            let mut clicks = 0;
+            for pressed in [
+                None,
+                None,
+                None,
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+            ] {
+                let mut events = vec![egui::Event::PointerMoved(pos)];
+                if let Some(pressed) = pressed {
+                    events.push(egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(420.0, 340.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let rect = Rect::from_min_max(pos2(140.0, 265.0), pos2(400.0, 325.0));
+                        let bubble =
+                            ui.interact(rect, egui::Id::new("empty-corner-bubble"), Sense::click());
+                        if bubble.clicked() {
+                            clicks += 1;
+                        }
+                        grouped_hover_actions(ui, view, &message, &bubble, &mut Vec::new());
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            assert_eq!(
+                clicks, 2,
+                "edge clamping must not move the bar over its own message"
+            );
+        });
+    }
+
+    #[test]
     fn grouped_toolbar_routes_each_control_to_one_hovered_message() {
         with_still_view(|view| {
             let message = crate::archive::tests::message(&view.chat.id, "toolbar-owner", 0, false);
