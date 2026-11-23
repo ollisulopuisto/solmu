@@ -902,8 +902,8 @@ fn network_badges(app: &App, ui: &egui::Ui, palette: &Palette, avatar: Rect, cha
     }
     let first = usize::from(chat.disappearing_timer().is_some());
     let overflow = networks.len() > 2;
-    // Paint left-to-right so each rightward badge covers the edge of the
-    // previous one. Reserve the rightmost network slot for a passive plus.
+    // Preserve existing service-mark paint order. Reserve the rightmost
+    // network slot for the passive plus and paint it last.
     for (slot, index) in network_badge_slots(networks.len(), first) {
         widgets::paint_network_badge(ui, palette, avatar, &networks[index], slot);
     }
@@ -916,7 +916,6 @@ fn network_badges(app: &App, ui: &egui::Ui, palette: &Palette, avatar: Rect, cha
 fn network_badge_slots(count: usize, first: usize) -> Vec<(usize, usize)> {
     let offset = usize::from(count > 2);
     (0..count.min(2))
-        .rev()
         .map(|index| (first + offset + index, index))
         .collect()
 }
@@ -3723,11 +3722,11 @@ mod tests {
     fn avatar_overflow_keeps_two_networks_with_plus_to_the_right() {
         assert!(super::network_badge_slots(0, 0).is_empty());
         assert_eq!(super::network_badge_slots(1, 0), vec![(0, 0)]);
-        assert_eq!(super::network_badge_slots(2, 0), vec![(1, 1), (0, 0)]);
-        assert_eq!(super::network_badge_slots(3, 0), vec![(2, 1), (1, 0)]);
-        assert_eq!(super::network_badge_slots(7, 0), vec![(2, 1), (1, 0)]);
+        assert_eq!(super::network_badge_slots(2, 0), vec![(0, 0), (1, 1)]);
+        assert_eq!(super::network_badge_slots(3, 0), vec![(1, 0), (2, 1)]);
+        assert_eq!(super::network_badge_slots(7, 0), vec![(1, 0), (2, 1)]);
         // Disappearing timer retains slot0, plus shifts to slot1.
-        assert_eq!(super::network_badge_slots(3, 1), vec![(3, 1), (2, 0)]);
+        assert_eq!(super::network_badge_slots(3, 1), vec![(2, 0), (3, 1)]);
     }
     #[test]
     fn title_preview_gap_rejects_touching_and_overlapping_regions() {
