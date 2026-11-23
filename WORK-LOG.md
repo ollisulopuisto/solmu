@@ -1502,3 +1502,5 @@ Added exact production helper pointer/Enter/geometry regression and full-app
 exact-thread/timestamp-stability regression. Helper passes, nonclickable
 mutation fails, restored passes. Full-app/native verification pending.
 Floating actions follow-up: native second run 2646 passed, five failed. A failing-first real-egui lower-edge click test received zero of two clicks with clamped overlapping geometry and both clicks with a no-overlap placement guard. Full bar now falls back if edge clamping covers its own message. Added equivalent native helper regression; original full-app failures remain the acceptance gate, not waived.
+
+Native evidence follow-up: add existing demo capture pages for the actual grouped helper in dark/light, with a synthetic resting-pointer position on one designated fixture message. Normal app and tests never enable it. No workflow/job or upload setting added; existing smoke loop and artifact path reused. Fresh exact-head checks required.

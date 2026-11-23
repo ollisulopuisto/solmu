@@ -4786,6 +4786,12 @@ fn grouped_hover_actions(
     ui.ctx()
         .data_mut(|d| d.insert_temp(bubble.id.with("react-rect"), g.cell(quick.len())));
     let pointer = ui.input(|i| i.pointer.interact_pos());
+    #[cfg(feature = "demo")]
+    let pointer = if crate::demo::hover_actions_shot(&message.id) {
+        Some(bubble.rect.center())
+    } else {
+        pointer
+    };
     let area_id = bubble.id.with("hover-actions");
     let layers = [
         area_id,

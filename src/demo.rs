@@ -1,5 +1,12 @@
 //! Offline sample data for screenshots, recorded tours, and headless UI tests.
 
+static SHOT_HOVER_ACTIONS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Synthetic pointer fixture only, never enabled in a normal app.
+pub fn hover_actions_shot(id: &str) -> bool {
+    id == "hover-actions-target" && SHOT_HOVER_ACTIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub mod stock;
 pub mod tour;
 
@@ -2752,6 +2759,28 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 );
                 app.conversations.get_mut(chat).unwrap().messages =
                     vec![original, first, second, normal];
+                app.open_chat = Some(chat.into());
+                app.scroll_to_bottom = false;
+            }
+            "hover-actions" => {
+                SHOT_HOVER_ACTIONS.store(true, std::sync::atomic::Ordering::Relaxed);
+                let chat = SAMPLES[0].id;
+                app.conversations.get_mut(chat).unwrap().messages = vec![
+                    message(
+                        chat,
+                        "hover-actions-target",
+                        false,
+                        crate::util::now(),
+                        Content::text("The revised notes are ready for review."),
+                    ),
+                    message(
+                        chat,
+                        "hover-actions-following",
+                        true,
+                        crate::util::now() + 60,
+                        Content::text("Thanks. I will read them this afternoon."),
+                    ),
+                ];
                 app.open_chat = Some(chat.into());
                 app.scroll_to_bottom = false;
             }
