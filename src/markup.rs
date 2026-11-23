@@ -4146,26 +4146,26 @@ mod fence_language_regression {
                     &laid,
                     None,
                 ) {
-                    if let Some(language) = &details[index].language {
-                        if let Some(pill) = put_code_language(
+                    if let Some(language) = &details[index].language
+                        && let Some(pill) = put_code_language(
                             ui,
                             panel,
                             language,
                             Color32::DARK_GRAY,
                             Color32::WHITE,
-                        ) {
-                            assert!(!pill.intersects(copy_button_rect(panel)));
-                            assert!(pill.right() <= panel.right());
-                            let first = laid
-                                .galley
-                                .rows
-                                .iter()
-                                .zip(laid.row_kinds())
-                                .find(|(_, kind)| **kind == RowKind::Code(index))
-                                .unwrap()
-                                .0;
-                            assert!(pill.bottom() <= first.pos.y + 0.1);
-                        }
+                        )
+                    {
+                        assert!(!pill.intersects(copy_button_rect(panel)));
+                        assert!(pill.right() <= panel.right());
+                        let first = laid
+                            .galley
+                            .rows
+                            .iter()
+                            .zip(laid.row_kinds())
+                            .find(|(_, kind)| **kind == RowKind::Code(index))
+                            .unwrap()
+                            .0;
+                        assert!(pill.bottom() <= first.pos.y + 0.1);
                     }
                 }
             }
