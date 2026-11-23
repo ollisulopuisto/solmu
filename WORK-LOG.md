@@ -3,6 +3,9 @@
 ## 2026-11-23: Passive linked-network overflow badge
 
 Approved two overlapping service marks then a plain plus on the right. Reused exact existing badge geometry and timer slot offset. Distinct-network collection remains unchanged; third and later distinct networks cause the passive mark. No click/focus/tooltip/list. Own adversarial review traced all three chat-row callers, timer-slot preservation, source-index ordering and unlimited linked member counts. Local exact-source harness covers slots0..9 with timer/no timer and passive paint allocating no widget; native CI pending. Separate from floating action bar and older threading controls.
+## 2026-11-23: Approved cross-under hover toolbar
+
+Separate floating action-bar outcome, not the earlier enter-sign/Original threading work. Replaced pointer hover discs with six existing quick reactions plus the full picker, reply and star. The rear vertical strip stays continuous behind the foreground reaction bar, with square right joins. All actions target the same hovered message. Existing keyboard controls and narrow-viewport discs remain. No avatar or interleaving changes. Own adversarial review traced hover lifetime, clipping, thread-salted IDs, selection/pending-media early returns, reaction toggle/picker dispatch and star/reply consumers. Exact-helper harness interaction and geometry tests pass; full app tests and native screenshots remain for CI/runtime, not claimed locally.
 
 ## 2026-11-23: Keep cursor fix, remove new header warnings
 
