@@ -567,7 +567,6 @@ pub fn row(
     m: &Message,
     response: &egui::Response,
     color: egui::Color32,
-    actions: &mut Vec<crate::model::Action>,
     locale: crate::i18n::Locale,
 ) {
     let key = Key::of(m);

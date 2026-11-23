@@ -5239,7 +5239,6 @@ fn bubble(
                             item,
                             &painted,
                             view.palette.accent,
-                            actions,
                             view.locale,
                         );
                     }
@@ -5249,7 +5248,6 @@ fn bubble(
                         message,
                         &painted,
                         view.palette.accent,
-                        actions,
                         view.locale,
                     );
                 }
@@ -7095,10 +7093,11 @@ fn quote_chip(
         "Jump to the original message",
     ));
     let paint_pass = ui.ctx().cumulative_pass_nr();
+    let focused = response.has_focus();
     ui.ctx().data_mut(|data| {
         let id = bubble_id(&message.chat, &message.id);
         data.insert_temp(id.with("quote-pass"), paint_pass);
-        data.insert_temp(id.with("quote-focus"), response.has_focus());
+        data.insert_temp(id.with("quote-focus"), focused);
     });
     theme::reveal_focus(&response);
     theme::focus_outline(ui, response.id, rect, 6.0);
