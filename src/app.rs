@@ -2479,22 +2479,21 @@ impl App {
         if self.editing.is_some() || self.recording.is_some() || self.reply_to.is_some() {
             self.pending_whatsapp = None;
             self.toast_error(
-                "Finish your current edit, recording or reply before opening this link.".into(),
+                "Finish your current edit, recording or reply before opening this link.",
             );
             return;
         }
         let matches = crate::target::whatsapp_matches(&self.chats, request);
         if matches.len() > 1 {
             self.pending_whatsapp = None;
-            self.toast_error("More than one WhatsApp chat matches this number. Open the intended chat and paste the message.".into());
+            self.toast_error("More than one WhatsApp chat matches this number. Open the intended chat and paste the message.");
             return;
         }
         let Some(member) = matches.first().cloned() else {
             if started.elapsed() >= std::time::Duration::from_secs(30) {
                 self.pending_whatsapp = None;
                 self.toast_error(
-                    "WhatsApp chat unavailable. Open the intended chat and paste the message."
-                        .into(),
+                    "WhatsApp chat unavailable. Open the intended chat and paste the message.",
                 );
             } else {
                 ctx.request_repaint_after(std::time::Duration::from_millis(250));
