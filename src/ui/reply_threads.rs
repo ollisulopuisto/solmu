@@ -576,15 +576,14 @@ pub fn row(
     };
     let mut f = shared.lock().unwrap_or_else(|e| e.into_inner());
     f.rects.insert(key.clone(), response.rect);
+    let pass = ui.ctx().cumulative_pass_nr();
+    let pointer = ui.input(|i| i.pointer.hover_pos());
     let marker_active = ui.ctx().data(|d| {
         let id = super::conversation::bubble_id(&m.chat, &m.id);
-        d.get_temp::<u64>(id.with("quote-pass")) == Some(ui.ctx().cumulative_pass_nr())
+        d.get_temp::<u64>(id.with("quote-pass")) == Some(pass)
             && (d.get_temp::<bool>(id.with("quote-focus")).unwrap_or(false)
                 || d.get_temp::<egui::Rect>(id.with("quote"))
-                    .is_some_and(|rect| {
-                        ui.input(|i| i.pointer.hover_pos())
-                            .is_some_and(|p| rect.contains(p))
-                    }))
+                    .is_some_and(|rect| pointer.is_some_and(|p| rect.contains(p))))
     });
     if marker_active {
         f.hover = Some(key.clone());
