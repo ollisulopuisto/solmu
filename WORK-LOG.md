@@ -1,5 +1,9 @@
 # Work log
 
+## 2026-11-23: Passive linked-network overflow badge
+
+Approved two overlapping service marks then a plain plus on the right. Reused exact existing badge geometry and timer slot offset. Distinct-network collection remains unchanged; third and later distinct networks cause the passive mark. No click/focus/tooltip/list. Own adversarial review traced all three chat-row callers, timer-slot preservation, source-index ordering and unlimited linked member counts. Local exact-source harness covers slots0..9 with timer/no timer and passive paint allocating no widget; native CI pending. Separate from floating action bar and older threading controls.
+
 ## 2026-11-23: Keep cursor fix, remove new header warnings
 
 Reworked existing PR445 per maintainer direction. Merged current main f7216d9,

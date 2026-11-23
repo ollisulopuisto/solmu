@@ -365,12 +365,7 @@ pub fn paint_source_avatar(
 /// A small network icon on an avatar's bottom-right corner. `slot` shifts
 /// further badges left, so a linked person's networks sit side by side.
 pub fn paint_network_badge(ui: &Ui, palette: &Palette, avatar: Rect, network: &str, slot: usize) {
-    let size = (avatar.width() * 0.38).clamp(14.0, 18.0);
-    let shift = slot as f32 * size * 0.85;
-    let center = pos2(
-        avatar.right() - size * 0.15 - shift,
-        avatar.bottom() - size * 0.15,
-    );
+    let (size, center) = network_badge_geometry(avatar, slot);
     let rect = Rect::from_center_size(center, Vec2::splat(size));
     ui.painter()
         .circle_filled(center, size * 0.58, palette.surface);
@@ -383,6 +378,32 @@ pub fn paint_network_badge(ui: &Ui, palette: &Palette, avatar: Rect, network: &s
         size * 0.85,
         palette.secondary,
     );
+}
+
+/// Shared geometry keeps the overflow mark in the existing overlapping cluster.
+fn network_badge_geometry(avatar: Rect, slot: usize) -> (f32, egui::Pos2) {
+    let size = (avatar.width() * 0.38).clamp(14.0, 18.0);
+    let shift = slot as f32 * size * 0.85;
+    (
+        size,
+        pos2(
+            avatar.right() - size * 0.15 - shift,
+            avatar.bottom() - size * 0.15,
+        ),
+    )
+}
+
+/// A passive overflow mark. No response, focus target, tooltip, popup or list.
+pub fn paint_network_overflow(ui: &Ui, palette: &Palette, avatar: Rect, slot: usize) {
+    let (size, center) = network_badge_geometry(avatar, slot);
+    ui.painter()
+        .circle_filled(center, size * 0.58, palette.surface);
+    let half = size * 0.25;
+    let stroke = Stroke::new(1.5, palette.secondary);
+    ui.painter()
+        .line_segment([center - vec2(half, 0.0), center + vec2(half, 0.0)], stroke);
+    ui.painter()
+        .line_segment([center - vec2(0.0, half), center + vec2(0.0, half)], stroke);
 }
 
 pub fn paint_disappearing_badge(ui: &Ui, palette: &Palette, avatar: Rect) {
@@ -2118,6 +2139,21 @@ pub fn dotted_chip(
 mod tests {
     use super::*;
 
+    #[test]
+    fn overflow_is_passive_and_keeps_existing_overlap_geometry() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let avatar = Rect::from_min_size(pos2(30.0, 76.0), Vec2::splat(48.0));
+            let before = ui.next_auto_id();
+            paint_network_overflow(ui, &Palette::dark(), avatar, 0);
+            assert_eq!(before, ui.next_auto_id());
+            let (size, right) = network_badge_geometry(avatar, 0);
+            let (_, left) = network_badge_geometry(avatar, 1);
+            assert!((right.x - left.x - size * 0.85).abs() < 0.001);
+            assert_eq!(right.y, left.y);
+        });
+        out.textures_delta.clear();
+    }
     #[test]
     fn avatar_tail_tip_is_one_third_above_bottom_for_any_avatar_rect() {
         for (top, height) in [(0.0, 28.0), (50.0, 60.0), (-18.0, 36.0)] {
