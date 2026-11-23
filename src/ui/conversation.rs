@@ -5137,6 +5137,11 @@ fn bubble(
             // Every reaction belongs to its own message. Flow pills and the
             // timestamp together, wrapping rather than covering either one.
             let members = album.unwrap_or(std::slice::from_ref(message));
+            for member in members {
+                ui.ctx().data_mut(|d| {
+                    d.remove::<Rect>(bubble_id(&member.chat, &member.id).with("open-thread-rect"))
+                });
+            }
             if let Some(body) = &response {
                 let last = members.last().unwrap_or(message);
                 let starred = view.starred.is_some_and(|ids| ids.contains(&last.id));
@@ -5146,7 +5151,26 @@ fn bubble(
                 let visible_status = last.from_me
                     && !matches!(status, Delivery::None | Delivery::Unknown)
                     && (!view.hide_grouped_status || not_sent(last));
-                let metadata = view.show_timestamp
+                let thread_members: Vec<_> = members
+                    .iter()
+                    .filter(|m| super::reply_threads::has_replies(ui.ctx(), m))
+                    .collect();
+                let thread_width = thread_members
+                    .iter()
+                    .map(|_| {
+                        ui.painter()
+                            .layout_no_wrap(
+                                crate::i18n::gettext(view.locale, "Open thread").into_owned(),
+                                theme::regular(11.0),
+                                Color32::WHITE,
+                            )
+                            .size()
+                            .x
+                            + 10.0
+                    })
+                    .sum::<f32>();
+                let metadata = !thread_members.is_empty()
+                    || view.show_timestamp
                     || visible_status
                     || starred
                     || pinned
@@ -5173,7 +5197,7 @@ fn bubble(
                         .map(|row| reaction_row_width(ui, view, row))
                         .sum::<f32>()
                         + if metadata {
-                            metadata_width.max(1.0) + 5.0
+                            metadata_width.max(1.0) + thread_width + 5.0
                         } else {
                             0.0
                         };
@@ -5198,18 +5222,44 @@ fn bubble(
                                 if last.from_me && !visible_status {
                                     width -= 19.0;
                                 }
-                                let (slot, _) = ui.allocate_exact_size(
+                                let pointer = ui.input(|i| i.pointer.hover_pos());
+                                let hovered = pointer.is_some_and(|p| body.rect.contains(p));
+                                let each = thread_width / thread_members.len().max(1) as f32;
+                                for member in &thread_members {
+                                    let (target, _) = ui.allocate_exact_size(
+                                        vec2(each, if reacted { 26.0 } else { 15.0 }),
+                                        Sense::hover(),
+                                    );
+                                    super::reply_threads::footer_entry(
+                                        ui,
+                                        member,
+                                        target,
+                                        hovered,
+                                        view.palette.accent,
+                                        view.locale,
+                                    );
+                                }
+                                let (time_slot, _) = ui.allocate_exact_size(
                                     vec2(width.max(1.0), if reacted { 26.0 } else { 15.0 }),
                                     Sense::hover(),
                                 );
-                                footer(ui, view, last, Some(slot), starred, pinned, saved, actions);
+                                footer(
+                                    ui,
+                                    view,
+                                    last,
+                                    Some(time_slot),
+                                    starred,
+                                    pinned,
+                                    saved,
+                                    actions,
+                                );
                             } else {
                                 ui.ctx().data_mut(|data| {
                                     data.remove::<Rect>(footer_id(&last.chat, &last.id))
                                 });
                             }
                         };
-                        if reacted {
+                        if reacted || !thread_members.is_empty() {
                             ui.horizontal_wrapped(draw);
                         } else {
                             draw(ui);

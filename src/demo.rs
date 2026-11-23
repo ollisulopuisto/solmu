@@ -6161,6 +6161,84 @@ mod tests {
     }
 
     #[test]
+    fn quiet_thread_entry_keeps_geometry_and_opens_exact_thread_by_pointer_or_keyboard() {
+        use crate::ui::conversation::{bubble_id, footer_id};
+        for keyboard in [false, true] {
+            let mut app = app();
+            apply_flags(&mut app, Some("refined-thread"));
+            let chat = SAMPLES[0].id;
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            for _ in 0..4 {
+                streak_test_frame(&mut app, &ctx, 1180.0, 1000.0, vec![]);
+            }
+            let id = bubble_id(chat, "refined-original");
+            let rect = ctx
+                .data(|d| d.get_temp::<egui::Rect>(id.with("open-thread-rect")))
+                .expect("parent retains thread navigation");
+            let before = ctx
+                .data(|d| d.get_temp::<egui::Rect>(footer_id(chat, "refined-original")))
+                .unwrap();
+            streak_test_frame(
+                &mut app,
+                &ctx,
+                1180.0,
+                1000.0,
+                vec![egui::Event::PointerMoved(rect.center())],
+            );
+            let after = ctx
+                .data(|d| d.get_temp::<egui::Rect>(footer_id(chat, "refined-original")))
+                .unwrap();
+            assert_eq!(before, after, "hover must not shift the timestamp");
+            assert!(
+                rect.right() <= after.left(),
+                "thread entry stays beside clock"
+            );
+            assert!(
+                ctx.data(|d| d.get_temp::<egui::Rect>(
+                    bubble_id(chat, "refined-normal").with("open-thread-rect")
+                ))
+                .is_none(),
+                "unrelated messages get no thread entry"
+            );
+            if keyboard {
+                ctx.memory_mut(|m| m.request_focus(id.with("open-thread")));
+                streak_test_frame(
+                    &mut app,
+                    &ctx,
+                    1180.0,
+                    1000.0,
+                    vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+                );
+            } else {
+                for pressed in [true, false] {
+                    streak_test_frame(
+                        &mut app,
+                        &ctx,
+                        1180.0,
+                        1000.0,
+                        vec![
+                            egui::Event::PointerMoved(rect.center()),
+                            egui::Event::PointerButton {
+                                pos: rect.center(),
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                }
+            }
+            let scope = crate::ui::reply_threads::scope(&app, &[chat.into()]);
+            assert_eq!(
+                ctx.data(|d| d.get_temp::<crate::reply_graph::Key>(scope))
+                    .map(|k| k.id),
+                Some("refined-original".into())
+            );
+        }
+    }
+
+    #[test]
     fn refined_tail_clicks_and_keyboard_jump_to_each_exact_original() {
         for (reply, target) in [
             ("refined-reply-one", "refined-original"),

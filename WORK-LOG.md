@@ -1489,3 +1489,12 @@ the sender header after removal of the internal quote card. Cache the actual
 current-frame sender-name rectangle (clear it before each bubble) and exclude
 only that header from text selection. Existing Info/locked-member tests stay
 unchanged, no speculative delay or weakened assertion.
+
+## Quiet thread entry
+
+Separately approved loaded-reply cleanup, stacked after #453, not part of it.
+Removed the visible count row and moved exact-parent thread navigation into a
+reserved timestamp-adjacent slot. Hover/focus changes ink only, not layout.
+Added exact production helper pointer/Enter/geometry regression and full-app
+exact-thread/timestamp-stability regression. Helper passes, nonclickable
+mutation fails, restored passes. Full-app/native verification pending.

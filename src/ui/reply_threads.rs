@@ -566,8 +566,8 @@ pub fn row(
     ui: &mut egui::Ui,
     m: &Message,
     response: &egui::Response,
-    color: egui::Color32,
-    locale: crate::i18n::Locale,
+    _color: egui::Color32,
+    _locale: crate::i18n::Locale,
 ) {
     let key = Key::of(m);
     let Some(shared) = frame(ui.ctx()) else {
@@ -587,24 +587,58 @@ pub fn row(
     if marker_active {
         f.hover = Some(key.clone());
     }
-    if let Some(replies) = f.replies.get(&key).filter(|r| !r.is_empty()) {
-        let n = replies.len();
-        let label =
-            crate::i18n::ngettext(locale, "{} loaded reply ›", "{} loaded replies ›", n as u32)
-                .replace("{}", &n.to_string());
-        if ui
-            .add(egui::Button::new(egui::RichText::new(label).color(color)).frame(false))
-            .on_hover_text(crate::i18n::gettext(
-                locale,
-                "Only replies in loaded history are counted. Open this thread.",
-            ))
-            .clicked()
-        {
-            ui.ctx().data_mut(|d| d.insert_temp(f.scope, key));
-            ui.ctx().request_repaint();
-        }
-    }
 }
+/// Loaded history determines whether thread navigation is available, never a count label.
+pub fn has_replies(ctx: &egui::Context, m: &Message) -> bool {
+    frame(ctx).is_some_and(|shared| {
+        shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replies
+            .get(&Key::of(m))
+            .is_some_and(|replies| !replies.is_empty())
+    })
+}
+
+/// Reserved beside the clock in every frame, so revealing it cannot reflow a row.
+pub fn footer_entry(
+    ui: &mut egui::Ui,
+    m: &Message,
+    rect: egui::Rect,
+    hovered: bool,
+    color: egui::Color32,
+    locale: crate::i18n::Locale,
+) {
+    let label = crate::i18n::gettext(locale, "Open thread");
+    let response = super::thread_entry::show(
+        ui,
+        rect,
+        super::conversation::bubble_id(&m.chat, &m.id).with("open-thread"),
+        hovered,
+        label.as_ref(),
+        crate::theme::regular(11.0),
+        color,
+    );
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            super::conversation::bubble_id(&m.chat, &m.id).with("open-thread-rect"),
+            rect,
+        )
+    });
+    if hovered || response.hovered() || response.has_focus() {
+        crate::theme::focus_outline(ui, response.id, rect, 3.0);
+    }
+    if response.clicked()
+        && let Some(shared) = frame(ui.ctx())
+    {
+        let scope = shared.lock().unwrap_or_else(|e| e.into_inner()).scope;
+        ui.ctx().data_mut(|d| d.insert_temp(scope, Key::of(m)));
+        ui.ctx().request_repaint();
+    }
+    crate::theme::reveal_focus(&response);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand);
+}
+
 pub fn finish(ui: &egui::Ui, color: egui::Color32) {
     let Some(shared) = frame(ui.ctx()) else {
         return;
