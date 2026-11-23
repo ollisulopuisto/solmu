@@ -2708,6 +2708,53 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 history.messages[3].status = crate::model::Delivery::Unknown;
                 history.messages[4].status = crate::model::Delivery::Failed;
             }
+            "refined-thread" => {
+                let chat = SAMPLES[0].id;
+                let base = crate::util::now() - 600;
+                let original = message(
+                    chat,
+                    "refined-original",
+                    false,
+                    base,
+                    Content::text("Can you send the revised draft?"),
+                );
+                let quote = Quoted {
+                    labelled: None,
+                    chat: None,
+                    id: original.id.clone(),
+                    sender: original.sender.clone(),
+                    sender_name: original.sender_name.clone(),
+                    summary: "Can you send the revised draft?".into(),
+                    mentions: Vec::new(),
+                };
+                let mut first = message(
+                    chat,
+                    "refined-reply-one",
+                    true,
+                    base + 60,
+                    Content::text("The draft is ready."),
+                );
+                first.quoted = Some(quote.clone());
+                let mut second = message(
+                    chat,
+                    "refined-reply-two",
+                    true,
+                    base + 120,
+                    Content::text("I fixed the crop too."),
+                );
+                second.quoted = Some(quote);
+                let normal = message(
+                    chat,
+                    "refined-normal",
+                    true,
+                    base + 180,
+                    Content::text("I will send it this afternoon."),
+                );
+                app.conversations.get_mut(chat).unwrap().messages =
+                    vec![original, first, second, normal];
+                app.open_chat = Some(chat.into());
+                app.scroll_to_bottom = false;
+            }
             "group-stacks" => group_stacks_sample(app),
             "linked-chip-lanes" => {
                 linked_sample(app);
@@ -6111,6 +6158,120 @@ mod tests {
             stacks_after(&first, &reacted),
             "a final reaction is below the streak, not in its seam"
         );
+    }
+
+    #[test]
+    fn refined_tail_clicks_and_keyboard_jump_to_each_exact_original() {
+        for (reply, target) in [
+            ("refined-reply-one", "refined-original"),
+            ("refined-reply-two", "second-original"),
+        ] {
+            for keyboard in [false, true] {
+                let mut app = app();
+                apply_flags(&mut app, Some("refined-thread"));
+                let chat = SAMPLES[0].id;
+                let rows = &mut app.conversations.get_mut(chat).unwrap().messages;
+                let mut second = rows[0].clone();
+                second.id = "second-original".into();
+                second.timestamp += 1;
+                rows.insert(1, second);
+                rows.iter_mut()
+                    .find(|m| m.id == "refined-reply-two")
+                    .unwrap()
+                    .quoted
+                    .as_mut()
+                    .unwrap()
+                    .id = "second-original".into();
+                let quoted = rows
+                    .iter()
+                    .find(|m| m.id == reply)
+                    .unwrap()
+                    .quoted
+                    .clone()
+                    .unwrap();
+                let ctx = egui::Context::default();
+                crate::theme::install(&ctx);
+                for _ in 0..4 {
+                    streak_test_frame(&mut app, &ctx, 1180.0, 1000.0, vec![]);
+                }
+                let id = crate::ui::conversation::bubble_id(chat, reply);
+                if keyboard {
+                    ctx.memory_mut(|m| {
+                        m.request_focus(id.with(("quote", &quoted.chat, &quoted.id)))
+                    });
+                    streak_test_frame(
+                        &mut app,
+                        &ctx,
+                        1180.0,
+                        1000.0,
+                        vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+                    );
+                } else {
+                    let pos = ctx
+                        .data(|d| d.get_temp::<egui::Rect>(id.with("quote")))
+                        .unwrap()
+                        .center();
+                    for pressed in [true, false] {
+                        streak_test_frame(
+                            &mut app,
+                            &ctx,
+                            1180.0,
+                            1000.0,
+                            vec![
+                                egui::Event::PointerMoved(pos),
+                                egui::Event::PointerButton {
+                                    pos,
+                                    button: egui::PointerButton::Primary,
+                                    pressed,
+                                    modifiers: egui::Modifiers::NONE,
+                                },
+                            ],
+                        );
+                    }
+                }
+                assert_eq!(
+                    app.scroll_anchor.as_deref(),
+                    Some(target),
+                    "{reply} keyboard={keyboard}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn refined_reply_tails_belong_to_each_exact_reply_outside_the_body() {
+        for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+            let mut app = app();
+            apply_flags(&mut app, Some("refined-thread"));
+            app.settings.theme = theme;
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            for _ in 0..4 {
+                streak_test_frame(&mut app, &ctx, 1180.0, 1000.0, vec![]);
+            }
+            let id = |name: &str| crate::ui::conversation::bubble_id(SAMPLES[0].id, name);
+            for name in ["refined-reply-one", "refined-reply-two"] {
+                let body = ctx
+                    .data(|d| d.get_temp::<egui::Rect>(id(name).with("rect")))
+                    .unwrap();
+                let tail = ctx
+                    .data(|d| d.get_temp::<egui::Rect>(id(name).with("quote")))
+                    .unwrap();
+                assert!(
+                    tail.left() >= body.right(),
+                    "the reply control is the external tail, not an internal chip"
+                );
+                assert_eq!(tail.top(), body.top());
+                assert!(
+                    tail.height() >= 28.0,
+                    "keyboard/pointer target remains usable"
+                );
+            }
+            assert!(
+                ctx.data(|d| d.get_temp::<egui::Rect>(id("refined-normal").with("quote")))
+                    .is_none()
+            );
+        }
     }
 
     #[test]
@@ -21867,7 +22028,7 @@ mod tests {
     }
 
     #[test]
-    fn a_quote_bar_takes_the_quoted_senders_colour() {
+    fn reply_tail_links_take_the_quoted_senders_colour() {
         let mut app = app();
         apply_flags(&mut app, Some("quotes"));
         let ctx = egui::Context::default();
@@ -21876,45 +22037,47 @@ mod tests {
         for _ in 0..3 {
             shapes = frame_sized(&mut app, &ctx, 780.0, Vec::new());
         }
-        let group = SAMPLES[1].id;
-        let quoted = |id: &str| {
-            app.conversations[group]
+        let palette = app.palette;
+        let mut expected = Vec::new();
+        for id in ["group-reply", "quote-own"] {
+            let row = app.conversations[SAMPLES[1].id]
                 .messages
                 .iter()
                 .find(|row| row.id == id)
-                .and_then(|row| row.quoted.clone())
-                .expect("a quote")
-                .sender
-        };
-        let palette = app.palette;
-        let bar = |sender: &str, bubble: egui::Color32| {
-            crate::theme::readable_on(
-                bubble,
-                palette.sender(crate::util::hue(sender)),
-                palette.text,
-                3.0,
-            )
-        };
-        let expected = [
-            bar(&quoted("group-reply"), palette.bubble_in),
-            bar(&quoted("quote-own"), palette.bubble_out),
-        ];
-        fn bars(shape: &egui::Shape, out: &mut Vec<egui::Color32>) {
+                .unwrap();
+            let quote = row.quoted.as_ref().unwrap();
+            let ink = if app.me.as_deref() == Some(quote.sender.as_str()) {
+                palette.text
+            } else {
+                palette.sender(crate::util::hue(&quote.sender))
+            };
+            let fill = if row.from_me {
+                palette.bubble_out
+            } else {
+                palette.bubble_in
+            };
+            expected
+                .push(crate::theme::readable_on(fill, ink, palette.text, 3.0).gamma_multiply(0.85));
+        }
+        fn links(shape: &egui::Shape, out: &mut Vec<egui::Color32>) {
             match shape {
-                egui::Shape::Rect(rect) if (rect.rect.width() - 4.0).abs() < 0.01 => {
-                    out.push(rect.fill)
+                egui::Shape::Rect(r)
+                    if (r.rect.width() - 9.0).abs() < 0.01
+                        && (r.rect.height() - 13.0).abs() < 0.01 =>
+                {
+                    out.push(r.stroke.color)
                 }
-                egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| bars(shape, out)),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| links(s, out)),
                 _ => {}
             }
         }
         let mut drawn = Vec::new();
-        for clipped in &shapes {
-            bars(&clipped.shape, &mut drawn);
+        for s in shapes {
+            links(&s.shape, &mut drawn);
         }
-        for colour in expected {
-            assert!(drawn.contains(&colour), "{colour:?} not among {drawn:?}");
-        }
+        assert!(drawn.len() >= 4, "both exact reply tails paint two links");
+        // Colours are checked through the actual strokes, not a removed quote bar.
+        assert!(expected.iter().all(|c| drawn.contains(c)));
     }
 
     #[test]
