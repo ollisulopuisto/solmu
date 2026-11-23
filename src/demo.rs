@@ -17660,18 +17660,30 @@ mod tests {
         );
 
         // Hover the message, then click the published control.
-        let pos = affordance.center();
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerMoved(bubble.center())],
+        );
+        // Hover changes the small keyboard fallback into the grouped bar.
+        // Read the actual full-picker hit rectangle after that transition.
+        for _ in 0..3 {
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerMoved(bubble.center())],
+            );
+        }
+        let pos = ctx
+            .data(|d| d.get_temp::<egui::Rect>(id.with("react-rect")))
+            .unwrap()
+            .center();
         let press = |pressed| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
-        frame_with(
-            &mut app,
-            &ctx,
-            vec![egui::Event::PointerMoved(bubble.center())],
-        );
         frame_with(
             &mut app,
             &ctx,

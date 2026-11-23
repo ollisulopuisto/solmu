@@ -4783,14 +4783,22 @@ fn grouped_hover_actions(
     let Some(g) = Geometry::place(bubble.rect.intersect(bounds), bounds, quick.len() + 1) else {
         return false;
     };
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(bubble.id.with("react-rect"), g.cell(quick.len())));
     let pointer = ui.input(|i| i.pointer.interact_pos());
     let area_id = bubble.id.with("hover-actions");
-    let layer = egui::LayerId::new(egui::Order::Foreground, area_id);
+    let layers = [
+        area_id,
+        area_id.with("reply"),
+        area_id.with("star"),
+        area_id.with("picker"),
+    ]
+    .map(|id| egui::LayerId::new(egui::Order::Foreground, id));
     let over = pointer.is_some_and(|p| bubble.rect.intersect(bounds).contains(p));
     let uncovered = pointer.is_some_and(|p| {
         ui.ctx()
             .layer_id_at(p)
-            .is_none_or(|id| id == bubble.layer_id || id == layer)
+            .is_none_or(|id| id == bubble.layer_id || layers.contains(&id))
     });
     let frame = ui.ctx().cumulative_frame_nr();
     let held = ui
@@ -4829,10 +4837,10 @@ fn grouped_hover_actions(
         .order(egui::Order::Foreground)
         .movable(false)
         .sense(Sense::hover())
-        .fixed_pos(g.bounds().min)
+        .fixed_pos(g.reactions.min)
         .show(ui.ctx(), |bar| {
             bar.set_clip_rect(bounds);
-            bar.set_min_size(g.bounds().size());
+            bar.set_min_size(g.reactions.size());
             hover_actions::paint(
                 bar.painter(),
                 g,
@@ -4872,18 +4880,32 @@ fn grouped_hover_actions(
                     });
                 }
             }
-            let controls = [
-                (g.reply, Icon::Reply, "Reply", can_reply),
-                (
-                    g.star,
-                    Icon::Star,
-                    if starred { "Unstar" } else { "Star" },
-                    !matches!(message.content, Content::Revoked),
-                ),
-                (g.cell(quick.len()), Icon::Smile, "React", true),
-            ];
-            for (index, (rect, icon, label, enabled)) in controls.into_iter().enumerate() {
-                let label = crate::i18n::gettext(view.locale, label);
+        });
+    let controls = [
+        (g.reply, Icon::Reply, "Reply", can_reply),
+        (
+            g.star,
+            Icon::Star,
+            if starred { "Unstar" } else { "Star" },
+            !matches!(message.content, Content::Revoked),
+        ),
+        (g.cell(quick.len()), Icon::Smile, "React", true),
+    ];
+    for (index, (rect, icon, label, enabled)) in controls.into_iter().enumerate() {
+        let label = crate::i18n::gettext(view.locale, label);
+        let control_id = match index {
+            0 => area_id.with("reply"),
+            1 => area_id.with("star"),
+            _ => area_id.with("picker"),
+        };
+        egui::Area::new(control_id)
+            .order(egui::Order::Foreground)
+            .movable(false)
+            .sense(Sense::hover())
+            .fixed_pos(rect.min)
+            .show(ui.ctx(), |bar| {
+                bar.set_clip_rect(bounds);
+                bar.set_min_size(rect.size());
                 let r = bar.interact(
                     rect,
                     area_id.with(("action", index)),
@@ -4923,8 +4945,8 @@ fn grouped_hover_actions(
                         _ => actions.push(open_reaction_picker_action(&view.chat.id, &message.id)),
                     }
                 }
-            }
-        });
+            });
+    }
     true
 }
 
@@ -14329,6 +14351,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn cross_toolbar_empty_corners_leave_bubble_clicks_alone() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let message = crate::archive::tests::message(&view.chat.id, "empty-corner", 0, false);
+            let pos = pos2(100.0, 80.0);
+            let mut clicks = 0;
+            for pressed in [None, None, None, Some(true), Some(false)] {
+                let mut events = vec![egui::Event::PointerMoved(pos)];
+                if let Some(pressed) = pressed {
+                    events.push(egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(420.0, 340.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let rect = Rect::from_min_size(pos2(18.0, 48.0), vec2(250.0, 55.0));
+                        let bubble =
+                            ui.interact(rect, egui::Id::new("empty-corner-bubble"), Sense::click());
+                        if bubble.clicked() {
+                            clicks += 1;
+                        }
+                        grouped_hover_actions(ui, view, &message, &bubble, &mut Vec::new());
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            assert_eq!(
+                clicks, 1,
+                "the invisible corner of the cross must not intercept message input"
+            );
+        });
     }
 
     #[test]
