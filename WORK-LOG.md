@@ -1540,3 +1540,19 @@ message/control focus uses the same grid. Added geometry bottom/tall/no-fit,
 disjoint cells and side-only no-legacy tests; original exact control dispatch
 regression stays. Own pre-push review traced source IDs, modal layers, focus,
 viewport and hover lifetime. Fmt/diff pass; native tests and pixels still needed.
+## Message info source identity
+
+Approved sent/received dark sketches: show Bridge, Account and original source
+To/From, with group context rather than an arbitrary group member. Incoming
+messages gain Message info access; outgoing receipt behavior stays separate.
+Beeper account lookup is scoped by exact origin and account id. Reported handles
+are optional; missing account names fall back to source account id. No linked
+primary destination is used to infer historical identity. Values wrap at narrow
+widths inside the existing bounded scroll pane. Incoming timestamps are called
+Message time, not invented delivery times. No incoming outgoing-receipt watcher.
+Added synthetic source fixtures, cross-origin same-account-id regression,
+incoming group watcher test and updated received footer click regression. The
+old short-info no-scroll contract changes because the approved metadata adds
+height, so viewport test now covers bounded scrolling instead. Exact-source
+metadata harness compiles/passes with minimal model stubs; no full native build
+or pixel claim locally. Workflow capture changes need separate approval.
