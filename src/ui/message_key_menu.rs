@@ -133,10 +133,9 @@ fn choose(app: &mut App, ctx: &egui::Context, menu: &Menu, index: usize) {
             if let Some(person) = app
                 .current_chat()
                 .and_then(|c| super::merged::person_for_view(app, c))
+                && let Some(member) = person.members.iter().find(|m| m.chat == menu.chat).cloned()
             {
-                if let Some(member) = person.members.iter().find(|m| m.chat == menu.chat).cloned() {
-                    super::merged::prepare_destination(app, ctx, &member);
-                }
+                super::merged::prepare_destination(app, ctx, &member);
             }
         }
         app.actions.push(Action::PrefillComposer {
