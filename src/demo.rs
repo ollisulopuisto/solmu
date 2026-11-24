@@ -3456,6 +3456,15 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     .unwrap();
                 message.status = crate::model::Delivery::Played;
             }
+            "translation-review" => {
+                linked_sample(app);
+                app.apply(
+                    crate::model::Action::TranslateLocally(
+                        "Voimmeko tarkistaa luonnoksen ennen lähettämistä?".into(),
+                    ),
+                    &egui::Context::default(),
+                );
+            }
             "info-source-sent" => message_info_source_sample(app, false, false),
             "info-source-received" => message_info_source_sample(app, true, false),
             "info-source-group" => message_info_source_sample(app, true, true),
