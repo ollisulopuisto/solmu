@@ -32,6 +32,7 @@ fn blocked(a: Point, b: Point, obstacles: &[Box2]) -> bool {
         }
     })
 }
+#[cfg(test)]
 pub fn route(source: Box2, target: Box2, others: &[Box2], viewport: Box2) -> Option<Vec<Point>> {
     if [source, target]
         .iter()
@@ -57,6 +58,60 @@ pub fn route(source: Box2, target: Box2, others: &[Box2], viewport: Box2) -> Opt
         x: end.x - sign * (PAD + 1.0),
         y: end.y,
     };
+    route_ports(source, target, others, viewport, start, end, a, b)
+}
+
+/// Route to the top of the reply's chain, not a guessed body midpoint.
+pub fn route_to_chain(
+    source: Box2,
+    target: Box2,
+    chain: Box2,
+    others: &[Box2],
+    viewport: Box2,
+) -> Option<Vec<Point>> {
+    if [source, target, chain]
+        .iter()
+        .any(|r| r.l < viewport.l || r.r > viewport.r || r.t < viewport.t || r.b > viewport.b)
+    {
+        return None;
+    }
+    let end = Point {
+        x: (chain.l + chain.r) / 2.0,
+        y: chain.t,
+    };
+    let right = end.x >= (source.l + source.r) / 2.0;
+    let start = Point {
+        x: if right { source.r } else { source.l },
+        y: (source.t + source.b) / 2.0,
+    };
+    let a = Point {
+        x: start.x + if right { PAD + 1.0 } else { -PAD - 1.0 },
+        y: start.y,
+    };
+    let b = Point {
+        x: end.x,
+        y: end.y - PAD - 1.0,
+    };
+    if [start, end, a, b]
+        .iter()
+        .any(|p| p.x < viewport.l || p.x > viewport.r || p.y < viewport.t || p.y > viewport.b)
+    {
+        return None;
+    }
+    route_ports(source, target, others, viewport, start, end, a, b)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn route_ports(
+    source: Box2,
+    target: Box2,
+    others: &[Box2],
+    viewport: Box2,
+    start: Point,
+    end: Point,
+    a: Point,
+    b: Point,
+) -> Option<Vec<Point>> {
     let mut obs: Vec<_> = others.iter().copied().map(|r| r.inflate(PAD)).collect();
     if blocked(start, a, &obs) || blocked(b, end, &obs) {
         return None;
@@ -165,6 +220,29 @@ mod tests {
     }
     fn view() -> Box2 {
         r(0., 0., 800., 800.)
+    }
+    #[test]
+    fn chain_port_is_exact_and_outer_route_avoids_reply_body() {
+        let source = r(350., 20., 600., 90.);
+        let target = r(90., 300., 400., 410.);
+        let chain = r(60., 264., 90., 294.);
+        let p = route_to_chain(source, target, chain, &[], view()).unwrap();
+        assert_eq!(*p.last().unwrap(), Point { x: 75., y: 264. });
+        assert!(p.windows(2).all(|p| p[0].x == p[1].x || p[0].y == p[1].y));
+        assert!(p.windows(2).all(|p| !blocked(p[0], p[1], &[target])));
+    }
+    #[test]
+    fn chain_outside_viewport_is_not_routed_to() {
+        assert!(
+            route_to_chain(
+                r(100., 10., 300., 50.),
+                r(100., 100., 300., 200.),
+                r(-40., 64., -10., 94.),
+                &[],
+                view()
+            )
+            .is_none()
+        );
     }
     #[test]
     fn endpoints_touch_inner_borders_and_segments_are_orthogonal() {

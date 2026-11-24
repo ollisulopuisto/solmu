@@ -5258,6 +5258,13 @@ fn bubble(
     if overlap.is_some() {
         ui.add_space(-STREAK_OVERLAP - ui.spacing().item_spacing.y);
     }
+    // Reserve the chain slot before layout, not on hover, so neighbouring
+    // messages and their media cannot be covered and hover never reflows.
+    if message.quoted.is_some()
+        || album.is_some_and(|items| items.iter().any(|m| m.quoted.is_some()))
+    {
+        ui.add_space(super::reply_tail::SLOT_HEIGHT);
+    }
     let mut response = None;
     let mut area = ui.available_rect_before_wrap();
     // Tails are part of the painted bounds, including beside a linked chip.
@@ -6677,14 +6684,14 @@ fn bubble_frame(
         if let Some(items) = album {
             for (index, item) in items.iter().enumerate() {
                 if let Some(quoted) = &item.quoted {
-                    // Each two-column media row has at least 80 points. Stack
-                    // its two independent reply tails beside that row, never
+                    // Each two-column media row reserves at least 132 points. Stack
+                    // its two independent chain/tail pairs beside that row, never
                     // beside a later message or on top of another member.
                     let top = tiles
                         .iter()
                         .find(|(_, id)| id == &item.id)
                         .map_or(inner.response.rect.top(), |(tile, _)| tile.top())
-                        + (index % 2) as f32 * 32.0;
+                        + (index % 2) as f32 * 66.0;
                     let anchor = inner
                         .response
                         .rect
@@ -7377,7 +7384,7 @@ fn quote_chip(
     } else {
         palette.bubble_in
     };
-    let rect = super::reply_tail::geometry(body, message.from_me);
+    let rect = super::reply_tail::chain_geometry(body, message.from_me);
     let quoted_own = quotes_me(view, quoted);
     let ink = if quoted_own {
         palette.text
@@ -7401,6 +7408,28 @@ fn quote_chip(
     ));
     let paint_pass = ui.ctx().cumulative_pass_nr();
     let focused = response.has_focus();
+    #[cfg(feature = "demo")]
+    let focused = focused || crate::demo::chain_hover_shot(&message.id);
+    if response.hovered() || focused {
+        let tail = super::reply_tail::geometry(body, message.from_me);
+        let x = rect.center().x;
+        ui.painter().line_segment(
+            [egui::pos2(x, rect.bottom()), egui::pos2(x, tail.center().y)],
+            egui::Stroke::new(1.8, palette.accent),
+        );
+        let tip = if message.from_me {
+            tail.right()
+        } else {
+            tail.left()
+        };
+        ui.painter().line_segment(
+            [
+                egui::pos2(x, tail.center().y),
+                egui::pos2(tip, tail.center().y),
+            ],
+            egui::Stroke::new(1.8, palette.accent),
+        );
+    }
     ui.ctx().data_mut(|data| {
         let id = bubble_id(&message.chat, &message.id);
         data.insert_temp(id.with("quote-pass"), paint_pass);
@@ -10072,18 +10101,29 @@ fn album_content(
     let gap = 3.0;
     let columns = 2;
     let tile = ((width - gap * (columns - 1) as f32) / columns as f32).max(80.0);
+    let tile_height = if messages.iter().any(|m| m.quoted.is_some()) {
+        tile.max(132.0)
+    } else {
+        tile
+    };
     let mut tiles = Vec::with_capacity(messages.len());
     for (row, chunk) in messages.chunks(columns).enumerate() {
         // An own bubble lays out right to left; the grid keeps reading order.
         ui.allocate_ui_with_layout(
-            vec2(tile * columns as f32 + gap, tile),
+            vec2(tile * columns as f32 + gap, tile_height),
             Layout::left_to_right(Align::Min),
             |ui| {
                 ui.spacing_mut().item_spacing.x = gap;
                 for (column, message) in chunk.iter().enumerate() {
-                    if let Some(rect) =
-                        album_tile(ui, view, message, vec2(tile, tile), row, column, actions)
-                    {
+                    if let Some(rect) = album_tile(
+                        ui,
+                        view,
+                        message,
+                        vec2(tile, tile_height),
+                        row,
+                        column,
+                        actions,
+                    ) {
                         tiles.push((rect, message.id.clone()));
                     }
                 }

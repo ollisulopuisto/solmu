@@ -1528,3 +1528,10 @@ pencil, "Draft" and the first non-blank line of the composer text while
 nothing is being edited. Checked first: no open or merged PR adds a draft
 label; restore-on-open drafts already exist. Native compile and capture not
 run by this agent, CI is the first compile.
+
+## Reply chain above tail (2026-11-24)
+
+- Moves the exact-source chain target and glyph into a reserved slot above the filled reply tail. Hover/focus alone reveals the local drop and the loaded-parent connector.
+- Router receives the exact chain port rather than deriving a child body midpoint. Source identity, jump-back and per-album-member destinations remain separate.
+- Quoted albums reserve vertical tile height for two distinct chain/tail pairs without increasing narrow tile width.
+- Review: traced body/painted/quote rect consumers, current-pass hover state, linked keys, album anchors and clipping. No workflow changes, no release. Native feature capture and full-app CI remain required before merge; local pure-router tests and formatting do not substitute for that proof.
