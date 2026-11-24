@@ -1,5 +1,12 @@
 //! Offline sample data for screenshots, recorded tours, and headless UI tests.
 
+static SHOT_HOVER_ACTIONS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Synthetic pointer fixture only, never enabled in a normal app.
+pub fn hover_actions_shot(id: &str) -> bool {
+    id == "hover-actions-target" && SHOT_HOVER_ACTIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub mod stock;
 pub mod tour;
 
@@ -2752,6 +2759,41 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 );
                 app.conversations.get_mut(chat).unwrap().messages =
                     vec![original, first, second, normal];
+                app.open_chat = Some(chat.into());
+                app.scroll_to_bottom = false;
+            }
+            "hover-actions" => {
+                SHOT_HOVER_ACTIONS.store(true, std::sync::atomic::Ordering::Relaxed);
+                let chat = SAMPLES[0].id;
+                app.conversations.get_mut(chat).unwrap().messages = vec![
+                    message(
+                        chat,
+                        "hover-actions-target",
+                        false,
+                        crate::util::now(),
+                        Content::text("The revised notes are ready for review."),
+                    ),
+                    message(
+                        chat,
+                        "hover-actions-following",
+                        true,
+                        crate::util::now() + 60,
+                        Content::text("Thanks. I will read them this afternoon."),
+                    ),
+                ];
+                for index in 0..5 {
+                    app.conversations
+                        .get_mut(chat)
+                        .unwrap()
+                        .messages
+                        .push(message(
+                            chat,
+                            &format!("hover-evidence-following-{index}"),
+                            true,
+                            crate::util::now() + 120 + index * 60,
+                            Content::text("A later note keeps room below the hovered message."),
+                        ));
+                }
                 app.open_chat = Some(chat.into());
                 app.scroll_to_bottom = false;
             }
@@ -17660,18 +17702,30 @@ mod tests {
         );
 
         // Hover the message, then click the published control.
-        let pos = affordance.center();
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![egui::Event::PointerMoved(bubble.center())],
+        );
+        // Hover changes the small keyboard fallback into the grouped bar.
+        // Read the actual full-picker hit rectangle after that transition.
+        for _ in 0..3 {
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerMoved(bubble.center())],
+            );
+        }
+        let pos = ctx
+            .data(|d| d.get_temp::<egui::Rect>(id.with("react-rect")))
+            .unwrap()
+            .center();
         let press = |pressed| egui::Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
-        frame_with(
-            &mut app,
-            &ctx,
-            vec![egui::Event::PointerMoved(bubble.center())],
-        );
         frame_with(
             &mut app,
             &ctx,

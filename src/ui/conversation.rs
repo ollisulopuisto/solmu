@@ -4762,6 +4762,200 @@ fn reaction_button_label(from_me: bool, sender: &str) -> String {
     }
 }
 
+/// All toolbar actions stay bound to this one hovered message, even when
+/// the foreground bar crosses the visual space of a neighbouring bubble.
+fn grouped_hover_actions(
+    ui: &mut egui::Ui,
+    view: &View<'_>,
+    message: &Message,
+    bubble: &egui::Response,
+    actions: &mut Vec<Action>,
+) -> bool {
+    use super::hover_actions::{self, Geometry};
+    if !ui.is_enabled() {
+        return false;
+    }
+    let quick = quick_reactions(message, view.reaction_emoji);
+    // The approved bar has six quick choices plus the full picker. A custom
+    // current reaction stays available in the full picker/context menu.
+    let quick = &quick[..quick.len().min(QUICK_REACTIONS.len())];
+    let bounds = ui.clip_rect().shrink(2.0);
+    let Some(g) = Geometry::place(bubble.rect.intersect(bounds), bounds, quick.len() + 1) else {
+        return false;
+    };
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(bubble.id.with("react-rect"), g.cell(quick.len())));
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    #[cfg(feature = "demo")]
+    let pointer = if crate::demo::hover_actions_shot(&message.id) {
+        Some(bubble.rect.center())
+    } else {
+        pointer
+    };
+    let area_id = bubble.id.with("hover-actions");
+    let layers = [
+        area_id,
+        area_id.with("reply"),
+        area_id.with("star"),
+        area_id.with("picker"),
+    ]
+    .map(|id| egui::LayerId::new(egui::Order::Foreground, id));
+    let over = pointer.is_some_and(|p| bubble.rect.intersect(bounds).contains(p));
+    let uncovered = pointer.is_some_and(|p| {
+        ui.ctx()
+            .layer_id_at(p)
+            .is_none_or(|id| id == bubble.layer_id || layers.contains(&id))
+    });
+    let frame = ui.ctx().cumulative_frame_nr();
+    let held = ui
+        .ctx()
+        .data(|d| d.get_temp::<u64>(area_id))
+        .is_some_and(|last| last == frame || last.saturating_add(1) == frame);
+    // Include the short bridge from the bubble to the toolbar. Without it
+    // a pointer crossing the 8px visual gap would dismiss its own target.
+    let shown = bubble.rect.intersect(bounds);
+    let bridge = Rect::from_min_max(
+        pos2(shown.left().max(g.reactions.left()), shown.bottom()),
+        pos2(shown.right().min(g.reactions.right()), g.reactions.top()),
+    );
+    let in_reach = pointer.is_some_and(|p| g.bounds().contains(p) || bridge.contains(p));
+    let active = (over && uncovered) || (held && in_reach && uncovered);
+    ui.ctx().data_mut(|d| {
+        if active {
+            d.insert_temp(area_id, frame);
+        } else {
+            d.remove::<u64>(area_id);
+        }
+    });
+    if !active {
+        // Keep the existing keyboard-focusable fallback, with its established
+        // accessible sender label. Pointer hover uses the grouped toolbar.
+        return false;
+    }
+    let mine = own_reaction(message);
+    let starred = view.starred.is_some_and(|ids| ids.contains(&message.id));
+    let can_reply = view.chat.can_send()
+        && !matches!(
+            message.content,
+            Content::Revoked | Content::PhoneOnly { .. }
+        );
+    egui::Area::new(area_id)
+        .order(egui::Order::Foreground)
+        .movable(false)
+        .sense(Sense::hover())
+        .fixed_pos(g.reactions.min)
+        .show(ui.ctx(), |bar| {
+            bar.set_clip_rect(bounds);
+            bar.set_min_size(g.reactions.size());
+            hover_actions::paint(
+                bar.painter(),
+                g,
+                view.palette.overlay,
+                view.palette.surface_active,
+                view.palette.outline,
+            );
+            for (index, emoji) in quick.iter().enumerate() {
+                let rect = g.cell(index);
+                let r = bar.interact(rect, area_id.with(("emoji", index)), Sense::click());
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        true,
+                        format!(
+                            "{} {emoji}",
+                            reaction_button_label(
+                                message.from_me,
+                                &(view.names_or)(&message.sender, message.sender_name.as_deref())
+                            )
+                        ),
+                    )
+                });
+                theme::focus_outline(bar, r.id, rect, 8.0);
+                if r.hovered() || mine == Some(*emoji) {
+                    bar.painter()
+                        .circle_filled(rect.center(), 16.0, view.palette.surface_hover);
+                }
+                let line =
+                    widgets::line(bar, emoji, theme::regular(22.0), view.palette.text, 34.0, 1);
+                line.paint(bar, rect.center() - line.size() / 2.0, view.palette.text);
+                if r.clicked() {
+                    actions.push(Action::React {
+                        chat: view.chat.id.clone(),
+                        message: message.id.clone(),
+                        emoji: reaction_choice(mine, emoji),
+                    });
+                }
+            }
+        });
+    let controls = [
+        (g.reply, Icon::Reply, "Reply", can_reply),
+        (
+            g.star,
+            Icon::Star,
+            if starred { "Unstar" } else { "Star" },
+            !matches!(message.content, Content::Revoked),
+        ),
+        (g.cell(quick.len()), Icon::Smile, "React", true),
+    ];
+    for (index, (rect, icon, label, enabled)) in controls.into_iter().enumerate() {
+        let label = crate::i18n::gettext(view.locale, label);
+        let control_id = match index {
+            0 => area_id.with("reply"),
+            1 => area_id.with("star"),
+            _ => area_id.with("picker"),
+        };
+        egui::Area::new(control_id)
+            .order(egui::Order::Foreground)
+            .movable(false)
+            .sense(Sense::hover())
+            .fixed_pos(rect.min)
+            .show(ui.ctx(), |bar| {
+                bar.set_clip_rect(bounds);
+                bar.set_min_size(rect.size());
+                let r = bar.interact(
+                    rect,
+                    area_id.with(("action", index)),
+                    if enabled {
+                        Sense::click()
+                    } else {
+                        Sense::hover()
+                    },
+                );
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &label)
+                });
+                theme::focus_outline(bar, r.id, rect, 8.0);
+                if r.hovered() && enabled {
+                    bar.painter()
+                        .rect_filled(rect.shrink(4.0), 8.0, view.palette.surface_hover);
+                }
+                theme::paint_icon(
+                    bar,
+                    icon,
+                    rect.shrink(7.0),
+                    23.0,
+                    if enabled {
+                        view.palette.text
+                    } else {
+                        view.palette.dim
+                    },
+                );
+                if r.on_hover_text(label).clicked() && enabled {
+                    match index {
+                        0 => actions.push(Action::Reply(message.id.clone())),
+                        1 => actions.push(Action::SetStar {
+                            chat: view.chat.id.clone(),
+                            message: message.id.clone(),
+                            starred: !starred,
+                        }),
+                        _ => actions.push(open_reaction_picker_action(&view.chat.id, &message.id)),
+                    }
+                }
+            });
+    }
+    true
+}
+
 /// Draws a Smile control beside a hovered message and opens the existing picker.
 fn reaction_affordance(
     ui: &mut egui::Ui,
@@ -4783,6 +4977,9 @@ fn reaction_affordance(
     }
     // A call in the chat is a record, as in WhatsApp: no reactions, no replies.
     if matches!(message.content, Content::Call { .. }) {
+        return;
+    }
+    if grouped_hover_actions(ui, view, message, bubble, actions) {
         return;
     }
     let rect = reaction_affordance_rect(shown, bounds, message.from_me);
@@ -14160,6 +14357,201 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn cross_toolbar_empty_corners_leave_bubble_clicks_alone() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let message = crate::archive::tests::message(&view.chat.id, "empty-corner", 0, false);
+            let pos = pos2(100.0, 80.0);
+            let mut clicks = 0;
+            for pressed in [None, None, None, Some(true), Some(false)] {
+                let mut events = vec![egui::Event::PointerMoved(pos)];
+                if let Some(pressed) = pressed {
+                    events.push(egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(420.0, 340.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let rect = Rect::from_min_size(pos2(18.0, 48.0), vec2(250.0, 55.0));
+                        let bubble =
+                            ui.interact(rect, egui::Id::new("empty-corner-bubble"), Sense::click());
+                        if bubble.clicked() {
+                            clicks += 1;
+                        }
+                        grouped_hover_actions(ui, view, &message, &bubble, &mut Vec::new());
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            assert_eq!(
+                clicks, 1,
+                "the invisible corner of the cross must not intercept message input"
+            );
+        });
+    }
+
+    #[test]
+    fn cross_toolbar_edge_clamp_preserves_message_input() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let message = crate::archive::tests::message(&view.chat.id, "empty-corner", 0, false);
+            let pos = pos2(250.0, 280.0);
+            let mut clicks = 0;
+            for pressed in [
+                None,
+                None,
+                None,
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(false),
+            ] {
+                let mut events = vec![egui::Event::PointerMoved(pos)];
+                if let Some(pressed) = pressed {
+                    events.push(egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(420.0, 340.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let rect = Rect::from_min_max(pos2(140.0, 265.0), pos2(400.0, 325.0));
+                        let bubble =
+                            ui.interact(rect, egui::Id::new("empty-corner-bubble"), Sense::click());
+                        if bubble.clicked() {
+                            clicks += 1;
+                        }
+                        grouped_hover_actions(ui, view, &message, &bubble, &mut Vec::new());
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            assert_eq!(
+                clicks, 2,
+                "edge clamping must not move the bar over its own message"
+            );
+        });
+    }
+
+    #[test]
+    fn grouped_toolbar_routes_each_control_to_one_hovered_message() {
+        with_still_view(|view| {
+            let message = crate::archive::tests::message(&view.chat.id, "toolbar-owner", 0, false);
+            for control in 0..4 {
+                let ctx = egui::Context::default();
+                theme::install(&ctx);
+                let mut actions = Vec::new();
+                let mut draw = |pos, pressed: Option<bool>| {
+                    let mut events = vec![egui::Event::PointerMoved(pos)];
+                    if let Some(pressed) = pressed {
+                        events.push(egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        });
+                    }
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(420.0, 340.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let rect = Rect::from_min_size(pos2(18.0, 48.0), vec2(250.0, 55.0));
+                            let bubble =
+                                ui.interact(rect, egui::Id::new("toolbar-message"), Sense::hover());
+                            grouped_hover_actions(ui, view, &message, &bubble, &mut actions);
+                        },
+                    );
+                    output.textures_delta.clear();
+                };
+                for _ in 0..4 {
+                    draw(pos2(100.0, 70.0), None);
+                }
+                // Geometry is deterministic for this exact viewport. Do not
+                // borrow the drawing closure's captured output across calls.
+                let g = super::super::hover_actions::Geometry::place(
+                    Rect::from_min_size(pos2(18.0, 48.0), vec2(250.0, 55.0)),
+                    Rect::from_min_max(pos2(2.0, 2.0), pos2(418.0, 338.0)),
+                    7,
+                )
+                .unwrap();
+                let rect = match control {
+                    0 => g.reply,
+                    1 => g.star,
+                    2 => g.cell(0),
+                    _ => g.cell(6),
+                };
+                draw(rect.center(), Some(true));
+                draw(rect.center(), Some(false));
+                assert_eq!(
+                    actions.len(),
+                    1,
+                    "exactly one action per click: {actions:?}"
+                );
+                match &actions[0] {
+                    Action::Reply(id) => {
+                        assert_eq!(control, 0);
+                        assert_eq!(id, &message.id);
+                    }
+                    Action::SetStar {
+                        chat,
+                        message: id,
+                        starred,
+                    } => {
+                        assert_eq!(control, 1);
+                        assert_eq!(chat, &view.chat.id);
+                        assert_eq!(id, &message.id);
+                        assert!(*starred);
+                    }
+                    Action::React {
+                        chat, message: id, ..
+                    } => {
+                        assert_eq!(control, 2);
+                        assert_eq!(chat, &view.chat.id);
+                        assert_eq!(id, &message.id);
+                    }
+                    Action::OpenReactionPicker {
+                        chat, message: id, ..
+                    } => {
+                        assert_eq!(control, 3);
+                        assert_eq!(chat, &view.chat.id);
+                        assert_eq!(id, &message.id);
+                    }
+                    other => panic!("unexpected toolbar action: {other:?}"),
+                }
+            }
+        });
     }
 
     #[test]

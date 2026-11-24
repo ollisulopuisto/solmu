@@ -20,6 +20,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 - WhatsApp links accept Finnish domestic numbers beginning with0, and short bare numbers default to+358. Explicit international formats and existing international link targets stay unchanged.
 
 - Show a passive plus to the right of two overlapping service badges when a linked person has more networks.
+- Group message hover actions into a cross-under reaction bar with flush right joins, Reply and Star.
 
 ## 26.11.8
 
