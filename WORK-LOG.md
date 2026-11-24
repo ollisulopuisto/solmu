@@ -1598,3 +1598,18 @@ and include the reply-chain change. No dependency resolution, workflow or UI
 code change. Own review traces package version to existing bundle generators
 and changelog parser. CI still required before merge; no release tag or DMG
 created by this commit.
+
+## 2026-11-24 - numbered draft tab redesign
+
+Owner-selected draft icon beside Send opens a numbered one-line draft list
+above the composer. Each row resumes a copy only into an empty composer;
+nonempty working text is never replaced. Long and multiline text is ellipsized
+within a fixed-height row, with full retained text unchanged. Close and delete
+are icons. Existing confirmed-save status, keep and clear-recovery actions stay.
+Reuses the current shelf and revision acknowledgements, no new persistence or
+workflow change. Main, branch and all open PRs checked for overlap: #456 is
+Quick Replies and #464 is its keyboard menu, neither is a draft picker.
+Native interaction regression adds actual pointer toggles, occupied/empty
+resume behavior, retained count and list/composer geometry at two widths.
+Local native compile/test and actual current-head captures still pending.
+No merge; existing workflow trims and DB-layer scope still await owner word.

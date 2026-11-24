@@ -26312,6 +26312,68 @@ mod rail_tests {
         }
     }
 
+    #[test]
+    fn numbered_drafts_open_beside_send_and_never_replace_working_text() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("draft-shelf-confirmed"));
+        let chat = app.open_chat.clone().unwrap();
+        let original = app.composer.clone();
+        let retained = app.draft_states[&chat].shelf[0].text.clone();
+        app.draft_states.get_mut(&chat).unwrap().shelf[0]
+            .text
+            .push_str("\nSecond line must stay in a single preview row.");
+        for width in [1180.0, 760.0] {
+            for _ in 0..3 {
+                frame(&mut app, &ctx, width, Vec::new());
+            }
+            let button = ctx
+                .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_button_id(&chat)))
+                .expect("draft icon beside Send");
+            let pill = ctx
+                .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::composer_pill_id()))
+                .unwrap();
+            assert!(
+                pill.contains_rect(button),
+                "icon remains in composer at {width}"
+            );
+            assert!(button.center().x > pill.center().x, "icon is at Send end");
+            let row = ctx
+                .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_row_id(&chat, 1)))
+                .expect("numbered row");
+            assert_eq!(row.height(), 30.0, "multiline content stays one line");
+            assert!(row.bottom() < pill.top(), "list is above composer");
+            click(&mut app, &ctx, width, row.center());
+            assert_eq!(app.composer, original, "a row cannot replace unsent text");
+            click(&mut app, &ctx, width, button.center());
+            assert!(!app.draft_states[&chat].shelf_open);
+            let button = ctx
+                .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_button_id(&chat)))
+                .unwrap();
+            click(&mut app, &ctx, width, button.center());
+            assert!(app.draft_states[&chat].shelf_open);
+        }
+        app.composer.clear();
+        for _ in 0..3 {
+            frame(&mut app, &ctx, 1180.0, Vec::new());
+        }
+        let row = ctx
+            .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_row_id(&chat, 1)))
+            .unwrap();
+        click(&mut app, &ctx, 1180.0, row.center());
+        assert!(app.composer.starts_with(&retained));
+        assert!(
+            app.composer.contains("Second line"),
+            "resume keeps complete text, not preview"
+        );
+        assert_eq!(
+            app.draft_states[&chat].shelf.len(),
+            2,
+            "resume copies without deleting retained drafts"
+        );
+    }
+
     /// The rail stands at the window's left edge beside the list, with Chats
     /// at its top and Starred, Settings and our avatar at its foot;
     /// with the list hidden, the chats' avatars fill it between the two. On
