@@ -1590,3 +1590,9 @@ Own review traced downstream Action matches, linked routes, draft guards, contex
 width and translation tests, keyboard/native routing and popup lifecycle. Added
 explicit older-context-target regression. Fmt/diff checks pass. Native compile,
 full tests and actual updated dock captures pending CI. No merge/release.
+
+Independent delta review follow-up: linked target reveal is now consumed once on
+open; its virtualization exemption stays until close without forcing scroll each
+frame. Discovery icon names and Close tooltip now pass through gettext. Added
+reveal one-shot and invalidation-frame digit/text-consumption regressions. Context
+older-target test remains. Full native icon/context click pixels still pending CI.

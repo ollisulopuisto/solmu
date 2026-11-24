@@ -13,6 +13,7 @@ struct Menu {
     message: String,
     templates: bool,
     choices: Vec<String>,
+    reveal: bool,
 }
 fn id() -> Id {
     Id::new("message-key-menu")
@@ -131,6 +132,7 @@ pub(crate) fn open_target(
         message,
         templates,
         choices,
+        reveal: true,
     };
     if valid(app, &menu) {
         app.scroll_to_bottom = false;
@@ -265,7 +267,7 @@ pub(crate) fn show(app: &mut App, ui: &mut egui::Ui) {
             18.0,
             app.palette.secondary,
             app.palette.text,
-            "Close",
+            &crate::i18n::gettext(app.locale, "Close"),
         )
         .clicked()
         {
@@ -332,6 +334,7 @@ pub(crate) fn buttons(app: &mut App, ui: &mut egui::Ui) {
             ),
         ] {
             let hint = super::keys::hint(binding).unwrap_or_default();
+            let label = crate::i18n::gettext(app.locale, label);
             if crate::theme::icon_button(
                 ui,
                 icon,
@@ -351,4 +354,18 @@ pub(crate) fn buttons(app: &mut App, ui: &mut egui::Ui) {
 pub(crate) fn target_is(ctx: &egui::Context, chat: &str, message: &str) -> bool {
     ctx.data(|d| d.get_temp::<Menu>(id()))
         .is_some_and(|m| m.chat == chat && m.message == message)
+}
+
+pub(crate) fn take_reveal(ctx: &egui::Context, chat: &str, message: &str) -> bool {
+    ctx.data_mut(|d| {
+        let Some(mut menu) = d.get_temp::<Menu>(id()) else {
+            return false;
+        };
+        if menu.chat != chat || menu.message != message || !menu.reveal {
+            return false;
+        }
+        menu.reveal = false;
+        d.insert_temp(id(), menu);
+        true
+    })
 }

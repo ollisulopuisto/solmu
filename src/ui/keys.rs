@@ -3162,8 +3162,53 @@ mod tests {
         );
         assert!(super::super::message_key_menu::is_open(&ctx));
         assert_eq!(app.scroll_anchor.as_deref(), Some("older"));
+        assert!(super::super::message_key_menu::take_reveal(
+            &ctx, &chat, "older"
+        ));
+        assert!(!super::super::message_key_menu::take_reveal(
+            &ctx, &chat, "older"
+        ));
+        assert!(super::super::message_key_menu::target_is(
+            &ctx, &chat, "older"
+        ));
         press(&mut app, &ctx, Key::Num1, Modifiers::NONE);
         assert!(matches!(app.actions.as_slice(),[Action::React{message,..}] if message=="older"));
+    }
+    #[test]
+    fn invalidated_message_dock_consumes_digit_and_text_in_that_frame() {
+        let (_root, mut app, ids) = app_with_chats(2);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![shortcut_message(&chat, "incoming", true, 10)],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        super::super::message_key_menu::open(&mut app, &ctx, false);
+        app.open_chat = Some(ids[1].clone());
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                events: vec![
+                    egui::Event::Text("1".into()),
+                    egui::Event::Key {
+                        key: Key::Num1,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                assert!(super::super::message_key_menu::keyboard(&mut app, ui.ctx()));
+                assert!(ui.input(|i| i.events.is_empty()));
+            },
+        );
+        assert!(app.actions.is_empty());
     }
     #[test]
     fn message_key_menu_cancels_on_chat_change_and_escape() {

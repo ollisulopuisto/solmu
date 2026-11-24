@@ -1206,7 +1206,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                     },
                                 )
                                 .inner;
-                            if keyboard_target && let Some(rect) = bubble_rect {
+                            if keyboard_target
+                                && let Some(rect) = bubble_rect
+                                && super::message_key_menu::take_reveal(
+                                    ui.ctx(),
+                                    &message.chat,
+                                    &message.id,
+                                )
+                            {
                                 ui.scroll_to_rect(rect, Some(egui::Align::Center));
                             }
                             if bubble_rect.is_some_and(|rect| rect.intersects(viewport)) {
