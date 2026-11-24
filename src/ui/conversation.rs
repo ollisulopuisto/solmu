@@ -4862,11 +4862,37 @@ fn grouped_hover_actions(
             .layer_id_at(p)
             .is_none_or(|id| id == bubble.layer_id || layers.contains(&id))
     });
-    // Keep the union bridge alive in any placement direction. It owns no
+    // Keep only the facing-edge corridor alive. It owns no
     // hit targets, so links/media in the bubble remain usable.
     let shown = bubble.rect.intersect(bounds);
     let bridge = g.bridge(shown);
     let in_reach = pointer.is_some_and(|p| g.bounds().contains(p) || bridge.contains(p));
+    // Foreground Areas form separate native focus scopes. Explicitly join
+    // this message's controls into one sequential order across those Areas.
+    let order = std::iter::once(bubble.id)
+        .chain((0_usize..6).map(|i| area_id.with(("emoji", i))))
+        .chain([
+            area_id.with(("action", 2_usize)),
+            area_id.with(("action", 0_usize)),
+            area_id.with(("action", 1_usize)),
+            bubble.id.with("react-keyboard"),
+        ])
+        .collect::<Vec<_>>();
+    let focused = ui.ctx().memory(|m| m.focused());
+    if let Some(at) = order.iter().position(|id| Some(*id) == focused) {
+        let shift = ui.input(|i| i.modifiers.shift);
+        if ((!shift && at + 1 < order.len()) || (shift && at > 0))
+            && ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)
+                    || (shift && i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab))
+            })
+        {
+            let next = order[if shift { at - 1 } else { at + 1 }];
+            ui.ctx().memory_mut(|m| m.request_focus(next));
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new("message-actions-keyboard-mode"), true));
+        }
+    }
     let keyboard = ui.ctx().memory(|memory| {
         memory.has_focus(bubble.id.with("react-keyboard"))
             || (0_usize..6).any(|i| memory.has_focus(area_id.with(("emoji", i))))
@@ -4883,9 +4909,12 @@ fn grouped_hover_actions(
         .ctx()
         .data(|d| d.get_temp::<bool>(nav_id))
         .unwrap_or(false);
-    let active = (over && uncovered)
-        || (held && in_reach && uncovered)
-        || (keyboard_mode && (bubble.has_focus() || keyboard));
+    let scrolling = ui
+        .input(|i| i.smooth_scroll_delta.length_sq() > 0.0 || i.raw_scroll_delta.length_sq() > 0.0);
+    let active = !scrolling
+        && ((over && uncovered)
+            || (held && in_reach && uncovered)
+            || (keyboard_mode && (bubble.has_focus() || keyboard)));
     ui.ctx().data_mut(|d| {
         if active {
             d.insert_temp(area_id, frame);
