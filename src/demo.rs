@@ -6560,7 +6560,7 @@ mod tests {
                     tail.left() >= body.right(),
                     "the reply control is the external tail, not an internal chip"
                 );
-                assert_eq!(tail.top(), body.top());
+                assert_eq!(tail.bottom() + 6.0, body.top());
                 assert!(
                     tail.height() >= 28.0,
                     "keyboard/pointer target remains usable"
