@@ -1679,6 +1679,7 @@ pub(crate) fn composer_with_capabilities(
                 }
             }
             if app.editing.is_none()
+                && app.composer_holds_draft()
                 && let Some(preview) = draft_preview(&app.composer)
             {
                 draft_label(app, ui, &preview);
