@@ -13040,9 +13040,14 @@ mod tests {
             render(app, ctx);
             label(ctx).map(|(_, preview)| preview)
         };
-        app.actions.push(crate::model::Action::OpenChat(own.clone()));
+        app.actions
+            .push(crate::model::Action::OpenChat(own.clone()));
         render(&mut app, &ctx);
-        assert_eq!(drawn(&mut app, &ctx), None, "an empty composer has no label");
+        assert_eq!(
+            drawn(&mut app, &ctx),
+            None,
+            "an empty composer has no label"
+        );
 
         app.composer = "  Yes,   after the chart fix.\nsecond line".to_owned();
         assert_eq!(
@@ -13052,13 +13057,18 @@ mod tests {
         );
 
         app.editing = Some("not-a-real-message".to_owned());
-        assert_eq!(drawn(&mut app, &ctx), None, "editing a message is not a draft");
+        assert_eq!(
+            drawn(&mut app, &ctx),
+            None,
+            "editing a message is not a draft"
+        );
         app.editing = None;
         assert!(drawn(&mut app, &ctx).is_some());
 
         // Leaving parks the text. The other chat has none, and coming back
         // restores it together with the label.
-        app.actions.push(crate::model::Action::OpenChat(other.clone()));
+        app.actions
+            .push(crate::model::Action::OpenChat(other.clone()));
         render(&mut app, &ctx);
         assert_eq!(drawn(&mut app, &ctx), None, "another chat has no draft");
         app.actions.push(crate::model::Action::OpenChat(own));
@@ -13070,7 +13080,8 @@ mod tests {
         );
 
         // A link's prefill is not the reader's text until they change it.
-        app.actions.push(crate::model::Action::OpenChat(other.clone()));
+        app.actions
+            .push(crate::model::Action::OpenChat(other.clone()));
         render(&mut app, &ctx);
         app.actions.push(crate::model::Action::PrefillComposer {
             chat: other,
@@ -13079,7 +13090,11 @@ mod tests {
         });
         render(&mut app, &ctx);
         assert_eq!(app.composer, "Hello from a link");
-        assert_eq!(drawn(&mut app, &ctx), None, "an untouched prefill is not a draft");
+        assert_eq!(
+            drawn(&mut app, &ctx),
+            None,
+            "an untouched prefill is not a draft"
+        );
         app.composer.push_str(" and more");
         assert_eq!(
             drawn(&mut app, &ctx).as_deref(),

@@ -2619,10 +2619,19 @@ fn draft_label(app: &App, ui: &mut egui::Ui, preview: &str) {
     ui.horizontal(|ui| {
         ui.add_space(6.0);
         theme::icon(ui, Icon::Pencil, 14.0, palette.accent);
-        theme::text(ui, label.into_owned(), theme::semibold(12.5), palette.accent);
+        theme::text(
+            ui,
+            label.into_owned(),
+            theme::semibold(12.5),
+            palette.accent,
+        );
+        // A separator keeps the preview from being the composer's own text
+        // twice on screen: tools that look the draft up by its text find
+        // only the composer.
+        let shown = format!("\u{b7} {preview}");
         let line = widgets::line(
             ui,
-            preview,
+            &shown,
             theme::regular(12.5),
             palette.secondary,
             ui.available_width().max(0.0),
