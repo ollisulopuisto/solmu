@@ -2759,7 +2759,7 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
             ui.horizontal(|ui| {
                 theme::text(
                     ui,
-                    &crate::i18n::gettext(app.locale, "Drafts"),
+                    crate::i18n::gettext(app.locale, "Drafts").into_owned(),
                     theme::semibold(12.5),
                     palette.text,
                 );
