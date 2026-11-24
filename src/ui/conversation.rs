@@ -4868,7 +4868,8 @@ fn grouped_hover_actions(
     let bridge = g.bridge(shown);
     let in_reach = pointer.is_some_and(|p| g.bounds().contains(p) || bridge.contains(p));
     let keyboard = ui.ctx().memory(|memory| {
-        (0_usize..6).any(|i| memory.has_focus(area_id.with(("emoji", i))))
+        memory.has_focus(bubble.id.with("react-keyboard"))
+            || (0_usize..6).any(|i| memory.has_focus(area_id.with(("emoji", i))))
             || (0_usize..3).any(|i| memory.has_focus(area_id.with(("action", i))))
     });
     let nav_id = egui::Id::new("message-actions-keyboard-mode");
@@ -5033,13 +5034,14 @@ fn reaction_affordance(
     }
     grouped_hover_actions(ui, view, message, bubble, actions);
     {
-        // Accessible labelled fallback when no complete grid fits. This is
-        // keyboard-only, never a resurrected side pointer control.
+        // Labelled keyboard-only fallback, never a side pointer control.
+        // It also retains visible keyboard focus when the grid cannot fit.
         let r = ui.interact(
             bubble.rect,
             bubble.id.with("react-keyboard"),
             Sense::focusable_noninteractive(),
         );
+        theme::focus_outline(ui, r.id, bubble.rect, 8.0);
         r.widget_info(|| {
             egui::WidgetInfo::labeled(
                 egui::WidgetType::Button,
