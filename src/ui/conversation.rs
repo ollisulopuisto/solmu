@@ -1924,7 +1924,7 @@ pub(crate) fn composer_with_capabilities(
                     ui.add_space(COMPOSER_TEXT_GAP - ui.spacing().item_spacing.x - 8.0);
                 }
                 // The send button closes the row, flush with the field's end.
-                let drafts_width = if app.editing.is_none() { COMPOSER_CONTROL + ui.spacing().item_spacing.x } else { 0.0 };
+                let drafts_width = if app.editing.is_none() { 22.0 + theme::ICON_BUTTON_PAD + ui.spacing().item_spacing.x } else { 0.0 };
                 let field_width =
                     (ui.available_width() - drafts_width - button_width - SEND_BUTTON_GAP - view_once_width - schedule_width - extras_width - later_width - ui.spacing().item_spacing.x).max(0.0);
                 // The ink is centred on the controls, not the line box: the
