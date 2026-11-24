@@ -17381,7 +17381,7 @@ mod reaction_tests {
                 // in English, so they cannot count as untranslated here.
                 if matches!(
                     english.as_str(),
-                    "Save for later" | "Hide in Solmu" | "Quick Replies"
+                    "Save for later" | "Hide in Solmu" | "Quick Replies" | "Reactions"
                 ) {
                     continue;
                 }
