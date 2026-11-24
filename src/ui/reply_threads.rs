@@ -768,7 +768,7 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
                         app,
                         ui,
                         chat,
-                        &m,
+                        m,
                         None,
                         super::conversation::starts_sender_run(
                             m,
