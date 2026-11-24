@@ -13408,7 +13408,7 @@ mod tests {
         );
         app.reply_to = Some(crate::model::ReplyTarget {
             chat: Some(SAMPLES[2].id.into()),
-            message: "unavailable".into(),
+            id: "unavailable".into(),
         });
         assert!(
             drawn(&mut app).is_some(),
