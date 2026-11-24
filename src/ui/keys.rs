@@ -3152,7 +3152,7 @@ mod tests {
             let ctx = egui::Context::default();
             crate::theme::install(&ctx);
             let mut draw = |events: Vec<egui::Event>| {
-                let _ = ctx.run_ui(
+                let mut output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -3163,6 +3163,7 @@ mod tests {
                     },
                     |ui| super::super::message_key_menu::buttons(&mut app, ui),
                 );
+                output.textures_delta.clear();
             };
             draw(vec![]);
             let at = ctx
@@ -3244,7 +3245,7 @@ mod tests {
         let ctx = egui::Context::default();
         super::super::message_key_menu::open(&mut app, &ctx, false);
         app.open_chat = Some(ids[1].clone());
-        let _ = ctx.run_ui(
+        let mut output = ctx.run_ui(
             egui::RawInput {
                 events: vec![
                     egui::Event::Text("1".into()),
@@ -3263,6 +3264,7 @@ mod tests {
                 assert!(ui.input(|i| i.events.is_empty()));
             },
         );
+        output.textures_delta.clear();
         assert!(app.actions.is_empty());
     }
     #[test]

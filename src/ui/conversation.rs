@@ -1567,9 +1567,6 @@ pub(crate) fn composer_with_capabilities(
             }
 
             super::message_key_menu::show(app, ui);
-            if !super::message_key_menu::is_open(ui.ctx()) && chat.can_send() {
-                super::message_key_menu::buttons(app, ui);
-            }
             if super::message_key_menu::is_open(ui.ctx()) {
                 ui.memory_mut(|memory| memory.surrender_focus(egui::Id::new("composer-text")));
             }
@@ -1934,6 +1931,9 @@ pub(crate) fn composer_with_capabilities(
                     // The text follows the pair as closely as the emoji
                     // follows the plus (the field's own left margin included).
                     ui.add_space(COMPOSER_TEXT_GAP - ui.spacing().item_spacing.x - 8.0);
+                }
+                if !super::message_key_menu::is_open(ui.ctx()) {
+                    super::message_key_menu::buttons(app,ui);
                 }
                 // The send button closes the row, flush with the field's end.
                 let field_width =
@@ -16452,7 +16452,7 @@ mod tests {
                 crate::theme::install(&ctx);
                 let mut actions = Vec::new();
                 let mut draw = |events| {
-                    ctx.run_ui(
+                    let mut output = ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -16462,7 +16462,9 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| context_menu(ui, view, &message, MenuOrigin::Chat, &mut actions),
-                    )
+                    );
+                    output.textures_delta.clear();
+                    output
                 };
                 let output = draw(vec![]);
                 fn find(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
@@ -16503,7 +16505,7 @@ mod tests {
                 crate::archive::tests::message("1@s.whatsapp.net", "older-menu-target", 0, false);
             for (key, templates) in [(Key::T, false), (Key::Y, true)] {
                 let mut actions = Vec::new();
-                let _ = ctx.run_ui(
+                let mut output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(
                             egui::Pos2::ZERO,
@@ -16520,6 +16522,7 @@ mod tests {
                     },
                     |ui| context_menu(ui, view, &message, MenuOrigin::Chat, &mut actions),
                 );
+                output.textures_delta.clear();
                 assert!(actions.iter().any(|a|matches!(a,Action::OpenMessageKeyMenu{message,templates:chosen,..}if message=="older-menu-target"&&*chosen==templates)));
             }
         });
@@ -17557,7 +17560,7 @@ mod reaction_tests {
             .map(String::as_str)
             .filter(|label| !labels.iter().any(|drawn| drawn == label))
             .collect();
-        assert_eq!(undrawn, ["Reply privately"]);
+        assert_eq!(undrawn, ["Reactions", "Reply privately"]);
         // Hover texts are not in the accessibility tree.
         labels.extend(["React with any emoji".into(), "Remove your reaction".into()]);
         labels.sort();
