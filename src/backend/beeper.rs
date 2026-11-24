@@ -687,7 +687,7 @@ fn measure_cache(dirs: &AccountDirs) -> std::io::Result<crate::model::StorageSta
     Ok(stats)
 }
 
-fn write_local_draft_state(
+pub(crate) fn write_local_draft_state(
     loaded: bool,
     store: &mut Option<crate::archive::Archive>,
     path: &std::path::Path,
@@ -6658,42 +6658,6 @@ mod tests {
         );
         assert!(store.is_none());
     }
-    #[test]
-    fn locked_start_then_unlock_cannot_replace_unread_shelf() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("drafts.db");
-        let archive = crate::archive::Archive::in_memory().unwrap();
-        let origin = "http://localhost:23373";
-        let chat = "one";
-        let key = serde_json::to_string(&(origin, chat, "parked-v1")).unwrap();
-        archive
-            .write_draft_state(
-                &super::draft_namespace(origin, chat),
-                "original",
-                &key,
-                "retained",
-                1,
-            )
-            .unwrap();
-        // Startup failed before reading the shelf. The keyring/store then becomes available.
-        let mut unlocked = Some(archive);
-        assert!(!super::write_local_draft_state(
-            false,
-            &mut unlocked,
-            &path,
-            origin,
-            chat,
-            "replace",
-            &[]
-        ));
-        let rows = unlocked.unwrap().drafts().unwrap();
-        assert!(rows.iter().any(|(k, t)| k == &key && t == "retained"));
-        assert!(
-            rows.iter()
-                .any(|(k, t)| k == &super::draft_namespace(origin, chat) && t == "original")
-        );
-    }
-
     #[test]
     fn edited_picture_copy_is_counted_and_disposable_not_the_original() {
         let root = tempfile::tempdir().unwrap();

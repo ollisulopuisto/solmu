@@ -65,6 +65,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn locked_start_then_unlock_cannot_replace_unread_shelf() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("drafts.db");
+        let archive = crate::archive::Archive::in_memory().unwrap();
+        let origin = "http://localhost:23373";
+        let chat = "one";
+        let key = serde_json::to_string(&(origin, chat, "parked-v1")).unwrap();
+        archive
+            .write_draft_state(
+                &crate::backend::beeper::draft_namespace(origin, chat),
+                "original",
+                &key,
+                "retained",
+                1,
+            )
+            .unwrap();
+        // Startup failed before reading the shelf. The keyring/store then becomes available.
+        let mut unlocked = Some(archive);
+        assert!(!crate::backend::beeper::write_local_draft_state(
+            false,
+            &mut unlocked,
+            &path,
+            origin,
+            chat,
+            "replace",
+            &[]
+        ));
+        let rows = unlocked.unwrap().drafts().unwrap();
+        assert!(rows.iter().any(|(k, t)| k == &key && t == "retained"));
+        assert!(rows.iter().any(|(k, t)| k
+            == &crate::backend::beeper::draft_namespace(origin, chat)
+            && t == "original"));
+    }
+
+    #[test]
     fn beeper_drafts_are_encrypted_durable_and_backend_isolated() {
         use crate::backend::beeper::{draft_namespace, stored_drafts};
         let root = tempfile::tempdir().unwrap();
