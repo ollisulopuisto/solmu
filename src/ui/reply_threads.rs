@@ -762,7 +762,7 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
                     ));
                 }
                 let mut landing = None;
-                for m in rows {
+                for (index, m) in rows.iter().enumerate() {
                     let right = ui.max_rect().right();
                     let rect = super::conversation::linked_bubble(
                         app,
@@ -770,6 +770,10 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
                         chat,
                         &m,
                         None,
+                        super::conversation::starts_sender_run(
+                            m,
+                            index.checked_sub(1).map(|i| &rows[i]),
+                        ),
                         true,
                         right,
                         None,

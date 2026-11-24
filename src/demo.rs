@@ -5854,6 +5854,47 @@ mod tests {
     }
 
     #[test]
+    fn messages_group_tails_stay_on_first_rows_not_last_avatars() {
+        for page in ["messages", "messages-light"] {
+            let mut app = app();
+            group_stacks_sample(&mut app);
+            apply_flags(&mut app, Some(&format!("group-stacks,{page}")));
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            for _ in 0..4 {
+                streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+            }
+            for index in 0..12 {
+                let id = crate::ui::conversation::bubble_id(
+                    SAMPLES[0].id,
+                    &format!("group-stack-{index}"),
+                );
+                let (body, painted) = ctx.data(|data| {
+                    (
+                        data.get_temp::<egui::Rect>(id.with("rect")).unwrap(),
+                        data.get_temp::<egui::Rect>(id.with("painted-rect"))
+                            .unwrap(),
+                    )
+                });
+                let reach = if [0, 2, 5, 8, 10].contains(&index) {
+                    crate::ui::widgets::TAIL_WIDTH
+                } else {
+                    0.0
+                };
+                let actual = if index < 10 {
+                    body.left() - painted.left()
+                } else {
+                    painted.right() - body.right()
+                };
+                assert!(
+                    (actual - reach).abs() < 0.5,
+                    "row {index}: reach {actual}, expected {reach}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn group_shadow_colours_the_body_and_tail_without_a_stripe() {
         for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
             let mut app = app();
