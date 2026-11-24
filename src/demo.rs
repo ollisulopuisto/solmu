@@ -3396,9 +3396,12 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             }
             "translation-review" => {
                 linked_sample(app);
-                app.apply(crate::model::Action::TranslateLocally(
-                    "Voimmeko tarkistaa luonnoksen ennen lähettämistä?".into(),
-                ));
+                app.apply(
+                    crate::model::Action::TranslateLocally(
+                        "Voimmeko tarkistaa luonnoksen ennen lähettämistä?".into(),
+                    ),
+                    &egui::Context::default(),
+                );
             }
             "message-info" => message_info_sample(app, true),
             "message-info-unknown" => message_info_sample(app, false),
