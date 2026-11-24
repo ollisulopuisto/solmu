@@ -2609,7 +2609,12 @@ fn unsent_voice_strip(app: &mut App, ui: &mut egui::Ui, samples: usize) {
 fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
     if app.editing.is_some()
         || !app.composer_holds_draft()
-        || (app.reply_to.is_some() && app.composer.is_empty())
+        || (app.reply_to.is_some()
+            && app.composer.is_empty()
+            && app
+                .draft_states
+                .get(chat)
+                .is_none_or(|s| s.recovery.is_none() && s.shelf.is_empty()))
     {
         return;
     }
