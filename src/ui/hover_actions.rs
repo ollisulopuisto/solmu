@@ -3,6 +3,32 @@ use egui::{Color32, Rect, Stroke, pos2, vec2};
 pub const CELL: f32 = 44.0;
 const GAP: f32 = 4.0;
 const SECTION_GAP: f32 = 8.0;
+pub fn focus_order(bubble: egui::Id, reply: bool, star: bool) -> Vec<egui::Id> {
+    let area = bubble.with("hover-actions");
+    let mut order = vec![bubble];
+    order.extend((0_usize..6).map(|i| area.with(("emoji", i))));
+    order.push(area.with(("action", 2_usize)));
+    if reply {
+        order.push(area.with(("action", 0_usize)));
+    }
+    if star {
+        order.push(area.with(("action", 1_usize)));
+    }
+    order.push(bubble.with("react-keyboard"));
+    order
+}
+pub fn next_focus(
+    order: &[egui::Id],
+    focused: Option<egui::Id>,
+    reverse: bool,
+) -> Option<egui::Id> {
+    let at = order.iter().position(|id| Some(*id) == focused)?;
+    let next = if reverse { at.checked_sub(1)? } else { at + 1 };
+    order.get(next).copied()
+}
+pub fn show_grid(scrolling: bool, pointer_active: bool, keyboard_active: bool) -> bool {
+    !scrolling && (pointer_active || keyboard_active)
+}
 #[derive(Clone, Copy, Debug)]
 pub struct Geometry {
     pub reactions: Rect,
@@ -115,6 +141,25 @@ pub fn paint(p: &egui::Painter, g: Geometry, rear: Color32, front: Color32, outl
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn focus_order_skips_disabled_controls_and_scroll_yields() {
+        let b = egui::Id::new("owner");
+        let a = b.with("hover-actions");
+        let order = focus_order(b, false, false);
+        assert_eq!(order.len(), 9);
+        assert!(!order.contains(&a.with(("action", 0_usize))));
+        assert!(!order.contains(&a.with(("action", 1_usize))));
+        assert_eq!(
+            next_focus(&order, Some(order[6]), false),
+            Some(a.with(("action", 2_usize)))
+        );
+        assert_eq!(next_focus(&order, Some(order[0]), true), None);
+        assert_eq!(next_focus(&order, order.last().copied(), false), None);
+        assert_eq!(next_focus(&order, Some(order[1]), true), Some(b));
+        assert!(!show_grid(true, true, true));
+        assert!(show_grid(false, true, false));
+        assert!(show_grid(false, false, true));
+    }
     #[test]
     fn below_grid_bridge_excludes_next_bubble_side_strip() {
         let bubble = Rect::from_min_max(pos2(20., 20.), pos2(300., 80.));

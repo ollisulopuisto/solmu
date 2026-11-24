@@ -4869,25 +4869,25 @@ fn grouped_hover_actions(
     let in_reach = pointer.is_some_and(|p| g.bounds().contains(p) || bridge.contains(p));
     // Foreground Areas form separate native focus scopes. Explicitly join
     // this message's controls into one sequential order across those Areas.
-    let order = std::iter::once(bubble.id)
-        .chain((0_usize..6).map(|i| area_id.with(("emoji", i))))
-        .chain([
-            area_id.with(("action", 2_usize)),
-            area_id.with(("action", 0_usize)),
-            area_id.with(("action", 1_usize)),
-            bubble.id.with("react-keyboard"),
-        ])
-        .collect::<Vec<_>>();
-    let focused = ui.ctx().memory(|m| m.focused());
-    if let Some(at) = order.iter().position(|id| Some(*id) == focused) {
-        let shift = ui.input(|i| i.modifiers.shift);
-        if ((!shift && at + 1 < order.len()) || (shift && at > 0))
-            && ui.input_mut(|i| {
-                i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)
-                    || (shift && i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab))
-            })
-        {
-            let next = order[if shift { at - 1 } else { at + 1 }];
+    let can_reply = view.chat.can_send()
+        && !matches!(
+            message.content,
+            Content::Revoked | Content::PhoneOnly { .. }
+        );
+    let can_star = !matches!(message.content, Content::Revoked);
+    let order = hover_actions::focus_order(bubble.id, can_reply, can_star);
+    let shift = ui.input(|i| i.modifiers.shift);
+    if let Some(next) = hover_actions::next_focus(&order, ui.ctx().memory(|m| m.focused()), shift) {
+        if ui.input_mut(|i| {
+            i.consume_key(
+                if shift {
+                    egui::Modifiers::SHIFT
+                } else {
+                    egui::Modifiers::NONE
+                },
+                egui::Key::Tab,
+            )
+        }) {
             ui.ctx().memory_mut(|m| m.request_focus(next));
             ui.ctx()
                 .data_mut(|d| d.insert_temp(egui::Id::new("message-actions-keyboard-mode"), true));
@@ -4911,10 +4911,11 @@ fn grouped_hover_actions(
         .unwrap_or(false);
     let scrolling = ui
         .input(|i| i.smooth_scroll_delta.length_sq() > 0.0 || i.raw_scroll_delta.length_sq() > 0.0);
-    let active = !scrolling
-        && ((over && uncovered)
-            || (held && in_reach && uncovered)
-            || (keyboard_mode && (bubble.has_focus() || keyboard)));
+    let active = hover_actions::show_grid(
+        scrolling,
+        (over && uncovered) || (held && in_reach && uncovered),
+        keyboard_mode && (bubble.has_focus() || keyboard),
+    );
     ui.ctx().data_mut(|d| {
         if active {
             d.insert_temp(area_id, frame);
