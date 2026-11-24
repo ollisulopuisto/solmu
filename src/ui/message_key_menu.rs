@@ -164,7 +164,9 @@ pub(crate) fn keyboard(app: &mut App, ctx: &egui::Context) -> bool {
     let mut close = false;
     ctx.input_mut(|i| {
         i.events.retain(|event| match event {
-            egui::Event::Text(_) => false,
+            egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Copy => {
+                false
+            }
             egui::Event::Key {
                 key,
                 pressed: true,
