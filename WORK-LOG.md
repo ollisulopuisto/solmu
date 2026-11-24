@@ -1528,3 +1528,15 @@ pencil, "Draft" and the first non-blank line of the composer text while
 nothing is being edited. Checked first: no open or merged PR adds a draft
 label; restore-on-open drafts already exist. Native compile and capture not
 run by this agent, CI is the first compile.
+
+## Linked-view local translation staging
+
+The linked timeline rejected TranslateLocally together with source-bound editing
+and selection. That action only carries selected text to Local AI settings for
+review; it does not resolve a destination or call the translation endpoint.
+Allow that text-only action while retaining the edit/select/sweep guard.
+Added a full-App linked-person regression with a different default destination,
+exact selected text, preserved composer/source/default and no bridge command.
+An isolated exact-predicate harness fails with the old translation rejection and
+passes after the fix. This is not a full native test pass. Native CI and actual
+review-form pixels remain required; no workflow changes or merge authority added.
