@@ -2782,11 +2782,15 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 history.messages[3].status = crate::model::Delivery::Unknown;
                 history.messages[4].status = crate::model::Delivery::Failed;
             }
-            "refined-thread" | "chain-above-incoming" | "chain-above-outgoing" => {
+            "refined-thread"
+            | "chain-above-incoming"
+            | "chain-above-outgoing"
+            | "regular-tail-incoming"
+            | "regular-tail-outgoing" => {
                 if part.starts_with("chain-above-") {
                     SHOT_CHAIN.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
-                let reply_own = part != "chain-above-incoming";
+                let reply_own = !matches!(part, "chain-above-incoming" | "regular-tail-incoming");
                 let chat = SAMPLES[0].id;
                 let base = crate::util::now() - 600;
                 let original = message(
