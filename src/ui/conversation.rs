@@ -2607,13 +2607,6 @@ fn unsent_voice_strip(app: &mut App, ui: &mut egui::Ui, samples: usize) {
 
 /// The first non-blank line of the unsent text, for the one-line preview in
 /// the draft label. `None` while the composer holds nothing worth calling a
-/// draft.
-#[allow(dead_code)]
-fn draft_preview(text: &str) -> Option<String> {
-    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
-    Some(line.split_whitespace().collect::<Vec<_>>().join(" "))
-}
-
 /// Truthful local save status, retained drafts and nonblocking clear recovery.
 fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
     if app.editing.is_some() || !app.composer_holds_draft() {
@@ -2621,6 +2614,18 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
     }
     let mut state = app.draft_states.remove(chat).unwrap_or_default();
     state.loaded |= app.draft_shelves_loaded;
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            egui::Id::new("draft-controls-rendered"),
+            (
+                chat.to_owned(),
+                state.status().to_owned(),
+                state.shelf.len(),
+                state.recovery.is_some(),
+            ),
+        )
+    });
     ui.horizontal(|ui| {
         if !state.loaded || state.changed.is_some() || state.confirmed.is_some() || state.failed {
             theme::text(
@@ -2760,42 +2765,6 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
             });
     }
     app.draft_states.insert(chat.into(), state);
-}
-
-#[allow(dead_code)]
-fn draft_label(app: &App, ui: &mut egui::Ui, preview: &str) {
-    let palette = app.conversation_palette();
-    let label = crate::i18n::gettext(app.locale, "Draft");
-    let row = ui.horizontal(|ui| {
-        ui.add_space(6.0);
-        theme::icon(ui, Icon::Pencil, 14.0, palette.accent);
-        theme::text(
-            ui,
-            label.into_owned(),
-            theme::semibold(12.5),
-            palette.accent,
-        );
-        let line = widgets::line(
-            ui,
-            preview,
-            theme::regular(12.5),
-            palette.secondary,
-            ui.available_width().max(0.0),
-            1,
-        );
-        let (rect, _) = ui.allocate_exact_size(line.size(), Sense::hover());
-        line.paint(ui, rect.min, palette.secondary);
-    });
-    #[cfg(test)]
-    {
-        let shown = row.response.rect;
-        ui.ctx().data_mut(|data| {
-            data.insert_temp(egui::Id::new("draft-label"), (shown, preview.to_owned()))
-        });
-    }
-    #[cfg(not(test))]
-    let _ = row;
-    strip_gap(ui);
 }
 
 fn edit_strip(app: &mut App, ui: &mut egui::Ui) {
@@ -17014,16 +16983,6 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert!(seen.len() >= 9, "{} different steps", seen.len());
-    }
-
-    #[test]
-    fn draft_preview_is_the_first_non_blank_line_on_one_row() {
-        assert_eq!(draft_preview(""), None);
-        assert_eq!(draft_preview(" \n\t "), None);
-        assert_eq!(
-            draft_preview("\n  Yes,   after the chart fix.  \nsecond line"),
-            Some("Yes, after the chart fix.".to_owned())
-        );
     }
 
     #[test]

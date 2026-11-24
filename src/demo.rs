@@ -13382,23 +13382,58 @@ mod tests {
         assert_eq!(app.settings.voice_speed, 2.0);
     }
 
-    /// Unsent text is never duplicated as a live label above the composer.
-    /// The replacement exposes save state and retained drafts instead.
+    /// Native composer renders confirmed shelf state, and excludes edits/prefill.
     #[test]
-    fn unsent_text_has_no_duplicate_live_label() {
+    fn draft_controls_render_saved_shelf_and_recovery_but_not_edits_or_prefill() {
         let mut app = app();
         let ctx = egui::Context::default();
         app.attach(&ctx);
-        app.actions
-            .push(crate::model::Action::OpenChat(SAMPLES[0].id.into()));
-        render(&mut app, &ctx);
-        app.composer = "Yes, after the chart fix.\nsecond line".into();
-        render(&mut app, &ctx);
+        apply_flags(&mut app, Some("draft-shelf-confirmed"));
+        let marker = egui::Id::new("draft-controls-rendered");
+        let drawn = |app: &mut App| {
+            ctx.data_mut(|d| {
+                d.remove::<(String, String, usize, bool)>(marker);
+            });
+            render(app, &ctx);
+            ctx.data(|d| d.get_temp::<(String, String, usize, bool)>(marker))
+        };
+        let saved = drawn(&mut app).expect("production draft_controls rendered");
+        assert_eq!(saved.1, "Saved locally");
+        assert_eq!(saved.2, 2);
+        assert!(!saved.3);
+        apply_flags(&mut app, Some("draft-clear-recovery"));
         assert!(
-            ctx.data(|d| d.get_temp::<(egui::Rect, String)>(egui::Id::new("draft-label")))
-                .is_none()
+            drawn(&mut app).unwrap().3,
+            "actual recovery controls rendered"
         );
-        assert_eq!(app.composer, "Yes, after the chart fix.\nsecond line");
+        app.editing = Some("not-real".into());
+        assert!(drawn(&mut app).is_none());
+        app.editing = None;
+        let chat = app.open_chat.clone().unwrap();
+        app.apply(
+            crate::model::Action::PrefillComposer {
+                chat: chat.clone(),
+                text: "Hello from link".into(),
+                mentions: Vec::new(),
+            },
+            &ctx,
+        );
+        assert!(
+            drawn(&mut app).is_none(),
+            "untouched prefill is not a draft"
+        );
+        app.composer.push_str(" edited");
+        assert!(drawn(&mut app).is_some());
+        app.actions
+            .push(crate::model::Action::OpenChat(SAMPLES[2].id.into()));
+        render(&mut app, &ctx);
+        app.actions.push(crate::model::Action::OpenChat(chat));
+        render(&mut app, &ctx);
+        assert_eq!(
+            app.composer, "Hello from link edited",
+            "reopen restores text"
+        );
+        assert!(drawn(&mut app).is_some());
     }
 
     /// A refused voice message waits above its own chat's composer, where
