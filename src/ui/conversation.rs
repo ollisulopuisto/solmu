@@ -4876,22 +4876,22 @@ fn grouped_hover_actions(
         );
     let can_star = !matches!(message.content, Content::Revoked);
     let order = hover_actions::focus_order(bubble.id, can_reply, can_star);
-    // Disable egui's automatic Tab advance for controls we route ourselves.
-    // Otherwise begin_pass advances once and this handler advances again.
+    let shift = ui.input(|i| i.modifiers.shift);
+    // Release the native focus lock at either exit boundary, including
+    // reverse navigation out of the bubble. Always reset a previous lock.
     ui.ctx().memory_mut(|m| {
         if let Some(id) = m.focused()
-            && order.iter().take(order.len() - 1).any(|known| *known == id)
+            && order.contains(&id)
         {
             m.set_focus_lock_filter(
                 id,
                 egui::EventFilter {
-                    tab: true,
+                    tab: hover_actions::next_focus(&order, Some(id), shift).is_some(),
                     ..Default::default()
                 },
             );
         }
     });
-    let shift = ui.input(|i| i.modifiers.shift);
     let tab_frame = ui.ctx().cumulative_frame_nr();
     let handled_id = egui::Id::new("message-actions-tab-handled");
     let already_handled = ui.ctx().data(|d| d.get_temp::<u64>(handled_id)) == Some(tab_frame);
@@ -14503,6 +14503,64 @@ mod tests {
             assert_eq!(
                 clicks, 2,
                 "edge clamping must not move the bar over its own message"
+            );
+        });
+    }
+
+    #[test]
+    fn shift_tab_from_bubble_leaves_message() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let message = crate::archive::tests::message(&view.chat.id, "reverse-tab", 0, false);
+            let id = egui::Id::new("reverse-bubble");
+            let before = id.with("before");
+            for step in 0..6 {
+                if step == 2 {
+                    ctx.memory_mut(|m| m.request_focus(id));
+                }
+                let shift = step >= 2;
+                let events = if step == 3 {
+                    vec![egui::Event::Key {
+                        key: egui::Key::Tab,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::SHIFT,
+                    }]
+                } else {
+                    Vec::new()
+                };
+                let mut out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(420., 640.))),
+                        modifiers: if shift {
+                            egui::Modifiers::SHIFT
+                        } else {
+                            egui::Modifiers::NONE
+                        },
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.interact(
+                            Rect::from_min_size(pos2(10., 10.), vec2(80., 30.)),
+                            before,
+                            Sense::click(),
+                        );
+                        let bubble = ui.interact(
+                            Rect::from_min_size(pos2(80., 80.), vec2(250., 70.)),
+                            id,
+                            Sense::click(),
+                        );
+                        reaction_affordance(ui, view, &message, &bubble, &mut Vec::new());
+                    },
+                );
+                out.textures_delta.clear();
+            }
+            assert!(
+                ctx.memory(|m| m.has_focus(before)),
+                "Shift+Tab must leave bubble"
             );
         });
     }
