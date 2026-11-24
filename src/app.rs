@@ -9200,14 +9200,19 @@ impl App {
         }
         // The text is on its way, so there is nothing left to restore.
         self.store_draft(&chat, "");
-        if let Some(anchor) = self.open_chat.as_deref().filter(|open| {
-            *open != chat
-                && self.settings.beeper.people.iter().any(|p| {
-                    p.members.iter().any(|m| m.chat == *open)
-                        && p.members.iter().any(|m| m.chat == chat)
-                })
-        }) {
-            self.store_draft(anchor, "");
+        if let Some(anchor) = self
+            .open_chat
+            .as_deref()
+            .filter(|open| {
+                *open != chat
+                    && self.settings.beeper.people.iter().any(|p| {
+                        p.members.iter().any(|m| m.chat == *open)
+                            && p.members.iter().any(|m| m.chat == chat)
+                    })
+            })
+            .map(str::to_owned)
+        {
+            self.store_draft(&anchor, "");
         }
         self.backend.send(Command::SendText {
             chat,
