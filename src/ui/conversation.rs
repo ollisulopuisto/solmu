@@ -2625,7 +2625,7 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
         if !state.loaded || state.changed.is_some() || state.confirmed.is_some() || state.failed {
             theme::text(
                 ui,
-                &match state.status() {
+                match state.status() {
                     "Saved locally" => crate::i18n::gettext(app.locale, "Saved locally"),
                     "Not saved" => crate::i18n::gettext(app.locale, "Not saved"),
                     "Not saved here until restart" => {
