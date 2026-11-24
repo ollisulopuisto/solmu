@@ -1,10 +1,8 @@
-//! Cross-under toolbar geometry. Each action owns one disjoint rectangle.
-use egui::{Color32, CornerRadius, Rect, Stroke, Vec2, pos2, vec2};
-
-pub const CELL: f32 = 36.0;
-pub const BAND: f32 = 44.0;
-pub const STEM: f32 = 44.0;
-
+//! One 3x3 message action grid. Six reactions, gap, then picker/Reply/Star.
+use egui::{Color32, Rect, Stroke, pos2, vec2};
+pub const CELL: f32 = 44.0;
+const GAP: f32 = 4.0;
+const SECTION_GAP: f32 = 8.0;
 #[derive(Clone, Copy, Debug)]
 pub struct Geometry {
     pub reactions: Rect,
@@ -14,121 +12,140 @@ pub struct Geometry {
 }
 impl Geometry {
     pub fn place(bubble: Rect, bounds: Rect, count: usize) -> Option<Self> {
-        let width = count as f32 * CELL + 12.0;
-        let height = BAND + STEM * 2.0;
+        if count != 7 {
+            return None;
+        }
+        let width = 3.0 * CELL + 2.0 * GAP;
+        let height = 3.0 * CELL + 2.0 * GAP + SECTION_GAP;
         if bounds.width() < width || bounds.height() < height {
             return None;
         }
-        // Keep both flush joins on the right, including for outgoing messages.
-        let edge = bubble.right() + 6.0 + STEM;
-        let x = (edge - width).clamp(bounds.left(), bounds.right() - width);
-        let y = (bubble.bottom() + 8.0).clamp(bounds.top() + STEM, bounds.bottom() - BAND - STEM);
-        let reactions = Rect::from_min_size(pos2(x, y), vec2(width, BAND));
-        let stem_x = reactions.right() - STEM;
-        let vertical = Rect::from_min_size(pos2(stem_x, y - STEM), vec2(STEM, height));
-        let placed = Self {
-            reactions,
-            vertical,
-            reply: Rect::from_min_size(vertical.min, Vec2::splat(STEM)),
-            star: Rect::from_min_size(pos2(stem_x, reactions.bottom()), Vec2::splat(STEM)),
-        };
-        // Edge clamping must never turn hover chrome into a cover over the
-        // message's own links, voice controls or double-click padding.
-        if [placed.reactions, placed.reply, placed.star]
-            .into_iter()
-            .any(|rect| rect.shrink(0.01).intersects(bubble))
-        {
-            return None;
+        let x = (bubble.center().x - width / 2.0).clamp(bounds.left(), bounds.right() - width);
+        let y = (bubble.center().y - height / 2.0).clamp(bounds.top(), bounds.bottom() - height);
+        let candidates = [
+            pos2(x, bubble.bottom() + 8.0),
+            pos2(x, bubble.top() - height - 8.0),
+            pos2(bubble.right() + 8.0, y),
+            pos2(bubble.left() - width - 8.0, y),
+        ];
+        for at in candidates {
+            let whole = Rect::from_min_size(at, vec2(width, height));
+            if !bounds.contains_rect(whole) || whole.shrink(0.01).intersects(bubble) {
+                continue;
+            }
+            let reactions = Rect::from_min_size(at, vec2(width, 2.0 * CELL + GAP));
+            let vertical = Rect::from_min_size(
+                pos2(at.x, reactions.bottom() + GAP + SECTION_GAP),
+                vec2(width, CELL),
+            );
+            let reply = Rect::from_min_size(vertical.min + vec2(CELL + GAP, 0.0), vec2(CELL, CELL));
+            let star = Rect::from_min_size(
+                vertical.min + vec2(2.0 * (CELL + GAP), 0.0),
+                vec2(CELL, CELL),
+            );
+            return Some(Self {
+                reactions,
+                vertical,
+                reply,
+                star,
+            });
         }
-        Some(placed)
+        None
+    }
+    /// Only the corridor directly between the facing edges, never the full
+    /// bounding box that also contains unrelated neighbouring message rows.
+    pub fn bridge(self, bubble: Rect) -> Rect {
+        let grid = self.bounds();
+        if grid.top() >= bubble.bottom() {
+            Rect::from_min_max(
+                pos2(grid.left().max(bubble.left()), bubble.bottom()),
+                pos2(grid.right().min(bubble.right()), grid.top()),
+            )
+        } else if grid.bottom() <= bubble.top() {
+            Rect::from_min_max(
+                pos2(grid.left().max(bubble.left()), grid.bottom()),
+                pos2(grid.right().min(bubble.right()), bubble.top()),
+            )
+        } else if grid.left() >= bubble.right() {
+            Rect::from_min_max(
+                pos2(bubble.right(), grid.top().max(bubble.top())),
+                pos2(grid.left(), grid.bottom().min(bubble.bottom())),
+            )
+        } else {
+            Rect::from_min_max(
+                pos2(grid.right(), grid.top().max(bubble.top())),
+                pos2(bubble.left(), grid.bottom().min(bubble.bottom())),
+            )
+        }
     }
     pub fn bounds(self) -> Rect {
         self.reactions.union(self.vertical)
     }
     pub fn cell(self, index: usize) -> Rect {
+        if index == 6 {
+            return Rect::from_min_size(self.vertical.min, vec2(CELL, CELL));
+        }
         Rect::from_min_size(
-            self.reactions.min + vec2(6.0 + index as f32 * CELL, 4.0),
-            Vec2::splat(CELL),
+            self.reactions.min
+                + vec2(
+                    (index % 3) as f32 * (CELL + GAP),
+                    (index / 3) as f32 * (CELL + GAP),
+                ),
+            vec2(CELL, CELL),
         )
     }
 }
-
-/// Rear rounded stem first; foreground bar has flush corners at the crossing.
-pub fn paint(
-    painter: &egui::Painter,
-    g: Geometry,
-    rear: Color32,
-    front: Color32,
-    outline: Color32,
-) {
-    painter.rect(
-        g.vertical,
-        12.0,
-        rear,
-        Stroke::new(1.0, outline),
-        egui::StrokeKind::Inside,
-    );
-    let corners = CornerRadius {
-        nw: 12,
-        sw: 12,
-        ne: 0,
-        se: 0,
-    };
-    painter.rect(
-        g.reactions,
-        corners,
-        front,
-        Stroke::new(1.0, outline),
-        egui::StrokeKind::Inside,
-    );
+pub fn paint(p: &egui::Painter, g: Geometry, rear: Color32, front: Color32, outline: Color32) {
+    for i in 0..9 {
+        let rect = match i {
+            6 => g.cell(6),
+            7 => g.reply,
+            8 => g.star,
+            _ => g.cell(i),
+        };
+        p.rect(
+            rect,
+            8.0,
+            if i < 6 { front } else { rear },
+            Stroke::new(1.0, outline),
+            egui::StrokeKind::Inside,
+        );
+    }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn edges_clamps_and_hit_regions_are_disjoint() {
-        for x in [0.0, 80.0, 390.0] {
-            for y in [-30.0, 120.0, 590.0] {
-                let bounds = Rect::from_min_size(egui::Pos2::ZERO, vec2(420.0, 640.0));
-                let g = Geometry::place(
-                    Rect::from_min_size(pos2(x, y), vec2(100.0, 50.0)),
-                    bounds,
-                    7,
-                );
-                let Some(g) = g else {
-                    continue;
-                };
-                assert!(bounds.contains_rect(g.bounds()));
-                assert!(!g.reply.shrink(0.01).intersects(g.reactions));
-                assert!(!g.star.shrink(0.01).intersects(g.reactions));
-                for i in 0..7 {
-                    assert!(g.reactions.contains_rect(g.cell(i)));
-                    assert!(!g.cell(i).intersects(g.reply));
-                    assert!(!g.cell(i).intersects(g.star));
-                    for j in 0..i {
-                        assert!(!g.cell(i).shrink(0.01).intersects(g.cell(j)));
-                    }
-                }
-            }
-        }
+    fn below_grid_bridge_excludes_next_bubble_side_strip() {
+        let bubble = Rect::from_min_max(pos2(20., 20.), pos2(300., 80.));
+        let g = Geometry::place(
+            bubble,
+            Rect::from_min_max(pos2(0., 0.), pos2(420., 640.)),
+            7,
+        )
+        .unwrap();
+        let next = pos2(25., 140.);
+        assert!(bubble.union(g.bounds()).contains(next));
+        assert!(!g.bridge(bubble).contains(next));
+        assert!(!g.bounds().contains(next));
+        assert!(g.bridge(bubble).contains(pos2(g.bounds().center().x, 84.)));
     }
     #[test]
-    fn edge_clamp_never_covers_the_hovered_message() {
-        let bounds = Rect::from_min_size(egui::Pos2::ZERO, vec2(420.0, 640.0));
-        for x in (0..400).step_by(20) {
-            for y in (0..620).step_by(20) {
-                let bubble = Rect::from_min_size(pos2(x as f32, y as f32), vec2(120.0, 50.0));
-                if let Some(g) = Geometry::place(bubble, bounds, 7) {
-                    for r in [g.reactions, g.reply, g.star] {
-                        assert!(!r.shrink(0.01).intersects(bubble));
-                    }
-                }
-            }
-        }
+    fn bottom_message_flips_above_and_all_targets_stay_visible() {
+        let b = Rect::from_min_max(pos2(210., 520.), pos2(405., 630.));
+        let bounds = Rect::from_min_max(pos2(0., 0.), pos2(420., 640.));
+        let g = Geometry::place(b, bounds, 7).unwrap();
+        assert!(g.bounds().bottom() < b.top());
+        assert!(bounds.contains_rect(g.bounds()));
+    }
+    #[test]
+    fn tall_message_uses_side_or_context_fallback() {
+        let bounds = Rect::from_min_max(pos2(0., 0.), pos2(620., 640.));
+        let b = Rect::from_min_max(pos2(0., -200.), pos2(300., 900.));
+        assert!(Geometry::place(b, bounds, 7).is_some());
         assert!(
             Geometry::place(
-                Rect::from_min_max(pos2(220.0, 580.0), pos2(410.0, 630.0)),
+                Rect::from_min_max(pos2(0., -200.), pos2(620., 900.)),
                 bounds,
                 7
             )
@@ -136,12 +153,21 @@ mod tests {
         );
     }
     #[test]
-    fn tiny_viewports_keep_existing_affordance_instead_of_overflowing() {
-        let bubble = Rect::from_min_size(pos2(20.0, 20.0), vec2(80.0, 50.0));
-        for size in [vec2(220.0, 640.0), vec2(420.0, 120.0)] {
-            assert!(
-                Geometry::place(bubble, Rect::from_min_size(egui::Pos2::ZERO, size), 7).is_none()
-            );
+    fn all_nine_targets_disjoint_and_actions_separated() {
+        let g = Geometry::place(
+            Rect::from_min_max(pos2(30., 30.), pos2(200., 100.)),
+            Rect::from_min_max(pos2(0., 0.), pos2(420., 640.)),
+            7,
+        )
+        .unwrap();
+        let mut cells = (0..7).map(|i| g.cell(i)).collect::<Vec<_>>();
+        cells.extend([g.reply, g.star]);
+        for (i, a) in cells.iter().enumerate() {
+            assert!(g.bounds().contains_rect(*a));
+            for b in &cells[..i] {
+                assert!(!a.shrink(0.01).intersects(*b));
+            }
         }
+        assert!(g.vertical.top() - g.reactions.bottom() >= SECTION_GAP);
     }
 }
