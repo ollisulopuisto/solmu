@@ -2605,8 +2605,6 @@ fn unsent_voice_strip(app: &mut App, ui: &mut egui::Ui, samples: usize) {
     strip_gap(ui);
 }
 
-/// The first non-blank line of the unsent text, for the one-line preview in
-/// the draft label. `None` while the composer holds nothing worth calling a
 /// Truthful local save status, retained drafts and nonblocking clear recovery.
 fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
     if app.editing.is_some() || !app.composer_holds_draft() {
