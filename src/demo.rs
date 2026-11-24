@@ -8319,14 +8319,27 @@ mod tests {
     /// Issue #184: "٤٥" drew as "٥٤". Every number on the `rtl` page, in the
     /// bubbles, the quote, the chat list preview, and the composer, must read
     /// left to right, alone or inside right-to-left text.
+    /// Where the Draft label above the composer was last drawn. It repeats the
+    /// draft's first line on purpose, so tests that look for the composer's
+    /// own text must leave that rectangle out.
+    fn draft_label_rect(ctx: &egui::Context) -> Option<egui::Rect> {
+        ctx.data(|data| data.get_temp::<(egui::Rect, String)>(egui::Id::new("draft-label")))
+            .map(|(rect, _)| rect)
+    }
+
     #[test]
     fn issue_184_numbers_read_left_to_right_everywhere() {
-        fn collect(shape: &egui::Shape, galleys: &mut Vec<std::sync::Arc<egui::Galley>>) {
+        fn collect(
+            shape: &egui::Shape,
+            skip: Option<egui::Rect>,
+            galleys: &mut Vec<std::sync::Arc<egui::Galley>>,
+        ) {
             match shape {
+                egui::Shape::Text(text) if skip.is_some_and(|rect| rect.contains(text.pos)) => {}
                 egui::Shape::Text(text) => galleys.push(text.galley.clone()),
                 egui::Shape::Vec(shapes) => {
                     for shape in shapes {
-                        collect(shape, galleys);
+                        collect(shape, skip, galleys);
                     }
                 }
                 _ => {}
@@ -8338,9 +8351,10 @@ mod tests {
         app.attach(&ctx);
         render(&mut app, &ctx);
         let shapes = frame_sized(&mut app, &ctx, 780.0, Vec::new());
+        let label = draft_label_rect(&ctx);
         let mut galleys = Vec::new();
         for shape in shapes {
-            collect(&shape.shape, &mut galleys);
+            collect(&shape.shape, label, &mut galleys);
         }
         let count = |text: &str| galleys.iter().filter(|g| g.text() == text).count();
         // The reply chip shows no quoted text: the bubble and the chat
@@ -22923,13 +22937,17 @@ mod tests {
                 .map(|(_, id)| id)
                 .expect("the plus is drawn");
             let control = ctx.read_response(id).unwrap().rect.center().y;
+            let label = draft_label_rect(&ctx);
             let mut ink: Option<(f32, f32)> = None;
             let mut stack: Vec<&egui::Shape> =
                 shapes.iter().map(|clipped| &clipped.shape).collect();
             while let Some(shape) = stack.pop() {
                 match shape {
                     egui::Shape::Vec(shapes) => stack.extend(shapes.iter()),
-                    egui::Shape::Text(text) if text.galley.text() == DRAFT => {
+                    egui::Shape::Text(text)
+                        if text.galley.text() == DRAFT
+                            && !label.is_some_and(|rect| rect.contains(text.pos)) =>
+                    {
                         for row in &text.galley.rows {
                             for glyph in row
                                 .glyphs

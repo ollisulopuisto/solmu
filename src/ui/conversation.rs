@@ -2616,7 +2616,7 @@ fn draft_preview(text: &str) -> Option<String> {
 fn draft_label(app: &App, ui: &mut egui::Ui, preview: &str) {
     let palette = app.conversation_palette();
     let label = crate::i18n::gettext(app.locale, "Draft");
-    ui.horizontal(|ui| {
+    let row = ui.horizontal(|ui| {
         ui.add_space(6.0);
         theme::icon(ui, Icon::Pencil, 14.0, palette.accent);
         theme::text(
@@ -2625,13 +2625,9 @@ fn draft_label(app: &App, ui: &mut egui::Ui, preview: &str) {
             theme::semibold(12.5),
             palette.accent,
         );
-        // A separator keeps the preview from being the composer's own text
-        // twice on screen: tools that look the draft up by its text find
-        // only the composer.
-        let shown = format!("\u{b7} {preview}");
         let line = widgets::line(
             ui,
-            &shown,
+            preview,
             theme::regular(12.5),
             palette.secondary,
             ui.available_width().max(0.0),
@@ -2642,11 +2638,13 @@ fn draft_label(app: &App, ui: &mut egui::Ui, preview: &str) {
     });
     #[cfg(test)]
     {
-        let shown = ui.min_rect();
+        let shown = row.response.rect;
         ui.ctx().data_mut(|data| {
             data.insert_temp(egui::Id::new("draft-label"), (shown, preview.to_owned()))
         });
     }
+    #[cfg(not(test))]
+    let _ = row;
     strip_gap(ui);
 }
 
