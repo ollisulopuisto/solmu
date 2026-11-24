@@ -4876,6 +4876,21 @@ fn grouped_hover_actions(
         );
     let can_star = !matches!(message.content, Content::Revoked);
     let order = hover_actions::focus_order(bubble.id, can_reply, can_star);
+    // Disable egui's automatic Tab advance for controls we route ourselves.
+    // Otherwise begin_pass advances once and this handler advances again.
+    ui.ctx().memory_mut(|m| {
+        if let Some(id) = m.focused()
+            && order.iter().take(order.len() - 1).any(|known| *known == id)
+        {
+            m.set_focus_lock_filter(
+                id,
+                egui::EventFilter {
+                    tab: true,
+                    ..Default::default()
+                },
+            );
+        }
+    });
     let shift = ui.input(|i| i.modifiers.shift);
     let tab_frame = ui.ctx().cumulative_frame_nr();
     let handled_id = egui::Id::new("message-actions-tab-handled");
