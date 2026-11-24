@@ -14519,7 +14519,6 @@ mod tests {
                 if step == 2 {
                     ctx.memory_mut(|m| m.request_focus(id));
                 }
-                let shift = step >= 2;
                 let events = if step == 3 {
                     vec![egui::Event::Key {
                         key: egui::Key::Tab,
@@ -14534,11 +14533,6 @@ mod tests {
                 let mut out = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(420., 640.))),
-                        modifiers: if shift {
-                            egui::Modifiers::SHIFT
-                        } else {
-                            egui::Modifiers::NONE
-                        },
                         events,
                         ..Default::default()
                     },
