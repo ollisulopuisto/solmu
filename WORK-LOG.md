@@ -1508,3 +1508,55 @@ mutation fails, restored passes. Full-app/native verification pending.
 Floating actions follow-up: native second run 2646 passed, five failed. A failing-first real-egui lower-edge click test received zero of two clicks with clamped overlapping geometry and both clicks with a no-overlap placement guard. Full bar now falls back if edge clamping covers its own message. Added equivalent native helper regression; original full-app failures remain the acceptance gate, not waived.
 
 Native evidence follow-up: add existing demo capture pages for the actual grouped helper in dark/light, with a synthetic resting-pointer position on one designated fixture message. Normal app and tests never enable it. No workflow/job or upload setting added; existing smoke loop and artifact path reused. Fresh exact-head checks required.
+
+
+## 2026-11-24 - first-run top tail (Instinct)
+
+Supersedes the held last-message proposal after the selected first-message
+sketch. Ordinary transcript, linked timeline and thread pane now agree on
+source/sender/direction/calendar-day run starts. Tail shape, avatars, existing
+overlap and separate thread spacing stay unchanged. Messages incoming tails
+no longer follow the final-row avatar. Thread run identity is separate from
+its deliberately absent overlap predecessor. Reply-chain controls unchanged.
+
+Exact-source helper test passes with minimal model/day stubs; removing day
+boundaries fails. Added native full-App Messages group geometry regression.
+Fmt/diff checks pass. Local cargo check --tests --features demo reached the
+application but did not finish two bounded windows; no native pass or actual
+app pixel verification claimed. No workflow change, release or merge.
+## Unsent draft indication
+
+Approved option A from the 23 Nov draft sketches (label above the composer,
+chat list unchanged) plus a one-line inline preview of the draft. Shows a
+pencil, "Draft" and the first non-blank line of the composer text while
+nothing is being edited. Checked first: no open or merged PR adds a draft
+label; restore-on-open drafts already exist. Native compile and capture not
+run by this agent, CI is the first compile.
+
+## Linked-view local translation staging
+
+The linked timeline rejected TranslateLocally together with source-bound editing
+and selection. That action only carries selected text to Local AI settings for
+review; it does not resolve a destination or call the translation endpoint.
+Allow that text-only action while retaining the edit/select/sweep guard.
+Added a full-App linked-person regression with a different default destination,
+exact selected text, preserved composer/source/default and no bridge command.
+An isolated exact-predicate harness fails with the old translation rejection and
+passes after the fix. This is not a full native test pass. Native CI and actual
+review-form pixels remain required; no workflow changes or merge authority added.
+## Message info source identity
+
+Approved sent/received dark sketches: show Bridge, Account and original source
+To/From, with group context rather than an arbitrary group member. Incoming
+messages gain Message info access; outgoing receipt behavior stays separate.
+Beeper account lookup is scoped by exact origin and account id. Reported handles
+are optional; missing account names fall back to source account id. No linked
+primary destination is used to infer historical identity. Values wrap at narrow
+widths inside the existing bounded scroll pane. Incoming timestamps are called
+Message time, not invented delivery times. No incoming outgoing-receipt watcher.
+Added synthetic source fixtures, cross-origin same-account-id regression,
+incoming group watcher test and updated received footer click regression. The
+old short-info no-scroll contract changes because the approved metadata adds
+height, so viewport test now covers bounded scrolling instead. Exact-source
+metadata harness compiles/passes with minimal model stubs; no full native build
+or pixel claim locally. Workflow capture changes need separate approval.

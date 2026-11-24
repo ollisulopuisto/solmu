@@ -1678,6 +1678,12 @@ pub(crate) fn composer_with_capabilities(
                     None => app.reply_to = None,
                 }
             }
+            if app.editing.is_none()
+                && app.composer_holds_draft()
+                && let Some(preview) = draft_preview(&app.composer)
+            {
+                draft_label(app, ui, &preview);
+            }
             app.prepare_composer_undo(ui.ctx());
             let id = egui::Id::new("composer-text");
             let has_focus = ui.memory(|memory| memory.has_focus(id));
@@ -2593,6 +2599,52 @@ fn unsent_voice_strip(app: &mut App, ui: &mut egui::Ui, samples: usize) {
             });
         });
     });
+    strip_gap(ui);
+}
+
+/// The first non-blank line of the unsent text, for the one-line preview in
+/// the draft label. `None` while the composer holds nothing worth calling a
+/// draft.
+fn draft_preview(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    Some(line.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// A small "Draft" label above the composer with the draft's first line
+/// beside it, so unsent text is never mistaken for a sent message. It has
+/// no frame: the chat list keeps its normal last-message preview.
+fn draft_label(app: &App, ui: &mut egui::Ui, preview: &str) {
+    let palette = app.conversation_palette();
+    let label = crate::i18n::gettext(app.locale, "Draft");
+    let row = ui.horizontal(|ui| {
+        ui.add_space(6.0);
+        theme::icon(ui, Icon::Pencil, 14.0, palette.accent);
+        theme::text(
+            ui,
+            label.into_owned(),
+            theme::semibold(12.5),
+            palette.accent,
+        );
+        let line = widgets::line(
+            ui,
+            preview,
+            theme::regular(12.5),
+            palette.secondary,
+            ui.available_width().max(0.0),
+            1,
+        );
+        let (rect, _) = ui.allocate_exact_size(line.size(), Sense::hover());
+        line.paint(ui, rect.min, palette.secondary);
+    });
+    #[cfg(test)]
+    {
+        let shown = row.response.rect;
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(egui::Id::new("draft-label"), (shown, preview.to_owned()))
+        });
+    }
+    #[cfg(not(test))]
+    let _ = row;
     strip_gap(ui);
 }
 
@@ -3702,8 +3754,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                     ui.add_space(4.0);
                                 }
                                 // One tail belongs to the run, never each follower.
-                                let first_in_run = new_day
-                                    || previous.is_none_or(|previous| !same_run(previous, message));
+                                let first_in_run = starts_sender_run(message, previous);
                                 let show_sender =
                                     shows_sender_pictures(chat) && !message.from_me && first_in_run;
                                 let show_avatar = if palette.bubbles == theme::BubbleStyle::Messages
@@ -3714,11 +3765,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                 } else {
                                     show_sender
                                 };
-                                let tailed = if shows_sender_pictures(chat) && !message.from_me {
-                                    show_avatar
-                                } else {
-                                    first_in_run
-                                };
+                                let tailed = first_in_run;
                                 if first_in_run && !new_day && previous.is_some() {
                                     ui.add_space(RUN_GAP);
                                 }
@@ -6052,6 +6099,15 @@ fn same_run(message: &Message, next: &Message) -> bool {
         && (message.from_me || message.sender == next.sender)
 }
 
+/// A tail marks the first message in its sender/source/calendar-day run.
+/// This is independent of the avatar slot and viewport visibility.
+pub(crate) fn starts_sender_run(message: &Message, previous: Option<&Message>) -> bool {
+    previous.is_none_or(|previous| {
+        !same_run(previous, message)
+            || crate::util::day_key(previous.timestamp) != crate::util::day_key(message.timestamp)
+    })
+}
+
 /// Assign a hue per sender streak, before viewport culling. Adjacent different
 /// senders get at least 120 degrees of hue separation. Among equally safe
 /// choices use the hue nearest the sender's stable preference. Loading older
@@ -7711,14 +7767,14 @@ pub fn footer_id(chat: &str, message: &str) -> egui::Id {
     bubble_id(chat, message).with("footer")
 }
 
-/// Whether "Message info" has receipts to show: our own sent message.
+/// Source identity for received messages; source and receipts for sent ones.
 fn has_message_info(message: &Message) -> bool {
-    message.from_me
-        && !matches!(message.content, Content::Revoked)
-        && !matches!(
-            message.status,
-            Delivery::None | Delivery::Pending | Delivery::Failed
-        )
+    !matches!(message.content, Content::Revoked)
+        && (!message.from_me
+            || !matches!(
+                message.status,
+                Delivery::None | Delivery::Pending | Delivery::Failed
+            ))
 }
 
 /// Clicking our time and ticks opens "Message info", as in WhatsApp.
@@ -8236,6 +8292,7 @@ pub(crate) fn linked_bubble(
     chat: &Chat,
     message: &Message,
     previous: Option<&Message>,
+    first_in_run: bool,
     show_timestamp: bool,
     footer_right: f32,
     run_width: Option<f32>,
@@ -8337,7 +8394,7 @@ pub(crate) fn linked_bubble(
             show_timestamp,
             show_sender: chat.is_group() && !message.from_me,
             show_avatar: chat.is_group() && !message.from_me,
-            tailed: previous.is_none_or(|previous| !same_run(previous, message)),
+            tailed: first_in_run,
             overlap_previous: previous
                 .filter(|previous| stack_pair(&view, previous, message))
                 .map(|previous| bubble_id(&previous.chat, &previous.id)),
@@ -16537,6 +16594,16 @@ mod tests {
     }
 
     #[test]
+    fn draft_preview_is_the_first_non_blank_line_on_one_row() {
+        assert_eq!(draft_preview(""), None);
+        assert_eq!(draft_preview(" \n\t "), None);
+        assert_eq!(
+            draft_preview("\n  Yes,   after the chart fix.  \nsecond line"),
+            Some("Yes, after the chart fix.".to_owned())
+        );
+    }
+
+    #[test]
     fn composer_triggers_only_start_at_word_boundaries() {
         assert_eq!(standalone_trigger(":", 1, ':'), Some(0));
         assert_eq!(standalone_trigger("hello :", 7, ':'), Some(6));
@@ -16625,8 +16692,35 @@ mod reaction_tests {
         }
     }
 
-    /// The tail goes to a run's last bubble, past the messages drawn without
-    /// one after it, and only to one in the same run.
+    #[test]
+    fn tail_starts_each_source_sender_direction_and_day_run() {
+        let first = crate::archive::tests::message("source-a", "first", 1_700_000_000, false);
+        let mut follower = first.clone();
+        follower.id = "follower".into();
+        follower.timestamp += 1;
+        assert!(starts_sender_run(&first, None));
+        assert!(!starts_sender_run(&follower, Some(&first)));
+        for field in 0..4 {
+            let mut boundary = follower.clone();
+            match field {
+                0 => boundary.chat = "source-b".into(),
+                1 => boundary.sender = "someone-else".into(),
+                2 => boundary.from_me = true,
+                _ => boundary.timestamp += 2 * 86_400,
+            }
+            assert!(
+                starts_sender_run(&boundary, Some(&first)),
+                "boundary {field}"
+            );
+        }
+        follower.forwarded = true;
+        assert!(!starts_sender_run(&follower, Some(&first)));
+        // The first row owns the tail even if a caller paints it bubbleless.
+        let mut third = follower.clone();
+        third.id = "third".into();
+        assert!(!starts_sender_run(&third, Some(&follower)));
+    }
+
     #[test]
     fn the_tail_goes_to_the_last_bubble_of_a_run() {
         let photo = Message {

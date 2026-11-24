@@ -424,14 +424,12 @@ fn run() -> eframe::Result<()> {
         .as_deref()
         .is_some_and(|page| page.split(',').any(|part| part.trim() == "link-menu"));
     #[cfg(feature = "demo")]
-    let demo_thread = cli
-        .demo_page
-        .as_deref()
-        .is_some_and(|page| page.split(',').any(|part| part.trim() == "thread"));
+    let demo_thread = cli.demo_page.as_deref().is_some_and(|page| {
+        page.split(',').any(|part| matches!(part.trim(), "thread" | "tail-thread"))
+    });
     #[cfg(feature = "demo")]
     let demo_quick_replies_menu = cli.demo_page.as_deref().is_some_and(|page| {
-        page.split(',')
-            .any(|part| part.trim() == "quick-replies-menu")
+        page.split(',').any(|part| part.trim() == "quick-replies-menu")
     });
     let mut update_receipt = launch.receipt;
     // The link, archive, and tray outlive windows. The shell recreates a

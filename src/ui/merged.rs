@@ -4,6 +4,15 @@ use crate::{
     merged::{Member, Person},
     model::{Action, Chat, ChatKind},
 };
+/// These actions need a source-specific conversation state. Translation only
+/// carries explicit text into a review form and has no source routing to guess.
+fn requires_source_conversation(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Edit(_) | Action::SelectMessage(_) | Action::SweepMessages { .. }
+    )
+}
+
 #[derive(Clone, Default)]
 struct RowCache {
     width: f32,
@@ -1158,6 +1167,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                             visible_index
                                                 .checked_sub(1)
                                                 .and_then(|i| visible.get(i).copied()),
+                                            super::conversation::starts_sender_run(
+                                                message,
+                                                visible_index
+                                                    .checked_sub(1)
+                                                    .and_then(|i| visible.get(i).copied()),
+                                            ),
                                             super::conversation::last_minute_in_run(
                                                 original_message,
                                                 visible.get(visible_index + 1).copied(),
@@ -1234,10 +1249,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                             refused_action = true;
                                         }
                                     }
-                                    Action::Edit(_)
-                                    | Action::SelectMessage(_)
-                                    | Action::SweepMessages { .. }
-                                    | Action::TranslateLocally(_) => refused_action = true,
+                                    action if requires_source_conversation(&action) => {
+                                        refused_action = true;
+                                    }
                                     other => actions.push(other),
                                 }
                             }
@@ -2043,6 +2057,42 @@ mod tests {
         );
         output.textures_delta.clear();
         handled
+    }
+
+    #[test]
+    fn linked_translation_stages_exact_text_without_source_routing_or_send() {
+        let chats = same_name_pair();
+        let source = chats[1].clone();
+        let destination = Member::of(&chats[0]).unwrap();
+        let person = Person {
+            name: "Ada".into(),
+            members: chats.iter().map(|c| Member::of(c).unwrap()).collect(),
+            primary: Some(destination.clone()),
+        };
+        let (_directory, mut app, ctx) = linked_app(chats, vec![person]);
+        app.open_chat = Some(source.id.clone());
+        app.composer = "existing draft must survive".into();
+        let (backend, mut inbox) = crate::backend::Backend::recording();
+        app.backend = backend;
+        let text = "Vain tämä viesti, ei koko keskustelua.";
+        let action = Action::TranslateLocally(text.into());
+        assert!(!requires_source_conversation(&action));
+        app.apply(action, &ctx);
+        assert_eq!(app.local_ai.input, text);
+        assert!(!app.local_ai.busy());
+        assert_eq!(app.page, crate::model::Page::Settings);
+        assert_eq!(app.settings_search, "Local AI");
+        assert_eq!(app.composer, "existing draft must survive");
+        assert_eq!(app.open_chat.as_deref(), Some(source.id.as_str()));
+        assert_eq!(app.settings.beeper.people[0].primary, Some(destination));
+        assert!(
+            inbox.try_recv().is_err(),
+            "staging must not contact a bridge"
+        );
+        assert!(requires_source_conversation(&Action::Edit("id".into())));
+        assert!(requires_source_conversation(&Action::SelectMessage(
+            "id".into()
+        )));
     }
 
     fn same_name_pair() -> Vec<Chat> {

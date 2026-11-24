@@ -1956,6 +1956,14 @@ impl App {
             .is_some_and(|(prefilled_chat, prefilled)| prefilled_chat == chat && prefilled == text)
     }
 
+    /// Whether the open chat's composer holds text the reader wrote and did
+    /// not send. Text a link put there is not their draft.
+    pub(crate) fn composer_holds_draft(&self) -> bool {
+        self.open_chat
+            .as_deref()
+            .is_some_and(|chat| !self.is_untouched_prefill(chat, &self.composer))
+    }
+
     /// Parks the current account's text, mentions and attachments before switching accounts.
     fn park_composer(&mut self) {
         if let Some(previous) = self.open_chat.clone() {
@@ -14765,7 +14773,16 @@ impl App {
     fn follow_receipts(&mut self) {
         let wanted = match &self.dialog {
             Some(Dialog::MessageInfo { chat, message })
-                if crate::model::ChatKind::from_id(chat) == crate::model::ChatKind::Group =>
+                if self
+                    .chat(chat)
+                    .map(|c| c.kind)
+                    .unwrap_or_else(|| crate::model::ChatKind::from_id(chat))
+                    == crate::model::ChatKind::Group
+                    && self
+                        .conversations
+                        .get(chat)
+                        .and_then(|c| c.message(message))
+                        .is_none_or(|m| m.from_me) =>
             {
                 Some((chat.clone(), message.clone()))
             }
@@ -23156,6 +23173,47 @@ mod tests {
         );
         app.follow_receipts();
         assert!(watches(&mut commands).is_empty());
+    }
+
+    #[test]
+    fn incoming_group_info_does_not_subscribe_to_outgoing_receipts() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let group = "incoming@g.us";
+        let row = Message {
+            id: "incoming-info".into(),
+            chat: group.into(),
+            sender: "alice@s.whatsapp.net".into(),
+            sender_name: Some("Alice".into()),
+            from_me: false,
+            timestamp: 1_700_000_000,
+            content: Content::text("hello"),
+            status: Delivery::None,
+            delivered_at: None,
+            read_at: None,
+            quoted: None,
+            reactions: vec![],
+            history_order: None,
+            edited: false,
+            mentions: vec![],
+            forwarded: false,
+            thumbnail: None,
+        };
+        app.conversations.insert(
+            group.into(),
+            Conversation {
+                messages: vec![row],
+                ..Default::default()
+            },
+        );
+        app.dialog = Some(Dialog::MessageInfo {
+            chat: group.into(),
+            message: "incoming-info".into(),
+        });
+        app.follow_receipts();
+        assert!(app.receipts_watch.is_none());
+        assert!(commands.try_recv().is_err());
     }
 
     #[test]

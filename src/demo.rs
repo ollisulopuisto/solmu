@@ -1727,6 +1727,68 @@ fn sample_recipients(now: i64) -> Vec<crate::model::Recipient> {
 /// "Message info" for our message in a bigger group: some members read it,
 /// some only have it, and the rest have not received it yet. Without a saved
 /// audience, the dialog explains that earlier receipts are unknown.
+fn message_info_source_sample(app: &mut App, incoming: bool, group: bool) {
+    let chat = if group { SAMPLES[1].id } else { SAMPLES[0].id };
+    let source = app.chats.iter_mut().find(|c| c.id == chat).unwrap();
+    source.backend_origin = Some("demo-source".into());
+    source.backend_account = Some("demo-account".into());
+    source.backend_network = Some("WhatsApp".into());
+    source.handles = if group {
+        vec![]
+    } else {
+        vec!["alex@example.invalid".into()]
+    };
+    source.name = if group {
+        "Design group"
+    } else {
+        "Alex Example"
+    }
+    .into();
+    app.beeper_accounts.insert(
+        "demo-source".into(),
+        vec![crate::backend::BeeperAccountInfo {
+            id: "demo-account".into(),
+            name: "My WhatsApp account".into(),
+            network: "WhatsApp".into(),
+            status: "connected".into(),
+            own_user_id: None,
+        }],
+    );
+    let mut m = message(
+        chat,
+        "source-info",
+        !incoming,
+        crate::util::now() - 120,
+        Content::text(if incoming {
+            "The revised draft is ready."
+        } else {
+            "Thanks, I will check it."
+        }),
+    );
+    m.sender = if incoming { "alex@example.invalid" } else { ME }.into();
+    m.sender_name = Some(if incoming { "Alex Example" } else { "Me" }.into());
+    m.status = if incoming {
+        Delivery::None
+    } else {
+        Delivery::Delivered
+    };
+    app.conversations.get_mut(chat).unwrap().messages = vec![m];
+    app.open_chat = Some(chat.into());
+    app.typing.clear();
+    app.dialog = Some(Dialog::MessageInfo {
+        chat: chat.into(),
+        message: "source-info".into(),
+    });
+    if !incoming && group {
+        app.message_receipts = Some(crate::model::MessageReceipts {
+            chat: chat.into(),
+            message: "source-info".into(),
+            recipients: vec![],
+        });
+        app.receipts_watch = Some((chat.into(), "source-info".into()));
+    }
+}
+
 fn message_info_sample(app: &mut App, recorded: bool) {
     let chat = SAMPLES[1].id;
     let now = crate::util::now();
@@ -2797,6 +2859,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.open_chat = Some(chat.into());
                 app.scroll_to_bottom = false;
             }
+            "tail-run" | "tail-thread" => tail_run_sample(app, part == "tail-thread"),
             "group-stacks" => group_stacks_sample(app),
             "linked-chip-lanes" => {
                 linked_sample(app);
@@ -3393,6 +3456,18 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     .unwrap();
                 message.status = crate::model::Delivery::Played;
             }
+            "translation-review" => {
+                linked_sample(app);
+                app.apply(
+                    crate::model::Action::TranslateLocally(
+                        "Voimmeko tarkistaa luonnoksen ennen lähettämistä?".into(),
+                    ),
+                    &egui::Context::default(),
+                );
+            }
+            "info-source-sent" => message_info_source_sample(app, false, false),
+            "info-source-received" => message_info_source_sample(app, true, false),
+            "info-source-group" => message_info_source_sample(app, true, true),
             "message-info" => message_info_sample(app, true),
             "message-info-unknown" => message_info_sample(app, false),
             "message-info-partial" => {
@@ -4416,6 +4491,13 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.at_bottom = false;
                 app.scroll_anchor = Some("group-photo".into());
             }
+            // Unsent text in the open chat: the Draft label above the composer
+            // with the draft's first line beside it.
+            "draft-label" => {
+                app.open_chat = Some(SAMPLES[0].id.to_owned());
+                app.composer = "Yes, after the chart fix.\nI will send the notes tomorrow.".into();
+                app.focus_composer = true;
+            }
             "unsent-voice" => {
                 let chat = SAMPLES[0].id;
                 app.open_chat = Some(chat.to_owned());
@@ -5179,6 +5261,62 @@ fn history_date_sample(app: &mut App) {
     app.scroll_anchor = Some("history-date-45".into());
 }
 
+/// Compact tail evidence: one same-sender run, then the same sender on a new day.
+fn tail_run_sample(app: &mut App, thread: bool) {
+    let chat = SAMPLES[0].id;
+    let group = app.chats.iter_mut().find(|row| row.id == chat).unwrap();
+    group.kind = crate::model::ChatKind::Group;
+    group.name = "Tail placement sample".into();
+    if !thread {
+        // Messages follows the OS otherwise, which can make both captures light.
+        app.settings.custom_theme = Some("Tail evidence Messages dark.json".into());
+        app.settings.custom_theme_cache = Some(crate::theme::CustomTheme {
+            filename: "Tail evidence Messages dark.json".into(),
+            palette: crate::theme::Palette::messages(),
+        });
+    }
+    let (today, _) = crate::util::day_bounds(crate::util::today()).unwrap();
+    let mut rows = Vec::new();
+    for (index, (offset, text)) in [
+        (-120, "First message: the run starts here."),
+        (-100, "Middle message: same sender."),
+        (-80, "Last message: avatar stays here in Messages."),
+        (60, "New day: the same sender starts a new run."),
+        (80, "Last message of the new day."),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut row = message(
+            chat,
+            &format!("tail-evidence-{index}"),
+            false,
+            today + offset,
+            Content::text(text),
+        );
+        row.sender = "tail-sender@example.invalid".into();
+        row.sender_name = Some("Alex Example".into());
+        if thread && index > 0 {
+            row.quoted = Some(Quoted {
+                labelled: None,
+                chat: Some(chat.into()),
+                id: "tail-evidence-0".into(),
+                sender: row.sender.clone(),
+                sender_name: row.sender_name.clone(),
+                summary: "First message: the run starts here.".into(),
+                mentions: vec![],
+            });
+        }
+        rows.push(row);
+    }
+    let conversation = app.conversations.get_mut(chat).unwrap();
+    conversation.messages = rows;
+    conversation.complete = true;
+    app.open_chat = Some(chat.into());
+    app.typing.clear();
+    app.scroll_to_bottom = true;
+}
+
 /// Deterministic group identity, streak, reaction and wrapped-footer fixture.
 fn group_stacks_sample(app: &mut App) {
     let chat = SAMPLES[0].id;
@@ -5337,13 +5475,22 @@ pub fn sample_ids() -> Vec<&'static str> {
 /// window frame, so headless captures show the reply redesign's modal.
 pub fn open_thread_shot(app: &App, ctx: &egui::Context) {
     let chat = SAMPLES[0].id.to_owned();
+    let root = if app
+        .conversations
+        .get(&chat)
+        .is_some_and(|c| c.messages.iter().any(|m| m.id == "tail-evidence-0"))
+    {
+        "tail-evidence-0"
+    } else {
+        "ada-voice"
+    };
     let scope = crate::ui::reply_threads::scope(app, std::slice::from_ref(&chat));
     ctx.data_mut(|d| {
         d.insert_temp(
             scope,
             crate::ui::reply_threads::Key {
                 chat,
-                id: "ada-voice".into(),
+                id: root.into(),
             },
         )
     });
@@ -5855,6 +6002,103 @@ mod tests {
             app.reply_to.as_ref().map(|reply| reply.id.as_str()),
             Some("group-stack-2")
         );
+    }
+
+    #[test]
+    fn tail_capture_scenes_cover_group_day_boundary_and_real_thread_root() {
+        for (page, thread, dark) in [
+            ("tail-run,messages", false, true),
+            ("tail-run,messages-light", false, false),
+            ("tail-thread,dark", true, true),
+            ("tail-thread,light", true, false),
+        ] {
+            let mut app = app();
+            apply_flags(&mut app, Some(page));
+            let chat = app.current_chat().unwrap();
+            assert_eq!(chat.kind, crate::model::ChatKind::Group);
+            let rows = &app.conversations.get(&chat.id).unwrap().messages;
+            assert_eq!(rows.len(), 5);
+            assert!(
+                rows.iter()
+                    .all(|m| !m.from_me && m.sender == rows[0].sender)
+            );
+            assert!(crate::ui::conversation::starts_sender_run(&rows[0], None));
+            assert!(!crate::ui::conversation::starts_sender_run(
+                &rows[1],
+                Some(&rows[0])
+            ));
+            assert!(crate::ui::conversation::starts_sender_run(
+                &rows[3],
+                Some(&rows[2])
+            ));
+            if thread {
+                assert!(
+                    rows[1..]
+                        .iter()
+                        .all(|m| m.quoted.as_ref().is_some_and(|q| q.id == rows[0].id))
+                );
+                let ctx = egui::Context::default();
+                open_thread_shot(&app, &ctx);
+                let scope = crate::ui::reply_threads::scope(&app, std::slice::from_ref(&chat.id));
+                assert_eq!(
+                    ctx.data(|d| d.get_temp::<crate::ui::reply_threads::Key>(scope))
+                        .unwrap()
+                        .id,
+                    rows[0].id
+                );
+            } else {
+                assert_eq!(
+                    app.settings
+                        .custom_theme_cache
+                        .as_ref()
+                        .unwrap()
+                        .palette
+                        .dark,
+                    dark
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn messages_group_tails_stay_on_first_rows_not_last_avatars() {
+        for page in ["messages", "messages-light"] {
+            let mut app = app();
+            group_stacks_sample(&mut app);
+            apply_flags(&mut app, Some(&format!("group-stacks,{page}")));
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            for _ in 0..4 {
+                streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+            }
+            for index in 0..12 {
+                let id = crate::ui::conversation::bubble_id(
+                    SAMPLES[0].id,
+                    &format!("group-stack-{index}"),
+                );
+                let (body, painted) = ctx.data(|data| {
+                    (
+                        data.get_temp::<egui::Rect>(id.with("rect")).unwrap(),
+                        data.get_temp::<egui::Rect>(id.with("painted-rect"))
+                            .unwrap(),
+                    )
+                });
+                let reach = if [0, 2, 5, 8, 10].contains(&index) {
+                    crate::ui::widgets::TAIL_WIDTH
+                } else {
+                    0.0
+                };
+                let actual = if index < 10 {
+                    body.left() - painted.left()
+                } else {
+                    painted.right() - body.right()
+                };
+                assert!(
+                    (actual - reach).abs() < 0.5,
+                    "row {index}: reach {actual}, expected {reach}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -7743,15 +7987,73 @@ mod tests {
         render(&mut app, &ctx);
     }
 
-    /// Message info grows with its content like poll results, so a short
-    /// list, the note about missing receipts included, shows without
-    /// scrolling.
     #[test]
-    fn short_message_info_shows_in_full() {
+    fn message_info_uses_exact_source_account_and_incoming_sender() {
+        for (incoming, group) in [(false, false), (true, false), (true, true), (false, true)] {
+            let mut app = app();
+            message_info_source_sample(&mut app, incoming, group);
+            // Same account id at another origin must never supply the label.
+            app.beeper_accounts.insert(
+                "other-origin".into(),
+                vec![crate::backend::BeeperAccountInfo {
+                    id: "demo-account".into(),
+                    name: "WRONG ACCOUNT".into(),
+                    network: "Telegram".into(),
+                    status: "connected".into(),
+                    own_user_id: None,
+                }],
+            );
+            let m = app.conversations[app.open_chat.as_ref().unwrap()].messages[0].clone();
+            let facts = crate::ui::message_info::source_facts(&app, &m);
+            assert!(facts.contains(&("Bridge".into(), "WhatsApp".into())));
+            assert!(facts.contains(&("Account".into(), "My WhatsApp account".into())));
+            let counterpart = facts
+                .iter()
+                .find(|(label, _)| label == if incoming { "From" } else { "To" })
+                .unwrap();
+            assert_eq!(
+                counterpart.1,
+                if !incoming && group {
+                    "Design group"
+                } else {
+                    "Alex Example"
+                }
+            );
+            assert_eq!(
+                facts.iter().any(|(label, _)| label == "In"),
+                incoming && group
+            );
+            assert!(!facts.iter().any(|(_, value)| value.contains("WRONG")));
+            app.beeper_accounts.remove("demo-source");
+            let facts = crate::ui::message_info::source_facts(&app, &m);
+            assert!(facts.contains(&("Account".into(), "demo-account".into())));
+        }
+    }
+
+    #[test]
+    fn long_message_source_names_wrap_in_a_narrow_dialog() {
+        let mut app = app();
+        message_info_source_sample(&mut app, true, false);
+        app.beeper_accounts.get_mut("demo-source").unwrap()[0].name =
+            "A long account name with several words that must wrap".repeat(2);
+        app.conversations.get_mut(SAMPLES[0].id).unwrap().messages[0].sender_name =
+            Some("A long original sender display name that must remain readable".repeat(2));
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..3 {
+            render_sized(&mut app, &ctx, egui::vec2(390.0, 760.0));
+        }
+    }
+
+    #[test]
+    fn message_info_identity_and_receipts_share_a_bounded_viewport() {
         for page in [
             "message-info-partial",
             "message-info-unknown",
             "message-info-direct",
+            "info-source-sent",
+            "info-source-received",
+            "info-source-group",
         ] {
             let mut app = app();
             apply_flags(&mut app, Some(page));
@@ -7769,7 +8071,9 @@ mod tests {
                 .data(|data| data.get_temp::<egui::Vec2>(id.with("message-info-content")))
                 .unwrap();
             assert!(
-                content.y <= viewport.height() + 0.5,
+                content.y.is_finite()
+                    && viewport.height() > 0.0
+                    && viewport.height() <= ctx.content_rect().height(),
                 "{page}: content {content:?}, viewport {viewport:?}"
             );
         }
@@ -8323,14 +8627,27 @@ mod tests {
     /// Issue #184: "٤٥" drew as "٥٤". Every number on the `rtl` page, in the
     /// bubbles, the quote, the chat list preview, and the composer, must read
     /// left to right, alone or inside right-to-left text.
+    /// Where the Draft label above the composer was last drawn. It repeats the
+    /// draft's first line on purpose, so tests that look for the composer's
+    /// own text must leave that rectangle out.
+    fn draft_label_rect(ctx: &egui::Context) -> Option<egui::Rect> {
+        ctx.data(|data| data.get_temp::<(egui::Rect, String)>(egui::Id::new("draft-label")))
+            .map(|(rect, _)| rect)
+    }
+
     #[test]
     fn issue_184_numbers_read_left_to_right_everywhere() {
-        fn collect(shape: &egui::Shape, galleys: &mut Vec<std::sync::Arc<egui::Galley>>) {
+        fn collect(
+            shape: &egui::Shape,
+            skip: Option<egui::Rect>,
+            galleys: &mut Vec<std::sync::Arc<egui::Galley>>,
+        ) {
             match shape {
+                egui::Shape::Text(text) if skip.is_some_and(|rect| rect.contains(text.pos)) => {}
                 egui::Shape::Text(text) => galleys.push(text.galley.clone()),
                 egui::Shape::Vec(shapes) => {
                     for shape in shapes {
-                        collect(shape, galleys);
+                        collect(shape, skip, galleys);
                     }
                 }
                 _ => {}
@@ -8342,9 +8659,10 @@ mod tests {
         app.attach(&ctx);
         render(&mut app, &ctx);
         let shapes = frame_sized(&mut app, &ctx, 780.0, Vec::new());
+        let label = draft_label_rect(&ctx);
         let mut galleys = Vec::new();
         for shape in shapes {
-            collect(&shape.shape, &mut galleys);
+            collect(&shape.shape, label, &mut galleys);
         }
         let count = |text: &str| galleys.iter().filter(|g| g.text() == text).count();
         // The reply chip shows no quoted text: the bubble and the chat
@@ -10526,6 +10844,8 @@ mod tests {
             "private-reply-locked-source,light",
             "edit",
             "unsent-voice",
+            "draft-label",
+            "draft-label,light",
             "scrolled",
             "reactions",
             "typers",
@@ -13021,6 +13341,92 @@ mod tests {
         assert_eq!(app.settings.voice_speed, 2.0);
     }
 
+    /// The Draft label sits above the composer only for text the reader wrote
+    /// and did not send: typed text and a restored draft show it with the
+    /// first line as preview, an untouched link prefill and a message edit do
+    /// not, and a chat without text never has it.
+    #[test]
+    fn the_draft_label_follows_the_readers_unsent_text() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let own = SAMPLES[0].id.to_owned();
+        let other = SAMPLES[2].id.to_owned();
+        let label = |ctx: &egui::Context| {
+            ctx.data(|data| data.get_temp::<(egui::Rect, String)>(egui::Id::new("draft-label")))
+        };
+        // Each check starts from a frame that did not draw the label, so a
+        // stale rectangle from an earlier frame cannot pass for a new one.
+        let drawn = |app: &mut App, ctx: &egui::Context| {
+            ctx.data_mut(|data| {
+                data.remove::<(egui::Rect, String)>(egui::Id::new("draft-label"));
+            });
+            render(app, ctx);
+            label(ctx).map(|(_, preview)| preview)
+        };
+        app.actions
+            .push(crate::model::Action::OpenChat(own.clone()));
+        render(&mut app, &ctx);
+        assert_eq!(
+            drawn(&mut app, &ctx),
+            None,
+            "an empty composer has no label"
+        );
+
+        app.composer = "  Yes,   after the chart fix.\nsecond line".to_owned();
+        assert_eq!(
+            drawn(&mut app, &ctx).as_deref(),
+            Some("Yes, after the chart fix."),
+            "typed text shows the label with its first line"
+        );
+
+        app.editing = Some("not-a-real-message".to_owned());
+        assert_eq!(
+            drawn(&mut app, &ctx),
+            None,
+            "editing a message is not a draft"
+        );
+        app.editing = None;
+        assert!(drawn(&mut app, &ctx).is_some());
+
+        // Leaving parks the text. The other chat has none, and coming back
+        // restores it together with the label.
+        app.actions
+            .push(crate::model::Action::OpenChat(other.clone()));
+        render(&mut app, &ctx);
+        assert_eq!(drawn(&mut app, &ctx), None, "another chat has no draft");
+        app.actions.push(crate::model::Action::OpenChat(own));
+        render(&mut app, &ctx);
+        assert_eq!(
+            drawn(&mut app, &ctx).as_deref(),
+            Some("Yes, after the chart fix."),
+            "a restored draft shows the label"
+        );
+
+        // A link's prefill is not the reader's text until they change it.
+        app.actions
+            .push(crate::model::Action::OpenChat(other.clone()));
+        render(&mut app, &ctx);
+        app.actions.push(crate::model::Action::PrefillComposer {
+            chat: other,
+            text: "Hello from a link".to_owned(),
+            mentions: Vec::new(),
+        });
+        render(&mut app, &ctx);
+        assert_eq!(app.composer, "Hello from a link");
+        assert_eq!(
+            drawn(&mut app, &ctx),
+            None,
+            "an untouched prefill is not a draft"
+        );
+        app.composer.push_str(" and more");
+        assert_eq!(
+            drawn(&mut app, &ctx).as_deref(),
+            Some("Hello from a link and more"),
+            "changing the prefill makes it the reader's draft"
+        );
+    }
+
     /// A refused voice message waits above its own chat's composer, where
     /// Enter in the empty composer sends it again and the strip's X discards
     /// it; other chats neither show nor send it.
@@ -13524,8 +13930,11 @@ mod tests {
             (chat, id, app.dialog)
         }
 
-        let (_, _, dialog) = click_footer(false, 7.5);
-        assert!(dialog.is_none(), "an incoming time is not a button");
+        let (chat, id, dialog) = click_footer(false, 7.5);
+        assert!(
+            matches!(&dialog, Some(Dialog::MessageInfo {chat: shown, message}) if *shown == chat && *message == id),
+            "incoming time opens source info"
+        );
 
         for (part, inset) in [("ticks", 7.5), ("time", 25.0)] {
             let (chat, id, dialog) = click_footer(true, inset);
@@ -23088,13 +23497,17 @@ mod tests {
                 .map(|(_, id)| id)
                 .expect("the plus is drawn");
             let control = ctx.read_response(id).unwrap().rect.center().y;
+            let label = draft_label_rect(&ctx);
             let mut ink: Option<(f32, f32)> = None;
             let mut stack: Vec<&egui::Shape> =
                 shapes.iter().map(|clipped| &clipped.shape).collect();
             while let Some(shape) = stack.pop() {
                 match shape {
                     egui::Shape::Vec(shapes) => stack.extend(shapes.iter()),
-                    egui::Shape::Text(text) if text.galley.text() == DRAFT => {
+                    egui::Shape::Text(text)
+                        if text.galley.text() == DRAFT
+                            && !label.is_some_and(|rect| rect.contains(text.pos)) =>
+                    {
                         for row in &text.galley.rows {
                             for glyph in row
                                 .glyphs
