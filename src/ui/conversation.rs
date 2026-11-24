@@ -8411,7 +8411,10 @@ pub(crate) fn linked_bubble(
 }
 
 /// Quick reactions plus our current reaction when needed.
-fn quick_reactions<'a>(message: &'a Message, preferred: &'a [(String, u32)]) -> Vec<&'a str> {
+pub(crate) fn quick_reactions<'a>(
+    message: &'a Message,
+    preferred: &'a [(String, u32)],
+) -> Vec<&'a str> {
     let mut list = Vec::new();
     for emoji in preferred
         .iter()

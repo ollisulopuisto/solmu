@@ -425,11 +425,13 @@ fn run() -> eframe::Result<()> {
         .is_some_and(|page| page.split(',').any(|part| part.trim() == "link-menu"));
     #[cfg(feature = "demo")]
     let demo_thread = cli.demo_page.as_deref().is_some_and(|page| {
-        page.split(',').any(|part| matches!(part.trim(), "thread" | "tail-thread"))
+        page.split(',')
+            .any(|part| matches!(part.trim(), "thread" | "tail-thread"))
     });
     #[cfg(feature = "demo")]
     let demo_quick_replies_menu = cli.demo_page.as_deref().is_some_and(|page| {
-        page.split(',').any(|part| part.trim() == "quick-replies-menu")
+        page.split(',')
+            .any(|part| part.trim() == "quick-replies-menu")
     });
     let mut update_receipt = launch.receipt;
     // The link, archive, and tray outlive windows. The shell recreates a
@@ -517,6 +519,14 @@ fn run() -> eframe::Result<()> {
                         quick_replies_hover: demo_quick_replies_menu,
                         #[cfg(feature = "demo")]
                         open_thread: demo_thread,
+                        #[cfg(feature = "demo")]
+                        open_message_keys: cli.demo_page.as_deref().and_then(|p| {
+                            p.split(',').find_map(|part| match part {
+                                "message-reaction-keys" => Some(false),
+                                "message-template-keys" => Some(true),
+                                _ => None,
+                            })
+                        }),
                         #[cfg(feature = "demo")]
                         tour,
                     }))
@@ -683,6 +693,8 @@ struct Shell {
     open_phone_menu: bool,
     #[cfg(feature = "demo")]
     open_thread: bool,
+    #[cfg(feature = "demo")]
+    open_message_keys: Option<bool>,
     #[cfg(feature = "demo")]
     link_menu_click: u8,
     #[cfg(feature = "demo")]
@@ -874,6 +886,10 @@ impl Shell {
         #[cfg(feature = "demo")]
         if std::mem::take(&mut self.open_thread) {
             solmu::demo::open_thread_shot(app, ui.ctx());
+        }
+        #[cfg(feature = "demo")]
+        if let Some(templates) = self.open_message_keys.take() {
+            solmu::ui::message_key_menu::open(app, ui.ctx(), templates);
         }
         app.frame_ui(ui);
         let startups: Vec<_> = app

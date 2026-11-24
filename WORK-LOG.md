@@ -1560,3 +1560,7 @@ old short-info no-scroll contract changes because the approved metadata adds
 height, so viewport test now covers bounded scrolling instead. Exact-source
 metadata harness compiles/passes with minimal model stubs; no full native build
 or pixel claim locally. Workflow capture changes need separate approval.
+
+## Issue463 keyboard message menus
+
+Added two-stage latest-incoming reaction and Quick Replies menus. Reuses existing reaction/pre-fill actions and PR456 Quick Replies, no automatic text send. Snapshots exact target and options, invalidates stale ownership, consumes bare numeric selection before composer. Cmd-T and Cmd-Shift-Y in shared registry/native menus/help; Cmd-Y remains text Redo. Interaction tests cover target stability, navigation cancellation, Escape and draft preservation. Local formatting passes; native compile/tests/screenshots are still pending CI. No merge.

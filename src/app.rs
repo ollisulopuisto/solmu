@@ -12968,6 +12968,13 @@ impl App {
                     });
                     return;
                 }
+                if matches!(id.as_str(), "chat-react-menu" | "chat-template-menu") {
+                    crate::ui::message_key_menu::open(self, ctx, id == "chat-template-menu");
+                    return;
+                }
+                if crate::ui::message_key_menu::is_open(ctx) {
+                    return;
+                }
                 let actions = crate::ui::keys::menu_actions(self, &id);
                 if id == "chat-quote-reply" && crate::ui::keys::linked_view(self) {
                     let message =

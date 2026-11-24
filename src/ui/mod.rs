@@ -23,6 +23,7 @@ pub mod lock;
 pub mod login;
 mod media_tools;
 pub mod message_info;
+pub mod message_key_menu;
 pub mod new_group;
 pub mod palette;
 pub mod pane;
@@ -166,6 +167,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     focus::finish(ctx, main_navigation);
     update::show(app, ctx);
     picker::show(app, ctx);
+    message_key_menu::show(app, ctx);
     dialogs::show(app, ctx);
     batch_actions::dialogs(app, ctx);
     flat_groups::dialogs(app, ctx);

@@ -68,6 +68,9 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         sticker_view_keys(app, ctx);
         return;
     }
+    if super::message_key_menu::keyboard(app, ctx) {
+        return;
+    }
     // An open context menu owns its explicit target and consumes its own
     // exact chords. Global shortcuts must not act on the background chat.
     if egui::Popup::is_any_open(ctx) {
@@ -338,6 +341,12 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     // Exact modifiers keep the linked search variant and app-lock binding
     // separate. Linked Cmd-R is handled before its composer in merged::show.
     if message_shortcuts_allowed(app, ctx) {
+        for (binding, templates) in [(&MESSAGE_REACT_MENU, false), (&MESSAGE_TEMPLATE_MENU, true)] {
+            let (modifiers, key) = binding.keys[0];
+            if take_exact(ctx, modifiers, key) {
+                super::message_key_menu::open(app, ctx, templates);
+            }
+        }
         let ordinary_reply = latest_incoming_action(app);
         if let Some(ordinary_reply) = ordinary_reply
             && take_exact(ctx, Modifiers::COMMAND, Key::R)
@@ -1433,6 +1442,28 @@ const INCOMING_BRIDGE: Shortcut = Shortcut {
     description: Some("Quote-reply to the latest incoming message (on its source in linked chats)"),
     menu: None,
 };
+const MESSAGE_REACT_MENU: Shortcut = Shortcut {
+    id: "message-react-menu",
+    keys: &[(Modifiers::COMMAND, Key::T)],
+    label: Some("Ctrl+T"),
+    description: Some("React to latest incoming message, then 1-6"),
+    menu: Some(MenuItem {
+        id: "chat-react-menu",
+        text: "React to Latest Incoming Message",
+        accelerator: "Super+KeyT",
+    }),
+};
+const MESSAGE_TEMPLATE_MENU: Shortcut = Shortcut {
+    id: "message-template-menu",
+    keys: &[(COMMAND_SHIFT, Key::Y)],
+    label: Some("Ctrl+Shift+Y"),
+    description: Some("Quick Reply to latest incoming message, then 1-3"),
+    menu: Some(MenuItem {
+        id: "chat-template-menu",
+        text: "Quick Replies to Latest Incoming Message",
+        accelerator: "Super+Shift+KeyY",
+    }),
+};
 const MESSAGE_STAR: Shortcut = Shortcut {
     id: "message-star",
     keys: &[(COMMAND_ALT, Key::S)],
@@ -1766,6 +1797,8 @@ pub static REGISTRY: &[Row] = &[
     Row::Binding(&PALETTE),
     Row::Binding(&FIND),
     Row::Binding(&INCOMING_BRIDGE),
+    Row::Binding(&MESSAGE_REACT_MENU),
+    Row::Binding(&MESSAGE_TEMPLATE_MENU),
     Row::Binding(&FORWARD),
     Row::Binding(&MESSAGE_STAR),
     Row::Binding(&MESSAGE_SAVE),
@@ -1908,6 +1941,8 @@ pub const MENU_COMMANDS: &[&str] = &[
     "chat-reply-later",
     "chat-read-later",
     "chat-quote-reply",
+    "chat-react-menu",
+    "chat-template-menu",
     "chat-forward",
     "chat-newest",
     "chat-oldest",
@@ -2103,6 +2138,8 @@ pub fn menu_accelerator(modifiers: Modifiers, key: Key) -> Option<String> {
         Key::N => "KeyN",
         Key::P => "KeyP",
         Key::Q => "KeyQ",
+        Key::T => "KeyT",
+        Key::Y => "KeyY",
         Key::U => "KeyU",
         Key::V => "KeyV",
         Key::W => "KeyW",
@@ -2303,6 +2340,11 @@ mod tests {
             (
                 "Ctrl+R",
                 "Quote-reply to the latest incoming message (on its source in linked chats)",
+            ),
+            ("Ctrl+T", "React to latest incoming message, then 1-6"),
+            (
+                "Ctrl+Shift+Y",
+                "Quick Reply to latest incoming message, then 1-3",
             ),
             ("Ctrl+L", "Forward selected messages, or the latest message"),
             ("Ctrl+Alt+S", "Star or unstar the context-menu message"),
@@ -3044,6 +3086,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn message_key_menu_snapshots_target_and_reaction_order() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.composer = "keep draft".into();
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![
+                    shortcut_message(&chat, "incoming", true, 10),
+                    shortcut_message(&chat, "own", false, 20),
+                ],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        assert!(!press(&mut app, &ctx, Key::T, Modifiers::COMMAND));
+        assert!(super::super::message_key_menu::is_open(&ctx));
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .messages
+            .push(shortcut_message(&chat, "arrived-after-open", true, 30));
+        assert!(!press(&mut app, &ctx, Key::Num1, Modifiers::NONE));
+        assert!(
+            matches!(app.actions.as_slice(),[Action::React{chat:target,message,..}] if target==&chat&&message=="incoming")
+        );
+        assert_eq!(app.composer, "keep draft");
+        assert!(!super::super::message_key_menu::is_open(&ctx));
+    }
+    #[test]
+    fn message_key_menu_cancels_on_chat_change_and_escape() {
+        let (_root, mut app, ids) = app_with_chats(2);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![shortcut_message(&chat, "incoming", true, 10)],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        press(&mut app, &ctx, Key::T, Modifiers::COMMAND);
+        app.open_chat = Some(ids[1].clone());
+        press(&mut app, &ctx, Key::Num1, Modifiers::NONE);
+        assert!(app.actions.is_empty());
+        assert!(!super::super::message_key_menu::is_open(&ctx));
+        app.open_chat = Some(chat);
+        press(&mut app, &ctx, Key::Y, COMMAND_SHIFT);
+        press(&mut app, &ctx, Key::Escape, Modifiers::NONE);
+        assert!(app.actions.is_empty());
+        assert!(!super::super::message_key_menu::is_open(&ctx));
+    }
+    #[test]
+    fn message_key_template_only_prefills_and_preserves_existing_draft() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![shortcut_message(&chat, "incoming", true, 10)],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        press(&mut app, &ctx, Key::Y, COMMAND_SHIFT);
+        press(&mut app, &ctx, Key::Num2, Modifiers::NONE);
+        assert_eq!(
+            app.actions,
+            [Action::PrefillComposer {
+                chat: chat.clone(),
+                text: "No".into(),
+                mentions: Vec::new()
+            }]
+        );
+        let action = app.actions.pop().unwrap();
+        app.composer = "keep draft".into();
+        app.apply(action, &ctx);
+        assert_eq!(app.composer, "keep draft");
+    }
     #[test]
     fn command_r_quotes_latest_incoming_in_ordinary_chat_despite_later_outgoing() {
         let (_root, mut app, ids) = app_with_chats(1);
