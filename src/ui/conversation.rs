@@ -4876,7 +4876,22 @@ fn grouped_hover_actions(
         );
     let can_star = !matches!(message.content, Content::Revoked);
     let order = hover_actions::focus_order(bubble.id, can_reply, can_star);
-    let shift = ui.input(|i| i.modifiers.shift);
+    // Key-event modifiers are authoritative for this Tab. Synthetic input and
+    // some integrations need not emit a separate ModifiersChanged event.
+    let shift = ui.input(|i| {
+        i.events
+            .iter()
+            .find_map(|event| match event {
+                egui::Event::Key {
+                    key: egui::Key::Tab,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => Some(modifiers.shift),
+                _ => None,
+            })
+            .unwrap_or(i.modifiers.shift)
+    });
     // Release the native focus lock at either exit boundary, including
     // reverse navigation out of the bubble. Always reset a previous lock.
     ui.ctx().memory_mut(|m| {
@@ -4886,7 +4901,10 @@ fn grouped_hover_actions(
             m.set_focus_lock_filter(
                 id,
                 egui::EventFilter {
-                    tab: hover_actions::next_focus(&order, Some(id), shift).is_some(),
+                    // Keep the bubble native so Shift+Tab can resolve its
+                    // preceding widget before this affordance is rendered.
+                    tab: id != bubble.id
+                        && hover_actions::next_focus(&order, Some(id), shift).is_some(),
                     ..Default::default()
                 },
             );
@@ -4895,7 +4913,12 @@ fn grouped_hover_actions(
     let tab_frame = ui.ctx().cumulative_frame_nr();
     let handled_id = egui::Id::new("message-actions-tab-handled");
     let already_handled = ui.ctx().data(|d| d.get_temp::<u64>(handled_id)) == Some(tab_frame);
-    if let Some(next) = hover_actions::next_focus(&order, ui.ctx().memory(|m| m.focused()), shift)
+    let route_from = if !shift && bubble.lost_focus() {
+        Some(bubble.id)
+    } else {
+        ui.ctx().memory(|m| m.focused())
+    };
+    if let Some(next) = hover_actions::next_focus(&order, route_from, shift)
         && !already_handled
         && ui.input_mut(|i| {
             i.consume_key(
@@ -4908,22 +4931,14 @@ fn grouped_hover_actions(
             )
         })
     {
-        ui.ctx().memory_mut(|m| m.request_focus(next));
+        ui.ctx().memory_mut(|m| {
+            m.move_focus(egui::FocusDirection::None);
+            m.request_focus(next);
+        });
         ui.ctx().data_mut(|d| {
             d.insert_temp(handled_id, tab_frame);
             d.insert_temp(egui::Id::new("message-actions-keyboard-mode"), true);
         });
-    }
-    // begin_pass read the previous frame's lock before this frame knew
-    // Shift was pressed. Explicitly hand an exit Tab back to native traversal.
-    if !already_handled
-        && ui.ctx().memory(|m| m.focused()) == Some(bubble.id)
-        && shift
-        && ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab))
-    {
-        ui.ctx()
-            .memory_mut(|m| m.move_focus(egui::FocusDirection::Previous));
-        ui.ctx().data_mut(|d| d.insert_temp(handled_id, tab_frame));
     }
     let keyboard = ui.ctx().memory(|memory| {
         memory.has_focus(bubble.id.with("react-keyboard"))
