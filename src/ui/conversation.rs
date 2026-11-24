@@ -4877,8 +4877,12 @@ fn grouped_hover_actions(
     let can_star = !matches!(message.content, Content::Revoked);
     let order = hover_actions::focus_order(bubble.id, can_reply, can_star);
     let shift = ui.input(|i| i.modifiers.shift);
-    if let Some(next) = hover_actions::next_focus(&order, ui.ctx().memory(|m| m.focused()), shift) {
-        if ui.input_mut(|i| {
+    let tab_frame = ui.ctx().cumulative_frame_nr();
+    let handled_id = egui::Id::new("message-actions-tab-handled");
+    let already_handled = ui.ctx().data(|d| d.get_temp::<u64>(handled_id)) == Some(tab_frame);
+    if let Some(next) = hover_actions::next_focus(&order, ui.ctx().memory(|m| m.focused()), shift)
+        && !already_handled
+        && ui.input_mut(|i| {
             i.consume_key(
                 if shift {
                     egui::Modifiers::SHIFT
@@ -4887,11 +4891,13 @@ fn grouped_hover_actions(
                 },
                 egui::Key::Tab,
             )
-        }) {
-            ui.ctx().memory_mut(|m| m.request_focus(next));
-            ui.ctx()
-                .data_mut(|d| d.insert_temp(egui::Id::new("message-actions-keyboard-mode"), true));
-        }
+        })
+    {
+        ui.ctx().memory_mut(|m| m.request_focus(next));
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(handled_id, tab_frame);
+            d.insert_temp(egui::Id::new("message-actions-keyboard-mode"), true);
+        });
     }
     let keyboard = ui.ctx().memory(|memory| {
         memory.has_focus(bubble.id.with("react-keyboard"))
