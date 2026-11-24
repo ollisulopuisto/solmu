@@ -2837,6 +2837,26 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.open_chat = Some(chat.into());
                 app.scroll_to_bottom = false;
             }
+            "draft-shelf-confirmed" | "draft-clear-recovery" => {
+                let chat = SAMPLES[0].id.to_owned();
+                app.open_chat = Some(chat.clone());
+                app.draft_shelves_loaded = true;
+                let text = if part == "draft-clear-recovery" {
+                    ""
+                } else {
+                    "A fresh message while two drafts wait safely."
+                };
+                app.composer = text.into();
+                let state = app.draft_states.entry(chat).or_default();
+                state.loaded = true;
+                state.text = text.into();
+                state.confirmed = Some(state.revision);
+                state.shelf_open = true;
+                state.shelf=vec![crate::draft_state::Parked{id:1,text:"First retained draft: send the revised agenda after checking the dates.".into()},crate::draft_state::Parked{id:2,text:"Second retained draft: ask Alex about the slides before Friday.".into()}];
+                if part == "draft-clear-recovery" {
+                    state.recovery=Some("The longer message that was just cleared remains available here.\nKeep it for later, undo into an empty composer, or dismiss it and carry on.".into());
+                }
+            }
             "hover-actions" => {
                 SHOT_HOVER_ACTIONS.store(true, std::sync::atomic::Ordering::Relaxed);
                 let chat = SAMPLES[0].id;
