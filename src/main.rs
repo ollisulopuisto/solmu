@@ -433,6 +433,14 @@ fn run() -> eframe::Result<()> {
         page.split(',')
             .any(|part| part.trim() == "quick-replies-menu")
     });
+    #[cfg(feature = "demo")]
+    let demo_message_keys = cli.demo_page.as_deref().and_then(|page| {
+        page.split(',').find_map(|part| match part {
+            "message-reaction-keys" => Some(false),
+            "message-template-keys" => Some(true),
+            _ => None,
+        })
+    });
     let mut update_receipt = launch.receipt;
     // The link, archive, and tray outlive windows. The shell recreates a
     // window when the tray, a notification, or another launch requests one;
@@ -520,13 +528,7 @@ fn run() -> eframe::Result<()> {
                         #[cfg(feature = "demo")]
                         open_thread: demo_thread,
                         #[cfg(feature = "demo")]
-                        open_message_keys: cli.demo_page.as_deref().and_then(|p| {
-                            p.split(',').find_map(|part| match part {
-                                "message-reaction-keys" => Some(false),
-                                "message-template-keys" => Some(true),
-                                _ => None,
-                            })
-                        }),
+                        open_message_keys: demo_message_keys,
                         #[cfg(feature = "demo")]
                         tour,
                     }))

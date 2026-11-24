@@ -14407,7 +14407,22 @@ mod tests {
             &ctx,
             vec![egui::Event::PointerMoved(tile.center()), press(true)],
         );
+        let press_target = ctx.data(|data| {
+            data.get_temp::<String>(
+                crate::ui::conversation::bubble_id(&chat, "album-0").with("album-target"),
+            )
+        });
         frame_with(&mut app, &ctx, vec![press(false)]);
+        let released_target = ctx.data(|data| {
+            data.get_temp::<String>(
+                crate::ui::conversation::bubble_id(&chat, "album-0").with("album-target"),
+            )
+        });
+        assert_eq!(
+            released_target.as_deref(),
+            Some("album-2"),
+            "pointer at {tile:?}; captured on press {press_target:?}, release {released_target:?}"
+        );
         let popup = crate::ui::conversation::bubble_id(&chat, "album-0").with("popup");
         assert!(
             egui::Popup::is_id_open(&ctx, popup),
@@ -14465,7 +14480,22 @@ mod tests {
             &ctx,
             vec![egui::Event::PointerMoved(tile.center()), press(true)],
         );
+        let press_target = ctx.data(|data| {
+            data.get_temp::<String>(
+                crate::ui::conversation::bubble_id(&chat, "album-0").with("album-target"),
+            )
+        });
         frame_with(&mut app, &ctx, vec![press(false)]);
+        let released_target = ctx.data(|data| {
+            data.get_temp::<String>(
+                crate::ui::conversation::bubble_id(&chat, "album-0").with("album-target"),
+            )
+        });
+        assert_eq!(
+            released_target.as_deref(),
+            Some("album-2"),
+            "pointer at {tile:?}; captured on press {press_target:?}, release {released_target:?}"
+        );
         let popup = crate::ui::conversation::bubble_id(&chat, "album-0").with("popup");
         assert!(
             egui::Popup::is_id_open(&ctx, popup),
