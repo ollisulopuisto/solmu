@@ -2852,9 +2852,21 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 state.text = text.into();
                 state.confirmed = Some(state.revision);
                 state.shelf_open = true;
-                state.shelf=vec![crate::draft_state::Parked{id:1,text:"First retained draft: send the revised agenda after checking the dates.".into()},crate::draft_state::Parked{id:2,text:"Second retained draft: ask Alex about the slides before Friday.".into()}];
+                state.shelf = vec![
+                    crate::draft_state::Parked {
+                        id: 1,
+                        text: "First retained draft: send the revised agenda after checking the dates.".into(),
+                    },
+                    crate::draft_state::Parked {
+                        id: 2,
+                        text: "Second retained draft: ask Alex about the slides before Friday.".into(),
+                    },
+                ];
                 if part == "draft-clear-recovery" {
-                    state.recovery=Some("The longer message that was just cleared remains available here.\nKeep it for later, undo into an empty composer, or dismiss it and carry on.".into());
+                    state.recovery = Some(concat!(
+                        "The longer message that was just cleared remains available here.\n",
+                        "Keep it for later, undo into an empty composer, or dismiss it and carry on."
+                    ).into());
                 }
             }
             "hover-actions" => {
