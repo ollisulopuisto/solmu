@@ -1505,6 +1505,21 @@ Floating actions follow-up: native second run 2646 passed, five failed. A failin
 
 Native evidence follow-up: add existing demo capture pages for the actual grouped helper in dark/light, with a synthetic resting-pointer position on one designated fixture message. Normal app and tests never enable it. No workflow/job or upload setting added; existing smoke loop and artifact path reused. Fresh exact-head checks required.
 
+
+## 2026-11-24 - first-run top tail (Instinct)
+
+Supersedes the held last-message proposal after the selected first-message
+sketch. Ordinary transcript, linked timeline and thread pane now agree on
+source/sender/direction/calendar-day run starts. Tail shape, avatars, existing
+overlap and separate thread spacing stay unchanged. Messages incoming tails
+no longer follow the final-row avatar. Thread run identity is separate from
+its deliberately absent overlap predecessor. Reply-chain controls unchanged.
+
+Exact-source helper test passes with minimal model/day stubs; removing day
+boundaries fails. Added native full-App Messages group geometry regression.
+Fmt/diff checks pass. Local cargo check --tests --features demo reached the
+application but did not finish two bounded windows; no native pass or actual
+app pixel verification claimed. No workflow change, release or merge.
 ## Unsent draft indication
 
 Approved option A from the 23 Nov draft sketches (label above the composer,

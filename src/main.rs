@@ -424,10 +424,10 @@ fn run() -> eframe::Result<()> {
         .as_deref()
         .is_some_and(|page| page.split(',').any(|part| part.trim() == "link-menu"));
     #[cfg(feature = "demo")]
-    let demo_thread = cli
-        .demo_page
-        .as_deref()
-        .is_some_and(|page| page.split(',').any(|part| part.trim() == "thread"));
+    let demo_thread = cli.demo_page.as_deref().is_some_and(|page| {
+        page.split(',')
+            .any(|part| matches!(part.trim(), "thread" | "tail-thread"))
+    });
     let mut update_receipt = launch.receipt;
     // The link, archive, and tray outlive windows. The shell recreates a
     // window when the tray, a notification, or another launch requests one;
