@@ -6813,25 +6813,31 @@ fn bubble_frame(
     // In an album the menu belongs to the member under the pointer, so a
     // reply, reaction, forward or deletion reaches that item, not the first.
     let target_id = bubble_id.with("album-target");
-    let album_press = album.is_some()
-        && ui.input(|input| {
-            input.pointer.button_pressed(egui::PointerButton::Secondary)
-                && input
-                    .pointer
-                    .interact_pos()
-                    .is_some_and(|pos| shown.contains(pos))
-        });
-    if album.is_some() && (right_clicked || album_press) {
+    if album.is_some() {
         let pointer = ui.input(|input| input.pointer.interact_pos());
+        let owned = pointer.is_some_and(|pos| {
+            shown.contains(pos)
+                && ui
+                    .ctx()
+                    .layer_id_at(pos)
+                    .is_none_or(|layer| layer == bubble.layer_id)
+        });
+        let (pressed, clicked) = ui.input(|input| {
+            (
+                input.pointer.button_pressed(egui::PointerButton::Secondary),
+                input.pointer.secondary_clicked(),
+            )
+        });
         let hit = tiles
             .iter()
             .find(|(rect, _)| pointer.is_some_and(|pos| rect.contains(pos)))
             .map(|(_, id)| id.clone());
         ui.ctx().data_mut(|data| {
-            if let Some(id) = hit {
-                data.insert_temp(target_id, id);
-            } else if album_press {
-                data.remove::<String>(target_id);
+            let mut target = data.get_temp::<String>(target_id);
+            super::album_menu_target::update(&mut target, owned, pressed, clicked, hit);
+            data.remove::<String>(target_id);
+            if let Some(target) = target {
+                data.insert_temp(target_id, target);
             }
         });
     }
