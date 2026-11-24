@@ -14452,6 +14452,82 @@ mod tests {
     }
 
     #[test]
+    fn tab_traverses_visible_grid_and_labelled_fallback() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let message = crate::archive::tests::message(&view.chat.id, "tab-grid", 0, false);
+            let id = egui::Id::new("tab-grid-body");
+            let area = id.with("hover-actions");
+            let mut seen = std::collections::HashSet::new();
+            for step in 0..80 {
+                let events = if step % 2 == 0 {
+                    vec![egui::Event::Key {
+                        key: egui::Key::Tab,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }]
+                } else {
+                    vec![egui::Event::Key {
+                        key: egui::Key::Tab,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }]
+                };
+                let mut out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(420., 640.))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let bubble = ui.interact(
+                            Rect::from_min_size(pos2(80., 80.), vec2(250., 70.)),
+                            id,
+                            Sense::click(),
+                        );
+                        reaction_affordance(ui, view, &message, &bubble, &mut Vec::new());
+                        ui.interact(
+                            Rect::from_min_size(pos2(80., 500.), vec2(90., 30.)),
+                            id.with("out"),
+                            Sense::click(),
+                        );
+                    },
+                );
+                out.textures_delta.clear();
+                if let Some(focus) = ctx.memory(|m| m.focused()) {
+                    seen.insert(focus);
+                }
+            }
+            assert!(seen.contains(&id), "bubble stop: {seen:?}");
+            for i in 0_usize..6 {
+                assert!(
+                    seen.contains(&area.with(("emoji", i))),
+                    "emoji {i}: {seen:?}"
+                );
+            }
+            for i in 0_usize..3 {
+                assert!(
+                    seen.contains(&area.with(("action", i))),
+                    "action {i}: {seen:?}"
+                );
+            }
+            assert!(
+                seen.contains(&id.with("react-keyboard")),
+                "fallback: {seen:?}"
+            );
+            assert!(
+                seen.contains(&id.with("out")),
+                "must be able to leave: {seen:?}"
+            );
+        });
+    }
+
+    #[test]
     fn mouse_focused_bubble_does_not_pin_grid_after_leaving() {
         with_still_view(|view| {
             let ctx = egui::Context::default();
