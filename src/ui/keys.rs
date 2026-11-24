@@ -3187,6 +3187,34 @@ mod tests {
         assert_eq!(app.composer, "keep draft");
     }
     #[test]
+    fn message_menu_rejects_replaced_source_identity_and_revoked_target() {
+        for replace in [true, false] {
+            let (_root, mut app, ids) = app_with_chats(1);
+            let chat = ids[0].clone();
+            app.open_chat = Some(chat.clone());
+            app.chats[0].backend_origin = Some("origin".into());
+            app.chats[0].backend_account = Some("before".into());
+            app.conversations.insert(
+                chat.clone(),
+                crate::app::Conversation {
+                    messages: vec![shortcut_message(&chat, "incoming", true, 10)],
+                    ..Default::default()
+                },
+            );
+            let ctx = egui::Context::default();
+            press(&mut app, &ctx, Key::T, Modifiers::COMMAND);
+            if replace {
+                app.chats[0].backend_account = Some("after".into());
+            } else {
+                app.conversations.get_mut(&chat).unwrap().messages[0].content =
+                    crate::model::Content::Revoked;
+            }
+            press(&mut app, &ctx, Key::Num1, Modifiers::NONE);
+            assert!(app.actions.is_empty());
+            assert!(!super::super::message_key_menu::is_open(&ctx));
+        }
+    }
+    #[test]
     fn command_r_quotes_latest_incoming_in_ordinary_chat_despite_later_outgoing() {
         let (_root, mut app, ids) = app_with_chats(1);
         let chat = ids[0].clone();

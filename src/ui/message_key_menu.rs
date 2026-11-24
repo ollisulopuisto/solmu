@@ -8,6 +8,7 @@ use egui::{Id, Key, Modifiers};
 struct Menu {
     account: String,
     owner: String,
+    source_identity: Option<crate::merged::Member>,
     chat: String,
     message: String,
     templates: bool,
@@ -51,9 +52,11 @@ fn valid(app: &App, menu: &Menu) -> bool {
         && app.pending_picture_preview.is_none()
         && app.local_avatar_editor.is_none()
         && app.selection.is_none()
-        && app
-            .chat(&menu.chat)
-            .is_some_and(|c| !c.read_only && (!c.locked || app.locked_folder_open()))
+        && app.chat(&menu.chat).is_some_and(|c| {
+            c.can_send()
+                && (!c.locked || app.locked_folder_open())
+                && crate::merged::Member::of(c) == menu.source_identity
+        })
         && app
             .conversations
             .get(&menu.chat)
@@ -102,7 +105,9 @@ pub fn open(app: &App, ctx: &egui::Context, templates: bool) {
         .map(str::to_owned)
         .collect()
     };
+    let source_identity = app.chat(&chat).and_then(crate::merged::Member::of);
     let menu = Menu {
+        source_identity,
         account: app.account().id.0.clone(),
         owner,
         chat,
