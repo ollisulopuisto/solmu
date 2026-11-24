@@ -13035,7 +13035,7 @@ mod tests {
         // stale rectangle from an earlier frame cannot pass for a new one.
         let drawn = |app: &mut App, ctx: &egui::Context| {
             ctx.data_mut(|data| {
-                data.remove_temp::<(egui::Rect, String)>(egui::Id::new("draft-label"))
+                let _ = data.remove::<(egui::Rect, String)>(egui::Id::new("draft-label"));
             });
             render(app, ctx);
             label(ctx).map(|(_, preview)| preview)
