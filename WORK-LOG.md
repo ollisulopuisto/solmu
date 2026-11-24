@@ -1589,3 +1589,12 @@ because local disk filled compiling dependencies; own temporary build removed.
 No local native pass or pixel claim. CI/native captures remain required.
 
 Owner visual follow-up: the reply connector now uses the exact raised-edge color of its reply bubble, rather than accent, including both short chain-to-tail segments and the routed original-to-chain line. The chain icon's sender ink is unchanged. Color is taken from the actual on-bubble palette/fill in each theme. fmt/diff pass; fresh native CI/captures required before readiness, no merge.
+
+## 2026-11-24 - version after reply-chain merge
+
+Bump Solmu26.11.8 to26.11.9 following owner-approved459 merge7e0e465.
+Cargo package/lock agree; move accumulated unreleased notes under26.11.9
+and include the reply-chain change. No dependency resolution, workflow or UI
+code change. Own review traces package version to existing bundle generators
+and changelog parser. CI still required before merge; no release tag or DMG
+created by this commit.
