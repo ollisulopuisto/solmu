@@ -1639,6 +1639,7 @@ pub(crate) fn composer_with_capabilities(
             {
                 unsent_voice_strip(app, ui, samples);
             }
+            draft_controls(app, ui, &chat.id);
             if app.editing.is_some() {
                 edit_strip(app, ui);
             } else if let Some(reply_id) = app.reply_to.clone() {
@@ -1678,7 +1679,6 @@ pub(crate) fn composer_with_capabilities(
                     None => app.reply_to = None,
                 }
             }
-            draft_controls(app, ui, &chat.id);
             app.prepare_composer_undo(ui.ctx());
             let id = egui::Id::new("composer-text");
             let has_focus = ui.memory(|memory| memory.has_focus(id));

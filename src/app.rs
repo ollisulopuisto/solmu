@@ -9757,20 +9757,21 @@ impl App {
     }
 
     fn tick(&mut self, ctx: &egui::Context) {
-        if self.editing.is_none() && self.composer_holds_draft() {
-            if let Some(chat) = self.open_chat.clone() {
-                let text = self.composer.clone();
-                let loaded = self.draft_shelves_loaded;
-                let state = self.draft_states.entry(chat).or_default();
-                state.loaded |= loaded;
-                if state.text != text {
-                    // Programmatic send/switch/resume is not a deletion offer.
-                    state.text = text;
-                    state.recovery = None;
-                    state.deletion_start = None;
-                    state.clear_after_save = None;
-                    state.touch();
-                }
+        if self.editing.is_none()
+            && self.composer_holds_draft()
+            && let Some(chat) = self.open_chat.clone()
+        {
+            let text = self.composer.clone();
+            let loaded = self.draft_shelves_loaded;
+            let state = self.draft_states.entry(chat).or_default();
+            state.loaded |= loaded;
+            if state.text != text {
+                // Programmatic send/switch/resume is not a deletion offer.
+                state.text = text;
+                state.recovery = None;
+                state.deletion_start = None;
+                state.clear_after_save = None;
+                state.touch();
             }
         }
         for account in &mut self.accounts {
