@@ -2619,7 +2619,7 @@ fn draft_label(app: &App, ui: &mut egui::Ui, preview: &str) {
     ui.horizontal(|ui| {
         ui.add_space(6.0);
         theme::icon(ui, Icon::Pencil, 14.0, palette.accent);
-        theme::text(ui, &label, theme::semibold(12.5), palette.accent);
+        theme::text(ui, label.into_owned(), theme::semibold(12.5), palette.accent);
         let line = widgets::line(
             ui,
             preview,
