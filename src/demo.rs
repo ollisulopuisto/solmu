@@ -4416,6 +4416,13 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.at_bottom = false;
                 app.scroll_anchor = Some("group-photo".into());
             }
+            // Unsent text in the open chat: the Draft label above the composer
+            // with the draft's first line beside it.
+            "draft-label" => {
+                app.open_chat = Some(SAMPLES[0].id.to_owned());
+                app.composer = "Yes, after the chart fix.\nI will send the notes tomorrow.".into();
+                app.focus_composer = true;
+            }
             "unsent-voice" => {
                 let chat = SAMPLES[0].id;
                 app.open_chat = Some(chat.to_owned());
@@ -10536,6 +10543,8 @@ mod tests {
             "private-reply-locked-source,light",
             "edit",
             "unsent-voice",
+            "draft-label",
+            "draft-label,light",
             "scrolled",
             "reactions",
             "typers",
@@ -13049,7 +13058,7 @@ mod tests {
         // stale rectangle from an earlier frame cannot pass for a new one.
         let drawn = |app: &mut App, ctx: &egui::Context| {
             ctx.data_mut(|data| {
-                let _ = data.remove::<(egui::Rect, String)>(egui::Id::new("draft-label"));
+                data.remove::<(egui::Rect, String)>(egui::Id::new("draft-label"));
             });
             render(app, ctx);
             label(ctx).map(|(_, preview)| preview)
