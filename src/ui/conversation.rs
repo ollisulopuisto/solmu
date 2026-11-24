@@ -4914,6 +4914,17 @@ fn grouped_hover_actions(
             d.insert_temp(egui::Id::new("message-actions-keyboard-mode"), true);
         });
     }
+    // begin_pass read the previous frame's lock before this frame knew
+    // Shift was pressed. Explicitly hand an exit Tab back to native traversal.
+    if !already_handled
+        && ui.ctx().memory(|m| m.focused()) == Some(bubble.id)
+        && shift
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab))
+    {
+        ui.ctx()
+            .memory_mut(|m| m.move_focus(egui::FocusDirection::Previous));
+        ui.ctx().data_mut(|d| d.insert_temp(handled_id, tab_frame));
+    }
     let keyboard = ui.ctx().memory(|memory| {
         memory.has_focus(bubble.id.with("react-keyboard"))
             || (0_usize..6).any(|i| memory.has_focus(area_id.with(("emoji", i))))
