@@ -1562,3 +1562,17 @@ old short-info no-scroll contract changes because the approved metadata adds
 height, so viewport test now covers bounded scrolling instead. Exact-source
 metadata harness compiles/passes with minimal model stubs; no full native build
 or pixel claim locally. Workflow capture changes need separate approval.
+
+## Reply tail matches the regular bubble (2026-11-24)
+
+Owner rejected the oversized six-vertex reply neck in native captures. Removed
+that separate shape: ordinary quoted messages use the normal bubble renderer,
+and quoted album members use its extracted exact same triangular tail helper.
+Chain target remains 30px above, independent from the smaller 8x11 tail bounds.
+Hover elbow now reaches the actual tail tip. Traced album per-member anchors,
+painted bounds, router chain ports and pointer/keyboard target consumers.
+Added regression forbidding a filled Path in the chain painter, which the old
+polygon violates. Existing mirrored geometry and exact-target interaction tests
+retained. Fmt/diff checks pass. Isolated real-egui test build could not complete
+because local disk filled compiling dependencies; own temporary build removed.
+No local native pass or pixel claim. CI/native captures remain required.

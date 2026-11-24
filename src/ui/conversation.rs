@@ -6383,8 +6383,7 @@ fn bubble_frame(
     let backdrop = ui.painter().add(egui::Shape::Noop);
     // Group messages share a straight bubble-body column, including follow-ups.
     // A protruding incoming tail made the first bubble look offset from the run.
-    let tail = (tailed
-        && message.quoted.is_none()
+    let tail = ((tailed || message.quoted.is_some())
         && !album.is_some_and(|items| items.iter().any(|m| m.quoted.is_some()))
         && fill != Color32::TRANSPARENT)
         .then_some(if own {
@@ -6696,11 +6695,19 @@ fn bubble_frame(
                         .response
                         .rect
                         .translate(vec2(0.0, top - inner.response.rect.top()));
-                    quote_chip(ui, view, item, quoted, anchor, actions);
+                    quote_chip(ui, view, item, quoted, anchor, true, actions);
                 }
             }
         } else if let Some(quoted) = &message.quoted {
-            quote_chip(ui, view, message, quoted, inner.response.rect, actions);
+            quote_chip(
+                ui,
+                view,
+                message,
+                quoted,
+                inner.response.rect,
+                false,
+                actions,
+            );
         }
     }
     let mut painted_with_replies = painted;
@@ -7376,6 +7383,7 @@ fn quote_chip(
     message: &Message,
     quoted: &crate::model::Quoted,
     body: Rect,
+    album_tail: bool,
     actions: &mut Vec<Action>,
 ) {
     let palette = view.palette;
@@ -7384,6 +7392,18 @@ fn quote_chip(
     } else {
         palette.bubble_in
     };
+    if album_tail {
+        let side = if message.from_me {
+            widgets::Side::Right
+        } else {
+            widgets::Side::Left
+        };
+        ui.painter().add(egui::Shape::convex_polygon(
+            widgets::bubble_tail_points(body, side, None),
+            fill,
+            egui::Stroke::NONE,
+        ));
+    }
     let rect = super::reply_tail::chain_geometry(body, message.from_me);
     let quoted_own = quotes_me(view, quoted);
     let ink = if quoted_own {
@@ -7392,7 +7412,7 @@ fn quote_chip(
         palette.sender(crate::util::hue(&quoted.sender))
     };
     let ink = theme::readable_on(fill, ink, palette.text, 3.0);
-    super::reply_tail::paint(ui.painter(), body, message.from_me, fill, ink);
+    super::reply_tail::paint(ui.painter(), body, message.from_me, ink);
     ui.ctx().data_mut(|data| {
         data.insert_temp(bubble_id(&view.chat.id, &message.id).with("quote"), rect);
     });
@@ -7414,7 +7434,7 @@ fn quote_chip(
         let tail = super::reply_tail::geometry(body, message.from_me);
         let x = rect.center().x;
         ui.painter().line_segment(
-            [egui::pos2(x, rect.bottom()), egui::pos2(x, tail.center().y)],
+            [egui::pos2(x, rect.bottom()), egui::pos2(x, tail.top())],
             egui::Stroke::new(1.8, palette.accent),
         );
         let tip = if message.from_me {
@@ -7423,10 +7443,7 @@ fn quote_chip(
             tail.left()
         };
         ui.painter().line_segment(
-            [
-                egui::pos2(x, tail.center().y),
-                egui::pos2(tip, tail.center().y),
-            ],
+            [egui::pos2(x, tail.top()), egui::pos2(tip, tail.top())],
             egui::Stroke::new(1.8, palette.accent),
         );
     }
