@@ -14428,11 +14428,17 @@ mod tests {
             egui::Popup::is_id_open(&ctx, popup),
             "the album's menu opened"
         );
-        let reply = accessible_nodes(&mut app, &ctx, Vec::new())
+        let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
+        let replies: Vec<_> = nodes
             .into_iter()
-            .find(|(label, _, _)| label == "Reply")
-            .expect("the menu offers Reply")
-            .2;
+            .filter(|(label, _, _)| label == "Reply")
+            .collect();
+        assert_eq!(
+            replies.len(),
+            1,
+            "only the context menu owns Reply, not the album-row hover grid"
+        );
+        let reply = replies[0].2;
         for pressed in [true, false] {
             frame_with(
                 &mut app,
@@ -14501,11 +14507,17 @@ mod tests {
             egui::Popup::is_id_open(&ctx, popup),
             "the album's menu opened"
         );
-        let reply = accessible_nodes(&mut app, &ctx, Vec::new())
+        let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
+        let replies: Vec<_> = nodes
             .into_iter()
-            .find(|(label, _, _)| label == "Reply")
-            .expect("the menu offers Reply")
-            .2;
+            .filter(|(label, _, _)| label == "Reply")
+            .collect();
+        assert_eq!(
+            replies.len(),
+            1,
+            "only the context menu owns Reply, not the album-row hover grid"
+        );
+        let reply = replies[0].2;
         for pressed in [true, false] {
             frame_with(
                 &mut app,

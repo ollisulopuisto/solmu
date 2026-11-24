@@ -4813,7 +4813,9 @@ fn grouped_hover_actions(
     actions: &mut Vec<Action>,
 ) -> bool {
     use super::hover_actions::{self, Geometry};
-    if !ui.is_enabled() {
+    // A context menu owns foreground input. Its Reply must not compete with
+    // a still-held hover grid bound to the album row's first member.
+    if !ui.is_enabled() || egui::Popup::is_any_open(ui.ctx()) {
         return false;
     }
     let quick = quick_reactions(message, view.reaction_emoji);

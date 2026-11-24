@@ -1602,3 +1602,12 @@ older-target test remains. Full native icon/context click pixels still pending C
 FIND-solmu-464-4: extracted the album-target transition so two standalone Rust regressions could run without the full native dependency build. Both failed with the previous transition (floating-layer retarget and stale no-hit release), then passed after requiring row/layer ownership for press and release and clearing target on every owned no-hit transition. The live caller computes the same layer guard as right_clicked. Native full-frame album tests remain required and pending; isolated transition tests are not a native interaction pass. Approved trim-only workflow untouched.
 
 464 native evidence follow-up: b2d23cf passes composer geometry and private-source-strip tests but still fails the two exact album context-menu interactions. Do not claim the press-state change fixed those tests. Add explicit post-press/release member assertions to locate whether loss occurs before or after menu selection; keep the final reply assertion. Fix Linux demo capture's FnMut move error by computing the Copy menu option before the closure. Native diagnostic run pending.
+
+464 album diagnostics b22: both exact-target assertions pass on secondary
+release, final Reply still selects album0. Consumer trace found a second Reply
+control in the still-held hover grid, bound to the album row's first member;
+menu additions change geometry enough to expose it in the accessibility click
+path. Hide foreground hover actions while any context popup owns input. The
+existing failing two album tests are unchanged at their final target assertion;
+they now also require exactly one Reply control. Fresh native results needed,
+not claiming fixed from this trace alone. No workflow or capture changes.
