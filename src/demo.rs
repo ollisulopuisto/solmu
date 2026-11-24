@@ -13406,6 +13406,15 @@ mod tests {
             drawn(&mut app).unwrap().3,
             "actual recovery controls rendered"
         );
+        app.reply_to = Some(crate::model::ReplyTarget {
+            chat: Some(SAMPLES[2].id.into()),
+            message: "unavailable".into(),
+        });
+        assert!(
+            drawn(&mut app).is_some(),
+            "recovery and shelf remain while replying with empty composer"
+        );
+        app.reply_to = None;
         app.editing = Some("not-real".into());
         assert!(drawn(&mut app).is_none());
         app.editing = None;
