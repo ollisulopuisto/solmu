@@ -4417,6 +4417,13 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.at_bottom = false;
                 app.scroll_anchor = Some("group-photo".into());
             }
+            // Unsent text in the open chat: the Draft label above the composer
+            // with the draft's first line beside it.
+            "draft-label" => {
+                app.open_chat = Some(SAMPLES[0].id.to_owned());
+                app.composer = "Yes, after the chart fix.\nI will send the notes tomorrow.".into();
+                app.focus_composer = true;
+            }
             "unsent-voice" => {
                 let chat = SAMPLES[0].id;
                 app.open_chat = Some(chat.to_owned());
@@ -8482,14 +8489,27 @@ mod tests {
     /// Issue #184: "٤٥" drew as "٥٤". Every number on the `rtl` page, in the
     /// bubbles, the quote, the chat list preview, and the composer, must read
     /// left to right, alone or inside right-to-left text.
+    /// Where the Draft label above the composer was last drawn. It repeats the
+    /// draft's first line on purpose, so tests that look for the composer's
+    /// own text must leave that rectangle out.
+    fn draft_label_rect(ctx: &egui::Context) -> Option<egui::Rect> {
+        ctx.data(|data| data.get_temp::<(egui::Rect, String)>(egui::Id::new("draft-label")))
+            .map(|(rect, _)| rect)
+    }
+
     #[test]
     fn issue_184_numbers_read_left_to_right_everywhere() {
-        fn collect(shape: &egui::Shape, galleys: &mut Vec<std::sync::Arc<egui::Galley>>) {
+        fn collect(
+            shape: &egui::Shape,
+            skip: Option<egui::Rect>,
+            galleys: &mut Vec<std::sync::Arc<egui::Galley>>,
+        ) {
             match shape {
+                egui::Shape::Text(text) if skip.is_some_and(|rect| rect.contains(text.pos)) => {}
                 egui::Shape::Text(text) => galleys.push(text.galley.clone()),
                 egui::Shape::Vec(shapes) => {
                     for shape in shapes {
-                        collect(shape, galleys);
+                        collect(shape, skip, galleys);
                     }
                 }
                 _ => {}
@@ -8501,9 +8521,10 @@ mod tests {
         app.attach(&ctx);
         render(&mut app, &ctx);
         let shapes = frame_sized(&mut app, &ctx, 780.0, Vec::new());
+        let label = draft_label_rect(&ctx);
         let mut galleys = Vec::new();
         for shape in shapes {
-            collect(&shape.shape, &mut galleys);
+            collect(&shape.shape, label, &mut galleys);
         }
         let count = |text: &str| galleys.iter().filter(|g| g.text() == text).count();
         // The reply chip shows no quoted text: the bubble and the chat
@@ -10685,6 +10706,8 @@ mod tests {
             "private-reply-locked-source,light",
             "edit",
             "unsent-voice",
+            "draft-label",
+            "draft-label,light",
             "scrolled",
             "reactions",
             "typers",
@@ -13178,6 +13201,92 @@ mod tests {
         click(&mut app, choice, egui::PointerButton::Primary);
         assert_eq!(app.chat(&chat).unwrap().voice_speed, Some(1.25));
         assert_eq!(app.settings.voice_speed, 2.0);
+    }
+
+    /// The Draft label sits above the composer only for text the reader wrote
+    /// and did not send: typed text and a restored draft show it with the
+    /// first line as preview, an untouched link prefill and a message edit do
+    /// not, and a chat without text never has it.
+    #[test]
+    fn the_draft_label_follows_the_readers_unsent_text() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let own = SAMPLES[0].id.to_owned();
+        let other = SAMPLES[2].id.to_owned();
+        let label = |ctx: &egui::Context| {
+            ctx.data(|data| data.get_temp::<(egui::Rect, String)>(egui::Id::new("draft-label")))
+        };
+        // Each check starts from a frame that did not draw the label, so a
+        // stale rectangle from an earlier frame cannot pass for a new one.
+        let drawn = |app: &mut App, ctx: &egui::Context| {
+            ctx.data_mut(|data| {
+                data.remove::<(egui::Rect, String)>(egui::Id::new("draft-label"));
+            });
+            render(app, ctx);
+            label(ctx).map(|(_, preview)| preview)
+        };
+        app.actions
+            .push(crate::model::Action::OpenChat(own.clone()));
+        render(&mut app, &ctx);
+        assert_eq!(
+            drawn(&mut app, &ctx),
+            None,
+            "an empty composer has no label"
+        );
+
+        app.composer = "  Yes,   after the chart fix.\nsecond line".to_owned();
+        assert_eq!(
+            drawn(&mut app, &ctx).as_deref(),
+            Some("Yes, after the chart fix."),
+            "typed text shows the label with its first line"
+        );
+
+        app.editing = Some("not-a-real-message".to_owned());
+        assert_eq!(
+            drawn(&mut app, &ctx),
+            None,
+            "editing a message is not a draft"
+        );
+        app.editing = None;
+        assert!(drawn(&mut app, &ctx).is_some());
+
+        // Leaving parks the text. The other chat has none, and coming back
+        // restores it together with the label.
+        app.actions
+            .push(crate::model::Action::OpenChat(other.clone()));
+        render(&mut app, &ctx);
+        assert_eq!(drawn(&mut app, &ctx), None, "another chat has no draft");
+        app.actions.push(crate::model::Action::OpenChat(own));
+        render(&mut app, &ctx);
+        assert_eq!(
+            drawn(&mut app, &ctx).as_deref(),
+            Some("Yes, after the chart fix."),
+            "a restored draft shows the label"
+        );
+
+        // A link's prefill is not the reader's text until they change it.
+        app.actions
+            .push(crate::model::Action::OpenChat(other.clone()));
+        render(&mut app, &ctx);
+        app.actions.push(crate::model::Action::PrefillComposer {
+            chat: other,
+            text: "Hello from a link".to_owned(),
+            mentions: Vec::new(),
+        });
+        render(&mut app, &ctx);
+        assert_eq!(app.composer, "Hello from a link");
+        assert_eq!(
+            drawn(&mut app, &ctx),
+            None,
+            "an untouched prefill is not a draft"
+        );
+        app.composer.push_str(" and more");
+        assert_eq!(
+            drawn(&mut app, &ctx).as_deref(),
+            Some("Hello from a link and more"),
+            "changing the prefill makes it the reader's draft"
+        );
     }
 
     /// A refused voice message waits above its own chat's composer, where
@@ -23000,13 +23109,17 @@ mod tests {
                 .map(|(_, id)| id)
                 .expect("the plus is drawn");
             let control = ctx.read_response(id).unwrap().rect.center().y;
+            let label = draft_label_rect(&ctx);
             let mut ink: Option<(f32, f32)> = None;
             let mut stack: Vec<&egui::Shape> =
                 shapes.iter().map(|clipped| &clipped.shape).collect();
             while let Some(shape) = stack.pop() {
                 match shape {
                     egui::Shape::Vec(shapes) => stack.extend(shapes.iter()),
-                    egui::Shape::Text(text) if text.galley.text() == DRAFT => {
+                    egui::Shape::Text(text)
+                        if text.galley.text() == DRAFT
+                            && !label.is_some_and(|rect| rect.contains(text.pos)) =>
+                    {
                         for row in &text.galley.rows {
                             for glyph in row
                                 .glyphs

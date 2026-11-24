@@ -1956,6 +1956,14 @@ impl App {
             .is_some_and(|(prefilled_chat, prefilled)| prefilled_chat == chat && prefilled == text)
     }
 
+    /// Whether the open chat's composer holds text the reader wrote and did
+    /// not send. Text a link put there is not their draft.
+    pub(crate) fn composer_holds_draft(&self) -> bool {
+        self.open_chat
+            .as_deref()
+            .is_some_and(|chat| !self.is_untouched_prefill(chat, &self.composer))
+    }
+
     /// Parks the current account's text, mentions and attachments before switching accounts.
     fn park_composer(&mut self) {
         if let Some(previous) = self.open_chat.clone() {

@@ -1520,3 +1520,11 @@ boundaries fails. Added native full-App Messages group geometry regression.
 Fmt/diff checks pass. Local cargo check --tests --features demo reached the
 application but did not finish two bounded windows; no native pass or actual
 app pixel verification claimed. No workflow change, release or merge.
+## Unsent draft indication
+
+Approved option A from the 23 Nov draft sketches (label above the composer,
+chat list unchanged) plus a one-line inline preview of the draft. Shows a
+pencil, "Draft" and the first non-blank line of the composer text while
+nothing is being edited. Checked first: no open or merged PR adds a draft
+label; restore-on-open drafts already exist. Native compile and capture not
+run by this agent, CI is the first compile.

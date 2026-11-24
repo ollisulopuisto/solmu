@@ -21,6 +21,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 - Show a passive plus to the right of two overlapping service badges when a linked person has more networks.
 - Group message hover actions into a cross-under reaction bar with flush right joins, Reply and Star.
+- Show a Draft label with a one-line preview of the unsent text above the composer.
 
 ## 26.11.8
 
