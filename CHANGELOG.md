@@ -17,6 +17,10 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+## 26.11.12
+
+- Action results no longer appear above the chat list by default. The new Debug mode preference shows them, including failures; every failure is written to the log either way.
+
 ## 26.11.11
 
 - Keep confirmed local draft rows beside Send, with numbered recall and cleared-text recovery.

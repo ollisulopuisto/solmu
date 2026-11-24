@@ -1825,6 +1825,9 @@ pub struct BeeperPreferences {
     /// Local display masks, never sent to the bridge.
     pub hidden_messages: Vec<crate::hidden_messages::HiddenMessage>,
     pub incognito: bool,
+    /// Show action results and failures above the chat list. Off by default:
+    /// failures stay in the log, out of the interface.
+    pub debug_mode: bool,
     pub compact_list: bool,
     pub show_previews: bool,
     pub show_unread_counts: bool,
@@ -1852,6 +1855,7 @@ impl Default for BeeperPreferences {
             saved: Vec::new(),
             hidden_messages: Vec::new(),
             incognito: false,
+            debug_mode: false,
             compact_list: false,
             show_previews: true,
             show_unread_counts: true,
@@ -1939,5 +1943,30 @@ mod media_tool_preferences_tests {
             .remove("media_tools_onboarding_done");
         let old: super::Settings = serde_json::from_value(value).unwrap();
         assert!(old.ffmpeg_path.is_none());
+    }
+
+    #[test]
+    fn debug_mode_defaults_off_and_round_trips() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let mut settings = super::Settings::default();
+        assert!(!settings.beeper.debug_mode);
+        settings.beeper.debug_mode = true;
+        settings.save(&path).unwrap();
+        assert!(super::Settings::load(&path).beeper.debug_mode);
+        let mut value = serde_json::to_value(super::Settings::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .get_mut("beeper")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("debug_mode");
+        let old: super::Settings = serde_json::from_value(value).unwrap();
+        assert!(
+            !old.beeper.debug_mode,
+            "older settings files without the field read as off"
+        );
     }
 }

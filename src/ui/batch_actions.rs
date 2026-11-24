@@ -108,80 +108,85 @@ fn archive_bar_contents(app: &mut App, ui: &mut egui::Ui) {
             }
         });
     }
-    for item in &app.batch_ui.results {
-        ui.add(egui::Label::new(result_line(app, item)).wrap());
-        if let Some(Err(error)) = &item.result {
-            technical_details(
-                ui,
-                &gettext(app.locale, "Technical details"),
-                "batch-current",
-                (
-                    &app.batch_ui.owner,
-                    app.batch_ui.request,
-                    &item.chat,
-                    &item.message,
-                    item.everyone,
-                ),
-                error,
-            );
-        }
-    }
-    if !app.batch_ui.previous_session_results.is_empty() {
-        ui.label(gettext(
-            app.locale,
-            "Unconfirmed or failed outcomes from a previous connection (not the current session)",
-        ));
-        for (index, item) in app.batch_ui.previous_session_results.iter().enumerate() {
-            ui.label(
-                gettext(
-                    app.locale,
-                    "{chat} {message}: check the previous connection before retrying",
-                )
-                .replace("{chat}", &gettext(app.locale, "Previous connection chat"))
-                .replace("{message}", &result_action(app.locale, item)),
-            );
+    // Action results and failures stay out of the interface unless the owner
+    // turns on Debug mode in Preferences; the log keeps every failure.
+    if app.settings.beeper.debug_mode {
+        for item in &app.batch_ui.results {
+            ui.add(egui::Label::new(result_line(app, item)).wrap());
             if let Some(Err(error)) = &item.result {
                 technical_details(
                     ui,
                     &gettext(app.locale, "Technical details"),
-                    "batch-previous",
-                    index,
+                    "batch-current",
+                    (
+                        &app.batch_ui.owner,
+                        app.batch_ui.request,
+                        &item.chat,
+                        &item.message,
+                        item.everyone,
+                    ),
                     error,
                 );
             }
         }
+        if !app.batch_ui.previous_session_results.is_empty() {
+            ui.label(gettext(
+                app.locale,
+                "Unconfirmed or failed outcomes from a previous connection (not the current session)",
+            ));
+            for (index, item) in app.batch_ui.previous_session_results.iter().enumerate() {
+                ui.label(
+                    gettext(
+                        app.locale,
+                        "{chat} {message}: check the previous connection before retrying",
+                    )
+                    .replace("{chat}", &gettext(app.locale, "Previous connection chat"))
+                    .replace("{message}", &result_action(app.locale, item)),
+                );
+                if let Some(Err(error)) = &item.result {
+                    technical_details(
+                        ui,
+                        &gettext(app.locale, "Technical details"),
+                        "batch-previous",
+                        index,
+                        error,
+                    );
+                }
+            }
 
-        if ui
-            .scope_builder(
-                egui::UiBuilder::new()
-                    .id(ui.make_persistent_id(("dismiss-previous-results", &app.batch_ui.owner))),
-                |ui| ui.button(gettext(app.locale, "Dismiss previous connection history")),
-            )
-            .inner
-            .clicked()
-        {
-            app.batch_ui.previous_session_results.clear();
+            if ui
+                .scope_builder(
+                    egui::UiBuilder::new()
+                        .id(ui
+                            .make_persistent_id(("dismiss-previous-results", &app.batch_ui.owner))),
+                    |ui| ui.button(gettext(app.locale, "Dismiss previous connection history")),
+                )
+                .inner
+                .clicked()
+            {
+                app.batch_ui.previous_session_results.clear();
+            }
         }
-    }
-    if !app.batch_ui.results.is_empty()
-        && app
-            .batch_ui
-            .results
-            .iter()
-            .all(|item| item.result.is_some())
-        && ui
-            .scope_builder(
-                egui::UiBuilder::new().id(ui.make_persistent_id((
-                    "dismiss-current-results",
-                    &app.batch_ui.owner,
-                    app.batch_ui.request,
-                ))),
-                |ui| ui.button(gettext(app.locale, "Dismiss action results")),
-            )
-            .inner
-            .clicked()
-    {
-        app.batch_ui.results.clear();
+        if !app.batch_ui.results.is_empty()
+            && app
+                .batch_ui
+                .results
+                .iter()
+                .all(|item| item.result.is_some())
+            && ui
+                .scope_builder(
+                    egui::UiBuilder::new().id(ui.make_persistent_id((
+                        "dismiss-current-results",
+                        &app.batch_ui.owner,
+                        app.batch_ui.request,
+                    ))),
+                    |ui| ui.button(gettext(app.locale, "Dismiss action results")),
+                )
+                .inner
+                .clicked()
+        {
+            app.batch_ui.results.clear();
+        }
     }
 }
 
@@ -414,6 +419,7 @@ mod tests {
             crate::paths::AppDirs::under(root.path()),
             Default::default(),
         );
+        app.settings.beeper.debug_mode = true;
         let now = std::time::Instant::now();
         let item = |id: &str, result, accepted_delete_at| Item {
             chat: "synthetic".into(),
@@ -495,6 +501,7 @@ mod tests {
                 crate::paths::AppDirs::under(root.path()),
                 Default::default(),
             );
+            app.settings.beeper.debug_mode = true;
             let now = std::time::Instant::now();
             let item = |id: &str, accepted: bool| Item {
                 chat: "synthetic".into(),
@@ -666,5 +673,117 @@ mod tests {
         assert!(result_line(&app, &item).contains("Failed or uncertain"));
         item.chat = "gone.internal".into();
         assert!(result_line(&app, &item).starts_with("Unavailable chat"));
+    }
+
+    #[test]
+    fn results_stay_hidden_until_debug_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        app.batch_ui = State {
+            owner: app.account().id.0.clone(),
+            request: Some(77),
+            selected_chats: vec!["chat-a".into()],
+            results: vec![Item {
+                chat: "chat-a".into(),
+                message: Some("m1".into()),
+                everyone: true,
+                accepted_delete_at: None,
+                result: Some(Err("HIDDEN_FAILURE_DETAIL".into())),
+            }],
+            previous_session_results: vec![Item {
+                chat: "chat-b".into(),
+                message: Some("m0".into()),
+                everyone: false,
+                accepted_delete_at: None,
+                result: Some(Err("HIDDEN_PREVIOUS_DETAIL".into())),
+            }],
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| {
+            style.animation_time = 0.0;
+            style.interaction.selectable_labels = false;
+        });
+        let hidden = batch_bar_frame(&mut app, &ctx, vec![]);
+        let texts: Vec<&str> = hidden.iter().map(|(text, _)| text.as_str()).collect();
+        assert!(
+            texts.iter().any(|text| text.contains("chat selected")),
+            "the selection bar is not action-result UI and must stay"
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.contains("Failed or uncertain"))
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.contains("HIDDEN_FAILURE_DETAIL"))
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.contains("HIDDEN_PREVIOUS_DETAIL"))
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.contains("Dismiss action results"))
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.contains("previous connection"))
+        );
+
+        app.settings.beeper.debug_mode = true;
+        let shown = batch_bar_frame(&mut app, &ctx, vec![]);
+        let texts: Vec<&str> = shown.iter().map(|(text, _)| text.as_str()).collect();
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("Failed or uncertain"))
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("Dismiss action results"))
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("Dismiss previous connection history"))
+        );
+    }
+
+    #[test]
+    fn accepted_notices_still_expire_with_debug_off() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        let old = std::time::Instant::now() - std::time::Duration::from_secs(11);
+        app.batch_ui = State {
+            owner: app.account().id.0.clone(),
+            request: Some(77),
+            results: vec![Item {
+                chat: "chat-a".into(),
+                message: Some("m1".into()),
+                everyone: true,
+                accepted_delete_at: Some(old),
+                result: Some(Ok(())),
+            }],
+            ..Default::default()
+        };
+        let ctx = egui::Context::default();
+        let _ = batch_bar_frame(&mut app, &ctx, vec![]);
+        assert!(
+            app.batch_ui.results.is_empty(),
+            "receipt cleanup must run even while results are hidden"
+        );
     }
 }

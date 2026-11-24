@@ -1,5 +1,25 @@
 # Work log
 
+## 2026-11-24: Hide action results behind Debug mode
+
+Owner direction (2026-11-24): no action-result or failure UI by default; a
+Debug mode preference (off by default) shows failures; failures stay logged.
+The batch archive/delete results bar above the chat list (including the
+"Dismiss action results" and previous-connection blocks) now renders only with
+the preference on; selection and review flows are unchanged. Backend archive/
+delete failures no longer raise a separate toast: the app logs every mutation
+failure and, for results no batch entry tracks (single deletes), toasts them in
+Debug mode only. Demo scene `batch-results` gains a synthetic failure item and
+a `debug` flag, feeding four new macOS smoke captures (dark/light × off/on).
+Version 26.11.10; 26.11.9 is left to the pending bump PR #465. Duplicate check:
+open PRs 456/460/462/464/465 unrelated; merged #422 (plain states, chat names)
+and #444 (receipt auto-clear) are the related prior work and keep their
+behavior behind the preference; branch fix/delete-result-banner is merged #444
+work, fix/preview-fail-quiet is empty. Unit tests cover hidden-by-default,
+Debug-mode visibility, receipt expiry while hidden, untracked/tracked failure
+toasts and the settings round-trip. Native tests and captures run in CI, not
+claimed locally.
+
 ## 2026-11-23: Passive linked-network overflow badge
 
 Approved two overlapping service marks then a plain plus on the right. Reused exact existing badge geometry and timer slot offset. Distinct-network collection remains unchanged; third and later distinct networks cause the passive mark. No click/focus/tooltip/list. Own adversarial review traced all three chat-row callers, timer-slot preservation, source-index ordering and unlimited linked member counts. Local exact-source harness covers slots0..9 with timer/no timer and passive paint allocating no widget; native CI pending. Separate from floating action bar and older threading controls.

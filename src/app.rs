@@ -4897,7 +4897,7 @@ impl App {
                 if let Some(archived) = archived.filter(|_| result.is_ok()) {
                     self.silence_hide(&chat, archived);
                 }
-                if self.batch_ui.owner == self.account().id.0
+                let matched = if self.batch_ui.owner == self.account().id.0
                     && request == self.batch_ui.request
                     && request.is_some()
                     && let Some(item) = self.batch_ui.results.iter_mut().find(|item| {
@@ -4905,11 +4905,29 @@ impl App {
                             && item.message == message
                             && item.everyone == everyone
                             && item.result.is_none()
-                    })
-                {
+                    }) {
                     item.accepted_delete_at =
                         (item.message.is_some() && result.is_ok()).then(Instant::now);
-                    item.result = Some(result);
+                    item.result = Some(result.clone());
+                    true
+                } else {
+                    false
+                };
+                if let Err(error) = result {
+                    // The interface hides failures unless Debug mode is on,
+                    // but the record never disappears: every failure is logged.
+                    log::warn!(
+                        "action result failed or uncertain (chat {chat}, message {message:?}, for everyone {everyone}): {error}"
+                    );
+                    if !matched && self.settings.beeper.debug_mode {
+                        self.toast(
+                            crate::i18n::gettext(
+                                self.locale,
+                                "Failed or uncertain; check the chat before retrying",
+                            )
+                            .into_owned(),
+                        );
+                    }
                 }
             }
             Event::BeeperMediaProgress {
@@ -17806,6 +17824,71 @@ mod tests {
         assert_eq!(app.batch_ui.results[0].result, Some(Ok(())));
         assert!(app.batch_ui.results[0].accepted_delete_at.is_some());
         assert!(app.batch_ui.selected_chats.is_empty());
+    }
+
+    #[test]
+    fn an_untracked_action_failure_toasts_only_in_debug_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        let failure = || Event::MutationResult {
+            request: None,
+            archived: None,
+            chat: "same-chat".into(),
+            message: Some("message".into()),
+            everyone: false,
+            result: Err("synthetic backend failure".into()),
+        };
+        app.apply_backend_event(failure(), false);
+        assert!(
+            app.toasts.is_empty(),
+            "without Debug mode an action failure stays out of the interface"
+        );
+        app.settings.beeper.debug_mode = true;
+        app.apply_backend_event(failure(), false);
+        assert_eq!(app.toasts.len(), 1, "Debug mode surfaces the failure");
+    }
+
+    #[test]
+    fn a_tracked_action_failure_is_recorded_without_a_toast() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(root.path()),
+            Default::default(),
+        );
+        app.batch_ui.owner = app.account().id.0.clone();
+        app.batch_ui.request = Some(9);
+        app.batch_ui.results = vec![crate::model::BatchItem {
+            chat: "same-chat".into(),
+            message: Some("message".into()),
+            everyone: false,
+            accepted_delete_at: None,
+            result: None,
+        }];
+        let failure = || Event::MutationResult {
+            request: Some(9),
+            archived: None,
+            chat: "same-chat".into(),
+            message: Some("message".into()),
+            everyone: false,
+            result: Err("synthetic backend failure".into()),
+        };
+        for debug in [false, true] {
+            app.batch_ui.results[0].result = None;
+            app.settings.beeper.debug_mode = debug;
+            app.apply_backend_event(failure(), false);
+            assert_eq!(
+                app.batch_ui.results[0].result,
+                Some(Err("synthetic backend failure".into())),
+                "the failure is always recorded"
+            );
+            assert!(
+                app.toasts.is_empty(),
+                "a tracked failure surfaces in the results bar, never as a toast"
+            );
+        }
     }
 
     #[test]
