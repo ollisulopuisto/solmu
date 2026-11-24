@@ -2631,6 +2631,13 @@ fn draft_label(app: &App, ui: &mut egui::Ui, preview: &str) {
         let (rect, _) = ui.allocate_exact_size(line.size(), Sense::hover());
         line.paint(ui, rect.min, palette.secondary);
     });
+    #[cfg(test)]
+    {
+        let shown = ui.min_rect();
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(egui::Id::new("draft-label"), (shown, preview.to_owned()))
+        });
+    }
     strip_gap(ui);
 }
 

@@ -13017,6 +13017,77 @@ mod tests {
         assert_eq!(app.settings.voice_speed, 2.0);
     }
 
+    /// The Draft label sits above the composer only for text the reader wrote
+    /// and did not send: typed text and a restored draft show it with the
+    /// first line as preview, an untouched link prefill and a message edit do
+    /// not, and a chat without text never has it.
+    #[test]
+    fn the_draft_label_follows_the_readers_unsent_text() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        let own = SAMPLES[0].id.to_owned();
+        let other = SAMPLES[2].id.to_owned();
+        let label = |ctx: &egui::Context| {
+            ctx.data(|data| data.get_temp::<(egui::Rect, String)>(egui::Id::new("draft-label")))
+        };
+        // Each check starts from a frame that did not draw the label, so a
+        // stale rectangle from an earlier frame cannot pass for a new one.
+        let drawn = |app: &mut App, ctx: &egui::Context| {
+            ctx.data_mut(|data| {
+                data.remove_temp::<(egui::Rect, String)>(egui::Id::new("draft-label"))
+            });
+            render(app, ctx);
+            label(ctx).map(|(_, preview)| preview)
+        };
+        app.actions.push(crate::model::Action::OpenChat(own.clone()));
+        render(&mut app, &ctx);
+        assert_eq!(drawn(&mut app, &ctx), None, "an empty composer has no label");
+
+        app.composer = "  Yes,   after the chart fix.\nsecond line".to_owned();
+        assert_eq!(
+            drawn(&mut app, &ctx).as_deref(),
+            Some("Yes, after the chart fix."),
+            "typed text shows the label with its first line"
+        );
+
+        app.editing = Some("not-a-real-message".to_owned());
+        assert_eq!(drawn(&mut app, &ctx), None, "editing a message is not a draft");
+        app.editing = None;
+        assert!(drawn(&mut app, &ctx).is_some());
+
+        // Leaving parks the text. The other chat has none, and coming back
+        // restores it together with the label.
+        app.actions.push(crate::model::Action::OpenChat(other.clone()));
+        render(&mut app, &ctx);
+        assert_eq!(drawn(&mut app, &ctx), None, "another chat has no draft");
+        app.actions.push(crate::model::Action::OpenChat(own));
+        render(&mut app, &ctx);
+        assert_eq!(
+            drawn(&mut app, &ctx).as_deref(),
+            Some("Yes, after the chart fix."),
+            "a restored draft shows the label"
+        );
+
+        // A link's prefill is not the reader's text until they change it.
+        app.actions.push(crate::model::Action::OpenChat(other.clone()));
+        render(&mut app, &ctx);
+        app.actions.push(crate::model::Action::PrefillComposer {
+            chat: other,
+            text: "Hello from a link".to_owned(),
+            mentions: Vec::new(),
+        });
+        render(&mut app, &ctx);
+        assert_eq!(app.composer, "Hello from a link");
+        assert_eq!(drawn(&mut app, &ctx), None, "an untouched prefill is not a draft");
+        app.composer.push_str(" and more");
+        assert_eq!(
+            drawn(&mut app, &ctx).as_deref(),
+            Some("Hello from a link and more"),
+            "changing the prefill makes it the reader's draft"
+        );
+    }
+
     /// A refused voice message waits above its own chat's composer, where
     /// Enter in the empty composer sends it again and the strip's X discards
     /// it; other chats neither show nor send it.
