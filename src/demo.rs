@@ -1727,6 +1727,68 @@ fn sample_recipients(now: i64) -> Vec<crate::model::Recipient> {
 /// "Message info" for our message in a bigger group: some members read it,
 /// some only have it, and the rest have not received it yet. Without a saved
 /// audience, the dialog explains that earlier receipts are unknown.
+fn message_info_source_sample(app: &mut App, incoming: bool, group: bool) {
+    let chat = if group { SAMPLES[1].id } else { SAMPLES[0].id };
+    let source = app.chats.iter_mut().find(|c| c.id == chat).unwrap();
+    source.backend_origin = Some("demo-source".into());
+    source.backend_account = Some("demo-account".into());
+    source.backend_network = Some("WhatsApp".into());
+    source.handles = if group {
+        vec![]
+    } else {
+        vec!["alex@example.invalid".into()]
+    };
+    source.name = if group {
+        "Design group"
+    } else {
+        "Alex Example"
+    }
+    .into();
+    app.beeper_accounts.insert(
+        "demo-source".into(),
+        vec![crate::backend::BeeperAccountInfo {
+            id: "demo-account".into(),
+            name: "My WhatsApp account".into(),
+            network: "WhatsApp".into(),
+            status: "connected".into(),
+            own_user_id: None,
+        }],
+    );
+    let mut m = message(
+        chat,
+        "source-info",
+        !incoming,
+        crate::util::now() - 120,
+        Content::text(if incoming {
+            "The revised draft is ready."
+        } else {
+            "Thanks, I will check it."
+        }),
+    );
+    m.sender = if incoming { "alex@example.invalid" } else { ME }.into();
+    m.sender_name = Some(if incoming { "Alex Example" } else { "Me" }.into());
+    m.status = if incoming {
+        Delivery::None
+    } else {
+        Delivery::Delivered
+    };
+    app.conversations.get_mut(chat).unwrap().messages = vec![m];
+    app.open_chat = Some(chat.into());
+    app.typing.clear();
+    app.dialog = Some(Dialog::MessageInfo {
+        chat: chat.into(),
+        message: "source-info".into(),
+    });
+    if !incoming && group {
+        app.message_receipts = Some(crate::model::MessageReceipts {
+            chat: chat.into(),
+            message: "source-info".into(),
+            recipients: vec![],
+        });
+        app.receipts_watch = Some((chat.into(), "source-info".into()));
+    }
+}
+
 fn message_info_sample(app: &mut App, recorded: bool) {
     let chat = SAMPLES[1].id;
     let now = crate::util::now();
@@ -3403,6 +3465,9 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     &egui::Context::default(),
                 );
             }
+            "info-source-sent" => message_info_source_sample(app, false, false),
+            "info-source-received" => message_info_source_sample(app, true, false),
+            "info-source-group" => message_info_source_sample(app, true, true),
             "message-info" => message_info_sample(app, true),
             "message-info-unknown" => message_info_sample(app, false),
             "message-info-partial" => {
@@ -7918,15 +7983,73 @@ mod tests {
         render(&mut app, &ctx);
     }
 
-    /// Message info grows with its content like poll results, so a short
-    /// list, the note about missing receipts included, shows without
-    /// scrolling.
     #[test]
-    fn short_message_info_shows_in_full() {
+    fn message_info_uses_exact_source_account_and_incoming_sender() {
+        for (incoming, group) in [(false, false), (true, false), (true, true), (false, true)] {
+            let mut app = app();
+            message_info_source_sample(&mut app, incoming, group);
+            // Same account id at another origin must never supply the label.
+            app.beeper_accounts.insert(
+                "other-origin".into(),
+                vec![crate::backend::BeeperAccountInfo {
+                    id: "demo-account".into(),
+                    name: "WRONG ACCOUNT".into(),
+                    network: "Telegram".into(),
+                    status: "connected".into(),
+                    own_user_id: None,
+                }],
+            );
+            let m = app.conversations[app.open_chat.as_ref().unwrap()].messages[0].clone();
+            let facts = crate::ui::message_info::source_facts(&app, &m);
+            assert!(facts.contains(&("Bridge".into(), "WhatsApp".into())));
+            assert!(facts.contains(&("Account".into(), "My WhatsApp account".into())));
+            let counterpart = facts
+                .iter()
+                .find(|(label, _)| label == if incoming { "From" } else { "To" })
+                .unwrap();
+            assert_eq!(
+                counterpart.1,
+                if !incoming && group {
+                    "Design group"
+                } else {
+                    "Alex Example"
+                }
+            );
+            assert_eq!(
+                facts.iter().any(|(label, _)| label == "In"),
+                incoming && group
+            );
+            assert!(!facts.iter().any(|(_, value)| value.contains("WRONG")));
+            app.beeper_accounts.remove("demo-source");
+            let facts = crate::ui::message_info::source_facts(&app, &m);
+            assert!(facts.contains(&("Account".into(), "demo-account".into())));
+        }
+    }
+
+    #[test]
+    fn long_message_source_names_wrap_in_a_narrow_dialog() {
+        let mut app = app();
+        message_info_source_sample(&mut app, true, false);
+        app.beeper_accounts.get_mut("demo-source").unwrap()[0].name =
+            "A long account name with several words that must wrap".repeat(2);
+        app.conversations.get_mut(SAMPLES[0].id).unwrap().messages[0].sender_name =
+            Some("A long original sender display name that must remain readable".repeat(2));
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        for _ in 0..3 {
+            render_sized(&mut app, &ctx, egui::vec2(390.0, 760.0));
+        }
+    }
+
+    #[test]
+    fn message_info_identity_and_receipts_share_a_bounded_viewport() {
         for page in [
             "message-info-partial",
             "message-info-unknown",
             "message-info-direct",
+            "info-source-sent",
+            "info-source-received",
+            "info-source-group",
         ] {
             let mut app = app();
             apply_flags(&mut app, Some(page));
@@ -7944,7 +8067,9 @@ mod tests {
                 .data(|data| data.get_temp::<egui::Vec2>(id.with("message-info-content")))
                 .unwrap();
             assert!(
-                content.y <= viewport.height() + 0.5,
+                content.y.is_finite()
+                    && viewport.height() > 0.0
+                    && viewport.height() <= ctx.content_rect().height(),
                 "{page}: content {content:?}, viewport {viewport:?}"
             );
         }
@@ -13801,8 +13926,11 @@ mod tests {
             (chat, id, app.dialog)
         }
 
-        let (_, _, dialog) = click_footer(false, 7.5);
-        assert!(dialog.is_none(), "an incoming time is not a button");
+        let (chat, id, dialog) = click_footer(false, 7.5);
+        assert!(
+            matches!(&dialog, Some(Dialog::MessageInfo {chat: shown, message}) if *shown == chat && *message == id),
+            "incoming time opens source info"
+        );
 
         for (part, inset) in [("ticks", 7.5), ("time", 25.0)] {
             let (chat, id, dialog) = click_footer(true, inset);

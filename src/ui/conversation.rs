@@ -7767,14 +7767,14 @@ pub fn footer_id(chat: &str, message: &str) -> egui::Id {
     bubble_id(chat, message).with("footer")
 }
 
-/// Whether "Message info" has receipts to show: our own sent message.
+/// Source identity for received messages; source and receipts for sent ones.
 fn has_message_info(message: &Message) -> bool {
-    message.from_me
-        && !matches!(message.content, Content::Revoked)
-        && !matches!(
-            message.status,
-            Delivery::None | Delivery::Pending | Delivery::Failed
-        )
+    !matches!(message.content, Content::Revoked)
+        && (!message.from_me
+            || !matches!(
+                message.status,
+                Delivery::None | Delivery::Pending | Delivery::Failed
+            ))
 }
 
 /// Clicking our time and ticks opens "Message info", as in WhatsApp.
