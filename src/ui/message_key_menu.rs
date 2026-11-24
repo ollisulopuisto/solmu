@@ -335,16 +335,18 @@ pub(crate) fn buttons(app: &mut App, ui: &mut egui::Ui) {
         ] {
             let hint = super::keys::hint(binding).unwrap_or_default();
             let label = crate::i18n::gettext(app.locale, label);
-            if crate::theme::icon_button(
+            let response = crate::theme::icon_button(
                 ui,
                 icon,
                 18.0,
                 app.palette.secondary,
                 app.palette.text,
                 &format!("{label} ({hint})"),
-            )
-            .clicked()
-            {
+            );
+            #[cfg(test)]
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(id().with(templates), response.rect));
+            if response.clicked() {
                 open(app, ui.ctx(), templates);
             }
         }

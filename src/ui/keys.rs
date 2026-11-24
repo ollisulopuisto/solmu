@@ -3137,6 +3137,61 @@ mod tests {
         assert!(!super::super::message_key_menu::is_open(&ctx));
     }
     #[test]
+    fn discovery_icon_clicks_open_both_numbered_docks() {
+        for templates in [false, true] {
+            let (_root, mut app, ids) = app_with_chats(1);
+            let chat = ids[0].clone();
+            app.open_chat = Some(chat.clone());
+            app.conversations.insert(
+                chat.clone(),
+                crate::app::Conversation {
+                    messages: vec![shortcut_message(&chat, "incoming", true, 10)],
+                    ..Default::default()
+                },
+            );
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            let mut draw = |events: Vec<egui::Event>| {
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(500.0, 300.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| super::super::message_key_menu::buttons(&mut app, ui),
+                );
+            };
+            draw(vec![]);
+            let at = ctx
+                .data(|d| {
+                    d.get_temp::<egui::Rect>(egui::Id::new("message-key-menu").with(templates))
+                })
+                .unwrap()
+                .center();
+            for pressed in [true, false] {
+                draw(vec![
+                    egui::Event::PointerMoved(at),
+                    egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    },
+                ]);
+            }
+            assert!(super::super::message_key_menu::is_open(&ctx));
+            press(&mut app, &ctx, Key::Num1, Modifiers::NONE);
+            assert!(app.actions.iter().any(|a| if templates {
+                matches!(a, Action::PrefillComposer { .. })
+            } else {
+                matches!(a, Action::React { .. })
+            }));
+        }
+    }
+    #[test]
     fn context_keyboard_dock_keeps_its_explicit_older_target() {
         let (_root, mut app, ids) = app_with_chats(1);
         let chat = ids[0].clone();

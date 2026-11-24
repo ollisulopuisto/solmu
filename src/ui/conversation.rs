@@ -16443,6 +16443,88 @@ mod tests {
     }
 
     #[test]
+    fn context_dock_entry_clicks_open_the_exact_message() {
+        with_still_view(|view| {
+            let message =
+                crate::archive::tests::message("1@s.whatsapp.net", "older-menu-target", 0, false);
+            for (label, templates) in [("Reactions", false), ("Quick Replies", true)] {
+                let ctx = egui::Context::default();
+                crate::theme::install(&ctx);
+                let mut actions = Vec::new();
+                let mut draw = |events| {
+                    ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(600.0, 1400.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| context_menu(ui, view, &message, MenuOrigin::Chat, &mut actions),
+                    )
+                };
+                let output = draw(vec![]);
+                fn find(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
+                    match shape {
+                        egui::Shape::Text(t) if t.galley.text() == label => {
+                            Some(t.pos + t.galley.size() / 2.0)
+                        }
+                        egui::Shape::Vec(parts) => parts.iter().find_map(|p| find(p, label)),
+                        _ => None,
+                    }
+                }
+                let at = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| find(&s.shape, label))
+                    .expect("context entry label drawn");
+                for pressed in [true, false] {
+                    draw(vec![
+                        egui::Event::PointerMoved(at),
+                        egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ]);
+                }
+                assert!(actions.iter().any(|a|matches!(a,Action::OpenMessageKeyMenu{message,templates:chosen,..}if message=="older-menu-target"&&*chosen==templates)));
+            }
+        });
+    }
+    #[test]
+    fn context_dock_entries_consume_their_chords_on_the_exact_message() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let message =
+                crate::archive::tests::message("1@s.whatsapp.net", "older-menu-target", 0, false);
+            for (key, templates) in [(Key::T, false), (Key::Y, true)] {
+                let mut actions = Vec::new();
+                let _ = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(600.0, 1400.0),
+                        )),
+                        events: vec![egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::COMMAND,
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| context_menu(ui, view, &message, MenuOrigin::Chat, &mut actions),
+                );
+                assert!(actions.iter().any(|a|matches!(a,Action::OpenMessageKeyMenu{message,templates:chosen,..}if message=="older-menu-target"&&*chosen==templates)));
+            }
+        });
+    }
+    #[test]
     fn context_menu_shortcut_targets_the_menu_message_not_the_latest() {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
