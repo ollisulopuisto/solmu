@@ -1455,13 +1455,13 @@ const MESSAGE_REACT_MENU: Shortcut = Shortcut {
 };
 const MESSAGE_TEMPLATE_MENU: Shortcut = Shortcut {
     id: "message-template-menu",
-    keys: &[(COMMAND_SHIFT, Key::Y)],
-    label: Some("Ctrl+Shift+Y"),
+    keys: &[(Modifiers::COMMAND, Key::Y)],
+    label: Some("Ctrl+Y"),
     description: Some("Quick Reply to latest incoming message, then 1-3"),
     menu: Some(MenuItem {
         id: "chat-template-menu",
         text: "Quick Replies to Latest Incoming Message",
-        accelerator: "Super+Shift+KeyY",
+        accelerator: "Super+KeyY",
     }),
 };
 const MESSAGE_STAR: Shortcut = Shortcut {
@@ -2342,10 +2342,7 @@ mod tests {
                 "Quote-reply to the latest incoming message (on its source in linked chats)",
             ),
             ("Ctrl+T", "React to latest incoming message, then 1-6"),
-            (
-                "Ctrl+Shift+Y",
-                "Quick Reply to latest incoming message, then 1-3",
-            ),
+            ("Ctrl+Y", "Quick Reply to latest incoming message, then 1-3"),
             ("Ctrl+L", "Forward selected messages, or the latest message"),
             ("Ctrl+Alt+S", "Star or unstar the context-menu message"),
             ("Ctrl+Alt+B", "Save or unsave the context-menu message"),
@@ -3087,6 +3084,26 @@ mod tests {
     }
 
     #[test]
+    fn message_menu_does_not_take_redo_shift_command_z() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.composer = "draft".into();
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![shortcut_message(&chat, "incoming", true, 10)],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        assert!(press(&mut app, &ctx, Key::Z, COMMAND_SHIFT));
+        assert!(!super::super::message_key_menu::is_open(&ctx));
+        assert!(!press(&mut app, &ctx, Key::Y, Modifiers::COMMAND));
+        assert!(super::super::message_key_menu::is_open(&ctx));
+        assert_eq!(app.composer, "draft");
+    }
+    #[test]
     fn message_key_menu_snapshots_target_and_reaction_order() {
         let (_root, mut app, ids) = app_with_chats(1);
         let chat = ids[0].clone();
@@ -3136,7 +3153,7 @@ mod tests {
         assert!(app.actions.is_empty());
         assert!(!super::super::message_key_menu::is_open(&ctx));
         app.open_chat = Some(chat);
-        press(&mut app, &ctx, Key::Y, COMMAND_SHIFT);
+        press(&mut app, &ctx, Key::Y, Modifiers::COMMAND);
         press(&mut app, &ctx, Key::Escape, Modifiers::NONE);
         assert!(app.actions.is_empty());
         assert!(!super::super::message_key_menu::is_open(&ctx));
@@ -3154,7 +3171,7 @@ mod tests {
             },
         );
         let ctx = egui::Context::default();
-        press(&mut app, &ctx, Key::Y, COMMAND_SHIFT);
+        press(&mut app, &ctx, Key::Y, Modifiers::COMMAND);
         press(&mut app, &ctx, Key::Num2, Modifiers::NONE);
         assert_eq!(
             app.actions,
