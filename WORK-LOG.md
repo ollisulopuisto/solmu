@@ -1535,3 +1535,19 @@ run by this agent, CI is the first compile.
 - Router receives the exact chain port rather than deriving a child body midpoint. Source identity, jump-back and per-album-member destinations remain separate.
 - Quoted albums reserve vertical tile height for two distinct chain/tail pairs without increasing narrow tile width.
 - Review: traced body/painted/quote rect consumers, current-pass hover state, linked keys, album anchors and clipping. No workflow changes, no release. Native feature capture and full-app CI remain required before merge; local pure-router tests and formatting do not substitute for that proof.
+## Message info source identity
+
+Approved sent/received dark sketches: show Bridge, Account and original source
+To/From, with group context rather than an arbitrary group member. Incoming
+messages gain Message info access; outgoing receipt behavior stays separate.
+Beeper account lookup is scoped by exact origin and account id. Reported handles
+are optional; missing account names fall back to source account id. No linked
+primary destination is used to infer historical identity. Values wrap at narrow
+widths inside the existing bounded scroll pane. Incoming timestamps are called
+Message time, not invented delivery times. No incoming outgoing-receipt watcher.
+Added synthetic source fixtures, cross-origin same-account-id regression,
+incoming group watcher test and updated received footer click regression. The
+old short-info no-scroll contract changes because the approved metadata adds
+height, so viewport test now covers bounded scrolling instead. Exact-source
+metadata harness compiles/passes with minimal model stubs; no full native build
+or pixel claim locally. Workflow capture changes need separate approval.

@@ -1,4 +1,4 @@
-//! "Message info": who has received, read, or played one of our messages.
+//! Message identity and outgoing delivery receipts, bound to the original source.
 
 use egui::{Align, Frame, Layout, Margin, Sense, vec2};
 
@@ -7,6 +7,121 @@ use crate::app::App;
 use crate::i18n::{gettext, ngettext};
 use crate::model::{Action, Delivery, Message, MessageReceipts, Recipient};
 use crate::theme::{self, Icon, Palette};
+
+/// Resolve only the message's original source, never the linked person's default.
+pub(crate) fn source_facts(app: &App, message: &Message) -> Vec<(String, String)> {
+    let missing = gettext(app.locale, "Not available").into_owned();
+    let label = |text| gettext(app.locale, text).into_owned();
+    let Some(chat) = app.chat(&message.chat) else {
+        return vec![
+            (label("Bridge"), missing.clone()),
+            (label(if message.from_me { "To" } else { "From" }), missing),
+        ];
+    };
+    let inventory = chat
+        .backend_origin
+        .as_ref()
+        .and_then(|origin| app.beeper_accounts.get(origin))
+        .and_then(|accounts| {
+            accounts
+                .iter()
+                .find(|a| Some(&a.id) == chat.backend_account.as_ref())
+        });
+    let bridge = chat
+        .backend_network
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            inventory
+                .map(|a| a.network.as_str())
+                .filter(|s| !s.trim().is_empty())
+        })
+        .or(chat.network.as_deref().filter(|s| !s.trim().is_empty()))
+        .unwrap_or(
+            if chat.backend_origin.is_none() && chat.backend_account.is_none() {
+                "WhatsApp"
+            } else {
+                "Beeper"
+            },
+        );
+    let account = if chat.backend_origin.is_some() || chat.backend_account.is_some() {
+        inventory
+            .map(|a| a.name.clone())
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| chat.backend_account.clone())
+    } else {
+        app.me_name
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| app.me.clone())
+    }
+    .unwrap_or_else(|| missing.clone());
+    let target = if message.from_me {
+        chat.name.clone()
+    } else if chat.backend_account.is_some() {
+        message
+            .sender_name
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| chat.participant_names.get(&message.sender).cloned())
+            .unwrap_or_else(|| message.sender.clone())
+    } else {
+        app.display_name_or(&message.sender, message.sender_name.as_deref())
+    };
+    let mut facts = vec![
+        (label("Bridge"), bridge.into()),
+        (label("Account"), account),
+        (
+            label(if message.from_me { "To" } else { "From" }),
+            if target.trim().is_empty() {
+                missing
+            } else {
+                target
+            },
+        ),
+    ];
+    if !message.from_me && chat.kind == crate::model::ChatKind::Group {
+        facts.push((label("In"), chat.name.clone()));
+    }
+    // A reported handle identifies the counterpart, not our own account.
+    if chat.kind == crate::model::ChatKind::Direct {
+        let handles = chat
+            .handles
+            .iter()
+            .filter(|s| !s.trim().is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        if !handles.is_empty() {
+            facts.push((label("Username / phone"), handles.join("\n")));
+        }
+    }
+    facts
+}
+
+fn identity(app: &App, ui: &mut egui::Ui, message: &Message) {
+    for (label, value) in source_facts(app, message) {
+        ui.add_space(8.0);
+        theme::text(ui, label, theme::regular(12.0), app.palette.secondary);
+        let response = ui.add(
+            egui::Label::new(
+                egui::RichText::new(value)
+                    .font(theme::medium(14.0))
+                    .color(app.palette.text),
+            )
+            .wrap(),
+        );
+        #[cfg(test)]
+        assert!(
+            response.rect.right() <= ui.max_rect().right() + 1.0,
+            "identity value overflowed: {:?}",
+            response.rect
+        );
+        #[cfg(not(test))]
+        let _ = response;
+    }
+    ui.add_space(8.0);
+    ui.separator();
+}
 
 pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &str, id: &str) {
     let palette = app.palette;
@@ -81,10 +196,18 @@ fn receipts(app: &mut App, ui: &mut egui::Ui, chat: &str, id: &str, message: &Me
     preview(ui, &palette, app.locale, message, delivery);
     // The bubble's stamp is short; here the full moment, with seconds and
     // the zone, pins the receipt times beside it to an exact instant.
+    identity(app, ui, message);
     ui.add_space(4.0);
     theme::text(
         ui,
-        gettext(app.locale, "Sent"),
+        gettext(
+            app.locale,
+            if message.from_me {
+                "Sent"
+            } else {
+                "Message time"
+            },
+        ),
         theme::medium(13.0),
         palette.text,
     );
@@ -94,7 +217,15 @@ fn receipts(app: &mut App, ui: &mut egui::Ui, chat: &str, id: &str, message: &Me
         theme::regular(12.5),
         palette.secondary,
     );
-    if crate::model::ChatKind::from_id(chat) != crate::model::ChatKind::Group {
+    if !message.from_me {
+        return;
+    }
+    if app
+        .chat(chat)
+        .map(|c| c.kind)
+        .unwrap_or_else(|| crate::model::ChatKind::from_id(chat))
+        != crate::model::ChatKind::Group
+    {
         direct(app, ui, message);
         return;
     }
@@ -134,12 +265,16 @@ fn preview(
     let width = text.size().x.max(90.0);
     ui.allocate_ui_with_layout(
         vec2(ui.available_width(), 0.0),
-        Layout::right_to_left(Align::Min),
+        if message.from_me {
+            Layout::right_to_left(Align::Min)
+        } else {
+            Layout::left_to_right(Align::Min)
+        },
         |ui| {
             // Room for the tail, which reaches out past the bubble's side.
             ui.add_space(widgets::TAIL_WIDTH);
             let stamp = crate::util::bubble_stamp(locale, message.timestamp);
-            bubble(ui, palette, text, width, &stamp, delivery);
+            bubble(ui, palette, text, width, &stamp, delivery, message.from_me);
         },
     );
 }
@@ -151,6 +286,7 @@ fn bubble(
     width: f32,
     stamp: &str,
     delivery: Delivery,
+    own: bool,
 ) {
     // Drawn as the chat draws our own messages: shadow, raised edge, tail.
     let backdrop = ui.painter().add(egui::Shape::Noop);
@@ -169,7 +305,9 @@ fn bubble(
                 egui::pos2(rect.right() - 16.0, rect.bottom() - 16.0),
                 vec2(16.0, 16.0),
             );
-            widgets::ticks(ui, palette, ticks, delivery);
+            if own {
+                widgets::ticks(ui, palette, ticks, delivery);
+            }
             ui.painter().galley(
                 egui::pos2(
                     ticks.left() - 4.0 - clock.size().x,
@@ -184,8 +322,16 @@ fn bubble(
         widgets::bubble_shape(
             palette,
             shown.response.rect,
-            palette.bubble_out,
-            Some(widgets::Side::Right),
+            if own {
+                palette.bubble_out
+            } else {
+                palette.bubble_in
+            },
+            Some(if own {
+                widgets::Side::Right
+            } else {
+                widgets::Side::Left
+            }),
             ui.ctx().pixels_per_point(),
             ui.clip_rect().y_range(),
         ),
