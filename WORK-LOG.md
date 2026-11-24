@@ -1575,3 +1575,18 @@ or pixel claim locally. Workflow capture changes need separate approval.
 ## Issue463 keyboard message menus
 
 Added two-stage latest-incoming reaction and Quick Replies menus. Reuses existing reaction/pre-fill actions and PR456 Quick Replies, no automatic text send. Snapshots exact target and options, invalidates stale ownership, consumes bare numeric selection before composer. Cmd-T and Cmd-Y in shared registry/native menus/help. Olli explicitly approved replacing the extra Cmd-Y Redo alias; Cmd-Shift-Z remains Redo. Interaction tests cover target stability, navigation cancellation, Escape and draft preservation. Local formatting passes; native compile/tests/screenshots are still pending CI. No merge.
+
+## Non-covering keyboard dock (2026-11-24)
+
+Owner488 approved reserved dock with discovery icons/context-menu shortcuts and
+no explanatory labels. Replaced centered Modal with space inside composer panel;
+added icon routes and exact-message context entries with registry CmdT/CmdY hints.
+Context action snapshots explicit target, keyboard/icon routes latest incoming.
+Normal timeline scroll anchor and linked-row exact-source scroll keep target in
+remaining transcript, including virtualized linked row. Linked no-destination
+case has its own reserved bottom dock. Native menu accelerators while context is
+open are rerouted to that menu. Invalidation frame consumes text/digits too.
+Own review traced downstream Action matches, linked routes, draft guards, context
+width and translation tests, keyboard/native routing and popup lifecycle. Added
+explicit older-context-target regression. Fmt/diff checks pass. Native compile,
+full tests and actual updated dock captures pending CI. No merge/release.

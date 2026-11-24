@@ -1974,6 +1974,8 @@ pub(crate) fn route_native_actions(ctx: &egui::Context, actions: Vec<Action>) ->
                     "chat-reply-later" => "reply-later",
                     "chat-quote-reply" => "incoming-bridge",
                     "chat-forward" => "forward-message",
+                    "chat-react-menu" => "message-react-menu",
+                    "chat-template-menu" => "message-template-menu",
                     _ => return Some(action),
                 },
                 Action::ToggleInfoSidebar => "info-sidebar",
@@ -3133,6 +3135,35 @@ mod tests {
         );
         assert_eq!(app.composer, "keep draft");
         assert!(!super::super::message_key_menu::is_open(&ctx));
+    }
+    #[test]
+    fn context_keyboard_dock_keeps_its_explicit_older_target() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![
+                    shortcut_message(&chat, "older", true, 10),
+                    shortcut_message(&chat, "newer", true, 20),
+                ],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        app.apply(
+            Action::OpenMessageKeyMenu {
+                chat: chat.clone(),
+                message: "older".into(),
+                templates: false,
+            },
+            &ctx,
+        );
+        assert!(super::super::message_key_menu::is_open(&ctx));
+        assert_eq!(app.scroll_anchor.as_deref(), Some("older"));
+        press(&mut app, &ctx, Key::Num1, Modifiers::NONE);
+        assert!(matches!(app.actions.as_slice(),[Action::React{message,..}] if message=="older"));
     }
     #[test]
     fn message_key_menu_cancels_on_chat_change_and_escape() {

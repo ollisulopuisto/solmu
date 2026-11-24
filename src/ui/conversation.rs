@@ -1566,6 +1566,13 @@ pub(crate) fn composer_with_capabilities(
                 ui.memory_mut(|memory|memory.surrender_focus(egui::Id::new("composer-text")));
             }
 
+            super::message_key_menu::show(app, ui);
+            if !super::message_key_menu::is_open(ui.ctx()) && chat.can_send() {
+                super::message_key_menu::buttons(app, ui);
+            }
+            if super::message_key_menu::is_open(ui.ctx()) {
+                ui.memory_mut(|memory| memory.surrender_focus(egui::Id::new("composer-text")));
+            }
             if let Some((selected_chat, selected)) = app.selection.clone()
                 && selected_chat == chat.id
             {
@@ -8157,6 +8164,7 @@ pub(crate) fn menu_width(
 fn message_menu_labels(locale: crate::i18n::Locale) -> Vec<String> {
     use crate::i18n::gettext;
     [
+        gettext(locale, "Reactions"),
         gettext(locale, "Reply"),
         gettext(locale, "Reply privately"),
         gettext(locale, "Quick Replies"),
@@ -8689,6 +8697,35 @@ fn context_menu(
             }
         },
     );
+    if !message.from_me
+        && !matches!(message.content, Content::Revoked | Content::Call { .. })
+        && matches!(origin, MenuOrigin::Chat)
+    {
+        for (templates, label, icon, binding) in [
+            (false, "Reactions", Icon::Smile, "message-react-menu"),
+            (
+                true,
+                "Quick Replies",
+                Icon::MessageCircle,
+                "message-template-menu",
+            ),
+        ] {
+            if widgets::menu_item_bound(
+                ui,
+                &palette,
+                Some(icon),
+                &crate::i18n::gettext(view.locale, label),
+                binding,
+            ) {
+                actions.push(Action::OpenMessageKeyMenu {
+                    chat: chat.clone(),
+                    message: message.id.clone(),
+                    templates,
+                });
+                ui.close();
+            }
+        }
+    }
     widgets::menu_separator(ui, &palette);
     if !matches!(message.content, Content::Revoked)
         && widgets::menu_item_bound(
@@ -8726,7 +8763,9 @@ fn context_menu(
     // Quick Replies: a canned Yes/No/Later the reader reviews in the
     // composer. Choosing one only fills the composer, the way a share
     // link's text does; it never sends, and a written draft is kept.
-    if !matches!(message.content, Content::Revoked) {
+    if !matches!(message.content, Content::Revoked)
+        && (!matches!(origin, MenuOrigin::Chat) || message.from_me)
+    {
         let quick_replies = [
             crate::i18n::gettext(view.locale, "Yes"),
             crate::i18n::gettext(view.locale, "No"),
@@ -17380,6 +17419,7 @@ mod reaction_tests {
                 || text == "Remove from Saved"
                 || text == "Hide in Solmu"
                 || text == "Quick Replies"
+                || text == "Reactions"
         };
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("photo.jpg");

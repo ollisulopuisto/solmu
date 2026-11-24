@@ -73,7 +73,7 @@ fn valid(app: &App, menu: &Menu) -> bool {
                 })
         })
 }
-pub fn open(app: &App, ctx: &egui::Context, templates: bool) {
+pub fn open(app: &mut App, ctx: &egui::Context, templates: bool) {
     if !app.chat_view()
         || app.show_update
         || app.reaction_target.is_some()
@@ -87,6 +87,23 @@ pub fn open(app: &App, ctx: &egui::Context, templates: bool) {
     let Some((chat, message)) = target(app) else {
         return;
     };
+    open_target(app, ctx, chat, message, templates);
+}
+pub(crate) fn open_target(
+    app: &mut App,
+    ctx: &egui::Context,
+    chat: String,
+    message: String,
+    templates: bool,
+) {
+    if app
+        .conversations
+        .get(&chat)
+        .and_then(|c| c.message(&message))
+        .is_none()
+    {
+        return;
+    }
     let Some(owner) = app.open_chat.clone() else {
         return;
     };
@@ -116,6 +133,8 @@ pub fn open(app: &App, ctx: &egui::Context, templates: bool) {
         choices,
     };
     if valid(app, &menu) {
+        app.scroll_to_bottom = false;
+        app.scroll_anchor = Some(menu.message.clone());
         ctx.data_mut(|d| d.insert_temp(id(), menu));
     }
 }
@@ -163,7 +182,19 @@ pub(crate) fn keyboard(app: &mut App, ctx: &egui::Context) -> bool {
     };
     if !valid(app, &menu) {
         ctx.data_mut(|d| d.remove::<Menu>(id()));
-        return false;
+        ctx.input_mut(|input| {
+            input.events.retain(|event| {
+                !matches!(
+                    event,
+                    egui::Event::Text(_)
+                        | egui::Event::Paste(_)
+                        | egui::Event::Cut
+                        | egui::Event::Copy
+                        | egui::Event::Key { .. }
+                )
+            })
+        });
+        return true;
     }
     let mut choice = None;
     let mut close = false;
@@ -207,7 +238,9 @@ pub(crate) fn keyboard(app: &mut App, ctx: &egui::Context) -> bool {
     }
     true
 }
-pub(crate) fn show(app: &mut App, ctx: &egui::Context) {
+/// Reserved composer space. This never creates a foreground message overlay.
+pub(crate) fn show(app: &mut App, ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
     let Some(menu) = ctx.data(|d| d.get_temp::<Menu>(id())) else {
         return;
     };
@@ -216,47 +249,106 @@ pub(crate) fn show(app: &mut App, ctx: &egui::Context) {
         return;
     }
     let mut chosen = None;
-    let response = egui::Modal::new(id().with("modal")).show(ctx, |ui| {
-        ui.set_width(260.0_f32.min((ctx.content_rect().width() - 64.0).max(100.0)));
-        ui.heading(crate::i18n::gettext(
-            app.locale,
-            if menu.templates {
-                "Quick Replies"
-            } else {
-                "React"
-            },
-        ));
-        for (n, text) in menu.choices.iter().enumerate() {
-            let (rect, response) = ui
-                .allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
-            if response.hovered() || response.has_focus() {
-                ui.painter()
-                    .rect_filled(rect, 4.0, app.palette.surface_hover);
+    ui.horizontal(|ui| {
+        let icon = if menu.templates {
+            crate::theme::Icon::MessageCircle
+        } else {
+            crate::theme::Icon::Smile
+        };
+        let rect = ui
+            .allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover())
+            .0;
+        crate::theme::paint_icon(ui, icon, rect, 20.0, app.palette.secondary);
+        if crate::theme::icon_button(
+            ui,
+            crate::theme::Icon::X,
+            18.0,
+            app.palette.secondary,
+            app.palette.text,
+            "Close",
+        )
+        .clicked()
+        {
+            ctx.data_mut(|d| d.remove::<Menu>(id()));
+        }
+    });
+    let columns = if ui.available_width() < 340.0 {
+        3
+    } else {
+        menu.choices.len()
+    };
+    let width = ((ui.available_width() - (columns - 1) as f32 * 4.0) / columns as f32).max(44.0);
+    egui::Grid::new(id().with("dock-grid"))
+        .num_columns(columns)
+        .spacing(egui::vec2(4.0, 4.0))
+        .show(ui, |ui| {
+            for (n, text) in menu.choices.iter().enumerate() {
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::vec2(width, 44.0), egui::Sense::click());
+                if response.hovered() || response.has_focus() {
+                    ui.painter()
+                        .rect_filled(rect, 4.0, app.palette.surface_hover);
+                }
+                let label = format!("{}  {}", n + 1, text);
+                let line = super::widgets::line(
+                    ui,
+                    &label,
+                    crate::theme::regular(18.0),
+                    app.palette.text,
+                    rect.width() - 8.0,
+                    1,
+                );
+                line.paint_decorative(ui, rect.center() - line.size() / 2.0, app.palette.text);
+                response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label)
+                });
+                if response.clicked() {
+                    chosen = Some(n);
+                }
+                if (n + 1) % columns == 0 {
+                    ui.end_row();
+                }
             }
-            let label = format!("{}   {}", n + 1, text);
-            let line = super::widgets::line(
+        });
+    if let Some(n) = chosen {
+        choose(app, &ctx, &menu, n);
+    }
+}
+/// Always visible icon routes, with the same native command and key hints.
+pub(crate) fn buttons(app: &mut App, ui: &mut egui::Ui) {
+    ui.horizontal(|ui| {
+        for (templates, icon, binding, label) in [
+            (
+                false,
+                crate::theme::Icon::Smile,
+                "message-react-menu",
+                "Reactions",
+            ),
+            (
+                true,
+                crate::theme::Icon::MessageCircle,
+                "message-template-menu",
+                "Quick Replies",
+            ),
+        ] {
+            let hint = super::keys::hint(binding).unwrap_or_default();
+            if crate::theme::icon_button(
                 ui,
-                &label,
-                crate::theme::regular(18.0),
+                icon,
+                18.0,
+                app.palette.secondary,
                 app.palette.text,
-                rect.width() - 20.0,
-                1,
-            );
-            line.paint_decorative(
-                ui,
-                egui::pos2(rect.left() + 10.0, rect.center().y - line.size().y / 2.0),
-                app.palette.text,
-            );
-            response
-                .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
-            if response.clicked() {
-                chosen = Some(n);
+                &format!("{label} ({hint})"),
+            )
+            .clicked()
+            {
+                open(app, ui.ctx(), templates);
             }
         }
     });
-    if let Some(n) = chosen {
-        choose(app, ctx, &menu, n);
-    } else if response.should_close() {
-        ctx.data_mut(|d| d.remove::<Menu>(id()));
-    }
+}
+
+pub(crate) fn target_is(ctx: &egui::Context, chat: &str, message: &str) -> bool {
+    ctx.data(|d| d.get_temp::<Menu>(id()))
+        .is_some_and(|m| m.chat == chat && m.message == message)
 }
