@@ -8363,20 +8363,17 @@ fn reactions(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: &mu
             )
         });
         if ui.is_rect_visible(rect) {
-            // Lifted as gently as a hovered chat-list row, so the pill
-            // stands off the bubble it overlaps.
-            let mut shadow = palette.bubble_shadow();
-            shadow.color = shadow.color.gamma_multiply(0.6);
-            ui.painter()
-                .add(shadow.as_shape(rect, CornerRadius::from(rect.height() / 2.0)));
-            ui.painter()
-                .rect_filled(rect, rect.height() / 2.0, palette.overlay);
-            ui.painter().rect_stroke(
-                rect,
-                rect.height() / 2.0,
-                Stroke::new(1.0, if mine { palette.accent } else { palette.chat }),
-                egui::StrokeKind::Inside,
-            );
+            if mine {
+                // A small underline distinguishes our chosen reaction without
+                // painting a background or a pill border around the emoji.
+                ui.painter().line_segment(
+                    [
+                        pos2(rect.left() + 6.0, rect.bottom() - 1.0),
+                        pos2(rect.right() - 6.0, rect.bottom() - 1.0),
+                    ],
+                    Stroke::new(2.0, palette.accent),
+                );
+            }
             line.paint(ui, rect.center() - line.size() / 2.0, palette.text);
         }
         let response = response
@@ -17401,7 +17398,61 @@ mod reaction_tests {
     }
 
     #[test]
-    fn reaction_chip_uses_larger_emoji_but_keeps_small_counts() {
+    fn large_given_reactions_wrap_and_keep_exact_targets() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let mut message =
+                crate::archive::tests::message(&view.chat.id, "large-reactions", 0, false);
+            for emoji in ["🫡", "👍", "❤️", "😂", "😮", "🙏"] {
+                message.reactions.push(crate::model::Reaction {
+                    sender: "someone".into(),
+                    from_me: false,
+                    emoji: emoji.into(),
+                });
+            }
+            let mut rects = Vec::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(220.0, 400.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.horizontal_wrapped(|ui| reactions(ui, view, &message, &mut Vec::new()));
+                    for reaction in &message.reactions {
+                        rects.push(
+                            ui.ctx()
+                                .data(|d| {
+                                    d.get_temp::<Rect>(
+                                        bubble_id(&message.chat, &message.id)
+                                            .with(("reaction", &reaction.emoji)),
+                                    )
+                                })
+                                .expect("every reaction keeps its own target"),
+                        );
+                    }
+                },
+            );
+            assert!(
+                rects
+                    .iter()
+                    .all(|r| r.height() >= 36.0 && r.right() <= 220.0)
+            );
+            assert!(
+                rects.last().unwrap().top() > rects[0].top(),
+                "wrap, do not shrink"
+            );
+            for (i, a) in rects.iter().enumerate() {
+                for b in &rects[..i] {
+                    assert!(!a.shrink(0.01).intersects(*b));
+                }
+            }
+            output.textures_delta.clear();
+        });
+    }
+
+    #[test]
+    fn given_reactions_use_36px_emoji_and_keep_13px_counts() {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -17416,7 +17467,9 @@ mod reaction_tests {
             // The emoji font's platform-specific aspect ratio changes the
             // invisible placeholder's font size. Its pinned row height,
             // rather than that implementation detail, controls painted size.
-            let expected = ui.fonts_mut(|fonts| fonts.row_height(&crate::theme::regular(17.0)));
+            let expected = ui.fonts_mut(|fonts| {
+                fonts.row_height(&crate::theme::regular(widgets::REACTION_EMOJI_SIZE))
+            });
             assert_eq!(
                 line.galley.job.sections[0].format.line_height,
                 Some(expected)

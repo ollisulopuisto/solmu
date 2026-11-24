@@ -2775,7 +2775,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             }
             "card-widths" => card_widths_sample(app),
             "minute-gutter" => minute_gutter_sample(app),
-            "group-footer-reactions" => {
+            "group-footer-reactions" | "given-reactions-large" => {
                 minute_gutter_sample(app);
                 let chat = SAMPLES[0].id;
                 let mut row = message(
@@ -2790,6 +2790,16 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     from_me: true,
                     emoji: "👍".into(),
                 });
+                if part == "given-reactions-large" {
+                    for (index, emoji) in ["🫡", "❤️", "😂", "😮", "🙏", "😢"].iter().enumerate()
+                    {
+                        row.reactions.push(Reaction {
+                            sender: format!("synthetic-{index}"),
+                            from_me: false,
+                            emoji: (*emoji).into(),
+                        });
+                    }
+                }
                 app.conversations.get_mut(chat).unwrap().messages = vec![row];
             }
             "group-footer-status" => {

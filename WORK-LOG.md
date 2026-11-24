@@ -1693,3 +1693,13 @@ requires explicit native CI validation; default PR CI may only build Linux Nix.
 Version26.11.16 reserved for this PR; serial Solmu merges may require rebasing and a fresh version before merge.
 
 Rebased after merged46735804e5, conflict resolution retains both work logs, version26.11.16. No implementation delta from reviewed97a8ffb. Darwin Nix validation remains unperformed.
+## Larger background-free given reactions (2026-11-24)
+
+Owner approved 36px emoji, unchanged counts, wrapping rows and no backgrounds.
+Use 36px reaction emoji with 13px counts. Remove pill fills, shadows and outlines;
+our chosen reaction has only a thin accent underline. Preserve per-source message
+React targets and native wrapped footer layout. Added size/count and narrow-wrap
+regressions plus a synthetic given-reactions-large scene. Pre-push adversarial
+pass traced row-width consumers, footer wrapping, own toggle, album member IDs and
+color-emoji line height. Full native checks and actual feature capture await CI;
+local formatting/diff checks alone are not visual proof. No workflow edit/release.
