@@ -2607,7 +2607,10 @@ fn unsent_voice_strip(app: &mut App, ui: &mut egui::Ui, samples: usize) {
 
 /// Truthful local save status, retained drafts and nonblocking clear recovery.
 fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
-    if app.editing.is_some() || !app.composer_holds_draft() {
+    if app.editing.is_some()
+        || !app.composer_holds_draft()
+        || (app.reply_to.is_some() && app.composer.is_empty())
+    {
         return;
     }
     let mut state = app.draft_states.remove(chat).unwrap_or_default();
