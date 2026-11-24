@@ -1529,6 +1529,12 @@ nothing is being edited. Checked first: no open or merged PR adds a draft
 label; restore-on-open drafts already exist. Native compile and capture not
 run by this agent, CI is the first compile.
 
+## Reply chain above tail (2026-11-24)
+
+- Moves the exact-source chain target and glyph into a reserved slot above the filled reply tail. Hover/focus alone reveals the local drop and the loaded-parent connector.
+- Router receives the exact chain port rather than deriving a child body midpoint. Source identity, jump-back and per-album-member destinations remain separate.
+- Quoted albums reserve vertical tile height for two distinct chain/tail pairs without increasing narrow tile width.
+- Review: traced body/painted/quote rect consumers, current-pass hover state, linked keys, album anchors and clipping. No workflow changes, no release. Native feature capture and full-app CI remain required before merge; local pure-router tests and formatting do not substitute for that proof.
 ## One message action grid (2026-11-24)
 
 Approved 3x3 action grid: six quick reactions, section gap, picker/Reply/Star.
@@ -1567,3 +1573,19 @@ old short-info no-scroll contract changes because the approved metadata adds
 height, so viewport test now covers bounded scrolling instead. Exact-source
 metadata harness compiles/passes with minimal model stubs; no full native build
 or pixel claim locally. Workflow capture changes need separate approval.
+
+## Reply tail matches the regular bubble (2026-11-24)
+
+Owner rejected the oversized six-vertex reply neck in native captures. Removed
+that separate shape: ordinary quoted messages use the normal bubble renderer,
+and quoted album members use its extracted exact same triangular tail helper.
+Chain target remains 30px above, independent from the smaller 8x11 tail bounds.
+Hover elbow now reaches the actual tail tip. Traced album per-member anchors,
+painted bounds, router chain ports and pointer/keyboard target consumers.
+Added regression forbidding a filled Path in the chain painter, which the old
+polygon violates. Existing mirrored geometry and exact-target interaction tests
+retained. Fmt/diff checks pass. Isolated real-egui test build could not complete
+because local disk filled compiling dependencies; own temporary build removed.
+No local native pass or pixel claim. CI/native captures remain required.
+
+Owner visual follow-up: the reply connector now uses the exact raised-edge color of its reply bubble, rather than accent, including both short chain-to-tail segments and the routed original-to-chain line. The chain icon's sender ink is unchanged. Color is taken from the actual on-bubble palette/fill in each theme. fmt/diff pass; fresh native CI/captures required before readiness, no merge.

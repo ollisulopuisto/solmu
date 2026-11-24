@@ -7,6 +7,11 @@ pub fn hover_actions_shot(id: &str) -> bool {
     id == "hover-actions-target" && SHOT_HOVER_ACTIONS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static SHOT_CHAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn chain_hover_shot(id: &str) -> bool {
+    id == "refined-reply-one" && SHOT_CHAIN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub mod stock;
 pub mod tour;
 
@@ -2777,13 +2782,21 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 history.messages[3].status = crate::model::Delivery::Unknown;
                 history.messages[4].status = crate::model::Delivery::Failed;
             }
-            "refined-thread" => {
+            "refined-thread"
+            | "chain-above-incoming"
+            | "chain-above-outgoing"
+            | "regular-tail-incoming"
+            | "regular-tail-outgoing" => {
+                if part.starts_with("chain-above-") {
+                    SHOT_CHAIN.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                let reply_own = !matches!(part, "chain-above-incoming" | "regular-tail-incoming");
                 let chat = SAMPLES[0].id;
                 let base = crate::util::now() - 600;
                 let original = message(
                     chat,
                     "refined-original",
-                    false,
+                    !reply_own,
                     base,
                     Content::text("Can you send the revised draft?"),
                 );
@@ -2799,7 +2812,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 let mut first = message(
                     chat,
                     "refined-reply-one",
-                    true,
+                    reply_own,
                     base + 60,
                     Content::text("The draft is ready."),
                 );
@@ -2807,7 +2820,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 let mut second = message(
                     chat,
                     "refined-reply-two",
-                    true,
+                    reply_own,
                     base + 120,
                     Content::text("I fixed the crop too."),
                 );
@@ -6625,7 +6638,7 @@ mod tests {
                     tail.left() >= body.right(),
                     "the reply control is the external tail, not an internal chip"
                 );
-                assert_eq!(tail.top(), body.top());
+                assert_eq!(tail.bottom() + 6.0, body.top());
                 assert!(
                     tail.height() >= 28.0,
                     "keyboard/pointer target remains usable"
@@ -25763,7 +25776,7 @@ mod bubble_detail_tests {
                 ("bubbles-in-1", false, true),
                 ("bubbles-in-2", false, false),
                 ("bubbles-out-1", true, true),
-                ("bubbles-out-3", true, false),
+                ("bubbles-out-3", true, true),
                 ("bubbles-in-4", false, false),
                 ("bubbles-out-4", true, true),
             ] {
