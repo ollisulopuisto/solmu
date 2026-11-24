@@ -1535,6 +1535,17 @@ run by this agent, CI is the first compile.
 - Router receives the exact chain port rather than deriving a child body midpoint. Source identity, jump-back and per-album-member destinations remain separate.
 - Quoted albums reserve vertical tile height for two distinct chain/tail pairs without increasing narrow tile width.
 - Review: traced body/painted/quote rect consumers, current-pass hover state, linked keys, album anchors and clipping. No workflow changes, no release. Native feature capture and full-app CI remain required before merge; local pure-router tests and formatting do not substitute for that proof.
+## Linked-view local translation staging
+
+The linked timeline rejected TranslateLocally together with source-bound editing
+and selection. That action only carries selected text to Local AI settings for
+review; it does not resolve a destination or call the translation endpoint.
+Allow that text-only action while retaining the edit/select/sweep guard.
+Added a full-App linked-person regression with a different default destination,
+exact selected text, preserved composer/source/default and no bridge command.
+An isolated exact-predicate harness fails with the old translation rejection and
+passes after the fix. This is not a full native test pass. Native CI and actual
+review-form pixels remain required; no workflow changes or merge authority added.
 ## Message info source identity
 
 Approved sent/received dark sketches: show Bridge, Account and original source
