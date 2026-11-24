@@ -79,7 +79,7 @@ mod tests {
     #[test]
     fn chain_paint_does_not_add_a_second_filled_tail() {
         let ctx = egui::Context::default();
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             paint(
                 ui.painter(),
                 Rect::from_min_size(pos2(80.0, 80.0), vec2(180.0, 80.0)),
@@ -87,6 +87,7 @@ mod tests {
                 Color32::WHITE,
             );
         });
+        output.textures_delta.clear();
         assert!(
             !output
                 .shapes

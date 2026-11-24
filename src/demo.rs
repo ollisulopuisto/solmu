@@ -25776,7 +25776,7 @@ mod bubble_detail_tests {
                 ("bubbles-in-1", false, true),
                 ("bubbles-in-2", false, false),
                 ("bubbles-out-1", true, true),
-                ("bubbles-out-3", true, false),
+                ("bubbles-out-3", true, true),
                 ("bubbles-in-4", false, false),
                 ("bubbles-out-4", true, true),
             ] {
