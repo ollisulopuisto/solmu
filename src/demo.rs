@@ -2663,9 +2663,14 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                         result: Some(Err("Synthetic failure detail for layout review".into())),
                     },
                 ];
-                if let Some(chat) = app.chats.iter().find(|chat| !chat.is_group()) {
+                let chat_id = app
+                    .chats
+                    .iter()
+                    .find(|chat| !chat.is_group())
+                    .map(|chat| chat.id.clone());
+                if let Some(chat_id) = chat_id {
                     for item in &mut app.batch_ui.results {
-                        item.chat = chat.id.clone();
+                        item.chat = chat_id.clone();
                     }
                 }
             }
