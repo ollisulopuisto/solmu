@@ -3480,6 +3480,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             // Scroll while selecting near an edge. `scroll_with_delta` also
             // releases stick-to-bottom; setting the offset directly does not.
             let viewport = ui.clip_rect();
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new("message-actions-viewport"), viewport));
             *app.selection_view.lock().unwrap_or_else(|p| p.into_inner()) = Some(viewport);
             if carried != 0.0 {
                 ui.scroll_with_delta_animation(
@@ -4611,23 +4613,6 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     }
 }
 
-/// The disc behind a message's react or reply button: opaque, so the chat's
-/// wallpaper does not show through, and lifted like a bubble.
-fn floating_circle(ui: &egui::Ui, palette: &Palette, rect: Rect, hovered: bool) {
-    let radius = CornerRadius::from(rect.width() / 2.0);
-    ui.painter()
-        .add(palette.bubble_shadow().as_shape(rect, radius));
-    ui.painter().circle_filled(
-        rect.center(),
-        rect.width() / 2.0,
-        if hovered {
-            palette.surface_hover
-        } else {
-            palette.overlay
-        },
-    );
-}
-
 /// Loading state above the oldest visible message.
 fn top_of_history(
     ui: &mut egui::Ui,
@@ -4762,6 +4747,7 @@ const REACTION_AFFORDANCE_SIZE: f32 = 26.0;
 const REACTION_AFFORDANCE_GAP: f32 = 6.0;
 
 /// Places the hover reaction control beside the bubble, swapping sides near an edge.
+#[allow(dead_code)]
 pub fn reaction_affordance_rect(bubble: Rect, bounds: Rect, own: bool) -> Rect {
     let size = Vec2::splat(REACTION_AFFORDANCE_SIZE);
     let before = bubble.left() - REACTION_AFFORDANCE_GAP - size.x;
@@ -4786,6 +4772,7 @@ pub fn reaction_affordance_rect(bubble: Rect, bounds: Rect, own: bool) -> Rect {
 }
 
 /// Includes the small gap so moving from the bubble to the control does not hide it.
+#[allow(dead_code)]
 fn reaction_affordance_visible(pointer: Option<egui::Pos2>, bubble: Rect, button: Rect) -> bool {
     pointer.is_some_and(|pointer| bubble.union(button).contains(pointer))
 }
@@ -4826,8 +4813,31 @@ fn grouped_hover_actions(
     // The approved bar has six quick choices plus the full picker. A custom
     // current reaction stays available in the full picker/context menu.
     let quick = &quick[..quick.len().min(QUICK_REACTIONS.len())];
-    let bounds = ui.clip_rect().shrink(2.0);
-    let Some(g) = Geometry::place(bubble.rect.intersect(bounds), bounds, quick.len() + 1) else {
+    let bounds = ui
+        .ctx()
+        .data(|d| d.get_temp::<Rect>(egui::Id::new("message-actions-viewport")))
+        .map_or(ui.clip_rect(), |viewport| {
+            viewport.intersect(ui.clip_rect())
+        })
+        .shrink(2.0);
+    let area_id = bubble.id.with("hover-actions");
+    let frame = ui.ctx().cumulative_frame_nr();
+    let held = ui
+        .ctx()
+        .data(|d| d.get_temp::<u64>(area_id))
+        .is_some_and(|last| last == frame || last.saturating_add(1) == frame);
+    let frozen = ui
+        .ctx()
+        .data(|d| d.get_temp::<Geometry>(area_id.with("geometry")));
+    let g = if held {
+        frozen.filter(|g| {
+            bounds.contains_rect(g.bounds()) && !g.bounds().shrink(0.01).intersects(bubble.rect)
+        })
+    } else {
+        None
+    }
+    .or_else(|| Geometry::place(bubble.rect, bounds, quick.len() + 1));
+    let Some(g) = g else {
         return false;
     };
     ui.ctx()
@@ -4839,7 +4849,6 @@ fn grouped_hover_actions(
     } else {
         pointer
     };
-    let area_id = bubble.id.with("hover-actions");
     let layers = [
         area_id,
         area_id.with("reply"),
@@ -4853,31 +4862,122 @@ fn grouped_hover_actions(
             .layer_id_at(p)
             .is_none_or(|id| id == bubble.layer_id || layers.contains(&id))
     });
-    let frame = ui.ctx().cumulative_frame_nr();
-    let held = ui
-        .ctx()
-        .data(|d| d.get_temp::<u64>(area_id))
-        .is_some_and(|last| last == frame || last.saturating_add(1) == frame);
-    // Include the short bridge from the bubble to the toolbar. Without it
-    // a pointer crossing the 8px visual gap would dismiss its own target.
+    // Keep only the facing-edge corridor alive. It owns no
+    // hit targets, so links/media in the bubble remain usable.
     let shown = bubble.rect.intersect(bounds);
-    let bridge = Rect::from_min_max(
-        pos2(shown.left().max(g.reactions.left()), shown.bottom()),
-        pos2(shown.right().min(g.reactions.right()), g.reactions.top()),
-    );
+    let bridge = g.bridge(shown);
     let in_reach = pointer.is_some_and(|p| g.bounds().contains(p) || bridge.contains(p));
-    let active = (over && uncovered) || (held && in_reach && uncovered);
+    // Foreground Areas form separate native focus scopes. Explicitly join
+    // this message's controls into one sequential order across those Areas.
+    let can_reply = view.chat.can_send()
+        && !matches!(
+            message.content,
+            Content::Revoked | Content::PhoneOnly { .. }
+        );
+    let can_star = !matches!(message.content, Content::Revoked);
+    let order = hover_actions::focus_order(bubble.id, can_reply, can_star);
+    // Key-event modifiers are authoritative for this Tab. Synthetic input and
+    // some integrations need not emit a separate ModifiersChanged event.
+    let shift = ui.input(|i| {
+        i.events
+            .iter()
+            .find_map(|event| match event {
+                egui::Event::Key {
+                    key: egui::Key::Tab,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => Some(modifiers.shift),
+                _ => None,
+            })
+            .unwrap_or(i.modifiers.shift)
+    });
+    // Release the native focus lock at either exit boundary, including
+    // reverse navigation out of the bubble. Always reset a previous lock.
+    ui.ctx().memory_mut(|m| {
+        if let Some(id) = m.focused()
+            && order.contains(&id)
+        {
+            m.set_focus_lock_filter(
+                id,
+                egui::EventFilter {
+                    // Keep the bubble native so Shift+Tab can resolve its
+                    // preceding widget before this affordance is rendered.
+                    tab: id != bubble.id
+                        && hover_actions::next_focus(&order, Some(id), shift).is_some(),
+                    ..Default::default()
+                },
+            );
+        }
+    });
+    let tab_frame = ui.ctx().cumulative_frame_nr();
+    let handled_id = egui::Id::new("message-actions-tab-handled");
+    let already_handled = ui.ctx().data(|d| d.get_temp::<u64>(handled_id)) == Some(tab_frame);
+    let route_from = if !shift && bubble.lost_focus() {
+        Some(bubble.id)
+    } else {
+        ui.ctx().memory(|m| m.focused())
+    };
+    if let Some(next) = hover_actions::next_focus(&order, route_from, shift)
+        && !already_handled
+        && ui.input_mut(|i| {
+            i.consume_key(
+                if shift {
+                    egui::Modifiers::SHIFT
+                } else {
+                    egui::Modifiers::NONE
+                },
+                egui::Key::Tab,
+            )
+        })
+    {
+        ui.ctx().memory_mut(|m| {
+            m.move_focus(egui::FocusDirection::None);
+            m.request_focus(next);
+        });
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(handled_id, tab_frame);
+            d.insert_temp(egui::Id::new("message-actions-keyboard-mode"), true);
+        });
+    }
+    let keyboard = ui.ctx().memory(|memory| {
+        memory.has_focus(bubble.id.with("react-keyboard"))
+            || (0_usize..6).any(|i| memory.has_focus(area_id.with(("emoji", i))))
+            || (0_usize..3).any(|i| memory.has_focus(area_id.with(("action", i))))
+    });
+    let nav_id = egui::Id::new("message-actions-keyboard-mode");
+    if ui.input(|i| i.key_pressed(egui::Key::Tab)) {
+        ui.ctx().data_mut(|d| d.insert_temp(nav_id, true));
+    }
+    if ui.input(|i| i.pointer.any_pressed()) {
+        ui.ctx().data_mut(|d| d.insert_temp(nav_id, false));
+    }
+    let keyboard_mode = ui
+        .ctx()
+        .data(|d| d.get_temp::<bool>(nav_id))
+        .unwrap_or(false);
+    let scrolling = ui.input(|i| {
+        i.smooth_scroll_delta.length_sq() > 0.0
+            || i.raw
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::MouseWheel { .. }))
+    });
+    let active = hover_actions::show_grid(
+        scrolling,
+        (over && uncovered) || (held && in_reach && uncovered),
+        keyboard_mode && (bubble.has_focus() || keyboard),
+    );
     ui.ctx().data_mut(|d| {
         if active {
             d.insert_temp(area_id, frame);
+            d.insert_temp(area_id.with("geometry"), g);
         } else {
             d.remove::<u64>(area_id);
         }
     });
     if !active {
-        // Keep the existing keyboard-focusable fallback, with its established
-        // accessible sender label. Pointer hover uses the grouped toolbar.
-        return false;
+        return true;
     }
     let mine = own_reaction(message);
     let starred = view.starred.is_some_and(|ids| ids.contains(&message.id));
@@ -4923,7 +5023,7 @@ fn grouped_hover_actions(
                         .circle_filled(rect.center(), 16.0, view.palette.surface_hover);
                 }
                 let line =
-                    widgets::line(bar, emoji, theme::regular(22.0), view.palette.text, 34.0, 1);
+                    widgets::line(bar, emoji, theme::regular(32.0), view.palette.text, 40.0, 1);
                 line.paint(bar, rect.center() - line.size() / 2.0, view.palette.text);
                 if r.clicked() {
                     actions.push(Action::React {
@@ -5011,117 +5111,34 @@ fn reaction_affordance(
     bubble: &egui::Response,
     actions: &mut Vec<Action>,
 ) {
-    let bounds = ui.clip_rect().shrink(2.0);
-    if bounds.width() < REACTION_AFFORDANCE_SIZE || bounds.height() < REACTION_AFFORDANCE_SIZE {
-        return;
-    }
-    // Only the part of the bubble on screen can be hovered. Anchoring to it
-    // keeps a bubble scrolled mostly out of view from parking its controls,
-    // and catching the pointer, at the edge of the transcript.
-    let shown = bubble.rect.intersect(bounds);
-    if shown.height() < REACTION_AFFORDANCE_SIZE || shown.width() <= 0.0 {
-        return;
-    }
-    // A call in the chat is a record, as in WhatsApp: no reactions, no replies.
     if matches!(message.content, Content::Call { .. }) {
         return;
     }
-    if grouped_hover_actions(ui, view, message, bubble, actions) {
-        return;
-    }
-    let rect = reaction_affordance_rect(shown, bounds, message.from_me);
-    let pointer = ui.input(|input| input.pointer.interact_pos());
-    // Stay hidden under any floating layer, as the context menu does. The
-    // affordance sits beside the bubble, so test the bubble itself rather than
-    // the pointer, which may already be over the button, outside the bubble's
-    // layer.
-    let uncovered = ui
-        .ctx()
-        .layer_id_at(bubble.rect.center())
-        .is_none_or(|layer| layer == bubble.layer_id);
-
-    // Publish where the control actually landed, the same way the bubble rect is
-    // published, so tests can act on the real rect instead of guessing it.
-    ui.ctx()
-        .data_mut(|data| data.insert_temp(bubble.id.with("react-rect"), rect));
-
-    // Acquire under the same layer as the bubble so the row strip keeps clicks.
-    let response = ui.interact(rect, bubble.id.with("react"), Sense::click());
-    let sender = (view.names_or)(&message.sender, message.sender_name.as_deref());
-    let label = reaction_button_label(message.from_me, &sender);
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &label)
-    });
-    theme::reveal_focus(&response);
-    // Reply sits one step further out, where the chat accepts messages.
-    let can_reply = view.chat.can_send()
-        && !matches!(
-            message.content,
-            Content::Revoked | Content::PhoneOnly { .. }
-        );
-    let step = REACTION_AFFORDANCE_SIZE + 4.0;
-    let outward = if rect.center().x < bubble.rect.center().x {
-        -step
-    } else {
-        step
-    };
-    let reply_rect = rect.translate(vec2(outward, 0.0));
-    let reply_fits = can_reply && bounds.contains_rect(reply_rect);
-    let reach = if reply_fits {
-        rect.union(reply_rect)
-    } else {
-        rect
-    };
-    let revealed = reaction_affordance_visible(pointer, shown, reach);
-    if ui.is_rect_visible(rect) && (response.has_focus() || (uncovered && revealed)) {
-        floating_circle(ui, &view.palette, rect, response.hovered());
-        theme::paint_icon(
-            ui,
-            Icon::Smile,
-            rect.shrink(5.0),
-            15.0,
-            if response.hovered() {
-                view.palette.text
-            } else {
-                view.palette.secondary
-            },
-        );
-    }
-    if response
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("React")
-        .clicked()
+    grouped_hover_actions(ui, view, message, bubble, actions);
     {
-        actions.push(open_reaction_picker_action(&view.chat.id, &message.id));
-    }
-    if !reply_fits {
-        return;
-    }
-    let reply = ui.interact(reply_rect, bubble.id.with("reply"), Sense::click());
-    reply.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Reply")
-    });
-    theme::reveal_focus(&reply);
-    if ui.is_rect_visible(reply_rect) && (reply.has_focus() || (uncovered && revealed)) {
-        floating_circle(ui, &view.palette, reply_rect, reply.hovered());
-        theme::paint_icon(
-            ui,
-            Icon::Reply,
-            reply_rect.shrink(5.0),
-            15.0,
-            if reply.hovered() {
-                view.palette.text
-            } else {
-                view.palette.secondary
-            },
+        // Labelled keyboard-only fallback, never a side pointer control.
+        // It also retains visible keyboard focus when the grid cannot fit.
+        let r = ui.interact(
+            bubble.rect,
+            bubble.id.with("react-keyboard"),
+            Sense::focusable_noninteractive(),
         );
-    }
-    if reply
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("Reply")
-        .clicked()
-    {
-        actions.push(Action::Reply(message.id.clone()));
+        theme::focus_outline(ui, r.id, bubble.rect, 8.0);
+        r.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                true,
+                reaction_button_label(
+                    message.from_me,
+                    &(view.names_or)(&message.sender, message.sender_name.as_deref()),
+                ),
+            )
+        });
+        if r.has_focus()
+            && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space))
+        {
+            actions.push(open_reaction_picker_action(&view.chat.id, &message.id));
+        }
     }
 }
 
@@ -14513,6 +14530,229 @@ mod tests {
                 clicks, 2,
                 "edge clamping must not move the bar over its own message"
             );
+        });
+    }
+
+    #[test]
+    fn shift_tab_from_bubble_leaves_message() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let message = crate::archive::tests::message(&view.chat.id, "reverse-tab", 0, false);
+            let id = egui::Id::new("reverse-bubble");
+            let before = id.with("before");
+            for step in 0..6 {
+                if step == 2 {
+                    ctx.memory_mut(|m| m.request_focus(id));
+                }
+                let events = if step == 3 {
+                    vec![egui::Event::Key {
+                        key: egui::Key::Tab,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::SHIFT,
+                    }]
+                } else {
+                    Vec::new()
+                };
+                let mut out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(420., 640.))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.interact(
+                            Rect::from_min_size(pos2(10., 10.), vec2(80., 30.)),
+                            before,
+                            Sense::click(),
+                        );
+                        let bubble = ui.interact(
+                            Rect::from_min_size(pos2(80., 80.), vec2(250., 70.)),
+                            id,
+                            Sense::click(),
+                        );
+                        reaction_affordance(ui, view, &message, &bubble, &mut Vec::new());
+                    },
+                );
+                out.textures_delta.clear();
+            }
+            assert!(
+                ctx.memory(|m| m.has_focus(before)),
+                "Shift+Tab must leave bubble"
+            );
+        });
+    }
+
+    #[test]
+    fn tab_traverses_visible_grid_and_labelled_fallback() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let message = crate::archive::tests::message(&view.chat.id, "tab-grid", 0, false);
+            let id = egui::Id::new("tab-grid-body");
+            let area = id.with("hover-actions");
+            let mut seen = std::collections::HashSet::new();
+            for step in 0..80 {
+                let events = if step % 2 == 0 {
+                    vec![egui::Event::Key {
+                        key: egui::Key::Tab,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }]
+                } else {
+                    vec![egui::Event::Key {
+                        key: egui::Key::Tab,
+                        physical_key: None,
+                        pressed: false,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }]
+                };
+                let mut out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(420., 640.))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let bubble = ui.interact(
+                            Rect::from_min_size(pos2(80., 80.), vec2(250., 70.)),
+                            id,
+                            Sense::click(),
+                        );
+                        reaction_affordance(ui, view, &message, &bubble, &mut Vec::new());
+                        ui.interact(
+                            Rect::from_min_size(pos2(80., 500.), vec2(90., 30.)),
+                            id.with("out"),
+                            Sense::click(),
+                        );
+                    },
+                );
+                out.textures_delta.clear();
+                if let Some(focus) = ctx.memory(|m| m.focused()) {
+                    seen.insert(focus);
+                }
+            }
+            assert!(seen.contains(&id), "bubble stop: {seen:?}");
+            for i in 0_usize..6 {
+                assert!(
+                    seen.contains(&area.with(("emoji", i))),
+                    "emoji {i}: {seen:?}"
+                );
+            }
+            for i in 0_usize..3 {
+                assert!(
+                    seen.contains(&area.with(("action", i))),
+                    "action {i}: {seen:?}"
+                );
+            }
+            assert!(
+                seen.contains(&id.with("react-keyboard")),
+                "fallback: {seen:?}"
+            );
+            assert!(
+                seen.contains(&id.with("out")),
+                "must be able to leave: {seen:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn mouse_focused_bubble_does_not_pin_grid_after_leaving() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let message = crate::archive::tests::message(&view.chat.id, "focus-leave", 0, true);
+            let id = egui::Id::new("focus-leave");
+            let mut active = false;
+            for step in 0..8 {
+                let pos = if step < 3 {
+                    pos2(180., 100.)
+                } else {
+                    pos2(410., 600.)
+                };
+                let mut events = vec![egui::Event::PointerMoved(pos)];
+                if step == 1 || step == 2 {
+                    events.push(egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: step == 1,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                let mut out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(420., 640.))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let bubble = ui.interact(
+                            Rect::from_min_size(pos2(150., 80.), vec2(200., 70.)),
+                            id,
+                            Sense::click(),
+                        );
+                        grouped_hover_actions(ui, view, &message, &bubble, &mut Vec::new());
+                        active = ui
+                            .ctx()
+                            .data(|d| d.get_temp::<u64>(id.with("hover-actions")))
+                            .is_some();
+                    },
+                );
+                out.textures_delta.clear();
+            }
+            assert!(!active, "mouse focus is not keyboard navigation focus");
+        });
+    }
+
+    #[test]
+    fn side_only_hover_has_no_legacy_controls() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let message = crate::archive::tests::message(&view.chat.id, "no-legacy", 0, true);
+            let bubble_rect = Rect::from_min_size(pos2(150.0, 80.0), vec2(200.0, 70.0));
+            let old = reaction_affordance_rect(
+                bubble_rect,
+                Rect::from_min_max(pos2(2.0, 2.0), pos2(418.0, 638.0)),
+                true,
+            );
+            let mut actions = Vec::new();
+            for pressed in [None, Some(true), Some(false)] {
+                let mut events = vec![egui::Event::PointerMoved(old.center())];
+                if let Some(pressed) = pressed {
+                    events.push(egui::Event::PointerButton {
+                        pos: old.center(),
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(420.0, 640.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let bubble = ui.interact(
+                            bubble_rect,
+                            egui::Id::new("no-legacy-body"),
+                            Sense::hover(),
+                        );
+                        reaction_affordance(ui, view, &message, &bubble, &mut actions);
+                    },
+                );
+                output.textures_delta.clear();
+            }
+            assert!(actions.is_empty(), "old side hit targets must not exist");
         });
     }
 

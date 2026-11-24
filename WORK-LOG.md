@@ -1529,6 +1529,17 @@ nothing is being edited. Checked first: no open or merged PR adds a draft
 label; restore-on-open drafts already exist. Native compile and capture not
 run by this agent, CI is the first compile.
 
+## One message action grid (2026-11-24)
+
+Approved 3x3 action grid: six quick reactions, section gap, picker/Reply/Star.
+Remove the old side-control renderer, not just its paint. Grid uses visible
+transcript clip excluding composer, tries below/above/right/left without covering
+its message, freezes its rect while active and retains a pointer bridge. If no
+placement fits, context-menu actions remain, no legacy controls return. Keyboard
+message/control focus uses the same grid. Added geometry bottom/tall/no-fit,
+disjoint cells and side-only no-legacy tests; original exact control dispatch
+regression stays. Own pre-push review traced source IDs, modal layers, focus,
+viewport and hover lifetime. Fmt/diff pass; native tests and pixels still needed.
 ## Linked-view local translation staging
 
 The linked timeline rejected TranslateLocally together with source-bound editing
