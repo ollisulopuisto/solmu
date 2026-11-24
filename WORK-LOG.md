@@ -1540,6 +1540,17 @@ message/control focus uses the same grid. Added geometry bottom/tall/no-fit,
 disjoint cells and side-only no-legacy tests; original exact control dispatch
 regression stays. Own pre-push review traced source IDs, modal layers, focus,
 viewport and hover lifetime. Fmt/diff pass; native tests and pixels still needed.
+## Linked-view local translation staging
+
+The linked timeline rejected TranslateLocally together with source-bound editing
+and selection. That action only carries selected text to Local AI settings for
+review; it does not resolve a destination or call the translation endpoint.
+Allow that text-only action while retaining the edit/select/sweep guard.
+Added a full-App linked-person regression with a different default destination,
+exact selected text, preserved composer/source/default and no bridge command.
+An isolated exact-predicate harness fails with the old translation rejection and
+passes after the fix. This is not a full native test pass. Native CI and actual
+review-form pixels remain required; no workflow changes or merge authority added.
 ## Message info source identity
 
 Approved sent/received dark sketches: show Bridge, Account and original source
