@@ -1596,3 +1596,5 @@ open; its virtualization exemption stays until close without forcing scroll each
 frame. Discovery icon names and Close tooltip now pass through gettext. Added
 reveal one-shot and invalidation-frame digit/text-consumption regressions. Context
 older-target test remains. Full native icon/context click pixels still pending CI.
+
+464 CI follow-up: kept the plus/emoji/text spacing unchanged by moving the compact discovery pair after the text field, measured explicitly and vertically aligned through the existing last-line helper. Album menus now capture their exact member on secondary press as well as release and preserve that press target across a release frame with no tile hit. Existing album pointer regressions failed at cc7f619 and remain the native gate, alongside composer geometry tests. Collapsed the Quick Replies destination guard per Clippy. Local fmt/diff checks pass; native retest pending, no merge.

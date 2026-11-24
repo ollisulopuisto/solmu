@@ -1932,12 +1932,9 @@ pub(crate) fn composer_with_capabilities(
                     // follows the plus (the field's own left margin included).
                     ui.add_space(COMPOSER_TEXT_GAP - ui.spacing().item_spacing.x - 8.0);
                 }
-                if !super::message_key_menu::is_open(ui.ctx()) {
-                    super::message_key_menu::buttons(app,ui);
-                }
                 // The send button closes the row, flush with the field's end.
                 let field_width =
-                    (ui.available_width() - button_width - SEND_BUTTON_GAP - view_once_width - schedule_width - extras_width - later_width - ui.spacing().item_spacing.x).max(0.0);
+                    (ui.available_width() - button_width - SEND_BUTTON_GAP - view_once_width - schedule_width - extras_width - later_width - if super::message_key_menu::is_open(ui.ctx()) { 0.0 } else { super::message_key_menu::buttons_width(ui) + ui.spacing().item_spacing.x } - ui.spacing().item_spacing.x).max(0.0);
                 // The ink is centred on the controls, not the line box: the
                 // span from a capital's top to a descender's bottom sits as far
                 // from the field's top as from its bottom. Inter's box leaves
@@ -2158,6 +2155,9 @@ pub(crate) fn composer_with_capabilities(
                     });
                 if app.editing.is_none() {
                     last_line(ui, line, |ui| super::send_later::button(app, ui, chat, schedule_key));
+                }
+                if !super::message_key_menu::is_open(ui.ctx()) {
+                    last_line(ui, line, |ui| super::message_key_menu::buttons(app, ui));
                 }
                 if let Some(extras) = send_extras.as_mut() {
                     last_line(ui, line, |ui| (extras.render)(app, ui));
@@ -6813,7 +6813,15 @@ fn bubble_frame(
     // In an album the menu belongs to the member under the pointer, so a
     // reply, reaction, forward or deletion reaches that item, not the first.
     let target_id = bubble_id.with("album-target");
-    if album.is_some() && right_clicked {
+    let album_press = album.is_some()
+        && ui.input(|input| {
+            input.pointer.button_pressed(egui::PointerButton::Secondary)
+                && input
+                    .pointer
+                    .interact_pos()
+                    .is_some_and(|pos| shown.contains(pos))
+        });
+    if album.is_some() && (right_clicked || album_press) {
         let pointer = ui.input(|input| input.pointer.interact_pos());
         let hit = tiles
             .iter()
@@ -6822,7 +6830,7 @@ fn bubble_frame(
         ui.ctx().data_mut(|data| {
             if let Some(id) = hit {
                 data.insert_temp(target_id, id);
-            } else {
+            } else if album_press {
                 data.remove::<String>(target_id);
             }
         });

@@ -155,14 +155,12 @@ fn choose(app: &mut App, ctx: &egui::Context, menu: &Menu, index: usize) {
             && app.editing.is_none()
             && !app.drafts.contains_key(&menu.owner)
             && app.pending.is_empty()
-        {
-            if let Some(person) = app
+            && let Some(person) = app
                 .current_chat()
                 .and_then(|c| super::merged::person_for_view(app, c))
-                && let Some(member) = person.members.iter().find(|m| m.chat == menu.chat).cloned()
-            {
-                super::merged::prepare_destination(app, ctx, &member);
-            }
+            && let Some(member) = person.members.iter().find(|m| m.chat == menu.chat).cloned()
+        {
+            super::merged::prepare_destination(app, ctx, &member);
         }
         app.actions.push(Action::PrefillComposer {
             chat: menu.owner.clone(),
@@ -316,41 +314,48 @@ pub(crate) fn show(app: &mut App, ui: &mut egui::Ui) {
         choose(app, &ctx, &menu, n);
     }
 }
+pub(crate) fn buttons_width(ui: &egui::Ui) -> f32 {
+    2.0 * (18.0 + crate::theme::ICON_BUTTON_PAD) + ui.spacing().item_spacing.x
+}
 /// Always visible icon routes, with the same native command and key hints.
 pub(crate) fn buttons(app: &mut App, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
-        for (templates, icon, binding, label) in [
-            (
-                false,
-                crate::theme::Icon::Smile,
-                "message-react-menu",
-                "Reactions",
-            ),
-            (
-                true,
-                crate::theme::Icon::MessageCircle,
-                "message-template-menu",
-                "Quick Replies",
-            ),
-        ] {
-            let hint = super::keys::hint(binding).unwrap_or_default();
-            let label = crate::i18n::gettext(app.locale, label);
-            let response = crate::theme::icon_button(
-                ui,
-                icon,
-                18.0,
-                app.palette.secondary,
-                app.palette.text,
-                &format!("{label} ({hint})"),
-            );
-            #[cfg(test)]
-            ui.ctx()
-                .data_mut(|d| d.insert_temp(id().with(templates), response.rect));
-            if response.clicked() {
-                open(app, ui.ctx(), templates);
+    ui.allocate_ui_with_layout(
+        egui::vec2(buttons_width(ui), 18.0 + crate::theme::ICON_BUTTON_PAD),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            for (templates, icon, binding, label) in [
+                (
+                    false,
+                    crate::theme::Icon::Smile,
+                    "message-react-menu",
+                    "Reactions",
+                ),
+                (
+                    true,
+                    crate::theme::Icon::MessageCircle,
+                    "message-template-menu",
+                    "Quick Replies",
+                ),
+            ] {
+                let hint = super::keys::hint(binding).unwrap_or_default();
+                let label = crate::i18n::gettext(app.locale, label);
+                let response = crate::theme::icon_button(
+                    ui,
+                    icon,
+                    18.0,
+                    app.palette.secondary,
+                    app.palette.text,
+                    &format!("{label} ({hint})"),
+                );
+                #[cfg(test)]
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(id().with(templates), response.rect));
+                if response.clicked() {
+                    open(app, ui.ctx(), templates);
+                }
             }
-        }
-    });
+        },
+    );
 }
 
 pub(crate) fn target_is(ctx: &egui::Context, chat: &str, message: &str) -> bool {
