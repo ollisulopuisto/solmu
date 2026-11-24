@@ -8086,6 +8086,7 @@ fn message_menu_labels(locale: crate::i18n::Locale) -> Vec<String> {
     [
         gettext(locale, "Reply"),
         gettext(locale, "Reply privately"),
+        gettext(locale, "Quick Replies"),
         gettext(locale, "Star"),
         gettext(locale, "Unstar"),
         gettext(locale, "Forward"),
@@ -8643,6 +8644,36 @@ fn context_menu(
         actions.push(Action::ReplyPrivately {
             chat: chat.clone(),
             message: message.id.clone(),
+        });
+    }
+    // Quick Replies: a canned Yes/No/Later the reader reviews in the
+    // composer. Choosing one only fills the composer, the way a share
+    // link's text does; it never sends, and a written draft is kept.
+    if !matches!(message.content, Content::Revoked) {
+        let quick_replies = [
+            crate::i18n::gettext(view.locale, "Yes"),
+            crate::i18n::gettext(view.locale, "No"),
+            crate::i18n::gettext(view.locale, "Later"),
+        ];
+        let items: Vec<&str> = quick_replies.iter().map(|text| text.as_ref()).collect();
+        let label = crate::i18n::gettext(view.locale, "Quick Replies");
+        widgets::submenu(ui, &palette, Icon::MessageCircle, &label, &items, |ui| {
+            for text in &quick_replies {
+                if widgets::menu_item(ui, &palette, None, text.as_ref()) {
+                    if matches!(origin, MenuOrigin::List) {
+                        actions.push(Action::OpenMessage {
+                            chat: chat.clone(),
+                            message: message.id.clone(),
+                        });
+                    }
+                    actions.push(Action::PrefillComposer {
+                        chat: chat.clone(),
+                        text: text.to_string(),
+                        mentions: Vec::new(),
+                    });
+                    ui.close();
+                }
+            }
         });
     }
     let starred = view.starred.is_some_and(|ids| ids.contains(&message.id));
@@ -16969,10 +17000,13 @@ mod reaction_tests {
         for row in menu_fixtures(&file) {
             let spanish = drawn_menu_words(crate::i18n::Locale::Spanish, &row);
             for english in drawn_menu_words(crate::i18n::Locale::English, &row) {
-                // "Save for later" awaits catalog extraction: until the
-                // maintainer regenerates them, every locale draws it in
-                // English, so it cannot count as untranslated here.
-                if matches!(english.as_str(), "Save for later" | "Hide in Solmu") {
+                // "Save for later" and "Quick Replies" await catalog extraction:
+                // until the maintainer regenerates them, every locale draws them
+                // in English, so they cannot count as untranslated here.
+                if matches!(
+                    english.as_str(),
+                    "Save for later" | "Hide in Solmu" | "Quick Replies"
+                ) {
                     continue;
                 }
                 assert!(!spanish.contains(&english), "{english} in {spanish:?}");
@@ -17008,6 +17042,7 @@ mod reaction_tests {
                 || text == "Save for later"
                 || text == "Remove from Saved"
                 || text == "Hide in Solmu"
+                || text == "Quick Replies"
         };
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("photo.jpg");
