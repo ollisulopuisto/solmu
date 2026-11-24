@@ -7422,6 +7422,13 @@ fn quote_chip(
         ));
     }
     let rect = super::reply_tail::chain_geometry(body, message.from_me);
+    let connector = palette.raised_edge(fill);
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            bubble_id(&message.chat, &message.id).with("connector-color"),
+            connector,
+        )
+    });
     let quoted_own = quotes_me(view, quoted);
     let ink = if quoted_own {
         palette.text
@@ -7452,7 +7459,7 @@ fn quote_chip(
         let x = rect.center().x;
         ui.painter().line_segment(
             [egui::pos2(x, rect.bottom()), egui::pos2(x, tail.top())],
-            egui::Stroke::new(1.8, palette.accent),
+            egui::Stroke::new(1.8, connector),
         );
         let tip = if message.from_me {
             tail.right()
@@ -7461,7 +7468,7 @@ fn quote_chip(
         };
         ui.painter().line_segment(
             [egui::pos2(x, tail.top()), egui::pos2(tip, tail.top())],
-            egui::Stroke::new(1.8, palette.accent),
+            egui::Stroke::new(1.8, connector),
         );
     }
     ui.ctx().data_mut(|data| {

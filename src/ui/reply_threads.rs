@@ -704,6 +704,14 @@ pub fn finish(ui: &egui::Ui, color: egui::Color32) {
         return;
     };
     let points: Vec<_> = points.iter().map(|p| egui::pos2(p.x, p.y)).collect();
+    let color = ui
+        .ctx()
+        .data(|data| {
+            data.get_temp::<egui::Color32>(
+                super::conversation::bubble_id(&child.chat, &child.id).with("connector-color"),
+            )
+        })
+        .unwrap_or(color);
     let stroke = egui::Stroke::new(1.8, color);
     let mut previous = points[0];
     for i in 1..points.len() - 1 {

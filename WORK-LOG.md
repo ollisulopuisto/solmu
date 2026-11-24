@@ -1587,3 +1587,5 @@ polygon violates. Existing mirrored geometry and exact-target interaction tests
 retained. Fmt/diff checks pass. Isolated real-egui test build could not complete
 because local disk filled compiling dependencies; own temporary build removed.
 No local native pass or pixel claim. CI/native captures remain required.
+
+Owner visual follow-up: the reply connector now uses the exact raised-edge color of its reply bubble, rather than accent, including both short chain-to-tail segments and the routed original-to-chain line. The chain icon's sender ink is unchanged. Color is taken from the actual on-bubble palette/fill in each theme. fmt/diff pass; fresh native CI/captures required before readiness, no merge.
