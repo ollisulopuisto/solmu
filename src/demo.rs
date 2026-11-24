@@ -2797,6 +2797,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.open_chat = Some(chat.into());
                 app.scroll_to_bottom = false;
             }
+            "tail-run" | "tail-thread" => tail_run_sample(app, part == "tail-thread"),
             "group-stacks" => group_stacks_sample(app),
             "linked-chip-lanes" => {
                 linked_sample(app);
@@ -5175,6 +5176,62 @@ fn history_date_sample(app: &mut App) {
     app.scroll_anchor = Some("history-date-45".into());
 }
 
+/// Compact tail evidence: one same-sender run, then the same sender on a new day.
+fn tail_run_sample(app: &mut App, thread: bool) {
+    let chat = SAMPLES[0].id;
+    let group = app.chats.iter_mut().find(|row| row.id == chat).unwrap();
+    group.kind = crate::model::ChatKind::Group;
+    group.name = "Tail placement sample".into();
+    if !thread {
+        // Messages follows the OS otherwise, which can make both captures light.
+        app.settings.custom_theme = Some("Tail evidence Messages dark.json".into());
+        app.settings.custom_theme_cache = Some(crate::theme::CustomTheme {
+            filename: "Tail evidence Messages dark.json".into(),
+            palette: crate::theme::Palette::messages(),
+        });
+    }
+    let (today, _) = crate::util::day_bounds(crate::util::today()).unwrap();
+    let mut rows = Vec::new();
+    for (index, (offset, text)) in [
+        (-120, "First message: the run starts here."),
+        (-100, "Middle message: same sender."),
+        (-80, "Last message: avatar stays here in Messages."),
+        (60, "New day: the same sender starts a new run."),
+        (80, "Last message of the new day."),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut row = message(
+            chat,
+            &format!("tail-evidence-{index}"),
+            false,
+            today + offset,
+            Content::text(text),
+        );
+        row.sender = "tail-sender@example.invalid".into();
+        row.sender_name = Some("Alex Example".into());
+        if thread && index > 0 {
+            row.quoted = Some(Quoted {
+                labelled: None,
+                chat: Some(chat.into()),
+                id: "tail-evidence-0".into(),
+                sender: row.sender.clone(),
+                sender_name: row.sender_name.clone(),
+                summary: "First message: the run starts here.".into(),
+                mentions: vec![],
+            });
+        }
+        rows.push(row);
+    }
+    let conversation = app.conversations.get_mut(chat).unwrap();
+    conversation.messages = rows;
+    conversation.complete = true;
+    app.open_chat = Some(chat.into());
+    app.typing.clear();
+    app.scroll_to_bottom = true;
+}
+
 /// Deterministic group identity, streak, reaction and wrapped-footer fixture.
 fn group_stacks_sample(app: &mut App) {
     let chat = SAMPLES[0].id;
@@ -5333,13 +5390,22 @@ pub fn sample_ids() -> Vec<&'static str> {
 /// window frame, so headless captures show the reply redesign's modal.
 pub fn open_thread_shot(app: &App, ctx: &egui::Context) {
     let chat = SAMPLES[0].id.to_owned();
+    let root = if app
+        .conversations
+        .get(&chat)
+        .is_some_and(|c| c.messages.iter().any(|m| m.id == "tail-evidence-0"))
+    {
+        "tail-evidence-0"
+    } else {
+        "ada-voice"
+    };
     let scope = crate::ui::reply_threads::scope(app, std::slice::from_ref(&chat));
     ctx.data_mut(|d| {
         d.insert_temp(
             scope,
             crate::ui::reply_threads::Key {
                 chat,
-                id: "ada-voice".into(),
+                id: root.into(),
             },
         )
     });
@@ -5851,6 +5917,62 @@ mod tests {
             app.reply_to.as_ref().map(|reply| reply.id.as_str()),
             Some("group-stack-2")
         );
+    }
+
+    #[test]
+    fn tail_capture_scenes_cover_group_day_boundary_and_real_thread_root() {
+        for (page, thread, dark) in [
+            ("tail-run,messages", false, true),
+            ("tail-run,messages-light", false, false),
+            ("tail-thread,dark", true, true),
+            ("tail-thread,light", true, false),
+        ] {
+            let mut app = app();
+            apply_flags(&mut app, Some(page));
+            let chat = app.current_chat().unwrap();
+            assert_eq!(chat.kind, crate::model::ChatKind::Group);
+            let rows = &app.conversations.get(&chat.id).unwrap().messages;
+            assert_eq!(rows.len(), 5);
+            assert!(
+                rows.iter()
+                    .all(|m| !m.from_me && m.sender == rows[0].sender)
+            );
+            assert!(crate::ui::conversation::starts_sender_run(&rows[0], None));
+            assert!(!crate::ui::conversation::starts_sender_run(
+                &rows[1],
+                Some(&rows[0])
+            ));
+            assert!(crate::ui::conversation::starts_sender_run(
+                &rows[3],
+                Some(&rows[2])
+            ));
+            if thread {
+                assert!(
+                    rows[1..]
+                        .iter()
+                        .all(|m| m.quoted.as_ref().is_some_and(|q| q.id == rows[0].id))
+                );
+                let ctx = egui::Context::default();
+                open_thread_shot(&app, &ctx);
+                let scope = crate::ui::reply_threads::scope(&app, std::slice::from_ref(&chat.id));
+                assert_eq!(
+                    ctx.data(|d| d.get_temp::<crate::ui::reply_threads::Key>(scope))
+                        .unwrap()
+                        .id,
+                    rows[0].id
+                );
+            } else {
+                assert_eq!(
+                    app.settings
+                        .custom_theme_cache
+                        .as_ref()
+                        .unwrap()
+                        .palette
+                        .dark,
+                    dark
+                );
+            }
+        }
     }
 
     #[test]
