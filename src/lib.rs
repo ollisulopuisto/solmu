@@ -21,6 +21,7 @@ pub mod chat_search_names;
 pub mod composed_forward;
 #[cfg(any(test, feature = "demo"))]
 pub mod demo;
+pub mod draft_state;
 pub mod emoji;
 pub mod energy;
 pub mod face_detect;

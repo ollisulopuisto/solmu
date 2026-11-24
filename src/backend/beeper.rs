@@ -687,6 +687,38 @@ fn measure_cache(dirs: &AccountDirs) -> std::io::Result<crate::model::StorageSta
     Ok(stats)
 }
 
+fn write_local_draft_state(
+    loaded: bool,
+    store: &mut Option<crate::archive::Archive>,
+    path: &std::path::Path,
+    origin: &str,
+    chat: &str,
+    text: &str,
+    shelf: &[crate::draft_state::Parked],
+) -> bool {
+    if !crate::draft_state::can_write_shelf(loaded, store.is_some() || !path.exists()) {
+        return false;
+    }
+    if store.is_none() {
+        *store = crate::archive::Archive::open(path).ok();
+    }
+    store.as_ref().is_some_and(|store| {
+        let key = serde_json::to_string(&(origin, chat, "parked-v1")).expect("strings serialize");
+        let Ok(shelf) = serde_json::to_string(shelf) else {
+            return false;
+        };
+        store
+            .write_draft_state(
+                &draft_namespace(origin, chat),
+                text,
+                &key,
+                &shelf,
+                jiff::Timestamp::now().as_second(),
+            )
+            .is_ok()
+    })
+}
+
 pub(crate) fn draft_namespace(origin: &str, chat: &str) -> String {
     serde_json::to_string(&(origin, chat)).expect("string pair serializes")
 }
@@ -4334,6 +4366,7 @@ pub fn run(
     // Separate encrypted draft-only archive. Never store duplicate message history.
     // OS keyring failure is explicit; never fall back to plaintext.
     let draft_path = dirs.state.join("beeper-drafts").join("drafts.db");
+    let mut draft_warning_shown = false;
     let mut draft_store = if draft_path.exists() {
         match crate::archive::Archive::open(&draft_path) {
             Ok(store) => Some(store),
@@ -4352,6 +4385,33 @@ pub fn run(
         }
     } else {
         emit(Event::Drafts(Vec::new()));
+    }
+
+    let shelves: Result<Vec<(String, Vec<crate::draft_state::Parked>)>, ()> = (|| {
+        let rows = if let Some(store) = &draft_store {
+            store.drafts().map_err(|_| ())?
+        } else if draft_path.exists() {
+            return Err(());
+        } else {
+            Vec::new()
+        };
+        let mut shelves = Vec::new();
+        for (key, value) in rows {
+            let Ok((origin, chat, kind)) = serde_json::from_str::<(String, String, String)>(&key)
+            else {
+                continue;
+            };
+            if origin == api.base_url && kind == "parked-v1" {
+                let shelf = serde_json::from_str(&value).map_err(|_| ())?;
+                shelves.push((chat, shelf));
+            }
+        }
+        Ok(shelves)
+    })();
+    let shelves_loaded = shelves.is_ok();
+    match shelves {
+        Ok(shelves) => emit(Event::DraftShelf(shelves)),
+        Err(()) => emit(Event::DraftShelfUnavailable),
     }
 
     // The favorites bar's order persists beside the drafts: Beeper has no
@@ -4454,12 +4514,32 @@ pub fn run(
                     }
                 }
                 Command::Shutdown => return,
+                Command::WriteDraftState {
+                    chat,
+                    revision,
+                    text,
+                    shelf,
+                } => {
+                    let ok = write_local_draft_state(
+                        shelves_loaded,
+                        &mut draft_store,
+                        &draft_path,
+                        &api.base_url,
+                        &chat,
+                        &text,
+                        &shelf,
+                    );
+                    emit(Event::DraftWritten { chat, revision, ok });
+                }
                 Command::SaveDraft { chat, text } => {
                     if draft_store.is_none() && !text.trim().is_empty() {
                         match crate::archive::Archive::open(&draft_path) {
                             Ok(store) => draft_store = Some(store),
                             Err(_) => {
-                                emit(Event::Error("Draft not saved: OS keyring unavailable. Keep the app open or copy the draft before closing; no plaintext fallback was used.".into()));
+                                if !draft_warning_shown {
+                                    draft_warning_shown = true;
+                                    emit(Event::Error("Draft not saved: OS keyring unavailable. Keep the app open or copy the draft before closing; no plaintext fallback was used.".into()));
+                                }
                                 continue;
                             }
                         }
@@ -6556,6 +6636,63 @@ mod tests {
     //! They pin the demo's contract: multiple accounts on one network stay
     //! distinguishable, background startup/polling causes NO mutating HTTP
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
+
+    #[test]
+    fn loaded_state_with_missing_store_and_existing_db_refuses_write() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("drafts.db");
+        std::fs::write(&path, b"untouched existing database").unwrap();
+        let mut store = None;
+        assert!(!super::write_local_draft_state(
+            true,
+            &mut store,
+            &path,
+            "origin",
+            "chat",
+            "replace",
+            &[]
+        ));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"untouched existing database"
+        );
+        assert!(store.is_none());
+    }
+    #[test]
+    fn locked_start_then_unlock_cannot_replace_unread_shelf() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("drafts.db");
+        let archive = crate::archive::Archive::in_memory().unwrap();
+        let origin = "http://localhost:23373";
+        let chat = "one";
+        let key = serde_json::to_string(&(origin, chat, "parked-v1")).unwrap();
+        archive
+            .write_draft_state(
+                &super::draft_namespace(origin, chat),
+                "original",
+                &key,
+                "retained",
+                1,
+            )
+            .unwrap();
+        // Startup failed before reading the shelf. The keyring/store then becomes available.
+        let mut unlocked = Some(archive);
+        assert!(!super::write_local_draft_state(
+            false,
+            &mut unlocked,
+            &path,
+            origin,
+            chat,
+            "replace",
+            &[]
+        ));
+        let rows = unlocked.unwrap().drafts().unwrap();
+        assert!(rows.iter().any(|(k, t)| k == &key && t == "retained"));
+        assert!(
+            rows.iter()
+                .any(|(k, t)| k == &super::draft_namespace(origin, chat) && t == "original")
+        );
+    }
 
     #[test]
     fn edited_picture_copy_is_counted_and_disposable_not_the_original() {

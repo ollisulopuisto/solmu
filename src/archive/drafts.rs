@@ -15,6 +15,20 @@ CREATE TABLE IF NOT EXISTS drafts (
 ";
 
 impl Archive {
+    pub fn write_draft_state(
+        &self,
+        chat: &str,
+        text: &str,
+        shelf_key: &str,
+        shelf: &str,
+        at: i64,
+    ) -> Result<()> {
+        let tx = self.connection.unchecked_transaction()?;
+        for (key, value) in [(chat, text), (shelf_key, shelf)] {
+            tx.execute("INSERT INTO drafts (chat,text,updated_at) VALUES (?1,?2,?3) ON CONFLICT(chat) DO UPDATE SET text=excluded.text,updated_at=excluded.updated_at", params![key,value,at])?;
+        }
+        tx.commit()
+    }
     /// Every stored draft, so the composer can restore them at startup.
     pub fn drafts(&self) -> Result<Vec<(String, String)>> {
         let mut statement = self.connection.prepare("SELECT chat, text FROM drafts")?;
@@ -149,5 +163,29 @@ mod tests {
         archive.set_draft("2@s.whatsapp.net", "again", 14).unwrap();
         archive.clear_chat("2@s.whatsapp.net").unwrap();
         assert!(archive.drafts().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod multi_tests {
+    use super::*;
+    #[test]
+    fn active_and_shelf_are_written_together_without_touching_another_chat() {
+        let archive = Archive::in_memory().unwrap();
+        archive.set_draft("other", "unchanged", 1).unwrap();
+        archive
+            .write_draft_state("active", "new", "shelf", "[]", 2)
+            .unwrap();
+        let rows = archive.drafts().unwrap();
+        assert!(rows.contains(&("active".into(), "new".into())));
+        assert!(rows.contains(&("shelf".into(), "[]".into())));
+        assert!(rows.contains(&("other".into(), "unchanged".into())));
+        archive.set_draft("active", "", 3).unwrap();
+        assert!(
+            archive
+                .drafts()
+                .unwrap()
+                .contains(&("shelf".into(), "[]".into()))
+        );
     }
 }

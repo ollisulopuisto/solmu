@@ -1678,12 +1678,7 @@ pub(crate) fn composer_with_capabilities(
                     None => app.reply_to = None,
                 }
             }
-            if app.editing.is_none()
-                && app.composer_holds_draft()
-                && let Some(preview) = draft_preview(&app.composer)
-            {
-                draft_label(app, ui, &preview);
-            }
+            draft_controls(app, ui, &chat.id);
             app.prepare_composer_undo(ui.ctx());
             let id = egui::Id::new("composer-text");
             let has_focus = ui.memory(|memory| memory.has_focus(id));
@@ -1995,6 +1990,10 @@ pub(crate) fn composer_with_capabilities(
                                 };
                                 let wrap = ui.available_width();
                                 ui.ctx().data_mut(|data| data.insert_temp(wrap_id, wrap));
+                                let before_edit = app.composer.clone();
+                                let deleting = ui.input(|input| input.events.iter().any(|event| matches!(event,
+                                    egui::Event::Cut | egui::Event::Key { key: Key::Backspace | Key::Delete, pressed: true, .. }
+                                )));
                                 let output = egui::TextEdit::multiline(&mut app.composer)
                                     .id(id)
                                     .frame(Frame::NONE)
@@ -2073,6 +2072,10 @@ pub(crate) fn composer_with_capabilities(
                                 let response = output.response.response.clone().tab_stop(Stop::Composer);
                                 ui.ctx().accesskit_node_builder(response.id, |node| node.set_label("Message"));
                                 if response.changed() {
+                                    if app.editing.is_none() && app.composer_holds_draft() {
+                                        let text = app.composer.clone();
+                                        app.draft_states.entry(chat.id.clone()).or_default().edit(&before_edit, &text, deleting);
+                                    }
                                     app.actions.push(Action::Composing {
                                         chat: chat.id.clone(),
                                         composing: true,
@@ -2605,14 +2608,161 @@ fn unsent_voice_strip(app: &mut App, ui: &mut egui::Ui, samples: usize) {
 /// The first non-blank line of the unsent text, for the one-line preview in
 /// the draft label. `None` while the composer holds nothing worth calling a
 /// draft.
+#[allow(dead_code)]
 fn draft_preview(text: &str) -> Option<String> {
     let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
     Some(line.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-/// A small "Draft" label above the composer with the draft's first line
-/// beside it, so unsent text is never mistaken for a sent message. It has
-/// no frame: the chat list keeps its normal last-message preview.
+/// Truthful local save status, retained drafts and nonblocking clear recovery.
+fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
+    if app.editing.is_some() || !app.composer_holds_draft() {
+        return;
+    }
+    let mut state = app.draft_states.remove(chat).unwrap_or_default();
+    state.loaded |= app.draft_shelves_loaded;
+    ui.horizontal(|ui| {
+        if !state.loaded || state.changed.is_some() || state.confirmed.is_some() || state.failed {
+            theme::text(
+                ui,
+                &match state.status() {
+                    "Saved locally" => crate::i18n::gettext(app.locale, "Saved locally"),
+                    "Not saved" => crate::i18n::gettext(app.locale, "Not saved"),
+                    "Not saved here until restart" => {
+                        crate::i18n::gettext(app.locale, "Not saved here until restart")
+                    }
+                    _ => crate::i18n::gettext(app.locale, "Saving"),
+                },
+                theme::regular(12.0),
+                Color32::GRAY,
+            );
+        }
+        if state.loaded
+            && state.failed
+            && ui
+                .button(crate::i18n::gettext(app.locale, "Retry"))
+                .clicked()
+        {
+            state.failed = false;
+            state.changed = Some(std::time::Instant::now() - Duration::from_secs(1));
+        }
+        if ui
+            .button(format!(
+                "{} ({})",
+                crate::i18n::gettext(app.locale, "Drafts"),
+                state.shelf.len()
+            ))
+            .clicked()
+        {
+            state.shelf_open = !state.shelf_open;
+        }
+        if state.loaded
+            && !app.composer.trim().is_empty()
+            && state.staged_shelf.is_none()
+            && ui
+                .button(crate::i18n::gettext(app.locale, "Keep as draft"))
+                .clicked()
+        {
+            let mut shelf = state.shelf.clone();
+            shelf.push(crate::draft_state::Parked {
+                id: crate::util::now() as u64 * 1000 + state.revision,
+                text: app.composer.clone(),
+            });
+            state.text = app.composer.clone();
+            state.clear_after_save = Some(app.composer.clone());
+            state.staged_shelf = Some(shelf);
+            state.touch();
+        }
+    });
+    if let Some(recovery) = state.recovery.clone() {
+        ui.group(|ui| {
+            ui.label(crate::i18n::gettext(
+                app.locale,
+                "Text cleared. Keep it for later?",
+            ));
+            ui.horizontal(|ui| {
+                if state.staged_shelf.is_none()
+                    && ui
+                        .button(crate::i18n::gettext(app.locale, "Keep as draft"))
+                        .clicked()
+                {
+                    let mut shelf = state.shelf.clone();
+                    shelf.push(crate::draft_state::Parked {
+                        id: crate::util::now() as u64 * 1000 + state.revision,
+                        text: recovery.clone(),
+                    });
+                    state.staged_recovery = Some(recovery.clone());
+                    state.staged_shelf = Some(shelf);
+                    state.touch();
+                }
+                if app.composer.is_empty()
+                    && ui
+                        .button(crate::i18n::gettext(app.locale, "Undo"))
+                        .clicked()
+                {
+                    app.composer = recovery.clone();
+                    state.text = recovery;
+                    state.recovery = None;
+                    state.touch();
+                }
+                if ui
+                    .button(crate::i18n::gettext(app.locale, "Dismiss"))
+                    .clicked()
+                {
+                    state.recovery = None;
+                }
+            });
+        });
+    }
+    if state.shelf_open {
+        egui::ScrollArea::vertical()
+            .max_height(180.0)
+            .id_salt(("draft-shelf", chat))
+            .show(ui, |ui| {
+                for draft in state.shelf.clone() {
+                    ui.group(|ui| {
+                        ui.label(&draft.text);
+                        ui.horizontal(|ui| {
+                            if app.composer.is_empty()
+                                && ui
+                                    .button(crate::i18n::gettext(app.locale, "Resume"))
+                                    .clicked()
+                            {
+                                // A copy leaves the retained draft intact. No overwrite or send.
+                                app.composer = draft.text.clone();
+                                state.text = draft.text.clone();
+                                state.touch();
+                            }
+                            if !app.composer.is_empty() {
+                                ui.label(crate::i18n::gettext(
+                                    app.locale,
+                                    "Keep current text first, or clear it to resume",
+                                ));
+                            }
+                            if state.staged_shelf.is_none()
+                                && ui
+                                    .button(crate::i18n::gettext(app.locale, "Delete"))
+                                    .clicked()
+                            {
+                                state.staged_shelf = Some(
+                                    state
+                                        .shelf
+                                        .iter()
+                                        .filter(|d| d.id != draft.id)
+                                        .cloned()
+                                        .collect(),
+                                );
+                                state.touch();
+                            }
+                        });
+                    });
+                }
+            });
+    }
+    app.draft_states.insert(chat.into(), state);
+}
+
+#[allow(dead_code)]
 fn draft_label(app: &App, ui: &mut egui::Ui, preview: &str) {
     let palette = app.conversation_palette();
     let label = crate::i18n::gettext(app.locale, "Draft");

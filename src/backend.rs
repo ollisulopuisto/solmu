@@ -220,6 +220,12 @@ pub enum Command {
         chat: ChatId,
         text: String,
     },
+    WriteDraftState {
+        chat: ChatId,
+        revision: u64,
+        text: String,
+        shelf: Vec<crate::draft_state::Parked>,
+    },
     /// Marks a visible chat read and optionally sends receipts.
     MarkRead {
         chat: ChatId,
@@ -1228,6 +1234,13 @@ pub enum Event {
     Labels(Vec<crate::model::Label>),
     /// Unsent text stored for each chat, sent once at startup.
     Drafts(Vec<(ChatId, String)>),
+    DraftShelf(Vec<(ChatId, Vec<crate::draft_state::Parked>)>),
+    DraftShelfUnavailable,
+    DraftWritten {
+        chat: ChatId,
+        revision: u64,
+        ok: bool,
+    },
     /// The favorites in bar order, sent at startup and after each change.
     Favorites(Vec<ChatId>),
     /// The starred messages of one chat, for the mark in the conversation.
