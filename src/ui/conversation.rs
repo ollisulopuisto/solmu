@@ -4909,8 +4909,13 @@ fn grouped_hover_actions(
         .ctx()
         .data(|d| d.get_temp::<bool>(nav_id))
         .unwrap_or(false);
-    let scrolling = ui
-        .input(|i| i.smooth_scroll_delta.length_sq() > 0.0 || i.raw_scroll_delta.length_sq() > 0.0);
+    let scrolling = ui.input(|i| {
+        i.smooth_scroll_delta.length_sq() > 0.0
+            || i.raw
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::MouseWheel { .. }))
+    });
     let active = hover_actions::show_grid(
         scrolling,
         (over && uncovered) || (held && in_reach && uncovered),
