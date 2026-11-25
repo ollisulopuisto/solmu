@@ -679,6 +679,34 @@ fn trim_cache(dirs: &AccountDirs, budget: u64) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Make room for the next bytes without deleting the active partial or uploads.
+fn reserve_media_chunk(
+    dirs: &AccountDirs,
+    budget: u64,
+    incoming: u64,
+    partial: &std::path::Path,
+) -> std::io::Result<()> {
+    let target = budget
+        .checked_sub(incoming)
+        .ok_or_else(|| std::io::Error::other("Cache budget exhausted"))?;
+    let files = cache_files(dirs)?;
+    let mut size: u64 = files.iter().map(|(_, _, bytes)| bytes).sum();
+    for (_, path, bytes) in files {
+        if size <= target {
+            break;
+        }
+        if path == partial || keeps_temp_upload(&path) {
+            continue;
+        }
+        std::fs::remove_file(path)?;
+        size = size.saturating_sub(bytes);
+    }
+    if size > target {
+        return Err(std::io::Error::other("Cache budget exhausted"));
+    }
+    Ok(())
+}
+
 fn measure_cache(dirs: &AccountDirs) -> std::io::Result<crate::model::StorageStats> {
     let mut stats = crate::model::StorageStats::default();
     for (_, path, bytes) in cache_files(dirs)? {
@@ -1704,10 +1732,6 @@ impl Api {
         if path.is_file() {
             return Ok(path);
         }
-        // Reserve the maximum transfer before writing. Complete files plus the
-        // in-flight file stay within the budget even without Content-Length.
-        trim_cache(dirs, budget.saturating_sub(limit))
-            .map_err(|_| "Could not enforce cache budget")?;
         let temporary = path.with_extension("part");
         if std::fs::symlink_metadata(&temporary).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err("Temporary cache entry must not be a symlink".into());
@@ -1728,21 +1752,33 @@ impl Api {
             let mut output = options
                 .open(&temporary)
                 .map_err(|_| "Could not create media file")?;
-            output.write_all(&head).map_err(|_| "Media write failed")?;
-            let copied = head.len() as u64
-                + std::io::copy(
-                    &mut (&mut response).take(limit.saturating_sub(head.len() as u64)),
-                    &mut output,
-                )
-                .map_err(|_| "Media transfer failed")?;
-            let mut excess = [0u8; 1];
-            if copied == limit
-                && response
-                    .read(&mut excess)
-                    .map_err(|_| "Media transfer failed")?
-                    != 0
-            {
-                return Err("Attachment exceeds download size limit");
+            // The partial already counts toward the cache. Reserve only the next
+            // chunk, not the maximum allowed transfer, and never evict ourselves.
+            let mut copied = 0u64;
+            let mut chunk = [0u8; 64 * 1024];
+            let mut pending = head;
+            loop {
+                if pending.is_empty() {
+                    let count = response
+                        .read(&mut chunk)
+                        .map_err(|_| "Media transfer failed")?;
+                    if count == 0 {
+                        break;
+                    }
+                    pending.extend_from_slice(&chunk[..count]);
+                }
+                copied = copied
+                    .checked_add(pending.len() as u64)
+                    .ok_or("Attachment exceeds download size limit")?;
+                if copied > limit {
+                    return Err("Attachment exceeds download size limit");
+                }
+                reserve_media_chunk(dirs, budget, pending.len() as u64, &temporary)
+                    .map_err(|_| "Could not enforce cache budget")?;
+                output
+                    .write_all(&pending)
+                    .map_err(|_| "Media write failed")?;
+                pending.clear();
             }
             output.flush().map_err(|_| "Media write failed")?;
             std::fs::rename(&temporary, &path).map_err(|_| "Could not finish media file")?;
@@ -11302,6 +11338,67 @@ mod tests {
                 .all(|(method, _, _)| method == "GET")
         );
         stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn growing_media_reserves_actual_bytes_and_never_evicts_its_partial() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = AppDirs::under(root.path()).as_account();
+        std::fs::create_dir_all(dirs.media_cache_dir()).unwrap();
+        let partial = dirs.media_cache_dir().join("beeper-active.part");
+        std::fs::write(&partial, [1u8; 9]).unwrap();
+        assert!(reserve_media_chunk(&dirs, 10, 2, &partial).is_err());
+        assert_eq!(std::fs::metadata(&partial).unwrap().len(), 9);
+        assert!(reserve_media_chunk(&dirs, 10, 1, &partial).is_ok());
+    }
+
+    #[test]
+    fn downloading_three_small_album_images_keeps_all_three_files() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for index in 0..3 {
+                for metadata in [true, false] {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut buffer = [0u8; 4096];
+                    let _ = stream.read(&mut buffer);
+                    let body = if metadata {
+                        format!(
+                            r#"{{"id":"media{index}","attachments":[{{"type":"img","id":"mxc://x/{index}","mimeType":"image/png"}}]}}"#
+                        )
+                    } else {
+                        format!("tiny image {index}")
+                    };
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .unwrap();
+                }
+            }
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url: base,
+            token: "test".into(),
+        })
+        .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let dirs = AppDirs::under(root.path()).as_account();
+        let paths: Vec<_> = (0..3)
+            .map(|index| {
+                api.download_media("chat", &format!("media{index}"), &dirs, true)
+                    .unwrap()
+            })
+            .collect();
+        server.join().unwrap();
+        for (index, path) in paths.iter().enumerate() {
+            assert_eq!(
+                std::fs::read_to_string(path).unwrap(),
+                format!("tiny image {index}")
+            );
+        }
     }
 
     #[test]

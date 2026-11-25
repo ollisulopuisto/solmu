@@ -1,5 +1,9 @@
 # Work log
 
+## 2026-11-25: Keep earlier album files during small downloads
+
+Branch fix/album-cache-eviction. Manual downloads reserved the entire maximum transfer allowance before writing, making the default256MiB cache empty itself on each tiny image. Reserve each received chunk against the actual cache size instead, exclude the active partial and staged uploads, fail closed if protected bytes exhaust the budget. Per-file64/500MiB limits and the account budget remain. Added three-image HTTP regression and partial-budget test; existing unknown-length oversize test retained. Local extracted std-only reservation harness fails under the old eviction model and passes the new helper (2tests), but full HTTP/native regressions not run locally because no cached dependency build and209MiB free. Native CI must run those before merge. Traced cache_files, trim_cache callers (unchanged), temporary cleanup, media limits and download completion. No auto-download policy, workflow, DB, credentials or version change; PR only.
+
 ## 2026-11-25: Mac message focus without Spaces collision
 
 Branch fix/mac-message-focus-shortcut rebased onto merged main61ceed71 after466. Version26.11.13. Message focus uses registry Command-Shift-2 instead of physicalControl-2; exact modifiers and physical digit fallback preserve Finnish shifted symbols. Favorites/network/filter chords unchanged. Traced keyboard routing, help registry and native message-focus action. Rustfmt check passes locally. Rust unit and native routing tests added, not executed locally: no prebuilt GUI dependency tree and limited disk; CI must compile/run. No workflow, DB or credentials changed. Protected439 and held464 untouched. PR only, no merge approval forA3.
