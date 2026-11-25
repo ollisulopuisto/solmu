@@ -5044,6 +5044,19 @@ fn grouped_hover_actions(
             viewport.intersect(ui.clip_rect())
         })
         .shrink(2.0);
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    #[cfg(feature = "demo")]
+    let pointer = if crate::demo::hover_actions_shot(&message.id) {
+        Some(bubble.rect.center())
+    } else {
+        pointer
+    };
+    let keyboard_open = ui
+        .ctx()
+        .data(|d| d.get_temp::<bool>(egui::Id::new("message-actions-keyboard-mode")))
+        .unwrap_or(false)
+        || ui.input(|i| i.key_pressed(egui::Key::Tab));
+    let anchor = hover_actions::opening_anchor(bubble.rect, pointer, keyboard_open);
     let area_id = bubble.id.with("hover-actions");
     let frame = ui.ctx().cumulative_frame_nr();
     let held = ui
@@ -5060,19 +5073,12 @@ fn grouped_hover_actions(
     } else {
         None
     }
-    .or_else(|| Geometry::place(bubble.rect, bounds, quick.len() + 1));
+    .or_else(|| Geometry::beside_pointer(bubble.rect, bounds, quick.len() + 1, anchor));
     let Some(g) = g else {
         return false;
     };
     ui.ctx()
         .data_mut(|d| d.insert_temp(bubble.id.with("react-rect"), g.cell(quick.len())));
-    let pointer = ui.input(|i| i.pointer.interact_pos());
-    #[cfg(feature = "demo")]
-    let pointer = if crate::demo::hover_actions_shot(&message.id) {
-        Some(bubble.rect.center())
-    } else {
-        pointer
-    };
     let layers = [
         area_id,
         area_id.with("reply"),
@@ -5203,6 +5209,12 @@ fn grouped_hover_actions(
     if !active {
         return true;
     }
+    ui.painter().rect_stroke(
+        bubble.rect.expand(2.0),
+        10.0,
+        Stroke::new(2.0, view.palette.accent),
+        egui::StrokeKind::Inside,
+    );
     let mine = own_reaction(message);
     let starred = view.starred.is_some_and(|ids| ids.contains(&message.id));
     let can_reply = view.chat.can_send()
@@ -14908,7 +14920,7 @@ mod tests {
                     },
                     |ui| {
                         let bubble = ui.interact(
-                            Rect::from_min_size(pos2(80., 80.), vec2(250., 70.)),
+                            Rect::from_min_size(pos2(80., 80.), vec2(160., 70.)),
                             id,
                             Sense::click(),
                         );
@@ -15072,6 +15084,13 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| {
+                            // Another message may sit behind the foreground grid.
+                            // Clicking it must still route to toolbar-owner.
+                            ui.interact(
+                                Rect::from_min_size(pos2(276.0, 70.0), vec2(130.0, 210.0)),
+                                egui::Id::new("covered-neighbor"),
+                                Sense::click(),
+                            );
                             let rect = Rect::from_min_size(pos2(18.0, 48.0), vec2(250.0, 55.0));
                             let bubble =
                                 ui.interact(rect, egui::Id::new("toolbar-message"), Sense::hover());
@@ -15085,10 +15104,11 @@ mod tests {
                 }
                 // Geometry is deterministic for this exact viewport. Do not
                 // borrow the drawing closure's captured output across calls.
-                let g = super::super::hover_actions::Geometry::place(
+                let g = super::super::hover_actions::Geometry::beside_pointer(
                     Rect::from_min_size(pos2(18.0, 48.0), vec2(250.0, 55.0)),
                     Rect::from_min_max(pos2(2.0, 2.0), pos2(418.0, 338.0)),
                     7,
+                    pos2(100.0, 70.0),
                 )
                 .unwrap();
                 let rect = match control {
