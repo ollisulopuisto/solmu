@@ -37,6 +37,7 @@ pub struct Geometry {
     pub star: Rect,
 }
 impl Geometry {
+    #[cfg(test)]
     pub fn place(bubble: Rect, bounds: Rect, count: usize) -> Option<Self> {
         if count != 7 {
             return None;
@@ -78,6 +79,55 @@ impl Geometry {
         }
         None
     }
+    /// Side-only pointer placement. No above/below fallback can cover another
+    /// row. The caller supplies the visible column's bubble obstacles.
+    pub fn beside_pointer(
+        bubble: Rect,
+        bounds: Rect,
+        count: usize,
+        pointer: egui::Pos2,
+        obstacles: &[Rect],
+    ) -> Option<Self> {
+        if count != 7 {
+            return None;
+        }
+        let width = 3.0 * CELL + 2.0 * GAP;
+        let height = 3.0 * CELL + 2.0 * GAP + SECTION_GAP;
+        if bounds.width() < width || bounds.height() < height {
+            return None;
+        }
+        let y = pointer.y.clamp(bounds.top(), bounds.bottom() - height);
+        let mut sides = [bubble.right() + 8.0, bubble.left() - width - 8.0];
+        if pointer.x < bubble.center().x {
+            sides.swap(0, 1);
+        }
+        for x in sides {
+            let whole = Rect::from_min_size(pos2(x, y), vec2(width, height));
+            if !bounds.contains_rect(whole)
+                || obstacles
+                    .iter()
+                    .any(|rect| whole.shrink(0.01).intersects(*rect))
+            {
+                continue;
+            }
+            let reactions = Rect::from_min_size(whole.min, vec2(width, 2.0 * CELL + GAP));
+            let vertical = Rect::from_min_size(
+                pos2(x, reactions.bottom() + GAP + SECTION_GAP),
+                vec2(width, CELL),
+            );
+            return Some(Self {
+                reactions,
+                vertical,
+                reply: Rect::from_min_size(vertical.min + vec2(CELL + GAP, 0.0), vec2(CELL, CELL)),
+                star: Rect::from_min_size(
+                    vertical.min + vec2(2.0 * (CELL + GAP), 0.0),
+                    vec2(CELL, CELL),
+                ),
+            });
+        }
+        None
+    }
+
     /// Only the corridor directly between the facing edges, never the full
     /// bounding box that also contains unrelated neighbouring message rows.
     pub fn bridge(self, bubble: Rect) -> Rect {
@@ -141,6 +191,39 @@ pub fn paint(p: &egui::Painter, g: Geometry, rear: Color32, front: Color32, outl
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pointer_grid_is_side_only_near_pointer_and_never_covers_neighbors() {
+        let bounds = Rect::from_min_max(pos2(0., 0.), pos2(700., 700.));
+        let bubble = Rect::from_min_max(pos2(20., 20.), pos2(360., 500.));
+        let neighbor = Rect::from_min_max(pos2(20., 510.), pos2(350., 620.));
+        let pointer = pos2(350., 380.);
+        let g = Geometry::beside_pointer(bubble, bounds, 7, pointer, &[bubble, neighbor]).unwrap();
+        assert!(g.bounds().left() >= bubble.right());
+        assert!((g.bounds().top() - pointer.y).abs() < 16.);
+        assert!(bounds.contains_rect(g.bounds()));
+        assert!(!g.bounds().intersects(neighbor));
+        assert!(
+            Geometry::beside_pointer(
+                bubble,
+                bounds,
+                7,
+                pointer,
+                &[Rect::from_min_max(pos2(0., 0.), pos2(700., 700.))]
+            )
+            .is_none()
+        );
+    }
+    #[test]
+    fn pointer_grid_flips_left_clamps_and_refuses_top_bottom_fallback() {
+        let bounds = Rect::from_min_max(pos2(0., 0.), pos2(700., 700.));
+        let bubble = Rect::from_min_max(pos2(340., 20.), pos2(680., 400.));
+        let g = Geometry::beside_pointer(bubble, bounds, 7, pos2(670., 690.), &[bubble]).unwrap();
+        assert!(g.bounds().right() <= bubble.left());
+        assert_eq!(g.bounds().bottom(), bounds.bottom());
+        let full = Rect::from_min_max(pos2(10., 200.), pos2(690., 300.));
+        assert!(Geometry::beside_pointer(full, bounds, 7, full.center(), &[full]).is_none());
+    }
+
     #[test]
     fn focus_order_skips_disabled_controls_and_scroll_yields() {
         let b = egui::Id::new("owner");

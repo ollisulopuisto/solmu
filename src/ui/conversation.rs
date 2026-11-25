@@ -5045,6 +5045,30 @@ fn grouped_hover_actions(
             viewport.intersect(ui.clip_rect())
         })
         .shrink(2.0);
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    #[cfg(feature = "demo")]
+    let pointer = if crate::demo::hover_actions_shot(&message.id) {
+        Some(bubble.rect.center())
+    } else {
+        pointer
+    };
+    // Keep recent visible bubble geometry, including rows painted after this
+    // one in the previous frame. On a fresh viewport wait for a complete pass.
+    let column_id = egui::Id::new(("message-action-obstacles", view.chat.id.as_str()));
+    let frame_now = ui.ctx().cumulative_frame_nr();
+    let (obstacles, ready) = ui.ctx().data_mut(|d| {
+        let mut rows = d
+            .get_temp::<HashMap<egui::Id, (u64, Rect)>>(column_id)
+            .unwrap_or_default();
+        rows.retain(|_, (frame, rect)| {
+            frame.saturating_add(1) >= frame_now && rect.intersects(bounds)
+        });
+        let ready = rows.values().any(|(frame, _)| *frame < frame_now);
+        rows.insert(bubble.id, (frame_now, bubble.rect));
+        let obstacles = rows.values().map(|(_, rect)| *rect).collect::<Vec<_>>();
+        d.insert_temp(column_id, rows);
+        (obstacles, ready)
+    });
     let area_id = bubble.id.with("hover-actions");
     let frame = ui.ctx().cumulative_frame_nr();
     let held = ui
@@ -5056,24 +5080,32 @@ fn grouped_hover_actions(
         .data(|d| d.get_temp::<Geometry>(area_id.with("geometry")));
     let g = if held {
         frozen.filter(|g| {
-            bounds.contains_rect(g.bounds()) && !g.bounds().shrink(0.01).intersects(bubble.rect)
+            bounds.contains_rect(g.bounds())
+                && !obstacles
+                    .iter()
+                    .any(|rect| g.bounds().shrink(0.01).intersects(*rect))
         })
     } else {
         None
     }
-    .or_else(|| Geometry::place(bubble.rect, bounds, quick.len() + 1));
+    .or_else(|| {
+        ready
+            .then(|| {
+                Geometry::beside_pointer(
+                    bubble.rect,
+                    bounds,
+                    quick.len() + 1,
+                    pointer.unwrap_or(bubble.rect.center()),
+                    &obstacles,
+                )
+            })
+            .flatten()
+    });
     let Some(g) = g else {
         return false;
     };
     ui.ctx()
         .data_mut(|d| d.insert_temp(bubble.id.with("react-rect"), g.cell(quick.len())));
-    let pointer = ui.input(|i| i.pointer.interact_pos());
-    #[cfg(feature = "demo")]
-    let pointer = if crate::demo::hover_actions_shot(&message.id) {
-        Some(bubble.rect.center())
-    } else {
-        pointer
-    };
     let layers = [
         area_id,
         area_id.with("reply"),
@@ -5204,6 +5236,12 @@ fn grouped_hover_actions(
     if !active {
         return true;
     }
+    ui.painter().rect_stroke(
+        bubble.rect.expand(2.0),
+        10.0,
+        Stroke::new(2.0, view.palette.accent),
+        egui::StrokeKind::Inside,
+    );
     let mine = own_reaction(message);
     let starred = view.starred.is_some_and(|ids| ids.contains(&message.id));
     let can_reply = view.chat.can_send()
@@ -14909,7 +14947,7 @@ mod tests {
                     },
                     |ui| {
                         let bubble = ui.interact(
-                            Rect::from_min_size(pos2(80., 80.), vec2(250., 70.)),
+                            Rect::from_min_size(pos2(80., 80.), vec2(160., 70.)),
                             id,
                             Sense::click(),
                         );
@@ -15086,10 +15124,12 @@ mod tests {
                 }
                 // Geometry is deterministic for this exact viewport. Do not
                 // borrow the drawing closure's captured output across calls.
-                let g = super::super::hover_actions::Geometry::place(
+                let g = super::super::hover_actions::Geometry::beside_pointer(
                     Rect::from_min_size(pos2(18.0, 48.0), vec2(250.0, 55.0)),
                     Rect::from_min_max(pos2(2.0, 2.0), pos2(418.0, 338.0)),
                     7,
+                    pos2(100.0, 70.0),
+                    &[Rect::from_min_size(pos2(18.0, 48.0), vec2(250.0, 55.0))],
                 )
                 .unwrap();
                 let rect = match control {
