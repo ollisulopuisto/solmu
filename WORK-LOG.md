@@ -1656,3 +1656,16 @@ so the message-delete confirm button could sit disabled with no visible reason
 (the archive review dialog already explains this state). The delete dialog now
 shows the same "An earlier batch still has pending results." line while an
 earlier batch awaits results. No new i18n string; the label already exists.
+
+## 2026-11-25 - action-result integration
+
+Rebased466 on main255f9c4 after owner merge approval. Kept main's entire
+current smoke list, adding only the four approved batch-results scenes and
+retaining the approved 8-to-10-minute smoke timeout. Both Cargo version fields
+and the correctly ordered changelog now take26.11.12, after main26.11.11.
+No manual executable-code conflict resolution. Own adversarial review reran:
+traced result emission, request/account matching, pending confirm gates, hidden
+receipt expiry, session replacement and debug preference persistence. Silent
+single-operation failure remains the owner's chosen behavior. No new finding.
+Integration assertions pass for capture preservation/version/changelog order;
+no local Rust toolchain, so fresh CI and native pixels remain pending.
