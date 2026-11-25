@@ -61,6 +61,15 @@ mod tests {
         }
     }
     #[test]
+    fn album_row_slot_keeps_later_chain_out_of_previous_media() {
+        let body = Rect::from_min_size(pos2(80., 80.), vec2(180., 132.));
+        let next = body.translate(vec2(0., body.height() + SLOT_HEIGHT));
+        for own in [false, true] {
+            assert!(!chain_geometry(next, own).intersects(body));
+            assert!(!chain_geometry(body, own).intersects(next));
+        }
+    }
+    #[test]
     fn each_tail_is_outside_its_own_body_and_mirrors_without_reflow() {
         let body = Rect::from_min_size(pos2(80.0, 50.0), vec2(180.0, 80.0));
         for own in [false, true] {

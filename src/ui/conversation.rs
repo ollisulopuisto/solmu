@@ -10369,6 +10369,11 @@ fn album_content(
     };
     let mut tiles = Vec::with_capacity(messages.len());
     for (row, chunk) in messages.chunks(columns).enumerate() {
+        // A chain sits above its own tile. Reserve that space for each
+        // media row, so a later row cannot place it over earlier media.
+        if chunk.iter().any(|message| message.quoted.is_some()) {
+            ui.add_space(super::reply_tail::SLOT_HEIGHT);
+        }
         // An own bubble lays out right to left; the grid keeps reading order.
         ui.allocate_ui_with_layout(
             vec2(tile * columns as f32 + gap, tile_height),
@@ -16758,7 +16763,6 @@ mod tests {
         );
     }
 
-    /// Runs `check` with a still view of one plain chat, as a footer test
     #[test]
     fn sender_bubbles_share_left_edge_with_and_without_reply_chain() {
         with_still_view(|view| {
@@ -16804,7 +16808,7 @@ mod tests {
         });
     }
 
-    /// needs one to paint into.
+    /// Runs `check` with a still view of one plain chat.
     fn with_still_view(check: impl FnOnce(&View<'_>)) {
         with_still_view_and(check, None, false);
     }
