@@ -171,6 +171,7 @@ pub enum Command {
         choices: Option<Vec<usize>>,
     },
     SendText {
+        draft: Option<(ChatId, u64)>,
         chat: ChatId,
         text: String,
         quoting: Option<crate::model::ReplyTarget>,
@@ -1620,6 +1621,10 @@ pub enum Event {
         from: Option<i64>,
         until: Option<i64>,
         error: String,
+    },
+    DraftSendConfirmed {
+        owner: ChatId,
+        id: u64,
     },
     BeeperSendConfirmed {
         origin: String,

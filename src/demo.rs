@@ -18158,6 +18158,17 @@ mod tests {
     #[test]
     fn clicking_the_hover_reaction_control_opens_the_picker_for_that_message() {
         let mut app = app();
+        // This interaction needs room beside its target. A full-width link
+        // preview deliberately uses the keyboard/context-menu fallback now.
+        let chat = sample_ids()[0].to_owned();
+        let row = app
+            .conversations
+            .get_mut(&chat)
+            .unwrap()
+            .message_mut("ada-link")
+            .unwrap();
+        row.content = Content::text("See https://example.invalid");
+        row.thumbnail = None;
         let ctx = egui::Context::default();
         app.attach(&ctx);
         for _ in 0..3 {
