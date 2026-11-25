@@ -16927,6 +16927,10 @@ mod tests {
             .retain(|row| {
                 ["ada-doc", "ada-voice", "you-voice", "ada-reply"].contains(&row.id.as_str())
             });
+        for row in &mut app.conversations.get_mut(&chat).unwrap().messages {
+            row.content = Content::text(format!("selection fixture {}", row.id));
+            row.reactions.clear();
+        }
         let ctx = egui::Context::default();
         app.attach(&ctx);
         for _ in 0..3 {
@@ -16948,7 +16952,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{message} is on screen"));
             // The stored body excludes the overhanging footer. Its padding
             // is a message target without invoking document/media controls.
-            let pos = rect.left_bottom() + egui::vec2(2.0, -2.0);
+            let pos = rect.left_top() - egui::vec2(2.0, 2.0);
             let button = |pressed| egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
