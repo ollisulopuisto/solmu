@@ -7619,18 +7619,9 @@ fn quote_chip(
     } else {
         palette.bubble_in
     };
-    if album_tail {
-        let side = if message.from_me {
-            widgets::Side::Right
-        } else {
-            widgets::Side::Left
-        };
-        ui.painter().add(egui::Shape::convex_polygon(
-            widgets::bubble_tail_points(body, side, None),
-            fill,
-            egui::Stroke::NONE,
-        ));
-    }
+    // Album tiles are separated by only3pt. A normal8pt filled tail
+    // would cover the adjacent tile, so album chains connect to the tile's
+    // top edge instead. Ordinary message bubbles retain their filled tail.
     let rect = super::reply_tail::chain_geometry(body, message.from_me);
     let connector = palette.raised_edge(fill);
     ui.ctx().data_mut(|data| {
@@ -7665,7 +7656,11 @@ fn quote_chip(
     #[cfg(feature = "demo")]
     let focused = focused || crate::demo::chain_hover_shot(&message.id);
     if response.hovered() || focused {
-        let tail = super::reply_tail::geometry(body, message.from_me);
+        let tail = if album_tail {
+            egui::Rect::from_min_size(egui::pos2(rect.center().x, body.top()), egui::Vec2::ZERO)
+        } else {
+            super::reply_tail::geometry(body, message.from_me)
+        };
         let x = rect.center().x;
         ui.painter().line_segment(
             [egui::pos2(x, rect.bottom()), egui::pos2(x, tail.top())],
