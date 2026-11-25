@@ -1673,3 +1673,6 @@ receipt expiry, session replacement and debug preference persistence. Silent
 single-operation failure remains the owner's chosen behavior. No new finding.
 Integration assertions pass for capture preservation/version/changelog order;
 no local Rust toolchain, so fresh CI and native pixels remain pending.
+
+### Mac message-focus exact modifier follow-up
+Native macOS CI caught egui matches_exact accepting physical Ctrl alongside its Command alias. Replaced that matcher with explicit Command+Shift/no-Control/no-Alt fields, preserving the failing regression. Shifted physical Digit2 routing unchanged. Own adversarial delta review RAN; no workflow/DB/credential changes. Native rerun required before merge.

@@ -1292,7 +1292,7 @@ fn account_switch_action(app: &App, forward: bool) -> Option<Action> {
 /// Exact Command-Shift on macOS, never physical Control (Spaces).
 #[cfg(any(target_os = "macos", test))]
 fn messages_modifier_alone(modifiers: Modifiers) -> bool {
-    modifiers.matches_exact(FOCUS_MESSAGES.keys[0].0)
+    modifiers.command && modifiers.shift && !modifiers.ctrl && !modifiers.alt
 }
 
 #[cfg(any(target_os = "macos", test))]
