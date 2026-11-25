@@ -8910,6 +8910,7 @@ mod tests {
                         app.background_frame(&ctx);
                         app.frame_ui(ui);
                         *found = None;
+                        let content_rect = ctx.content_rect();
                         for layer in ctx.memory(|memory| memory.layer_ids().collect::<Vec<_>>()) {
                             let transform =
                                 ctx.layer_transform_to_global(layer).unwrap_or_default();
@@ -8926,7 +8927,7 @@ mod tests {
                                             .center();
                                             let global = transform * local;
                                             if clipped.clip_rect.contains(local)
-                                                && ctx.content_rect().contains(global)
+                                                && content_rect.contains(global)
                                             {
                                                 *found = Some(global);
                                             }
@@ -16943,17 +16944,11 @@ mod tests {
             }
             let id = crate::ui::conversation::bubble_id(&chat, message);
             let rect = ctx
-                .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
+                .data(|data| data.get_temp::<egui::Rect>(id.with("body")))
                 .unwrap_or_else(|| panic!("{message} is on screen"));
-            // The empty strip beside the body is inside the message row,
-            // but outside text/media and the overhanging reaction footer.
-            let own = app.conversations[&chat].message(message).unwrap().from_me;
-            let x = if own {
-                rect.left() - 30.0
-            } else {
-                rect.right() + 30.0
-            };
-            let pos = egui::pos2(x, rect.center().y);
+            // The stored body excludes the overhanging footer. Its padding
+            // is a message target without invoking document/media controls.
+            let pos = rect.left_bottom() + egui::vec2(2.0, -2.0);
             let button = |pressed| egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
