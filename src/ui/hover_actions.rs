@@ -26,6 +26,14 @@ pub fn next_focus(
     let next = if reverse { at.checked_sub(1)? } else { at + 1 };
     order.get(next).copied()
 }
+pub fn opening_anchor(bubble: Rect, pointer: Option<egui::Pos2>, keyboard: bool) -> egui::Pos2 {
+    if keyboard {
+        return bubble.center();
+    }
+    pointer
+        .filter(|p| bubble.contains(*p))
+        .unwrap_or(bubble.center())
+}
 pub fn show_grid(scrolling: bool, pointer_active: bool, keyboard_active: bool) -> bool {
     !scrolling && (pointer_active || keyboard_active)
 }
@@ -191,6 +199,16 @@ pub fn paint(p: &egui::Painter, g: Geometry, rear: Color32, front: Color32, outl
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn keyboard_and_outside_pointer_anchor_to_target() {
+        let b = Rect::from_min_max(pos2(20., 20.), pos2(200., 80.));
+        assert_eq!(opening_anchor(b, Some(pos2(100., 600.)), true), b.center());
+        assert_eq!(opening_anchor(b, Some(pos2(100., 600.)), false), b.center());
+        assert_eq!(
+            opening_anchor(b, Some(pos2(100., 30.)), false),
+            pos2(100., 30.)
+        );
+    }
     #[test]
     fn pointer_grid_is_side_only_near_pointer_and_never_covers_neighbors() {
         let bounds = Rect::from_min_max(pos2(0., 0.), pos2(700., 700.));

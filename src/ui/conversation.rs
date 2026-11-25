@@ -5023,6 +5023,19 @@ fn reaction_button_label(from_me: bool, sender: &str) -> String {
 
 /// All toolbar actions stay bound to this one hovered message, even when
 /// the foreground bar crosses the visual space of a neighbouring bubble.
+fn register_action_obstacle(ui: &egui::Ui, chat: &str, id: egui::Id, rect: Rect) {
+    let key = egui::Id::new(("message-action-obstacles", chat));
+    let frame = ui.ctx().cumulative_frame_nr();
+    ui.ctx().data_mut(|d| {
+        let mut rows = d
+            .get_temp::<HashMap<egui::Id, (u64, Rect)>>(key)
+            .unwrap_or_default();
+        rows.retain(|_, (seen, _)| seen.saturating_add(1) >= frame);
+        rows.insert(id, (frame, rect));
+        d.insert_temp(key, rows);
+    });
+}
+
 fn grouped_hover_actions(
     ui: &mut egui::Ui,
     view: &View<'_>,
@@ -5063,12 +5076,22 @@ fn grouped_hover_actions(
         rows.retain(|_, (frame, rect)| {
             frame.saturating_add(1) >= frame_now && rect.intersects(bounds)
         });
-        let ready = rows.values().any(|(frame, _)| *frame < frame_now);
-        rows.insert(bubble.id, (frame_now, bubble.rect));
+        let first_frame = d
+            .get_temp::<u64>(column_id.with("first-frame"))
+            .unwrap_or(frame_now);
+        d.insert_temp(column_id.with("first-frame"), first_frame);
+        let ready = first_frame < frame_now;
+        rows.entry(bubble.id).or_insert((frame_now, bubble.rect));
         let obstacles = rows.values().map(|(_, rect)| *rect).collect::<Vec<_>>();
         d.insert_temp(column_id, rows);
         (obstacles, ready)
     });
+    let keyboard_open = ui
+        .ctx()
+        .data(|d| d.get_temp::<bool>(egui::Id::new("message-actions-keyboard-mode")))
+        .unwrap_or(false)
+        || ui.input(|i| i.key_pressed(egui::Key::Tab));
+    let anchor = hover_actions::opening_anchor(bubble.rect, pointer, keyboard_open);
     let area_id = bubble.id.with("hover-actions");
     let frame = ui.ctx().cumulative_frame_nr();
     let held = ui
@@ -5091,13 +5114,7 @@ fn grouped_hover_actions(
     .or_else(|| {
         ready
             .then(|| {
-                Geometry::beside_pointer(
-                    bubble.rect,
-                    bounds,
-                    quick.len() + 1,
-                    pointer.unwrap_or(bubble.rect.center()),
-                    &obstacles,
-                )
+                Geometry::beside_pointer(bubble.rect, bounds, quick.len() + 1, anchor, &obstacles)
             })
             .flatten()
     });
@@ -7003,6 +7020,9 @@ fn bubble_frame(
         .data_mut(|d| d.insert_temp(bubble_id.with("painted-rect"), painted_with_replies));
     let bubble =
         early.unwrap_or_else(|| ui.interact(exposed(inner.response.rect), bubble_id, Sense::CLICK));
+    // Register every painted body, including call rows and pending media,
+    // before affordance-specific early returns.
+    register_action_obstacle(ui, &view.chat.id, bubble.id, painted_with_replies);
     if view.selecting
         || view.pending_media.is_some_and(|records| {
             records
@@ -14909,6 +14929,40 @@ mod tests {
                 ctx.memory(|m| m.has_focus(before)),
                 "Shift+Tab must leave bubble"
             );
+        });
+    }
+
+    #[test]
+    fn passive_call_neighbor_is_registered_before_affordance_returns() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let id = egui::Id::new("passive-call-neighbor");
+            let rect = Rect::from_min_size(pos2(300., 80.), vec2(180., 100.));
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                register_action_obstacle(ui, &view.chat.id, id, rect);
+                let rows = ui
+                    .ctx()
+                    .data(|d| {
+                        d.get_temp::<HashMap<egui::Id, (u64, Rect)>>(egui::Id::new((
+                            "message-action-obstacles",
+                            view.chat.id.as_str(),
+                        )))
+                    })
+                    .unwrap();
+                assert_eq!(rows[&id].1, rect);
+                assert!(
+                    super::super::hover_actions::Geometry::beside_pointer(
+                        Rect::from_min_max(pos2(10., 80.), pos2(290., 180.)),
+                        Rect::from_min_max(pos2(0., 0.), pos2(500., 400.)),
+                        7,
+                        pos2(280., 90.),
+                        &[rect]
+                    )
+                    .is_none()
+                );
+            });
+            output.textures_delta.clear();
         });
     }
 
