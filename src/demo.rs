@@ -2647,15 +2647,31 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             }
             "batch-results" => {
                 app.batch_ui.owner = app.account().id.0.clone();
-                app.batch_ui.results = vec![crate::model::BatchItem {
-                    chat: "ada".into(),
-                    message: Some("402555".into()),
-                    everyone: false,
-                    accepted_delete_at: Some(std::time::Instant::now()),
-                    result: Some(Ok(())),
-                }];
-                if let Some(chat) = app.chats.iter().find(|chat| !chat.is_group()) {
-                    app.batch_ui.results[0].chat = chat.id.clone();
+                app.batch_ui.results = vec![
+                    crate::model::BatchItem {
+                        chat: "ada".into(),
+                        message: Some("402555".into()),
+                        everyone: false,
+                        accepted_delete_at: Some(std::time::Instant::now()),
+                        result: Some(Ok(())),
+                    },
+                    crate::model::BatchItem {
+                        chat: "ada".into(),
+                        message: Some("402556".into()),
+                        everyone: true,
+                        accepted_delete_at: None,
+                        result: Some(Err("Synthetic failure detail for layout review".into())),
+                    },
+                ];
+                let chat_id = app
+                    .chats
+                    .iter()
+                    .find(|chat| !chat.is_group())
+                    .map(|chat| chat.id.clone());
+                if let Some(chat_id) = chat_id {
+                    for item in &mut app.batch_ui.results {
+                        item.chat = chat_id.clone();
+                    }
                 }
             }
             "previous-session-results" => {
@@ -4270,6 +4286,9 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             }
             "dark" => {
                 app.settings.theme = ThemeChoice::Dark;
+            }
+            "debug" => {
+                app.settings.beeper.debug_mode = true;
             }
             "messages" => {
                 app.settings.theme = ThemeChoice::Messages;

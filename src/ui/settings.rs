@@ -416,6 +416,7 @@ fn sections(app: &App) -> Vec<Section> {
         |s| &mut s.beeper.notify_focused_chat,
     );
     beeper.toggle("Notify for group messages", "Off suppresses ordinary group notifications. Mentions and replies to you can still notify.", |s| &mut s.beeper.notify_group_messages);
+    beeper.toggle("Debug mode", "Show action results and failures above the chat list. Failures are always written to the log.", |s| &mut s.beeper.debug_mode);
     beeper.block(vec!["Accounts".into(), "Inbox".into(), "Notifications".into()], |ui, app| {
         let accounts = beeper_account_rows(app);
         if accounts.is_empty() { ui.label("Waiting for Beeper account inventory. No account has been removed."); }

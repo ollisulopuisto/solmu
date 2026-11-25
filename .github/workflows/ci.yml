@@ -184,7 +184,7 @@ jobs:
         run: mbx build --locked --features demo
       - name: macOS window smoke test
         if: runner.os == 'macOS'
-        timeout-minutes: 8
+        timeout-minutes: 10
         run: |
           target/debug/solmu --demo --demo-shot "$RUNNER_TEMP/solmu-content.png" --demo-shot-delay 8000 &
           demo_pid=$!
@@ -193,7 +193,7 @@ jobs:
           wait "$demo_pid"
           test -s "$RUNNER_TEMP/solmu-content.png"
           # Synthetic evidence: stamps, receipts, linked loading and shortcuts.
-          for page in translation-review,dark translation-review,light draft-shelf-confirmed,dark draft-clear-recovery,dark info-source-sent,dark info-source-received,dark info-source-group,dark tail-run,messages tail-run,messages-light chain-above-outgoing,dark regular-tail-outgoing,light hover-actions,dark hover-actions,light refined-thread,dark refined-thread,light avatar-overflow,dark image-burst,dark image-burst,light hidden-message hidden-message,light edit edit,light group-stacks history-date message-info-direct linked linked-loading shortcuts linked,rail linked,rail,light flat-groups,dark info-media info-videos info-voice voice-transcripts voice-transcripts-search chat-transcript-search settings-search=voice whisper-setup; do
+          for page in translation-review,dark translation-review,light draft-shelf-confirmed,dark draft-clear-recovery,dark info-source-sent,dark info-source-received,dark info-source-group,dark tail-run,messages tail-run,messages-light chain-above-outgoing,dark regular-tail-outgoing,light hover-actions,dark hover-actions,light refined-thread,dark refined-thread,light avatar-overflow,dark image-burst,dark image-burst,light hidden-message hidden-message,light edit edit,light group-stacks history-date message-info-direct linked linked-loading shortcuts linked,rail linked,rail,light flat-groups,dark info-media info-videos info-voice voice-transcripts voice-transcripts-search chat-transcript-search settings-search=voice whisper-setup batch-results,dark batch-results,light batch-results,debug,dark batch-results,debug,light; do
             hover=()
             case "$page" in refined-thread,*) hover=(--demo-hover 480,367) ;; esac
             target/debug/solmu --demo --demo-page "$page" "${hover[@]}" \
@@ -248,7 +248,7 @@ jobs:
       - name: Build macOS demo
         run: mbx build --locked --features demo
       - name: macOS window smoke test
-        timeout-minutes: 8
+        timeout-minutes: 10
         run: |
           target/debug/solmu --demo --demo-shot "$RUNNER_TEMP/solmu-content.png" --demo-shot-delay 8000 &
           demo_pid=$!
@@ -257,7 +257,7 @@ jobs:
           wait "$demo_pid"
           test -s "$RUNNER_TEMP/solmu-content.png"
           # Synthetic evidence: stamps, receipts, linked loading and shortcuts.
-          for page in translation-review,dark translation-review,light draft-shelf-confirmed,dark draft-clear-recovery,dark info-source-sent,dark info-source-received,dark info-source-group,dark tail-run,messages tail-run,messages-light chain-above-outgoing,dark regular-tail-outgoing,light hover-actions,dark hover-actions,light refined-thread,dark refined-thread,light avatar-overflow,dark image-burst,dark image-burst,light hidden-message hidden-message,light edit edit,light group-stacks history-date message-info-direct linked linked-loading shortcuts linked,rail linked,rail,light flat-groups,dark info-media info-videos info-voice voice-transcripts voice-transcripts-search chat-transcript-search settings-search=voice whisper-setup; do
+          for page in translation-review,dark translation-review,light draft-shelf-confirmed,dark draft-clear-recovery,dark info-source-sent,dark info-source-received,dark info-source-group,dark tail-run,messages tail-run,messages-light chain-above-outgoing,dark regular-tail-outgoing,light hover-actions,dark hover-actions,light refined-thread,dark refined-thread,light avatar-overflow,dark image-burst,dark image-burst,light hidden-message hidden-message,light edit edit,light group-stacks history-date message-info-direct linked linked-loading shortcuts linked,rail linked,rail,light flat-groups,dark info-media info-videos info-voice voice-transcripts voice-transcripts-search chat-transcript-search settings-search=voice whisper-setup batch-results,dark batch-results,light batch-results,debug,dark batch-results,debug,light; do
             hover=()
             case "$page" in refined-thread,*) hover=(--demo-hover 480,367) ;; esac
             target/debug/solmu --demo --demo-page "$page" "${hover[@]}" \

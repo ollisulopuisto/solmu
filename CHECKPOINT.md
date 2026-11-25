@@ -1,5 +1,20 @@
 # Fast-beeper coordination and development checkpoint
 
+## Action results behind Debug mode - November 24, 2026
+
+Branch `fix/action-results-debug-mode`, based on main 7e0e465, version 26.11.10
+(26.11.9 is open PR #465, so expect a version/CHANGELOG conflict in whichever
+merges later). Owner direction: no action-result or failure UI by default. The
+batch results bar above the chat list renders only with the new Debug mode
+preference (Beeper view section, off by default); backend archive/delete
+failures no longer raise separate toasts, the app logs every mutation failure
+and toasts only untracked ones in Debug mode. Demo `batch-results` gains a
+synthetic failure plus a `debug` flag; four macOS smoke captures added
+(dark/light x off/on) and the smoke step timeout raised 8 -> 10 min for them.
+Own review traced batch_ui producers/consumers, Event::Info consumers, settings
+persistence and the version/changelog chain. Not compiled locally (no Rust
+toolchain capacity in this checkout), CI is the check. No merge by the author.
+
 ## Overflow text: truncation, not scrolling - November 14, 2026
 
 Branch `fix/overflow-text-truncation`, based on main 645b11f, version 0.24.23

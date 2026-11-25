@@ -5090,8 +5090,10 @@ pub fn run(
                         everyone: false,
                         result: result.clone(),
                     });
-                    if let Err(error) = result {
-                        emit(Event::Info(error));
+                    if let Err(error) = &result {
+                        // The mutation result carries this failure to the app,
+                        // which logs it and shows it only in Debug mode.
+                        log::warn!("archive request failed or uncertain for chat {chat}: {error}");
                     }
                     api.refresh_chat(&chat, &accounts, &emit);
                     last_chat_refresh = Instant::now() - CHAT_REFRESH;
@@ -5277,9 +5279,11 @@ pub fn run(
                     });
                     match result {
                         Ok(()) => emit(Event::MessageDeleted { chat, id: wire_id }),
-                        Err(error) => emit(Event::Info(format!(
-                            "Delete failed or uncertain: {error}. Check state before retrying."
-                        ))),
+                        Err(error) => {
+                            // The mutation result carries this failure to the
+                            // app, which logs it and shows it only in Debug mode.
+                            log::warn!("delete failed or uncertain for chat {chat}: {error}");
+                        }
                     }
                 }
                 Command::React {
