@@ -745,7 +745,7 @@ fn sections(app: &App) -> Vec<Section> {
         translated(locale, "Download files automatically"),
         translated(
             locale,
-            "Files up to 64 MiB download as they come into view.",
+            "Incoming images up to 64 MiB download as soon as received. Other files download as they come into view.",
         ),
         |settings| &mut settings.auto_download,
     );
