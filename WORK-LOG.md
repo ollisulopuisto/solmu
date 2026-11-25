@@ -1613,3 +1613,16 @@ Native interaction regression adds actual pointer toggles, occupied/empty
 resume behavior, retained count and list/composer geometry at two widths.
 Local native compile/test and actual current-head captures still pending.
 No merge; existing workflow trims and DB-layer scope still await owner word.
+
+
+## 2026-11-25 - draft shelf integration
+
+Rebased462 onto cec6f020. Conflict resolution limited to capture-list and
+append-only work log. Preserved main chain-above-outgoing,dark and
+regular-tail-outgoing,light scenes while applying the reviewed draft capture
+list trims; no smoke timeout increase. Existing draft shelf source applies
+without manual source resolution. Version26.11.11 skips26.11.10 reserved
+by open466, with matching Cargo.lock and What's New entry. Own delta review
+traces account draft-state transitions, backend write command and archive
+transaction, composer geometry, recall/recovery and current-main integration.
+No fresh native result claimed before CI and real pixels.

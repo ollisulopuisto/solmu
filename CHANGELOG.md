@@ -6,7 +6,11 @@ Newest first. One `## <version>` section per release, bullets under it;
 - Send Later: composer clock expands into four upward presets (8am nearest, parsed message time, custom calendar, recurring); Cmd/Ctrl+Shift+Enter opens it, arrows and 1–4 choose, Esc returns to the draft.
 the app shows the sections newer than the version the user last
 acknowledged, and the latest sections when opened from Help. The
-`## Unreleased` section collects notes for the next release and is never
+`## Unreleased
+
+## 26.11.11
+
+- Keep confirmed local draft rows beside Send, with numbered recall and cleared-text recovery.` section collects notes for the next release and is never
 shown automatically; move its bullets under the release version when the
 version in Cargo.toml is bumped.
 
