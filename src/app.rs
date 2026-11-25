@@ -6248,7 +6248,20 @@ impl App {
                 chat,
                 message,
                 result,
-            } => self.handle_media(&chat, &message, card, result),
+            } => {
+                let queue_busy = result
+                    .as_ref()
+                    .is_err_and(|e| e.starts_with("Media queue is busy"));
+                self.handle_media(&chat, &message, card, result);
+                // A real completion frees capacity. Do not immediately resubmit
+                // a queue rejection into the same full queue.
+                if !queue_busy {
+                    let chats: Vec<_> = self.conversations.keys().cloned().collect();
+                    for chat in chats {
+                        self.download_incoming_images(&chat);
+                    }
+                }
+            }
             Event::Motion {
                 chat,
                 message,
@@ -8162,17 +8175,30 @@ impl App {
         if !self.account().settings.auto_download || self.chat(chat).is_some_and(|c| c.locked) {
             return;
         }
+        // Keep automatic image requests below the backend's256-job backlog,
+        // globally, not merely per chat/event. Completions replenish the batch.
+        const MAX_IN_FLIGHT: usize = 64;
+        let in_flight = self.conversations.values().flat_map(|c| &c.messages)
+            .filter(|m| matches!(&m.content, Content::Image { media, .. } if matches!(media.state, MediaState::Downloading))).count();
+        let capacity = MAX_IN_FLIGHT.saturating_sub(in_flight);
+        if capacity == 0 {
+            return;
+        }
         let Some(conversation) = self.conversations.get_mut(chat) else {
             return;
         };
         let mut ids = Vec::new();
         for message in &mut conversation.messages {
+            if ids.len() == capacity {
+                break;
+            }
             if message.from_me {
                 continue;
             }
             if let Content::Image { media, .. } = &mut message.content
                 && media.path.is_none()
-                && matches!(media.state, MediaState::Idle)
+                && (matches!(media.state, MediaState::Idle)
+                    || matches!(&media.state, MediaState::Failed(error) if error.starts_with("Media queue is busy")))
                 && media.is_within_download_limit()
             {
                 media.state = MediaState::Downloading;
@@ -34419,6 +34445,50 @@ mod conversation_palette_tests {
                 .iter()
                 .any(|c| matches!(c, Command::Download { .. }))
         );
+    }
+    #[test]
+    fn automatic_image_download_does_not_flood_the_bounded_media_queue() {
+        // The backend backlog holds 256 jobs; the overflow becomes a permanent
+        // "Media queue is busy" failure. One event must not dispatch past a cap.
+        let mut app = app();
+        app.backend.record_demo_commands();
+        app.account_mut().settings.auto_download = true;
+        let messages: Vec<_> = (0..400)
+            .map(|i| {
+                let mut message =
+                    crate::archive::tests::message("big-chat", &format!("image-{i}"), i, false);
+                message.content = Content::Image {
+                    caption: None,
+                    media: crate::model::Media {
+                        album: None,
+                        mime: "image/jpeg".into(),
+                        size: 1000,
+                        width: Some(100),
+                        height: Some(100),
+                        path: None,
+                        state: MediaState::Idle,
+                    },
+                    motion: None,
+                };
+                message
+            })
+            .collect();
+        app.apply_backend_event(
+            Event::Messages {
+                chat: "big-chat".into(),
+                messages,
+                older: true,
+                complete: true,
+            },
+            true,
+        );
+        let started = app
+            .backend
+            .take_demo_commands()
+            .iter()
+            .filter(|c| matches!(c, Command::Download { manual: false, .. }))
+            .count();
+        assert!(started <= 64, "{started} automatic downloads in one event");
     }
     #[test]
     fn automatic_image_download_respects_opt_out_and_existing_limits() {
