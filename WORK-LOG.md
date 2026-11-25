@@ -1648,3 +1648,11 @@ transaction, composer geometry, recall/recovery and current-main integration.
 No fresh native result claimed before CI and real pixels.
 
 Independent FIND-462-6: corrected26.11.11changelog placement after a section-boundary regression reproduced the malformed intro insertion. Retest verifies real heading/body and intact intro. No executable change.
+
+## 2026-11-25 - explain disabled delete confirm while a batch is pending
+
+Reviewer note on 466: with Debug mode off the pending batch lines are hidden,
+so the message-delete confirm button could sit disabled with no visible reason
+(the archive review dialog already explains this state). The delete dialog now
+shows the same "An earlier batch still has pending results." line while an
+earlier batch awaits results. No new i18n string; the label already exists.
