@@ -5526,22 +5526,15 @@ fn bubble(
     }
     // Reserve the chain slot before layout, not on hover, so neighbouring
     // messages and their media cannot be covered and hover never reflows.
-    if message.quoted.is_some()
-        || album.is_some_and(|items| items.iter().any(|m| m.quoted.is_some()))
-    {
+    if album.is_none() && message.quoted.is_some() {
         ui.add_space(super::reply_tail::SLOT_HEIGHT);
     }
     let mut response = None;
     let mut area = ui.available_rect_before_wrap();
     // Tails are part of the painted bounds, including beside a linked chip.
     area.max.x = area.max.x.min(footer_right);
-    let tail_room = if message.quoted.is_some()
-        || album.is_some_and(|items| items.iter().any(|m| m.quoted.is_some()))
-    {
-        32.0
-    } else {
-        widgets::TAIL_WIDTH
-    };
+    // Chain targets live above the body, not in a reply-only horizontal gutter.
+    let tail_room = widgets::TAIL_WIDTH;
     area.min.x += tail_room;
     area.max.x -= tail_room;
     ui.scope_builder(
@@ -6947,21 +6940,13 @@ fn bubble_frame(
         })
     {
         if let Some(items) = album {
-            for (index, item) in items.iter().enumerate() {
-                if let Some(quoted) = &item.quoted {
-                    // Each two-column media row reserves at least 132 points. Stack
-                    // its two independent chain/tail pairs beside that row, never
-                    // beside a later message or on top of another member.
-                    let top = tiles
-                        .iter()
-                        .find(|(_, id)| id == &item.id)
-                        .map_or(inner.response.rect.top(), |(tile, _)| tile.top())
-                        + (index % 2) as f32 * 66.0;
-                    let anchor = inner
-                        .response
-                        .rect
-                        .translate(vec2(0.0, top - inner.response.rect.top()));
-                    quote_chip(ui, view, item, quoted, anchor, true, actions);
+            for item in items {
+                if let Some(quoted) = &item.quoted
+                    && let Some((tile, _)) = tiles.iter().find(|(_, id)| id == &item.id)
+                {
+                    // Each tile owns its chain directly above its own column.
+                    // album_content reserves one slot per quoted row.
+                    quote_chip(ui, view, item, quoted, *tile, true, actions);
                 }
             }
         } else if let Some(quoted) = &message.quoted {
@@ -7672,18 +7657,9 @@ fn quote_chip(
     } else {
         palette.bubble_in
     };
-    if album_tail {
-        let side = if message.from_me {
-            widgets::Side::Right
-        } else {
-            widgets::Side::Left
-        };
-        ui.painter().add(egui::Shape::convex_polygon(
-            widgets::bubble_tail_points(body, side, None),
-            fill,
-            egui::Stroke::NONE,
-        ));
-    }
+    // Album tiles are separated by only3pt. A normal8pt filled tail
+    // would cover the adjacent tile, so album chains connect to the tile's
+    // top edge instead. Ordinary message bubbles retain their filled tail.
     let rect = super::reply_tail::chain_geometry(body, message.from_me);
     let connector = palette.raised_edge(fill);
     ui.ctx().data_mut(|data| {
@@ -7718,21 +7694,28 @@ fn quote_chip(
     #[cfg(feature = "demo")]
     let focused = focused || crate::demo::chain_hover_shot(&message.id);
     if response.hovered() || focused {
-        let tail = super::reply_tail::geometry(body, message.from_me);
-        let x = rect.center().x;
-        ui.painter().line_segment(
-            [egui::pos2(x, rect.bottom()), egui::pos2(x, tail.top())],
-            egui::Stroke::new(1.8, connector),
-        );
-        let tip = if message.from_me {
-            tail.right()
+        if album_tail {
+            ui.painter().line_segment(
+                super::reply_tail::album_connector(body, message.from_me),
+                egui::Stroke::new(1.8, connector),
+            );
         } else {
-            tail.left()
-        };
-        ui.painter().line_segment(
-            [egui::pos2(x, tail.top()), egui::pos2(tip, tail.top())],
-            egui::Stroke::new(1.8, connector),
-        );
+            let tail = super::reply_tail::geometry(body, message.from_me);
+            let x = rect.center().x;
+            ui.painter().line_segment(
+                [egui::pos2(x, rect.bottom()), egui::pos2(x, tail.top())],
+                egui::Stroke::new(1.8, connector),
+            );
+            let tip = if message.from_me {
+                tail.right()
+            } else {
+                tail.left()
+            };
+            ui.painter().line_segment(
+                [egui::pos2(x, tail.top()), egui::pos2(tip, tail.top())],
+                egui::Stroke::new(1.8, connector),
+            );
+        }
     }
     ui.ctx().data_mut(|data| {
         let id = bubble_id(&message.chat, &message.id);
@@ -10478,6 +10461,11 @@ fn album_content(
     };
     let mut tiles = Vec::with_capacity(messages.len());
     for (row, chunk) in messages.chunks(columns).enumerate() {
+        // A chain sits above its own tile. Reserve that space for each
+        // media row, so a later row cannot place it over earlier media.
+        if chunk.iter().any(|message| message.quoted.is_some()) {
+            ui.add_space(super::reply_tail::SLOT_HEIGHT);
+        }
         // An own bubble lays out right to left; the grid keeps reading order.
         ui.allocate_ui_with_layout(
             vec2(tile * columns as f32 + gap, tile_height),
@@ -16960,8 +16948,52 @@ mod tests {
         );
     }
 
-    /// Runs `check` with a still view of one plain chat, as a footer test
-    /// needs one to paint into.
+    #[test]
+    fn sender_bubbles_share_left_edge_with_and_without_reply_chain() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let mut ordinary =
+                crate::archive::tests::message(&view.chat.id, "plain-edge", 0, false);
+            ordinary.content = Content::text("Same body");
+            let mut reply = ordinary.clone();
+            reply.id = "reply-edge".into();
+            reply.quoted = Some(crate::model::Quoted {
+                chat: None,
+                id: "source".into(),
+                sender: "source-sender".into(),
+                sender_name: None,
+                summary: "source".into(),
+                labelled: None,
+                mentions: vec![],
+            });
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(600., 500.))),
+                    ..Default::default()
+                },
+                |ui| {
+                    let place = RunPlace {
+                        sender_hue: None,
+                        show_timestamp: false,
+                        show_sender: false,
+                        show_avatar: false,
+                        tailed: true,
+                        overlap_previous: None,
+                    };
+                    let plain = bubble(ui, view, &ordinary, None, place, &mut Vec::new()).unwrap();
+                    let quoted = bubble(ui, view, &reply, None, place, &mut Vec::new()).unwrap();
+                    assert!((plain.rect.left() - quoted.rect.left()).abs() < 0.5);
+                    let chain = super::super::reply_tail::chain_geometry(quoted.rect, false);
+                    assert!(chain.left() >= ui.clip_rect().left());
+                    assert!(chain.bottom() <= quoted.rect.top());
+                },
+            );
+            output.textures_delta.clear();
+        });
+    }
+
+    /// Runs `check` with a still view of one plain chat.
     fn with_still_view(check: impl FnOnce(&View<'_>)) {
         with_still_view_and(check, None, false);
     }
