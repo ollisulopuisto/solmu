@@ -5767,15 +5767,6 @@ mod tests {
         height: f32,
         events: Vec<egui::Event>,
     ) {
-        let modifiers = events
-            .iter()
-            .rev()
-            .find_map(|event| match event {
-                egui::Event::PointerButton { modifiers, .. }
-                | egui::Event::ModifiersChanged(modifiers) => Some(*modifiers),
-                _ => None,
-            })
-            .unwrap_or_else(|| ctx.input(|input| input.modifiers));
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -5783,7 +5774,6 @@ mod tests {
                     egui::vec2(width, height),
                 )),
                 events,
-                modifiers,
                 ..Default::default()
             },
             |ui| {
@@ -17035,7 +17025,8 @@ mod tests {
             // Selection changes bubble widths/heights. Settle that layout
             // before reading the next click target, never reuse its old rect.
             app.apply(crate::model::Action::ScrollTo(message.into()), &ctx);
-            for _ in 0..4 {
+            // Do not turn the next distinct gesture into a double-click.
+            for _ in 0..30 {
                 streak_test_frame(app, &ctx, 1180.0, 2400.0, vec![]);
             }
             let id = crate::ui::conversation::bubble_id(&chat, message);
