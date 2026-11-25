@@ -1,5 +1,9 @@
 # Work log
 
+## 2026-11-25: Mac message focus without Spaces collision
+
+Branch fix/mac-message-focus-shortcut rebased onto merged main61ceed71 after466. Version26.11.13. Message focus uses registry Command-Shift-2 instead of physicalControl-2; exact modifiers and physical digit fallback preserve Finnish shifted symbols. Favorites/network/filter chords unchanged. Traced keyboard routing, help registry and native message-focus action. Rustfmt check passes locally. Rust unit and native routing tests added, not executed locally: no prebuilt GUI dependency tree and limited disk; CI must compile/run. No workflow, DB or credentials changed. Protected439 and held464 untouched. PR only, no merge approval forA3.
+
 ## 2026-11-24: Hide action results behind Debug mode
 
 Owner direction (2026-11-24): no action-result or failure UI by default; a
