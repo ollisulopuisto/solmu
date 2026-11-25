@@ -8,10 +8,18 @@ use egui::{Context, FocusDirection, Id, Response};
 pub enum Stop {
     Composer,
     ViewOnce,
+    Schedule,
+    SendLater,
     Send,
     Attach,
     Emoji,
     PhoneLink(u32),
+    /// Stable session key for a message's Show more/Show less control.
+    BodyToggle(u64),
+    /// Transcript expansion, copy and language, keyed by account/chat/message.
+    Transcript(u64, u8),
+    /// Per-message local display restoration.
+    Unhide(u64),
     /// The chat header's Search, then the search pane's controls in reading
     /// order. The arrows walk its results from the field.
     ChatSearch,
@@ -24,6 +32,8 @@ pub enum Stop {
     /// pointer and accessibility targets, like chat rows.
     InfoClose,
     InfoControl(u8),
+    /// Shared audio rows, then play/download and jump, in newest-first order.
+    InfoVoice(u16, u8),
     /// The open chat's message list: one stop, the arrows walk its messages.
     Messages,
     /// The rail on the left, top to bottom, then the list header's Back
@@ -33,6 +43,7 @@ pub enum Stop {
     /// One network plate in the rail's bottom group, by its position.
     Network(u8),
     Starred,
+    Saved,
     Archived,
     Locked,
     Settings,
@@ -40,12 +51,16 @@ pub enum Stop {
     Back,
     Sidebar,
     Search,
+    Recent,
+    UnreadMode,
+    NeedsMe,
+    ListLayout,
+    NewLocalGroup,
     /// The first chip, All, on the chat list.
     All,
     Unread,
     ReplyLater,
     ReadLater,
-    Filters,
     Private,
     Favorites,
     Groups,

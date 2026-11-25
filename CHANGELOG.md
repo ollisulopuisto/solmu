@@ -1,18 +1,244 @@
 # Changelog
 
+- Replace duplicate reply-jump controls with one attached chain-tail per reply.
+
 Newest first. One `## <version>` section per release, bullets under it;
+- Send Later: composer clock expands into four upward presets (8am nearest, parsed message time, custom calendar, recurring); Cmd/Ctrl+Shift+Enter opens it, arrows and 1–4 choose, Esc returns to the draft.
 the app shows the sections newer than the version the user last
 acknowledged, and the latest sections when opened from Help. The
 `## Unreleased` section collects notes for the next release and is never
 shown automatically; move its bullets under the release version when the
 version in Cargo.toml is bumped.
 
+Versions are CalVer, `YY.M.N`: the two-digit year, the month without a leading
+zero, and the number of the release in that month, starting at 1 (`26.11.1`).
+Cargo, the Mac bundle and the Windows installer need three numeric parts, so
+this is the whole scheme. Older releases (`v0.24.21` and before) keep their numbers.
+
+## 26.11.16
+
+- Declare Swift for Darwin Nix launcher typechecks instead of depending on host Xcode discovery.
+
 ## Unreleased
+
+## 26.11.14
+
+- On Mac, Shift-Command-2 focuses the message list instead of Control-2, leaving Spaces shortcuts to macOS. Shifted digit layouts use the physical 2 key.
+
+## 26.11.12
+
+- Action results no longer appear above the chat list by default. The new Debug mode preference shows them, including failures; every failure is written to the log either way.
+
+## 26.11.11
+
+- Keep confirmed local draft rows beside Send, with numbered recall and cleared-text recovery.
+
+## 26.11.9
+
+- Place each reply chain above its separate tail and match connector lines to the bubble border.
+
+- WhatsApp links accept Finnish domestic numbers beginning with0, and short bare numbers default to+358. Explicit international formats and existing international link targets stay unchanged.
+
+- Show a passive plus to the right of two overlapping service badges when a linked person has more networks.
+- Group message hover actions into a cross-under reaction bar with flush right joins, Reply and Star.
+- Show a Draft label with a one-line preview of the unsent text above the composer.
+
+## 26.11.8
+
+- History jumps recognize a repeated cursor on the last allowed page without losing fetched messages or misreporting a found target. No new header warnings or retry controls.
+
+## 26.11.7
+
+- Consecutive image messages from one sender, at most five seconds apart, share the existing gallery. Protocol albums stay separate; selecting or locally hiding messages keeps the existing individual-message view.
+
+## 26.11.6
+
+- Accepted message-delete notices clear after ten seconds. Pending, failed and uncertain outcomes remain visible; clearing a receipt notice does not confirm remote completion.
+
+## 26.11.5
+
+- Keep very large pasted messages responsive: use greedy wrapping above 8 KiB and bound long shaping paragraphs without changing stored or copied text.
+- Keep explicit code/transcript copies literal, including real newlines, and avoid repeated paragraph scans when drawing long list items.
+
+## 26.11.4
+
+- History jumps preserve the actual stop reason instead of replacing every failure with a possible 400-page limit. The limit is local to Solmu, unchanged, and only reported when reached. Good pages remain loaded.
+
+- Wrapped list items use hanging indentation, keeping continuation lines under the item text rather than the bullet or number.
+- Chat-list reaction previews distinguish your reaction from reactions to your messages, without showing the original sender or delivery ticks as though the reaction were a new message. English wording first.
+- Preserve rich-text headings, paragraphs, code breaks, table fallback, compact HTML lists, literal markers and reversed numbering; safely reconstruct nested-list and hard-break edits.
+
+- Ordered lists in Beeper rich-text messages keep their numbers after sending, including nested lists and non-default starting numbers, instead of appearing as bullets. Outbound Markdown stays unchanged.
+
+- Bridge messages carrying several attachments show them all instead of only the first: the set appears as an album with its caption, and each item downloads, replies, reacts and is deleted together with the message.
+
+- Customize avatar: the Photo tab has a draggable, zoomable circular crop with live sidebar-size previews; on macOS the crop auto-centres on the detected face (native Vision, on-device) and can re-centre on demand, other platforms keep the centre crop. Existing avatars keep their look.
+- Sent text bubbles share a run's width only when they are near-equal to its widest text (within 16 points and 15%); media, cards, quotes and forwards keep their own width and no longer inflate short replies around them.
+- The chat list shows a contact's full-size picture when their thumbnail fetch missed, instead of bare initials while Contact info already has the photo.
+- Fenced code blocks and quotes sit on quiet inset panels with a pale accent bar, inline code gets a small inset, and each code panel has a Copy code button that copies the exact block contents.
+- A link preview that fails to load stays quiet: no unavailable row and no retry button under the message.
+
+- Long message bodies stop after 25 rendered lines. Show more gives the hidden-line count, Show less folds them again; copy, reply and forward keep the full message.
+- Customize avatars locally from Contact or Group info with an image or initials and colour. The override follows the identity across the sidebar and chat views; reset restores its source picture without changing anyone's profile.
+- Context menus show working message and chat shortcut hints. While a menu is open its keys act on that right-clicked item, not the background chat; palette and Saved-list shortcuts stay separate.
+
+- Local and Wyoming transcription now reject audio longer than five minutes instead of retaining unbounded audio or silently truncating video at fifteen minutes. Encoded audio is limited to 64 MB.
+
+- Local transcription setup: explicitly select this computer or your Wyoming server. Download the multilingual Whisper Base model only on request, with progress, cancellation, verification and removal. Existing Wyoming settings are preserved; there is no silent server fallback. Prebuilt runtimes are pinned for all six platforms to the published whisper-helper-v1.9.5 release (macOS signed and notarized; Linux and Windows hash-pinned); actual-app public-download verification runs in CI.
+- The chat list has a real Group by section switch beside +. Cmd+G (Ctrl+G on Linux/Windows) does the same; the key appears on hover only. Removed the extra mode explainer line.
+- Recent's group sections order themselves by their freshest chat, and a section with unread chats lists only those - a row under it shows the rest. A chat opened from a filtered section stays in it, dimmed, until the view changes.
+
+- Voice shared items can expand and search saved transcripts; in-chat search includes saved transcript matches without starting transcription.
+- The sidebar uses named Recent, Unread and Needs me tabs. Recent includes all chats, newest first, without a date cutoff; old Unread 7d settings open Recent. A + beside Groups opens local group creation instead of a permanent input at the end of the list.
+
+- Shared items has separate Photos, Videos and Voice tabs. Voice/audio rows can download and play a clip or jump to its message. Beeper listings now answer instead of spinning, with a clear note when only recent history was scanned.
+
+- Both About views show the full packaged build version, including the manual build suffix, instead of only the base Cargo version.
+
+- Linked-person chat headers keep clear of the Mac traffic lights after Cmd+B hides the chat list, including at different zoom levels.
+
+- The Mac menu bar has a Go menu (Chats, Bookmarks, Starred messages, Archived, Locked, Jump to chat, Command palette, Next and Previous number) and a Chat menu (Archive, Favorite, Reply later, Read later, Quote reply, Forward, Jump to newest, Clear, Leave). The View menu lists the four chat-list modes, Next list mode and the group-sections or flat-list switch. Menu items show the same keys as the keyboard; entries without a key stay blank.
+- The bookmark icon at the end of the chat-list mode row is gone, since it duplicated the rail's: Bookmarks opens from the rail, Go > Bookmarks or Cmd+Shift+B. The rail's Saved tooltip now shows the key.
+- The chat list has two independent choices: the mode (All, Unread, Unread 7d, Needs me; Cmd+D) and the layout (group sections or one flat list with the group name on each row; Cmd+G). The layout is remembered for each mode, and every mode starts as group sections, as before.
+- Opening a chat in Unread, Unread 7d or Needs me no longer drops it from the list: it stays in place, read, until you change the view (switch mode, pick a filter or archive). This worked only for the old Unread chip before.
+- The chat-list mode tabs no longer truncate: All keeps its word, and Unread, Unread 7d and Needs me are icons (a filled dot, a calendar with a dot, an alert circle) with the full name as tooltip and screen-reader label.
+- A fourth chat-list mode, Unread 7d, sits between Unread and Needs me: unread chats with activity in the last seven days, never a muted one, so an old unread backlog stays out of the way. Cmd+D now steps All, Unread, Unread 7d, Needs me. Unread still lists every unread chat, and a saved mode from before opens as it did.
+- Long image titles in the viewer no longer scroll back and forth: they end in an ellipsis and show in full on hover, and they no longer keep the window repainting while visible.
+- Ghost groups: select two or more chats in the list and choose "Message … separately" to write one message that goes to each chat on its own. Optionally keep the selection as a ghost group, which lives only on this computer, disbands in one click and expires after 7 days without use (each use restarts the clock). No merge fields, no send limits, and no per-chat result tracking yet.
+- The linked-person view's history catch-up no longer repaints five times a second while it waits: each answered page already wakes the window, and the header spinner shows the wait.
+- Settings' local-AI translation shows a real spinner while it runs instead of repainting every 250 ms.
+- The app lock's try-again countdown repaints once a second, exactly when the shown number changes, instead of every 250 ms.
+- Send Later can repeat: every N days, every N weeks on chosen weekdays, or every N months, ending never, on a date or after a number of sends. The dialog previews the next three dates. The queue has a Repeating tab with Skip next, Pause, Edit and Stop series. A missed occurrence waits for your decision and a series never catches up with a burst. A clock icon beside Send (refresh arrows for a repeating one) shows that the open chat has a schedule and opens the queue. Needs the same solmu-scheduler as Send Later; an older scheduler sends one occurrence and does not queue the next.
+- Favorite is the one mark: on a Beeper chat it also sets the bridge pin while one is free, and removing the favorite removes the pin, so a pin can no longer keep a chat in your favorites.
+- The chat list's modes are All, Unread and Needs me, and Cmd+D steps through them. Unread lists every unread chat, muted ones included; the old Focus mode is gone (favorites stay one click away in the rail and on Cmd+1..9), and a saved Focus setting opens as All.
+- A Bookmarks icon after the mode tabs, or Cmd+Shift+B, opens the Saved list; a Starred and Saved switch under its header moves between the two. Cmd+D skips it. Pinned messages are not listed there, since they have no list across chats.
+- Group headings fold with a click (Shift-click folds or unfolds all, or use the heading's right-click menu); a folded heading shows how many unread chats it hides, and a reveal unfolds the group it needs.
+- Outside Recent, groups with no chats drop their heading.
+- Right-click a chat and hover "Assign groups" to see every group at once and pick one; dragging a chat onto a group heading assigns it in every mode, and onto Other takes it out of its group.
+- Drag a group heading onto another to reorder groups; the order is saved.
+- The shrug ¯\_(ツ)_/¯ keeps its underscores in a bubble: an underscore next to a slash or backslash is not emphasis.
+- A macOS Text Replacement whose stored text is still escape text (such as the shrug as `\U00af\\_(\U30c4)_/\U00af`) expands to the characters, not the escape codes.
+- Archive multiple selected chats without deleting messages.
+- Explicit per-chat bridge-supported message deletion scope and age checks.
+- Unsupported-item preflight and request-correlated per-item outcomes, no auto retry.
+- The composer's send and record circle no longer touches the field's border: it is inset the same on the right, top and bottom, and centred on the field's centre line.
+- Settings no longer shows an About button inside the About section. The button only reopened the About dialog over the section that was already on screen; the dialog remains available from the macOS menu. The section gains a whatsapp-rust chip so the protocol library link the dialog shows only on macOS stays reachable on every platform.
+- Emoji-only messages of up to three emoji draw without a bubble, like stickers: one emoji largest, two or three big, and in group chats under a floating sender name. A message quoting another, carrying a link preview, or mixing text with emoji keeps its bubble.
+- Latest/Groups list views with local-only many-to-many membership.
+- Assign groups with Apply/Cancel, additive drag with Undo, safe group deletion.
+- Cmd-D switches views; requires shared keymap #281 (info is Cmd-Option-I).
+- The info sidebar moves from Cmd-D to Cmd-Option-I under the shared Postilaatikko/Solmu keymap; Cmd-D is reserved for the upcoming groups toggle. The shortcuts dialog and the macOS menu show the new chord.
+- Hide the View once photo toggle on Beeper chats. The send API cannot carry this mode, so offering it led to a refused send. Existing attachment drafts are retained without silently changing their send mode.
+- On macOS the message field applies the system's text replacements (System Settings > Keyboard > Text Replacements): a shortcut typed before a space, return, or punctuation expands to its phrase, including when adding a line or sending. Edits in System Settings apply the next time the window gains focus.
+- A file name like run_widths.rs is no longer linked as http://widths.rs: a bridge's automatic link on a bare name keeps just the text, and a bare name right after an underscore is not a link. Explicit http(s):// and www. links are unchanged.
+
+## v0.24.21
+
+- Link suggestions: when two one-to-one chats on different networks have the same full name or the same phone number or username, Contact info shows a "Same person?" card with Link and Not the same person, and Filters lists them under "Link suggestions". Linking can be undone for a few seconds, and a dismissed pair is not suggested again. Nothing is linked automatically and nothing leaves your computer.
+
+## v0.24.20
+
+- Cmd-R now quote-replies to the latest loaded incoming message in ordinary chats too, preserving the draft and focusing the composer through the existing Reply action. Cmd-L opens the existing Forward dialog for the selected messages, or the latest forwardable message. Beeper forwarding itself remains unsupported until the separate composed re-send feature is implemented.
+- Linked chats use the default network's profile picture, then the other linked networks in their saved order. Initials appear only when none has a picture.
+- Accept Beeper send confirmation when a pending message resolves to its final message ID. Successful sends no longer get a false 60-second warning solely because the ID changed. Unknown confirmations are not called pending; nothing is automatically resent.
+- Telegram and other media downloads wait in a bounded backlog when the worker queue is full, instead of failing immediately. Downloads start as slots free; exceeding the backlog limit or losing the worker still reports an error. New explicit requests go before automatic backlog work, but the current UI cannot promote an automatic download already shown as Downloading.
+
+- Exported attachment names cannot select NTFS alternate data streams through a colon in the original filename.
+
+- Saving an attachment whose name Windows reserves for a device (CON, NUL, COM1, ...) now keeps its extension: `CON.pdf` is saved as `attachment.pdf`, not `attachment`.
+- Automatic chat categories, first slice. Filters now has an Automatic category choice: People (one-to-one chats active in the last 7 days), Quiet people (idle 7 to 30 days), Long quiet (idle 30 days or more) and Notifications (channels and read-only chats). Groups stay in Groups. A chat's menu has Move to… to put a one-to-one chat in a category for good; the rules never re-sort it, and Sort automatically hands it back. The categories are opt-in filters: the default list, its order and its counts are unchanged, nothing is marked read, and nothing leaves this computer. While you search, the names of Quiet people chats fade a little and Long quiet chats fade more, in the chat rows and the message results, never below readable contrast. Your labels remain the tags. See docs/chat-categories.md.
+
+## v0.24.19
+
+- Telegram and other videos that Beeper sends without a file type no longer save as `.bin`. Solmu now takes the type from the file name, the server's content type or the file's first bytes, so they open in the player and your system viewer.
+
+## v0.24.17
+
+- Link person: in Contact info, Link selected is now the filled green button and looks inactive only while no chat is ticked. Link person... and Add chats to this person... are plain outlined buttons. Before, Link selected looked like a disabled toggle, so pressing it seemed to do nothing even though it linked.
+
+## v0.24.12
+
+- Reply with attachments on Beeper: a reply quote now goes with a sent file, document or pasted picture instead of the send being refused. The quote belongs to the first file, as the guide already describes. Mentions and view-once stays refused with attachments.
+- Reject URLs and preview links with deeply nested percent-encoded control characters: decoding now fails closed at the layer bound instead of letting a 17+ layer encoded control through.
+- Upgrade rusqlite to 0.41.1 (libsqlite3-sys 0.39.1). This turns the RUSTSEC-2026-0459 advisory check green, but the bundled SQLCipher path still builds SQLite 3.53.4 via sqlcipher-src 419.0.6 and stays affected (fixed upstream in SQLite 3.54.0); the archive remains exposed until sqlcipher-src and libsqlite3-sys adopt a patched SQLite. Exploitation needs a locally crafted database and -wal pair.
+
+## v0.24.11
+
+- The command palette (Ctrl+P) shows the key next to each command, lists Jump to open chat (Ctrl+K), and stays open after you pick a filter so you can try several in a row. Commands that open a dialog (New chat, Shortcuts, What's New, Send Later queue, Schedule this message) now really open it; before, the palette closed it again.
+## v0.24.10
+
+- Quoted replies, pictures, GIFs and videos now join a run of plain messages anywhere in it, not only at its start, and Sent, Delivered and Read receipts of your own messages no longer split a run. The time-gap rules are unchanged.
+
+## v0.24.9
+
+- Clicking a message's reply arrow, double-clicking a message, or using Reply to latest match in a linked chat now puts the cursor in the message field, the same as Cmd-R.
+
+## v0.24.8
+
+- Reclaim discarded linked-media downloads and old GIF thumbnails, keep native media types with each draft, and allow Send Later when a failed voice note belongs to another conversation. GIF search coalesces edits instead of starting a request thread for every keystroke.
+
+- Voice notes, GIFs and stickers in linked chats use the same default or chosen source. GIFs and stickers stage before Send, keep their native media types, and return to the owning draft after an uncertain upload. The source picker remains available while recording.
+
+- Keep returned linked attachments and captions in a reachable draft, preserve their original reply/source on retry, and refuse Send Later while media is staged.
+- Paste, drop, or pick pictures and files in linked chats. They send through the saved default source, or the source you choose from the network/account picker. Missing or unavailable defaults require a choice; attachments never fall back to the visible member chat.
+
+- Follow-up text bubbles use each sender/source's recent cadence instead of a fixed calendar-minute boundary. The last ten minutes of completed gaps set a 1.5x average allowance, bounded to 2-5 minutes. A long pause starts a new burst; replies, metadata and other existing boundaries still stay separate.
+
+- Cancelling a reply with X or Esc in a linked chat keeps the quote cleared, preserves the draft, and sends the next message without the cancelled quote.
+
+- Keep macOS package-signing and notarization passwords out of process arguments and error output during release builds.
+
+## v0.24.7
+
+- Message widths snap to 80-point steps: short text uses 80/160/240-point content widths, cards start at 320 points, and longer text/cards share the same larger steps within the window.
+
+- Cmd-R (Ctrl-R outside macOS) in a linked chat quotes the latest loaded incoming message, selects its exact bridge/account/chat and focuses the composer. Newer outgoing messages and search filters do not change the target; nothing is sent automatically.
+
+- Text streaks overlap with the older bubble in front and keep a triangular speech tail on every bubble. Group speaker changes use contrasting colored drop shadows, including their tails, while names and avatars remain visible.
+- Reactions and message time share a compact row that wraps when needed without covering one another.
+
+- Keep outgoing linked-chat network icons outside message bubbles.
+
+- Opening or marking a linked person read clears the exact unlocked source chats shown together, not only the representative chat. Live updates and returning focus use the same scope; incognito and hidden-account protections remain.
+
+- Save all exports are owner-only on Unix, rather than inheriting a world-readable default mode.
+- Save all keeps attachments with colliding sanitized filenames separate and checks the batch before writing.
+
+## v0.24.6
+
+- Message clocks sit below the final bubble of each same-sender/source minute, aligned with that sender's edge. The wide right-hand clock gutter is removed.
+- Unknown delivery status no longer paints a standalone dash in the transcript; hover still explains that the status is unavailable. Real pending, sent, delivered/read and failed states remain visible. Failed text can be restored to the composer for review by clicking its failure label; nothing is sent automatically.
+
+
+## v0.24.5
+
+- Day changes have more room above and below their labels in ordinary and linked timelines.
+- Message clocks align in a fixed right-edge gutter instead of following each bubble's width. Consecutive same-sender, same-source messages in one minute show the clock only beside the last bubble. Status ticks, edited/failure notices, pin/star marks and exact-time hovers remain available.
+
+## v0.24.4
+
+- Chat header actions now use outlined icon cells beside Search, with green active states and tooltips. Linked timelines use the same single header row, including at narrow widths.
+- Background live-update errors stay discoverable in a compact Connection status control instead of painting raw diagnostics across messages. Details explain that messages may be missing while updates retry.
+- Favorite avatars include unread state from other unlocked chats linked to the same person. Network badges use a single muted color so unread counts and the active chat stay easy to see. Muted unread badges keep the attention color, only slightly subdued instead of grey.
+
+## v0.24.3
+
+- Conversation clocks and status marks sit outside the bubble toward the centre. Date separators carry the day; hovering the clock keeps the full local timestamp. Photos and albums no longer draw a timestamp over the image.
+- Search results now request missing Beeper history instead of silently dropping the jump command. The target stays pending until reached; history failures and a 50-page safety bound are explicit and retryable.
+- Global and in-chat Beeper searches offer Load more when the API reports another page. Each click fetches one next cursor page, keeps earlier pages and is capped at 50 pages with a notice, preserving query/day/chat scope.
+- Cmd/Ctrl+K keeps recent chats with an empty query. Typing lists matching chat names first, then message text from the existing index plus fuzzy matching of loaded text. Remote Beeper search is literal-word search, so typo matches in unloaded history are not guaranteed.
+- The open-chat toolbar duplicates Read later, Reply later, Favorite and Archive actions, including clear/unfavorite/unarchive states. Later flags remain local and use the same existing shortcuts.
+
+- Search shortcuts now have fixed scopes on macOS and elsewhere: Cmd/Ctrl+F searches within the open chat only, Cmd/Ctrl+Shift+F searches all messages and chats, and Cmd/Ctrl+K stays recent chats. macOS Edit menus now match the keyboard instead of routing Cmd+F to the global search. Settings search is reached by clicking its field, not by changing Cmd+F's meaning.
+
+## v0.24.1
+
+- macOS: Cmd-Tab now restores minimized Solmu windows by default after real-device testing of the opt-in. Set `SOLMU_EXPERIMENTAL_RESTORE_MINIMIZED=0` when launching to opt out. Closed-window activation and Dock reopen keep their existing paths.
 
 - Conversation day separators now show Today, Yesterday and Day before yesterday, then short numeric dates in the system locale's order. Dates from another year include the full year. Finnish regions show Tänään, Eilen and Toissapäivänä. Bubble clocks and chat-row timestamps are unchanged.
 - The four-way queue toggle can show chat counts for All, Unread, Reply later and Read later. Settings > Chats > Show queue counts is on by default; turn it off for icons only. Counts follow the current search and filters, count linked people once, and are separate from unread-message counts.
 
-- macOS: explicitly subscribe the late-installed Cmd-Tab activation handler with standalone method type encodings so it reliably requests a new window when running headless, and provide experimental direct minimized-window restoration behind `SOLMU_EXPERIMENTAL_RESTORE_MINIMIZED=1` (off by default, awaiting native acceptance). Dock reopen stays separate.
+- macOS: explicitly subscribe the late-installed Cmd-Tab activation handler with standalone method type encodings so it reliably requests a new window when running headless, and provide direct minimized-window restoration (now on by default; set `SOLMU_EXPERIMENTAL_RESTORE_MINIMIZED=0` to opt out). Dock reopen stays separate.
 - Favorites ordering avoids normalizing ordinary ASCII search text just to test emptiness, while preserving Unicode search behavior.
 
 - Sidebar shortcuts follow the visible queue: Cmd+Option+3 (Ctrl+Alt+3 elsewhere) selects Reply later, and 5 toggles Favorites only. Network tooltips now show Option/Alt without Command/Ctrl. Fixed the off-Mac Ctrl+Shift+1 Chats collision and corrected shortcut help and guide references.

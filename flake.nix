@@ -70,6 +70,8 @@
                   libxi
                   libxrandr
                 ];
+              # NixOS development shells have no /usr/bin/tar.
+              SOLMU_TAR = "${pkgs.gnutar}/bin/tar";
               SOLMU_TEST_RTL_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf";
             }
             // pkgs.lib.optionalAttrs isLinux {
@@ -140,6 +142,9 @@
                 icnsify
                 rcodesign
               ];
+            # The launcher integration check typechecks Swift inside the sandbox.
+            # Do not discover a host Xcode compiler through xcrun there.
+            nativeCheckInputs = pkgs.lib.optionals isDarwin [ pkgs.swift ];
             # On macOS the app links the system frameworks instead.
             buildInputs = pkgs.lib.optionals isLinux (
               with pkgs;
@@ -150,7 +155,17 @@
                 libx11
               ]
             );
+            env = pkgs.lib.optionalAttrs isDarwin {
+              SOLMU_SWIFTC = "${pkgs.swift}/bin/swiftc";
+            };
+            # Pin the extractor in the package itself, not only the dev shell.
+            # Its store reference retains GNU tar in the runtime closure.
+            SOLMU_TAR = "${pkgs.gnutar}/bin/tar";
             SOLMU_TEST_RTL_FONT = "${pkgs.dejavu_fonts}/share/fonts/truetype/DejaVuSans.ttf";
+            # The build sandbox has no system time zone database, and jiff
+            # reads one for the mute-morning tests. TZDIR points it at the
+            # nixpkgs copy.
+            TZDIR = "${pkgs.tzdata}/share/zoneinfo";
 
             # The vendored OpenSSL (through rusqlite's bundled SQLCipher) embeds
             # its build line, compiler path included, in the binary. The app

@@ -8,11 +8,14 @@
 - Beeper Python packaging/launcher or harness-only changes run the current-source
   adapter tests plus Python tests on Linux, without recompiling four native apps.
 - Runtime source/assets/native-packaging changes run those portable checks first,
-  then quality and Ubuntu tests. PRs and routine main source merges no longer fan
-  out to macOS/Windows test legs, Debian12, Windows ARM or the three Nix systems;
-  those full matrices run on version tags, merge queues and manual scope=full,
-  matching the recorded preference that full platform matrices belong to tagged
-  releases or manual runs. Nix inputs (flake/flatpak) still select native+Nix.
+  then the macOS test leg (tests, demo build, window smoke test) as the merge
+  gate; quality, Ubuntu tests and a PR's Nix package wait for it and report
+  later, so the Mac result lands first and the rest may finish after a merge.
+  A failed macOS leg does not hide Linux feedback. Windows test legs, Debian12,
+  Windows ARM and the three-system Nix fan-out still run only on version tags,
+  merge queues and manual scope=full, matching the recorded preference that
+  full platform matrices belong to tagged releases or manual runs; release
+  coverage is unchanged. Nix inputs (flake/flatpak) still select native+Nix.
 - Cargo/toolchain/build inputs and CI routing changes select every check family.
   Nix inputs select native and Nix checks. Unclassified implementation paths
   conservatively select portable/native/Nix checks. Deleted files count too.

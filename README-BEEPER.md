@@ -72,3 +72,15 @@ Named message links written as `Title (https://address)` show the title as a
 clickable link. Hover shows the full address. Standalone URLs remain visible;
 message copy/export retains the original text and address. Selecting only the
 visible title copies that title, like other displayed text.
+
+Supplied Beeper `links[]` metadata can show the first matching link's title and
+summary as a preview card. The original message URL remains the click target,
+even when metadata reports a redirected URL. This reads metadata already in
+the message; it does not contact websites or download `img`/`favicon` URLs.
+Messages without supplied metadata stay bare links. Local preview fetching is
+a separate opt-in feature, not part of this mapping change.
+
+Malformed chat, history or search pages are connection/schema failures, not
+empty results. A missing `items` array leaves the last good chat/search state
+in place and does not mark message history as exhausted. A real empty
+`items: []` page remains valid.

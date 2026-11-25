@@ -14,7 +14,7 @@ use crate::wallpaper;
 
 use super::widgets;
 
-/// The settings search field, which Ctrl+F focuses on this page.
+/// The settings search field, focused by clicking it.
 pub const SEARCH_ID: &str = "settings-search";
 
 /// A settings string with its English source, so the search finds a
@@ -314,7 +314,7 @@ pub fn column_id() -> egui::Id {
     egui::Id::new("settings-column")
 }
 
-/// The search field above the settings. Ctrl+F focuses it.
+/// The search field above the settings.
 fn search(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let mut text = app.settings_search.clone();
@@ -416,6 +416,7 @@ fn sections(app: &App) -> Vec<Section> {
         |s| &mut s.beeper.notify_focused_chat,
     );
     beeper.toggle("Notify for group messages", "Off suppresses ordinary group notifications. Mentions and replies to you can still notify.", |s| &mut s.beeper.notify_group_messages);
+    beeper.toggle("Debug mode", "Show action results and failures above the chat list. Failures are always written to the log.", |s| &mut s.beeper.debug_mode);
     beeper.block(vec!["Accounts".into(), "Inbox".into(), "Notifications".into()], |ui, app| {
         let accounts = beeper_account_rows(app);
         if accounts.is_empty() { ui.label("Waiting for Beeper account inventory. No account has been removed."); }
@@ -511,32 +512,96 @@ fn sections(app: &App) -> Vec<Section> {
         if ui.add_enabled(ready,egui::Button::new("Translate with local API")).clicked() {
             app.local_ai.start(app.settings.beeper.local_ai_endpoint.clone(),app.settings.beeper.local_ai_model.clone(),app.settings.beeper.local_ai_language.clone(),app.settings.beeper.local_ai_allow_lan);
         }
-        if app.local_ai.busy() { ui.ctx().request_repaint_after(std::time::Duration::from_millis(250)); }
-        ui.label(&app.local_ai.status);
+        // A real spinner while the translation runs instead of a blind
+        // 250 ms poll: its frames drive local_ai.poll() only while shown.
+        if app.local_ai.busy() {
+            ui.horizontal(|ui| {
+                crate::theme::spinner(ui, 14.0, app.palette.accent);
+                ui.label(&app.local_ai.status);
+            });
+        } else {
+            ui.label(&app.local_ai.status);
+        }
         if !app.local_ai.output.is_empty() {
             ui.label("Generated translation (review, may be wrong):");
             ui.add(egui::TextEdit::multiline(&mut app.local_ai.output).desired_width(f32::INFINITY).desired_rows(5));
-            if ui.button("Copy translation").clicked() { ui.ctx().copy_text(app.local_ai.output.clone()); }
+            if ui.button("Copy translation").clicked() { crate::transcript::copy_literal(ui.ctx(), app.local_ai.output.clone()); }
         }
     });
     // Voice-note transcription is not Beeper-specific: every mode that
     // can play a voice note must reach these controls, so the section is
     // always listed, unlike the Beeper-only one above.
+    let mut media_tools = Section::new(translated(locale, "Media tools"));
+    media_tools.block(
+        vec![
+            "ffmpeg".into(),
+            "ffprobe".into(),
+            "Transcription".into(),
+            "Media tools".into(),
+        ],
+        |ui, app| super::media_tools::show(app, ui),
+    );
     let mut transcription = Section::new(translated(locale, "Voice notes"));
-    transcription.block(vec!["Transcription".into(), "Voice notes".into(), "Wyoming".into(), "Whisper".into()], |ui, app| {
-        ui.heading("Voice-note transcription");
-        ui.label("A Wyoming Whisper service you already run, on this computer or your own network. The audio and the transcripts never leave for a cloud service; an unreachable address fails with a visible error, never a silent fallback. Empty disables transcription.");
-        let before = (app.settings.transcription_wyoming.clone(), app.settings.transcription_language.clone());
-        ui.label("Service address (host:port, no credentials in this field)");
-        ui.text_edit_singleline(&mut app.settings.transcription_wyoming);
-        ui.label("Language (\"fi\", \"en\", ...; empty = detect automatically)");
+    transcription.block(vec!["Transcription".into(), "Voice notes".into(), "Wyoming".into(), "Whisper".into()], move |ui, app| {
+        use crate::i18n::gettext;
+        use crate::settings::TranscriptionEngine;
+        ui.heading(gettext(locale, "Voice-note transcription"));
+        ui.label(gettext(locale, "Choose where speech is transcribed. There is no cloud service or automatic fallback."));
+        let before = (app.settings.transcription_engine(), app.settings.transcription_wyoming.clone(), app.settings.transcription_language.clone());
+        let mut choice = app.settings.transcription_engine();
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut choice, TranscriptionEngine::Off, gettext(locale, "Off"));
+            ui.add_enabled_ui(crate::whisper_runtime::artifact().is_some(), |ui| {
+                ui.selectable_value(&mut choice, TranscriptionEngine::Local, gettext(locale, "On this computer"));
+            });
+            ui.selectable_value(&mut choice, TranscriptionEngine::Wyoming, gettext(locale, "My Wyoming server"));
+        });
+        if choice != before.0 { app.settings.transcription_engine = Some(choice); }
+        if choice == TranscriptionEngine::Local {
+            ui.label(gettext(locale, "Whisper Base multilingual. Engine + model download: about 151 MB. Allow 260 MB of free disk space for installation. Audio stays on this computer."));
+            let runtime = crate::whisper_runtime::artifact().is_some();
+            let presence = app.local_whisper_presence.get();
+            let installed = presence == Some(true);
+            if presence.is_none() { ui.label(gettext(locale, "Checking downloaded model…")); }
+            if !runtime { ui.label(gettext(locale, "A verified runtime download is not available in this draft yet. No engine is bundled with Solmu.")); }
+            if app.local_whisper_removal.is_some() {
+                ui.label(gettext(locale, "Removing downloaded engine and model…"));
+            } else if let Some(download) = &app.local_whisper_download {
+                if let crate::local_whisper::DownloadState::Downloading { received, total } = download.state() {
+                    ui.add(egui::ProgressBar::new(received as f32 / total as f32).show_percentage());
+                }
+                if download.cancellation_requested() { ui.label(gettext(locale, "Cancelling download...")); }
+                if ui.add_enabled(!download.cancellation_requested(), egui::Button::new(gettext(locale, "Cancel download"))).clicked() { app.actions.push(Action::CancelLocalWhisperDownload); }
+            } else {
+                if installed {
+                    ui.label(gettext(locale, "Model installed. Verified before its first use."));
+                    if ui.add_enabled(runtime, egui::Button::new(gettext(locale, "Verify or repair engine"))).clicked() { app.actions.push(Action::DownloadLocalWhisper); }
+                    if ui.button(gettext(locale, "Remove downloaded engine and model")).clicked() { app.actions.push(Action::RemoveLocalWhisperModel); }
+                } else if ui.add_enabled(runtime, egui::Button::new(gettext(locale, "Download engine + model & enable"))).clicked() {
+                    app.actions.push(Action::DownloadLocalWhisper);
+                }
+                match &app.local_whisper_status {
+                    Some(crate::local_whisper::DownloadState::Failed(error)) => { ui.label(format!("{} {error}", gettext(locale, "Download failed:"))); }
+                    Some(crate::local_whisper::DownloadState::Cancelled) => { ui.label(gettext(locale, "Download cancelled. No partial model was kept.")); }
+                    _ => {}
+                }
+            }
+        }
+        if choice == TranscriptionEngine::Wyoming {
+            ui.label(gettext(locale, "A Wyoming Whisper service you run on this computer or your own network. Audio is sent only to this address, never as a fallback from the local engine."));
+            ui.label(gettext(locale, "Service address (host:port)"));
+            ui.text_edit_singleline(&mut app.settings.transcription_wyoming);
+        }
+        ui.label(gettext(locale, "Language (fi, en, ...; empty = detect automatically)"));
         ui.text_edit_singleline(&mut app.settings.transcription_language);
-        if before != (app.settings.transcription_wyoming.clone(), app.settings.transcription_language.clone()) { app.actions.push(Action::SettingsChanged); }
+        if before != (choice, app.settings.transcription_wyoming.clone(), app.settings.transcription_language.clone()) { app.actions.push(Action::SettingsChanged); }
         ui.label("Transcripts are stored on this computer, per account and chat, and follow a chat you delete or clear. Transcript text joins message search on this computer only.");
-        if ui.add_enabled(app.transcriber.is_some(), egui::Button::new("Delete all transcripts on this computer")).clicked()
-            && let Some(worker) = &app.transcriber
+        if ui.add_enabled(app.transcript_reader().is_some(), egui::Button::new("Delete all transcripts on this computer")).clicked()
+            && let Some(worker) = app.transcript_reader()
         {
-            worker.clear();
+            if worker.clear().is_err() {
+                app.toast_error(crate::i18n::gettext(locale, "Could not delete every saved transcript. Some encrypted archives may still contain them.").into_owned());
+            }
             // The per-message language overrides belong to the transcripts.
             app.settings.transcription_language_overrides.clear();
             app.actions.push(Action::SettingsChanged);
@@ -613,6 +678,27 @@ fn sections(app: &App) -> Vec<Section> {
             .clicked()
             {
                 app.actions.push(Action::ZoomBy(-0.1));
+            }
+        },
+    );
+    appearance.row(
+        translated(locale, "Reduce motion"),
+        translated(locale, "Show bubble size changes instantly."),
+        |ui, app| {
+            let mut value = app.settings.reduce_motion;
+            let response = widgets::switch(ui, &app.palette, &mut value);
+            theme::reveal_focus(&response);
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::WidgetType::Checkbox,
+                    ui.is_enabled(),
+                    value,
+                    &*crate::i18n::gettext(app.locale, "Reduce motion"),
+                )
+            });
+            if response.changed() {
+                app.settings.reduce_motion = value;
+                app.actions.push(Action::SettingsChanged);
             }
         },
     );
@@ -797,6 +883,21 @@ fn sections(app: &App) -> Vec<Section> {
         "",
         |settings| &mut settings.send_typing,
     );
+    privacy.toggle(
+        translated(locale, "Automatically fetch link previews"),
+        translated(locale, "Off by default. Visible links contact websites directly, sharing your IP address and the requested URL. No proxy is used."),
+        |settings| &mut settings.auto_link_previews,
+    );
+    privacy.toggle(
+        translated(locale, "Remove tracking parameters when opening, copying and fetching links"),
+        translated(locale, "Off by default. Removes known tracking keys, keeps recognized signed URLs, and never changes messages. Some links may still need their original parameters."),
+        |settings| &mut settings.remove_link_tracking,
+    );
+    privacy.row(translated(locale, "Cached link previews"), translated(locale, "Kept in memory on this device only, until Solmu closes. Clearing also cancels pending requests."), move |ui, app| {
+        if ui.button(crate::i18n::gettext(locale, "Clear cached previews")).clicked() {
+            app.actions.push(Action::ClearLinkPreviews);
+        }
+    });
     app_lock_rows(app, &mut privacy);
     // The account values live on the phone: they are shown once fetched and
     // edited only while connected with a fresh snapshot.
@@ -909,7 +1010,7 @@ fn sections(app: &App) -> Vec<Section> {
             translated(locale, "Allow App Nap"),
             translated(
                 locale,
-                "Saves battery by letting macOS pause Solmu in the background. While off, messaging and the connection keep working without delay.",
+                "Saves battery by letting macOS pause Solmu even while its window is open. While off, Solmu stays awake only while a window is shown; hidden or minimized, macOS may pause it and new messages can arrive late.",
             ),
             move |ui, app| {
                 let mut allow = app.settings.allow_app_nap;
@@ -1116,6 +1217,7 @@ fn sections(app: &App) -> Vec<Section> {
             "Solmu".into(),
             translated(locale, "Keyboard shortcuts"),
             translated(locale, "Source code"),
+            "whatsapp-rust".into(),
         ],
         |ui, app| about(app, ui),
     );
@@ -1123,6 +1225,7 @@ fn sections(app: &App) -> Vec<Section> {
     let mut sections = vec![
         appearance,
         chats,
+        media_tools,
         transcription,
         notifications,
         privacy,
@@ -2094,7 +2197,7 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             theme::text(
                 ui,
-                format!("{} {}", "Solmu", env!("CARGO_PKG_VERSION")),
+                format!("{} {}", "Solmu", crate::version::display()),
                 theme::semibold(16.0),
                 palette.text,
             );
@@ -2130,17 +2233,8 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
         {
             app.actions.push(Action::ShowDialog(Dialog::Shortcuts));
         }
-        if theme::soft_button(
-            ui,
-            &palette,
-            Some(Icon::Info),
-            &crate::i18n::gettext(app.locale, "About"),
-            false,
-        )
-        .clicked()
-        {
-            app.actions.push(Action::ShowDialog(Dialog::About));
-        }
+        // No About chip: the section itself already carries what the
+        // dialog shows, and the macOS menu opens the dialog on its own.
         if theme::soft_button(
             ui,
             &palette,
@@ -2152,6 +2246,21 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
         {
             app.actions
                 .push(Action::OpenUrl(env!("CARGO_PKG_REPOSITORY").to_owned()));
+        }
+        // The About dialog links the protocol library only on macOS; keep
+        // the link reachable on every platform.
+        if theme::soft_button(
+            ui,
+            &palette,
+            Some(Icon::ExternalLink),
+            "whatsapp-rust",
+            false,
+        )
+        .clicked()
+        {
+            app.actions.push(Action::OpenUrl(
+                "https://github.com/oxidezap/whatsapp-rust".to_owned(),
+            ));
         }
     });
     ui.add_space(8.0);
@@ -2404,6 +2513,42 @@ fn theme_option(ui: &mut egui::Ui, palette: &theme::Palette, text: &str, selecte
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The About section links to shortcuts and source; an About chip inside
+    /// it would only reopen the dialog already on screen, so none exists.
+    #[test]
+    fn the_about_section_does_not_offer_a_second_about_dialog() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, _) = App::headless(
+            crate::paths::AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::install(&ctx);
+        app.attach(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            about(&mut app, ui);
+        });
+        output.textures_delta.clear();
+        let tree = output
+            .platform_output
+            .accesskit_update
+            .expect("accessibility tree");
+        let buttons: Vec<_> = tree
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.role() == egui::accesskit::Role::Button)
+            .filter_map(|(_, node)| node.label().or_else(|| node.value()))
+            .collect();
+        for expected in ["Keyboard shortcuts", "Source code", "whatsapp-rust"] {
+            assert!(buttons.contains(&expected), "missing chip: {expected}");
+        }
+        assert!(
+            !buttons.contains(&"About"),
+            "the About section must not open a second About dialog"
+        );
+    }
 
     /// The account panel's theme combo is reachable by clicks alone: the
     /// header expanded by egui's everything-visible memory, the combo by a
@@ -2668,5 +2813,24 @@ mod tests {
         let mut account = Section::new(translated(Locale::English, "Account"));
         account.block(Vec::new(), |_, _| {});
         assert!(account.visible(&Filter::new("unlink")).1.is_empty());
+    }
+
+    /// Searching the protocol library's name keeps the section whose chip
+    /// links it: the keyword list names every chip the section draws.
+    #[test]
+    fn settings_search_finds_the_protocol_library_chip() {
+        let directory = tempfile::tempdir().unwrap();
+        let (app, _) = App::headless(
+            crate::paths::AppDirs::under(directory.path()),
+            crate::settings::Settings::default(),
+        );
+        let about = sections(&app)
+            .into_iter()
+            .find(|section| section.title.shown == "About")
+            .expect("About section");
+        assert!(
+            !about.visible(&Filter::new("whatsapp-rust")).1.is_empty(),
+            "searching whatsapp-rust must keep the About section"
+        );
     }
 }

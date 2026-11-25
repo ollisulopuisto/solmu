@@ -94,6 +94,26 @@ pub fn forget(ctx: &egui::Context, uri: &str) {
     ctx.forget_image(uri);
 }
 
+/// Clear a local preview namespace, including decoded/GPU copies.
+pub fn forget_prefix(ctx: &egui::Context, prefix: &str) {
+    let registry = registry(ctx);
+    let uris: Vec<_> = {
+        let mut entries = registry.0.lock().unwrap_or_else(|p| p.into_inner());
+        let uris: Vec<_> = entries
+            .keys()
+            .filter(|uri| uri.starts_with(prefix))
+            .cloned()
+            .collect();
+        for uri in &uris {
+            entries.remove(uri);
+        }
+        uris
+    };
+    for uri in uris {
+        ctx.forget_image(&uri);
+    }
+}
+
 /// Forgets the images that have not been drawn for the longest.
 ///
 /// Images the current frame drew are never forgotten, so a frame that shows

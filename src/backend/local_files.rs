@@ -7,13 +7,48 @@ use super::{Command, Event};
 pub(super) fn handles(command: &Command) -> bool {
     matches!(
         command,
-        Command::PrepareClipboardImage(_)
+        Command::InspectPicture { .. }
+            | Command::ApplyPictureEdit { .. }
+            | Command::PrepareSticker { .. }
+            | Command::PrepareGif { .. }
+            | Command::PrepareClipboardImage(_)
             | Command::SaveAttachmentAs { .. }
             | Command::SaveAttachments { .. }
     )
 }
 
-pub(super) fn run(command: Command) -> Option<Event> {
+pub(super) fn run(command: Command, picture_dir: Option<&Path>) -> Option<Event> {
+    match command {
+        Command::InspectPicture { target, path } => {
+            let result = std::fs::read(path)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| super::picture_edit::inspect(&bytes));
+            return Some(Event::PictureInspected { target, result });
+        }
+        Command::ApplyPictureEdit {
+            target,
+            source,
+            width,
+            height,
+            crop,
+            turns,
+        } => {
+            let result = picture_dir
+                .ok_or_else(|| "Picture edit cache is unavailable".to_owned())
+                .and_then(|dir| {
+                    super::picture_edit::write_temporary(&source, width, height, crop, turns, dir)
+                });
+            return Some(Event::PictureEdited { target, result });
+        }
+        _ => {}
+    }
+
+    if matches!(
+        &command,
+        Command::PrepareSticker { .. } | Command::PrepareGif { .. }
+    ) {
+        return super::linked_media::run(command);
+    }
     run_with_dialogs(
         command,
         |name| {
@@ -44,26 +79,108 @@ fn run_with_dialogs(
         }
         Command::SaveAttachments { files } => {
             let folder = pick_folder()?;
-            let result = files.into_iter().try_for_each(|(source, name)| {
-                let destination = folder.join(safe_name(&name));
-                if destination.exists() {
-                    return Err("A file with this name already exists; save it individually to choose another name".into());
-                }
-                copy(&source, &destination)
-            });
+            let result = save_batch(&folder, files);
             Some(save_result(result))
         }
         _ => None,
     }
 }
 
+/// Plan every name first: normalization must not merge distinct attachments.
+/// Existing files still refuse the batch, and create_new closes overwrite races.
+fn save_batch(folder: &Path, files: Vec<(PathBuf, String)>) -> Result<(), String> {
+    let names: Vec<String> = files.iter().map(|(_, name)| safe_name(name)).collect();
+    let reserved: std::collections::HashSet<String> =
+        names.iter().map(|name| name.to_lowercase()).collect();
+    let mut used = std::collections::HashSet::new();
+    let mut plan = Vec::with_capacity(files.len());
+    for ((source, _), name) in files.into_iter().zip(names) {
+        let mut chosen = name.clone();
+        let mut number = 2;
+        if used.contains(&chosen.to_lowercase()) {
+            loop {
+                let path = Path::new(&name);
+                let stem = path
+                    .file_stem()
+                    .and_then(|part| part.to_str())
+                    .unwrap_or(&name);
+                let extension = path
+                    .extension()
+                    .and_then(|part| part.to_str())
+                    .map_or(String::new(), |part| format!(".{part}"));
+                chosen = format!("{stem} ({number}){extension}");
+                number += 1;
+                let key = chosen.to_lowercase();
+                if !used.contains(&key)
+                    && !reserved.contains(&key)
+                    && !folder.join(&chosen).exists()
+                {
+                    break;
+                }
+            }
+        }
+        let destination = folder.join(&chosen);
+        if destination.exists() {
+            return Err(
+                "A file with this name already exists; save it individually to choose another name"
+                    .into(),
+            );
+        }
+        let source = std::fs::File::open(&source).map_err(|error| error.to_string())?;
+        if !source
+            .metadata()
+            .map_err(|error| error.to_string())?
+            .is_file()
+        {
+            return Err("An attachment source is not a file".into());
+        }
+        used.insert(chosen.to_lowercase());
+        plan.push((source, destination));
+    }
+    for (mut source, destination) in plan {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        // Exported private conversations must not become readable to other
+        // local users through the default 0666 masked by a common 022 umask.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut output = options
+            .open(&destination)
+            .map_err(|error| error.to_string())?;
+        std::io::copy(&mut source, &mut output).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn safe_name(name: &str) -> String {
-    Path::new(name)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
-        .unwrap_or("attachment")
-        .to_owned()
+    // Strip both Unix (/) and Windows (\) path separators to prevent cross-platform directory traversal
+    let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    // A colon in any component selects an NTFS alternate data stream, even
+    // after a reserved stem is replaced. Normalize it before preserving suffixes.
+    let stream_safe = leaf.replace(':', "_");
+    let trimmed = stream_safe.trim();
+    let sanitized = trimmed.trim_end_matches([' ', '.']);
+    let stem = sanitized.split('.').next().unwrap_or(sanitized);
+    if sanitized.is_empty()
+        || sanitized == "."
+        || sanitized == ".."
+        || sanitized.chars().any(char::is_control)
+    {
+        "attachment".to_owned()
+    } else if crate::safety::is_reserved_dos_name(stem) {
+        // Windows treats CON.pdf as the CON device whatever the extension, so
+        // the stem is replaced; the extension stays so the file keeps opening
+        // with its usual application.
+        match sanitized.split_once('.') {
+            Some((_, extension)) if !extension.is_empty() => format!("attachment.{extension}"),
+            _ => "attachment".to_owned(),
+        }
+    } else {
+        sanitized.to_owned()
+    }
 }
 
 fn decode(path: &Path) -> Result<crate::model::DecodedImage, String> {
@@ -183,6 +300,94 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn batch_exports_are_owner_only_even_when_the_source_is_public() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("shared");
+        std::fs::create_dir(&folder).unwrap();
+        let source = root.path().join("source");
+        std::fs::write(&source, b"private attachment").unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o644)).unwrap();
+        save_batch(&folder, vec![(source, "private.txt".into())]).unwrap();
+        let output = folder.join("private.txt");
+        assert_eq!(
+            std::fs::metadata(&output).unwrap().permissions().mode() & 0o077,
+            0
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), b"private attachment");
+    }
+
+    #[test]
+    fn normalized_batch_names_are_unique_and_keep_each_documents_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("chosen");
+        std::fs::create_dir(&folder).unwrap();
+        let files: Vec<_> = [
+            "notes.pdf",
+            " notes.pdf",
+            "notes (2).pdf",
+            r"..\notes.pdf",
+            "NOTES.pdf",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let source = root.path().join(format!("source{index}"));
+            std::fs::write(&source, format!("document{index}")).unwrap();
+            (source, name.to_owned())
+        })
+        .collect();
+        save_batch(&folder, files).unwrap();
+        for (name, index) in [
+            ("notes.pdf", 0),
+            ("notes (3).pdf", 1),
+            ("notes (2).pdf", 2),
+            ("notes (4).pdf", 3),
+            ("NOTES (5).pdf", 4),
+        ] {
+            assert_eq!(
+                std::fs::read_to_string(folder.join(name)).unwrap(),
+                format!("document{index}")
+            );
+        }
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 5);
+    }
+
+    #[test]
+    fn batch_preflight_refuses_existing_files_or_missing_sources_without_partial_saves() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("chosen");
+        std::fs::create_dir(&folder).unwrap();
+        let source = root.path().join("source");
+        std::fs::write(&source, b"new").unwrap();
+        std::fs::write(folder.join("existing.pdf"), b"keep").unwrap();
+        assert!(
+            save_batch(
+                &folder,
+                vec![
+                    (source.clone(), "first.pdf".into()),
+                    (source.clone(), "existing.pdf".into())
+                ]
+            )
+            .is_err()
+        );
+        assert!(!folder.join("first.pdf").exists());
+        assert_eq!(std::fs::read(folder.join("existing.pdf")).unwrap(), b"keep");
+        assert!(
+            save_batch(
+                &folder,
+                vec![
+                    (source, "first.pdf".into()),
+                    (root.path().join("missing"), "last.pdf".into())
+                ]
+            )
+            .is_err()
+        );
+        assert!(!folder.join("first.pdf").exists());
+    }
+
     #[test]
     fn batch_save_stays_inside_the_chosen_folder_and_reports_failures() {
         let root = tempfile::tempdir().unwrap();
@@ -191,7 +396,12 @@ mod tests {
         std::fs::create_dir(&folder).unwrap();
         std::fs::write(&source, b"bytes").unwrap();
         let command = || Command::SaveAttachments {
-            files: vec![(source.clone(), "../photo.png".into())],
+            files: vec![
+                (source.clone(), "../photo.png".into()),
+                (source.clone(), r"..\..\traversal.png".into()),
+                (source.clone(), r"subfolder\picture.png".into()),
+                (source.clone(), "   ".into()),
+            ],
         };
         assert!(handles(&command()));
         assert!(matches!(
@@ -199,12 +409,55 @@ mod tests {
             Some(Event::Info(_))
         ));
         assert_eq!(std::fs::read(folder.join("photo.png")).unwrap(), b"bytes");
+        assert_eq!(
+            std::fs::read(folder.join("traversal.png")).unwrap(),
+            b"bytes"
+        );
+        assert_eq!(std::fs::read(folder.join("picture.png")).unwrap(), b"bytes");
+        assert_eq!(std::fs::read(folder.join("attachment")).unwrap(), b"bytes");
         assert!(!root.path().join("photo.png").exists());
+        assert!(!root.path().join("traversal.png").exists());
         std::fs::remove_file(&source).unwrap();
         assert!(matches!(
             run(command(), Some(folder)),
             Some(Event::Error(_))
         ));
         assert!(!handles(&Command::Shutdown));
+    }
+
+    #[test]
+    fn safe_name_neutralizes_dos_devices_and_trailing_characters() {
+        for (name, expected) in [
+            ("CON", "attachment"),
+            ("con.txt", "attachment.txt"),
+            ("PRN.pdf", "attachment.pdf"),
+            ("aux.png", "attachment.png"),
+            ("NUL.docx", "attachment.docx"),
+            ("com1.jpg", "attachment.jpg"),
+            ("COM9.csv", "attachment.csv"),
+            ("lpt1.txt", "attachment.txt"),
+            ("LPT9.log", "attachment.log"),
+            ("CON.tar.gz", "attachment.tar.gz"),
+            ("CONIN$.txt", "attachment.txt"),
+            ("conout$.png", "attachment.png"),
+            ("COM0.txt", "attachment.txt"),
+            ("LPT0.csv", "attachment.csv"),
+            ("CLOCK$.txt", "attachment.txt"),
+            ("clock$.log", "attachment.log"),
+            (r"folder\CON.txt", "attachment.txt"),
+            ("../PRN.png", "attachment.png"),
+            ("CON.pdf.", "attachment.pdf"),
+            ("CON.pdf:payload", "attachment.pdf_payload"),
+            ("report.txt:payload", "report.txt_payload"),
+            ("CON:payload", "CON_payload"),
+            ("report.txt::$DATA", "report.txt__$DATA"),
+            ("...", "attachment"),
+            ("   ", "attachment"),
+            ("photo.png.", "photo.png"),
+            ("photo.png   ", "photo.png"),
+        ] {
+            assert_eq!(safe_name(name), expected, "{name}");
+        }
+        assert_eq!(safe_name("normal_document.pdf"), "normal_document.pdf");
     }
 }

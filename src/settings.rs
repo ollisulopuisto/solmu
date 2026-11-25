@@ -417,9 +417,25 @@ pub struct Silence {
     pub muted_until: Option<i64>,
 }
 
+/// Explicit engine choice. Missing settings preserve an existing Wyoming setup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionEngine {
+    Off,
+    Local,
+    Wyoming,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    #[serde(default)]
+    pub ffmpeg_path: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub media_tools_onboarding_done: bool,
+    /// Local-only avatar presentation; never sent through a backend.
+    #[serde(default)]
+    pub local_avatars: Vec<crate::local_avatars::Entry>,
     /// [`SETTINGS_VERSION`] when written; missing, and so 0, in older files.
     #[serde(default)]
     pub version: u32,
@@ -432,6 +448,8 @@ pub struct Settings {
     /// empty disables transcription. Local services only, never cloud.
     #[serde(default)]
     pub transcription_wyoming: String,
+    /// None is a migration marker, not an automatic engine fallback.
+    pub transcription_engine: Option<TranscriptionEngine>,
     /// Global transcription language ("fi", "en", ...); empty = auto-detect.
     #[serde(default)]
     pub transcription_language: String,
@@ -479,6 +497,9 @@ pub struct Settings {
     /// Beeper chats with a local Silence promise, keyed by chat id.
     #[serde(default)]
     pub silenced: BTreeMap<String, Silence>,
+    pub flat_groups: crate::flat_groups::Groups,
+    /// Local-only, short-lived recipient groups for separate sends.
+    pub ghost_groups: crate::ghost_groups::Ghosts,
     pub sidebar_width: f32,
     /// Width of the search pane beside the open chat.
     pub search_pane_width: f32,
@@ -494,6 +515,10 @@ pub struct Settings {
     /// Download attachments when they enter view instead of on click.
     #[serde(alias = "auto_download_images")]
     pub auto_download: bool,
+    /// Local website requests are opt-in, separate from supplied message cards.
+    pub auto_link_previews: bool,
+    /// Applies only to explicit link actions, never stored messages.
+    pub remove_link_tracking: bool,
     /// Show the default doodle wallpaper behind conversations.
     pub show_wallpaper: bool,
     /// Colour selected in the wallpaper picker.
@@ -508,6 +533,9 @@ pub struct Settings {
     /// The hint bar under the composer, hidden with its × and shown again
     /// from the Keyboard shortcuts dialog.
     pub show_shortcut_hints: bool,
+    /// Skip decorative bubble reflow transitions.
+    #[serde(default)]
+    pub reduce_motion: bool,
     /// Recently used emoji, newest first.
     pub recent_emoji: Vec<String>,
     /// Emoji reaction usage on this device, most-used first (recent breaks ties).
@@ -572,8 +600,9 @@ pub struct Settings {
     /// Offer Touch ID on the lock screen. After the next successful
     /// password unlock, the password is kept in the OS keychain for it.
     pub app_lock_touch_id: bool,
-    /// Let macOS put Solmu into App Nap. Off, Solmu holds a power
-    /// assertion so messaging keeps working from the background.
+    /// Let macOS put Solmu into App Nap at any time. Off, Solmu holds a power
+    /// assertion only while a window is shown; hidden or minimized, macOS may
+    /// pause it.
     pub allow_app_nap: bool,
     /// Last window width in logical pixels (points at zoom 1), remembered
     /// across restarts; see [`fastframe_shell::window::Geometry`]. `None`
@@ -598,12 +627,62 @@ pub fn transcription_language_key(account: &str, chat: &str, message: &str) -> S
     format!("{account}\t{chat}\t{message}")
 }
 
+impl Settings {
+    pub fn transcription_engine(&self) -> TranscriptionEngine {
+        self.transcription_engine.unwrap_or_else(|| {
+            if self.transcription_wyoming.trim().is_empty() {
+                TranscriptionEngine::Off
+            } else {
+                TranscriptionEngine::Wyoming
+            }
+        })
+    }
+    pub fn transcription_worker_key(&self) -> String {
+        match self.transcription_engine() {
+            TranscriptionEngine::Off => "off".to_string(),
+            TranscriptionEngine::Local => "local".to_string(),
+            TranscriptionEngine::Wyoming => {
+                format!("wyoming:{}", self.transcription_wyoming.trim())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod transcription_engine_migration_tests {
+    use super::*;
+    #[test]
+    fn existing_wyoming_users_are_preserved_but_explicit_choices_always_win() {
+        let mut settings: Settings =
+            serde_json::from_str(r#"{"transcription_wyoming":"127.0.0.1:10300"}"#).unwrap();
+        assert_eq!(
+            settings.transcription_engine(),
+            TranscriptionEngine::Wyoming
+        );
+        settings.transcription_engine = Some(TranscriptionEngine::Local);
+        assert_eq!(settings.transcription_engine(), TranscriptionEngine::Local);
+        settings.transcription_engine = Some(TranscriptionEngine::Off);
+        assert_eq!(settings.transcription_engine(), TranscriptionEngine::Off);
+        let roundtrip: Settings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(roundtrip.transcription_engine(), TranscriptionEngine::Off);
+        assert_eq!(
+            Settings::default().transcription_engine(),
+            TranscriptionEngine::Off
+        );
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            ffmpeg_path: None,
+            media_tools_onboarding_done: false,
+            local_avatars: Vec::new(),
             version: SETTINGS_VERSION,
             scheduler_url: default_scheduler_url(),
             transcription_wyoming: String::new(),
+            transcription_engine: None,
             transcription_language: String::new(),
             transcription_language_overrides: std::collections::BTreeMap::new(),
             theme: ThemeChoice::System,
@@ -617,6 +696,8 @@ impl Default for Settings {
             system_theme_cache: None,
             zoom: 1.0,
             beeper: BeeperPreferences::default(),
+            flat_groups: Default::default(),
+            ghost_groups: Default::default(),
             sidebar_width: 300.0,
             search_pane_width: 380.0,
             info_pane_width: 380.0,
@@ -624,12 +705,15 @@ impl Default for Settings {
             send_read_receipts: true,
             send_typing: true,
             auto_download: true,
+            auto_link_previews: false,
+            remove_link_tracking: false,
             show_wallpaper: true,
             wallpaper_color: WallpaperColor::Theme,
             dark_wallpaper_color: WallpaperColor::Theme,
             wallpaper_image: None,
             last_chat: None,
             show_shortcut_hints: true,
+            reduce_motion: false,
             recent_emoji: Vec::new(),
             reaction_emoji: Vec::new(),
             giphy_key: String::new(),
@@ -910,6 +994,7 @@ pub struct AccountSettings {
     pub send_typing: bool,
     #[serde(alias = "auto_download_images")]
     pub auto_download: bool,
+
     pub last_chat: Option<String>,
     /// Recently opened chats, most recent last; `last_chat` is the open
     /// one. The field name stays for file compatibility: it was the tab
@@ -932,6 +1017,12 @@ pub struct AccountSettings {
     pub chat_category: Option<crate::model::ChatFilter>,
     pub favorites_only: bool,
     pub chat_queue: Option<crate::model::ChatFilter>,
+    /// The chat list's mode (All, Unread or Needs me); `None` is All.
+    pub list_mode: Option<crate::model::ListMode>,
+    /// Whether each list mode shows one flat list (true) or the group
+    /// sections (false), by [`crate::model::ListMode::key`]. A mode with no
+    /// entry shows the sections, as every mode always has.
+    pub flat_list: std::collections::BTreeMap<String, bool>,
     /// The chip the Calls page last showed, kept only so older settings
     /// files still load; the native Calls page is gone.
     pub call_filter: Option<String>,
@@ -943,6 +1034,7 @@ impl Default for AccountSettings {
             send_read_receipts: true,
             send_typing: true,
             auto_download: true,
+
             last_chat: None,
             open_tabs: Vec::new(),
             notifications: true,
@@ -954,6 +1046,8 @@ impl Default for AccountSettings {
             chat_category: None,
             favorites_only: false,
             chat_queue: None,
+            list_mode: None,
+            flat_list: std::collections::BTreeMap::new(),
             call_filter: None,
         }
     }
@@ -976,6 +1070,8 @@ impl AccountSettings {
             chat_category: None,
             favorites_only: false,
             chat_queue: None,
+            list_mode: None,
+            flat_list: std::collections::BTreeMap::new(),
             call_filter: None,
         }
     }
@@ -1704,17 +1800,34 @@ mod giphy_tests {
     }
 }
 
+/// Local provenance only. Never sent as a bridge-native forwarding claim.
+pub use crate::composed_forward::ForwardedMessage;
+
 /// Local preferences for the native Beeper view. Never written to remote accounts.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BeeperPreferences {
     pub people: Vec<crate::merged::Person>,
+    pub forwarded_messages: Vec<ForwardedMessage>,
+    /// Pairs the user said are not the same person; never suggested again.
+    pub dismissed_links: Vec<crate::suggest::LinkPair>,
     /// Local display names for single chats, by chat id. Never sent anywhere.
     pub chat_names: std::collections::HashMap<String, String>,
     pub reply_later: Vec<crate::merged::Member>,
     /// Flagged to read later, same local per-chat shape as reply_later.
     pub read_later: Vec<crate::merged::Member>,
+    /// Chats the user moved out of their automatic category; the rules never
+    /// re-sort them. Local only, same per-chat key as the later marks.
+    pub category_overrides: Vec<(crate::merged::Member, crate::categories::AutoCategory)>,
+    /// Per-message bookmarks, local only: identity plus the text shown when
+    /// the message was saved. Never written to remote accounts.
+    pub saved: Vec<crate::saved::SavedMessage>,
+    /// Local display masks, never sent to the bridge.
+    pub hidden_messages: Vec<crate::hidden_messages::HiddenMessage>,
     pub incognito: bool,
+    /// Show action results and failures above the chat list. Off by default:
+    /// failures stay in the log, out of the interface.
+    pub debug_mode: bool,
     pub compact_list: bool,
     pub show_previews: bool,
     pub show_unread_counts: bool,
@@ -1733,10 +1846,16 @@ impl Default for BeeperPreferences {
     fn default() -> Self {
         Self {
             people: Vec::new(),
+            forwarded_messages: Vec::new(),
+            dismissed_links: Vec::new(),
             chat_names: std::collections::HashMap::new(),
             reply_later: Vec::new(),
             read_later: Vec::new(),
+            category_overrides: Vec::new(),
+            saved: Vec::new(),
+            hidden_messages: Vec::new(),
             incognito: false,
+            debug_mode: false,
             compact_list: false,
             show_previews: true,
             show_unread_counts: true,
@@ -1799,4 +1918,55 @@ impl BeeperPreferences {
 
 fn default_scheduler_url() -> String {
     "http://127.0.0.1:23376".into()
+}
+
+#[cfg(test)]
+mod media_tool_preferences_tests {
+    #[test]
+    fn selected_media_path_and_onboarding_round_trip() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let settings = super::Settings {
+            ffmpeg_path: Some(root.path().join("my-ffmpeg")),
+            media_tools_onboarding_done: true,
+            ..Default::default()
+        };
+        settings.save(&path).unwrap();
+        let loaded = super::Settings::load(&path);
+        assert_eq!(loaded.ffmpeg_path, settings.ffmpeg_path);
+        assert!(loaded.media_tools_onboarding_done);
+        let mut value = serde_json::to_value(super::Settings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("ffmpeg_path");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("media_tools_onboarding_done");
+        let old: super::Settings = serde_json::from_value(value).unwrap();
+        assert!(old.ffmpeg_path.is_none());
+    }
+
+    #[test]
+    fn debug_mode_defaults_off_and_round_trips() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let mut settings = super::Settings::default();
+        assert!(!settings.beeper.debug_mode);
+        settings.beeper.debug_mode = true;
+        settings.save(&path).unwrap();
+        assert!(super::Settings::load(&path).beeper.debug_mode);
+        let mut value = serde_json::to_value(super::Settings::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .get_mut("beeper")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .remove("debug_mode");
+        let old: super::Settings = serde_json::from_value(value).unwrap();
+        assert!(
+            !old.beeper.debug_mode,
+            "older settings files without the field read as off"
+        );
+    }
 }

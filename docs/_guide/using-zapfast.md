@@ -15,9 +15,16 @@ undo history. Saved drafts remain available when you return to their chat.
 Enter sends and Shift+Enter adds a line. Turn off **Enter sends** in Settings
 to make Enter add a line and send with Ctrl+Enter (Command+Enter on macOS).
 `*bold*`, `_italic_`, `~strike~`, and ```` ```monospace ```` ```` format
-like WhatsApp, and a message of nothing but emoji shows large.
+like WhatsApp, and a message of nothing but emoji shows large. Up to three
+emoji alone show without a bubble, like a sticker; more emoji, mixed text,
+a link preview, or a quoted message keep the bubble.
 Paste text with Ctrl+V (Command+V on macOS) or Shift+Insert, as in other
 Linux applications.
+On macOS the field uses the system's text replacements (System Settings >
+Keyboard > Text Replacements): a shortcut expands to its phrase when you
+type a space, return, or punctuation after it, and just before the message
+sends. Changes made in System Settings apply when Solmu's window next
+gains focus.
 Mentions in a group are written with `@`. Choose **all** to mention
 everyone when the group's member list is available: the message shows `@all`,
 highlighted like any other mention.
@@ -37,8 +44,18 @@ Right-click a message to reply, react with any emoji, edit, forward, delete, or
 check when it was sent, delivered, and read. The reaction row has a **+** that
 opens the full emoji picker. Hover over a reaction to see who added it. When
 someone reacts to one of your messages, the chat moves to the top of the list.
-Editing uses the composer. Press Escape to cancel. If WhatsApp refuses an
-edit, the message keeps its earlier text.
+Right-clicking a web link in message text opens only **Open link** and **Copy
+link**, for that exact destination. Copy keeps its query and fragment. The
+shortened destination can be read in full by hovering it. Right-clicking other
+message text, padding, or a link-preview card still opens the message menu.
+Editing uses the composer: `Ctrl+E` (Command+E on macOS) starts editing
+your latest message, as does Arrow Up from an empty composer, and the
+message being edited keeps an accent outline. Press Escape to cancel. How
+long a message stays editable is the network's own window: 15 minutes on
+WhatsApp, Facebook/Messenger, Instagram and Google Messages, 60 minutes on
+LinkedIn, 24 hours on Signal, 48 hours on Telegram, and no practical limit
+on Slack and Discord. If the network refuses an edit, the message keeps its
+earlier text.
 
 **Development builds** also show when your message was delivered and read when
 you click its time or ticks, as on WhatsApp.
@@ -63,6 +80,20 @@ private-reply recovery, including refusals arriving after deletion.
 
 Double-click beside a message, or on its edge, to reply to it. A double-click
 on its text still selects the word.
+
+**Development builds** link replies without quoting the original above them.
+A small **N loaded replies ›** chip under a message opens its thread, and an
+**↑ Original** chip on a hovered reply jumps to the message it answers.
+Ctrl-click (Command-click on macOS) a reply to jump to its original, or a
+message with replies to cycle through them, with a fading "reply N of M" chip
+naming each landing; every message remembers how far its own cycle got. These
+clicks jump only between linked bubbles: Ctrl-click any other message still
+starts a selection, and Ctrl-click a link still opens the link. A thread
+opens as a panel over the chat, or fills the message area in a narrow window,
+with its own scrolling while the conversation behind it dims; **‹ Back to
+full chat**, Escape, or a click outside closes it. After a jump, **‹ Back to
+where you were** (or **‹ Back to thread**) at the top of the chat returns to
+where the jump started.
 
 Deleting a message asks which copies to remove. **Delete for everyone**
 revokes it through WhatsApp. In **0.19.0**, **Delete for me** removes only this
@@ -212,6 +243,12 @@ The sticker is a 512 × 512 WebP under WhatsApp's 100 KB limit.
 
 ## Attachments
 
+When saving an attachment, Solmu replaces colons with underscores, so
+`photo.png:stream` becomes `photo.png_stream` rather than a hidden NTFS alternate
+data stream. Reserved Windows device stems, including `CONIN$` and `CONOUT$`,
+become `attachment` while retaining their extension: `CONIN$.txt` becomes
+`attachment.txt`.
+
 Paste a picture or copied files, drop files on the window, or select them with
 the paperclip.
 A pasted or dropped attachment is ready at once, so the send key sends it even
@@ -258,9 +295,11 @@ or clearing it keeps its draft priority until you leave again. Within each
 group, chats keep their usual latest-message order. The Favorites chip keeps
 the phone's favorites order below pins.
 
-Click a picture above the composer to crop it before you send it. The picture
-opens over the window with the region to keep marked, and you can drag that
-region by its edges and corners or move it whole. **Turn left** and **Turn
+Click a picture above the composer to look at it closely before you send it.
+The preview opens over the window, and with several pictures staged **Previous**
+and **Next** move between them. **Crop / rotate** takes the picture to the
+cropper with the region to keep marked, and you can drag that region by its
+edges and corners or move it whole. **Turn left** and **Turn
 right** turn the picture a quarter at a time, and **Reset** puts it back the way
 it started. Press Enter or click the check to keep the crop, or Escape or the
 close button to leave the picture as it was.
@@ -276,7 +315,10 @@ items with the same protocol album identity, sender and local calendar date
 are grouped. **Download all** downloads every item that is not on this
 computer yet, whatever its size, as clicking each one would, and shows
 individual failures; **Save all…** copies downloaded files to a folder
-without replacing existing files. Open an item to view it individually, and
+without replacing existing files. Saved names are made safe: folders, trailing
+spaces and dots are dropped, and a name that Windows reserves for a device
+(such as CON or NUL) becomes `attachment` with its extension kept, so
+`CON.pdf` is saved as `attachment.pdf`. Open an item to view it individually, and
 right-click it to reply to, react to, forward or delete that item alone. A
 download that fails marks only its own item; click it to retry.
 
@@ -597,6 +639,9 @@ you want. Press `Cmd+C` on macOS or `Ctrl+C` elsewhere. The clipboard includes
 only the selected messages, in chat order, using the same sharing format,
 even if some have scrolled off-screen. Attachments contribute a text label and
 any caption; their files are not copied. Copying keeps the selection open.
+The hyphens and line breaks that [balanced wrapping](../balanced-wrapping.md)
+adds on screen never reach the clipboard: copied text is the original
+message.
 
 ## Chats
 
@@ -624,10 +669,19 @@ messages stored on this computer; and finds contacts without an existing chat.
 Use `↑`/`↓` to select a matching chat and Enter to open it ready for typing.
 Click a message result to jump to it, or a contact to start a chat. Use
 `Alt+↑/↓`, or `Ctrl+Shift+[` and `Ctrl+Shift+]` as in WhatsApp, to switch chats
-without leaving the composer (Command instead of Ctrl on macOS), and
+without leaving the composer (Command instead of Ctrl on macOS). With the
+sidebar grouped into sections, `Alt+Tab` jumps to the next group heading
+(`Alt+Shift+Tab` to the previous), unfolding the group it lands on and
+wrapping around after the last. `Ctrl+Shift+G` collapses every group
+(pressing it again when all are collapsed expands them), and the View menu
+carries Collapse All Groups and Expand All Groups. Use
 `Ctrl+1` through `Ctrl+0` to open the favorite at that position in the sidebar. Within an open
-chat, `PgUp`/`PgDn` scroll by about a page, and `Home`/`End` (or `Ctrl+End`)
-jump to the top or the newest message when the input is empty. With text in
+chat, `PgUp`/`PgDn` scroll by about a page, and `Home`/`End` (or `Ctrl+End`,
+or `Ctrl+↓`/`Ctrl+↑`) jump to the top or the newest message when the input
+is empty. Scrolled away from the end, a **Jump to latest** pill floats over
+the list's lower edge with the unread count; click it to return. The jumps
+live in the Chat menu (Jump to Newest, Jump to Oldest Loaded) and the page
+scrolls in the View menu. With text in
 the input, they move the text cursor as in any editor.
 
 With a mouse that has them, the **Back** and **Forward** side buttons step
@@ -664,6 +718,10 @@ on the left above **Settings**, opens the archived chats in the list, and
 shows how many of them are unread. A chip with unread chats shows how many it
 has. Click the active chip again, or **All**, to see every chat. The
 filter applies only to this list: search and the archive still show everything.
+Filters also has an **Automatic category**: People, Quiet people and
+Notifications, sorted by plain rules on this computer (see
+[chat categories](../chat-categories.md)). A chat's menu has **Move to…** to
+override the rules for good.
 Solmu remembers the chip or label each account last showed and comes back
 to it at the next start.
 As on the phone, the list leaves out people you have never exchanged a
@@ -682,8 +740,8 @@ connection and asks first. It clears messages on this computer and your phone,
 removes cached media from this computer, and keeps the chat. Media saved in
 your configured download folder stays there. **Delete chat** in
 the same menu also needs a connection and confirmation. Groups and channels
-can be left from the same menu, keeping their history here. `Ctrl+E`
-(Command+E on macOS) archives the open chat, or unarchives it from
+can be left from the same menu, keeping their history here. `Ctrl+Shift+E`
+(Command+Shift+E on macOS) archives the open chat, or unarchives it from
 **Archived**, as in WhatsApp.
 
 Solmu follows your phone's **Keep chats archived** (in WhatsApp's chat
@@ -888,7 +946,7 @@ Unread.
 
 The messages form one list, named for the chat, such as "Messages with Ada" or
 "Messages in Rust Berlin", and each message, or album, reports its position in
-it. The list is a single Tab stop. Control+2 on macOS also moves there; elsewhere use Tab. Alt+digit selects a network when outside a text field, not message focus.
+it. The list is a single Tab stop. Shift-Command-2 on macOS also moves there; elsewhere use Tab. Alt+digit selects a network when outside a text field, not message focus.
 In the list, Up and Down move one item, Home and End go to the oldest loaded
 and the newest message, and PgUp and PgDn move about a screen; Home on the
 oldest loaded message loads older history. The current message stays put when
@@ -902,7 +960,7 @@ rail, the chat list's header, search and the chat filters, then returns to the
 input. Shift+Tab goes back; hidden controls are skipped. Single messages,
 reactions and chat rows are not stops; Alt+Up/Down switches conversations.
 
-Cmd+D (Ctrl+D elsewhere) toggles the right-hand info sidebar for the open
+Cmd+Option+I (Ctrl+Alt+I elsewhere) toggles the right-hand info sidebar for the open
 chat. Cmd+B still toggles the left chat list; Cmd+I marks Reply later.
 
 ### Numbered sidebar shortcuts
@@ -913,3 +971,44 @@ Unreplied. The first four follow the visible queue order; Favorites and chat typ
 are additional facets, so selecting a queue does not clear them. 0 is unassigned.
 Option+1..0 (Alt elsewhere) selects a network outside text fields. Command+1..0
 (Ctrl elsewhere) opens a favorite chat. These modifier families are distinct.
+
+### Fixed search shortcuts
+
+`Ctrl+F` (`Cmd+F` on macOS) always searches within the open chat. Without an
+open chat it does nothing; it never switches to settings or global search.
+`Ctrl+Shift+F` (`Cmd+Shift+F`) opens the global search for messages and chats.
+`Ctrl+K` (`Cmd+K`) still jumps between recent chats. On macOS both searches are
+listed separately in Edit, using those same shortcuts. Click Settings' search
+field to search settings. Focus does not change either search shortcut's scope.
+
+### Large link-suggestion lists
+
+The Filters link-suggestion list scrolls through every pending pair. Each row
+has a single-line name and its Link / Not the same person buttons. Long names
+are shortened to fit the menu; hover the name to read the full pair. Only rows
+in view are drawn, so offscreen pairs do not build widgets or scan the chat list.
+
+### Hide a message only in Solmu
+
+Right-click a message and choose **Hide in Solmu**. Its body becomes a small
+"Message hidden in Solmu" row. Choose **Unhide** on that row to restore it,
+including after restarting Solmu. This preference is local to the exact
+server, account, chat and message. It does not call the bridge or delete the
+message from the archive or the network. This is display cleanup, not secure
+erasure: saved copies, chat previews, search and quoted replies are unchanged.
+An album is shown as individual rows while any message in its chat is hidden,
+so each hidden item can be restored independently.
+
+Local message masks are limited to 4096 entries. At the limit, Solmu asks you
+to unhide a message before adding another; it never silently restores an old
+hidden message to make room. This also bounds settings growth and lookup work.
+
+### Retained local drafts
+
+Use the stacked-page Drafts icon beside Send to open the numbered list above
+the composer. Each draft has a one-line preview; its complete text stays saved.
+Click a row to copy it into an empty composer for review. Keep or clear current
+text first so opening a saved draft never replaces it. Closing the list does
+not delete drafts. The row's trash icon deletes that retained draft after its
+local write is confirmed. Existing save status and cleared-text recovery stay
+above the composer. These drafts are local, not synced to another device.

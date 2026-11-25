@@ -33,7 +33,7 @@ class WorkflowTests(unittest.TestCase):
         block = run_block(text, '        run: |\n')
         targets = ['aarch64-apple-darwin', 'x86_64-apple-darwin',
                    'x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc']
-        for target in targets + ['all', 'invalid']:
+        for target in targets + ['all', 'shots-only', 'whisper-helper', 'whisper-smoke', 'invalid']:
             with tempfile.NamedTemporaryFile() as out:
                 env = dict(os.environ, TARGET=target, GITHUB_OUTPUT=out.name)
                 result = subprocess.run(['bash', '-eu', '-c', block], env=env, capture_output=True)
@@ -42,7 +42,7 @@ class WorkflowTests(unittest.TestCase):
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     rows = json.loads(Path(out.name).read_text().split('=', 1)[1])['include']
-                    self.assertEqual([r['target'] for r in rows], targets if target == 'all' else [target])
+                    self.assertEqual([r['target'] for r in rows], targets if target == 'all' else [] if target in ['shots-only', 'whisper-helper', 'whisper-smoke'] else [target])
         self.assertIn('fromJSON(needs.select.outputs.matrix)', text)
         self.assertIn('FAST_BEEPER_UPLOAD_ARTIFACTS', text)
 
@@ -50,7 +50,7 @@ class WorkflowTests(unittest.TestCase):
         text = workflow('release.yml')
         block = run_block(text.split('name: Resolve version and DMG name', 1)[1], '        run: |\n')
         for event, tag in [('workflow_dispatch', 'main'), ('push', 'v0.24.0'), ('push', 'v0.25.0-rc.2')]:
-            script = block.replace('${{ github.event_name }}', event).replace('${{ github.run_number }}', '7')
+            script = block.replace('${{ github.event_name }}', event).replace('${{ github.run_number }}', '7').replace("${{ inputs.macos_arch || 'arm64' }}", 'arm64')
             with tempfile.NamedTemporaryFile() as out:
                 env = dict(os.environ, GITHUB_REF_NAME=tag, GITHUB_ENV=out.name)
                 result = subprocess.run(['bash', '-eu', '-c', script], cwd=ROOT, env=env, capture_output=True)
@@ -59,12 +59,129 @@ class WorkflowTests(unittest.TestCase):
                 self.assertRegex(values['PACKAGE_VERSION'], r'^\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?$')
                 if event == 'workflow_dispatch':
                     self.assertTrue(values['PACKAGE_VERSION'].endswith('-alpha.7'))
-                    self.assertTrue(values['DMG_NAME'].endswith('-manual.7-macos-universal.dmg'))
+                    self.assertTrue(values['DMG_NAME'].endswith('-manual.7-macos-arm64.dmg'))
                 else:
                     self.assertEqual(values['PACKAGE_VERSION'], tag[1:])
                     self.assertEqual(values['DMG_NAME'], f'solmu-{tag}-macos-universal.dmg')
-        self.assertIn('--version "$PACKAGE_VERSION" --target macos-universal', text)
+        self.assertIn('--version "$PACKAGE_VERSION" --target "$PACKAGE_TARGET"', text)
         self.assertIn("if: github.event_name == 'workflow_dispatch'", text)
+
+    def test_manual_mac_architecture_choice_and_tag_universal(self):
+        text = workflow('release.yml')
+        self.assertIn('default: arm64', text)
+        block = run_block(text.split('name: Resolve version and DMG name', 1)[1], '        run: |\n')
+        for event, choice, expected in [('workflow_dispatch', 'arm64', 'arm64'), ('workflow_dispatch', 'universal', 'universal'), ('push', 'arm64', 'universal')]:
+            script = block.replace('${{ github.event_name }}', event).replace('${{ github.run_number }}', '7').replace("${{ inputs.macos_arch || 'arm64' }}", choice)
+            with tempfile.NamedTemporaryFile() as out:
+                result = subprocess.run(['bash', '-eu', '-c', script], cwd=ROOT, env=dict(os.environ, GITHUB_REF_NAME='v0.24.6', GITHUB_ENV=out.name), capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                values = dict(line.split('=', 1) for line in Path(out.name).read_text().splitlines())
+                self.assertEqual(values['MACOS_ARCH'], expected)
+                self.assertEqual(values['PACKAGE_TARGET'], 'macos-' + expected)
+                self.assertTrue(values['DMG_NAME'].endswith('-macos-' + expected + '.dmg'))
+
+    def test_mac_build_and_verification_use_exact_selected_slices(self):
+        build = ROOT / 'packaging/macos/build-release.sh'
+        verify = ROOT / 'packaging/macos/verify-architectures.sh'
+        for architecture in ['arm64', 'universal', 'invalid']:
+            with tempfile.TemporaryDirectory() as directory:
+                work = Path(directory)
+                bin_dir = work / 'bin'
+                bin_dir.mkdir()
+                for name in ['cargo', 'rustup', 'lipo']:
+                    stub = bin_dir / name
+                    stub.write_text('#!/bin/bash\nset -eu\necho "' + name + ' $*" >> "$LOG"\n' +
+                        ('mkdir -p "target/$5/release"; touch "target/$5/release/solmu"\n' if name == 'cargo' else '') +
+                        ('if [ "$1" = -archs ]; then echo "$SLICES"; else touch "${@: -1}"; fi\n' if name == 'lipo' else ''))
+                    stub.chmod(0o755)
+                env = dict(os.environ, PATH=str(bin_dir) + ':' + os.environ['PATH'], LOG=str(work/'calls'), SLICES='arm64')
+                result = subprocess.run(['bash', str(build), architecture], cwd=work, env=env, capture_output=True)
+                if architecture == 'invalid':
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse((work/'calls').exists())
+                    continue
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = (work/'calls').read_text()
+                self.assertIn('aarch64-apple-darwin', calls)
+                self.assertEqual('x86_64-apple-darwin' in calls, architecture == 'universal')
+                self.assertTrue((work/'macos-binary/solmu').exists())
+                for slices in ['arm64', 'x86_64 arm64', 'x86_64']:
+                    env['SLICES'] = slices
+                    result = subprocess.run(['bash', str(verify), 'app-binary', architecture], env=env, capture_output=True)
+                    self.assertEqual(result.returncode == 0, slices == ('arm64' if architecture == 'arm64' else 'x86_64 arm64'))
+        verifier = (ROOT / 'packaging/macos/verify.sh').read_text()
+        self.assertIn('verify_architectures "$app/Contents/MacOS/solmu"', verifier)
+        self.assertIn('verify_architectures "$app/Contents/MacOS/solmu-client"', verifier)
+
+    def test_optional_helper_routing_signing_and_artifact_guards(self):
+        trial = workflow('trial-binaries.yml')
+        caller = trial.split('  whisper-helper:', 1)[1].split('  build:', 1)[0]
+        helper = workflow('whisper-helper.yml')
+        for text in [caller, helper]:
+            self.assertIn("github.event.repository.private == false", text)
+            self.assertIn("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)", text)
+        self.assertIn("inputs.target != 'whisper-helper'", trial.split('  build:', 1)[1])
+        self.assertIn("inputs.target == 'whisper-helper'", caller)
+        self.assertIn("if: vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true'", helper)
+        self.assertIn('retention-days: 1', helper)
+        self.assertLess(helper.index('Build standalone optional helper'), helper.index('Set up signing credentials'))
+
+    def test_optional_helper_has_a_baseline_intel_cpu(self):
+        script = ROOT / 'packaging/macos/build-whisper-helper.sh'
+        for arch in ['x86_64', 'arm64']:
+            with tempfile.TemporaryDirectory() as directory:
+                work = Path(directory)
+                bin_dir = work / 'bin'
+                bin_dir.mkdir()
+                source = work / 'source'
+                source.mkdir()
+                (source / 'LICENSE').write_text('fixture')
+                output = work / 'output'
+                for name, body in {
+                    'cmake': 'echo "$*" >> "$LOG"\nif [ "$1" = --build ]; then mkdir -p "$2/bin"; touch "$2/bin/whisper-cli"; fi\n',
+                    'otool': 'echo fixture\necho " /usr/lib/libSystem.B.dylib (compatibility version 1)"\n',
+                    'lipo': 'exit 0\n',
+                }.items():
+                    stub = bin_dir / name
+                    stub.write_text('#!/bin/bash\nset -eu\n' + body)
+                    stub.chmod(0o755)
+                env = dict(os.environ, PATH=str(bin_dir)+':'+os.environ['PATH'], LOG=str(work/'calls'))
+                result = subprocess.run(['bash', str(script), str(source), str(output), arch], env=env, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = (work/'calls').read_text()
+                self.assertIn('-DGGML_NATIVE=OFF', calls)
+                for instruction in ['AVX', 'AVX2', 'FMA', 'F16C', 'BMI2', 'SSE42']:
+                    self.assertEqual('-DGGML_'+instruction+'=OFF' in calls, arch == 'x86_64', instruction)
+
+    def test_helper_matrix_is_unsigned_uncached_and_covers_all_platforms(self):
+        text = workflow('whisper-helper-matrix.yml')
+        # Unsigned Linux/Windows archives may be uploaded as short-retention
+        # artifacts for release assembly; exactly these four names, never the
+        # signed macOS artifacts, never with secrets, and never cached.
+        import re
+        # One upload step per unsigned job (the matrix expands the legs).
+        uploads = re.findall(r'name: (optional-whisper-[^\n]+)', text)
+        self.assertEqual(sorted(uploads), sorted([
+            'optional-whisper-linux-${{ matrix.arch }}',
+            'optional-whisper-windows-${{ matrix.arch_name }}',
+        ]))
+        self.assertEqual(text.count('retention-days: 5'), 2)
+        self.assertEqual(text.count('if-no-files-found: error'), 2)
+        self.assertNotIn('actions/cache', text)
+        self.assertNotIn('${{ secrets.', text)
+        self.assertNotIn('uses: ./.github/workflows/whisper-helper.yml', text)
+        self.assertNotIn('secrets: inherit', text)
+        for target in ['aarch64-apple-darwin', 'x86_64-apple-darwin',
+                       'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu',
+                       'x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc']:
+            self.assertIn(target, text)
+        self.assertIn('debian:12', text)
+        self.assertIn("github.event.repository.private == false", text)
+        self.assertIn('SOLMU_HELPER_METADATA', text)
+        self.assertIn('local_whisper_real_recording', text)
+        self.assertIn('INSTALLER_REVISION', text)
+        for step in ['Inference smoke test', 'metadata', 'fetch-source']:
+            self.assertIn(step, text)
 
     def test_ci_selection_modes(self):
         text = workflow('ci.yml')
@@ -94,8 +211,21 @@ class WorkflowTests(unittest.TestCase):
 
     def test_expensive_checks_follow_selection_and_portable_failure(self):
         text = workflow('ci.yml')
-        self.assertEqual(text.count('needs: [changes, portable]'), 6)
+        self.assertEqual(text.count('needs: [changes, portable]'), 4)
+        self.assertEqual(text.count('needs: [changes, portable, mac-test]'), 3)
         self.assertIn('!cancelled() && !failure()', text)
+
+    def test_macos_leg_gates_pull_requests_and_keeps_tag_coverage(self):
+        text = workflow('ci.yml')
+        # The macOS gate reports under the same name the tag matrix leg uses.
+        self.assertIn('name: test (macos-latest)', text)
+        block = text.split('  mac-test:', 1)[1].split('  # Linux releases build', 1)[0]
+        self.assertIn("github.event_name == 'pull_request'", block)
+        self.assertIn("!startsWith(github.ref, 'refs/tags/')", block)
+        # Quality, Ubuntu tests and the Nix package report after the gate.
+        self.assertEqual(block.count('needs: [changes, portable]'), 1)
+        # The tag/merge-queue/manual test matrix still carries macOS.
+        self.assertIn('["ubuntu-latest", "macos-latest", "windows-latest"]', text)
         self.assertIn("vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true'", text)
         self.assertIn('cancel-in-progress: true', workflow('flatpak.yml'))
         self.assertIn("upload-artifact: ${{ vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true' }}", workflow('flatpak.yml'))

@@ -16,6 +16,20 @@ on:
           - x86_64-pc-windows-msvc
           - all
           - shots-only
+          - whisper-helper
+          - whisper-smoke
+      capture_avatar_baseline:
+        description: 'Opt in to the one-off pre-avatar comparison build'
+        type: boolean
+        default: false
+      validate_public_download:
+        description: 'Explicitly exercise the pinned public runtime/model downloader'
+        type: boolean
+        default: false
+      helper_run:
+        description: 'Explicit successful helper artifact run for whisper-smoke'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -47,11 +61,61 @@ jobs:
               dict(os='windows-2025', target='x86_64-pc-windows-msvc', executable='solmu.exe'),
           ]
           selected = [r for r in rows if os.environ['TARGET'] in ('all', r['target'])]
-          if not selected and os.environ['TARGET'] != 'shots-only':
+          if not selected and os.environ['TARGET'] not in ('shots-only', 'whisper-helper', 'whisper-smoke'):
               raise SystemExit('Unknown target; refusing build')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
               out.write('matrix=' + json.dumps(dict(include=selected)) + '\n')
           PY
+
+  whisper-smoke:
+    if: github.event.repository.private == false && inputs.target == 'whisper-smoke'
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1
+        with:
+          cache-generation: test-v1
+      - name: Fetch explicitly selected signed helper and pinned test data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HELPER_RUN: ${{ inputs.helper_run }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          case "$HELPER_RUN" in ''|*[!0-9]*) echo 'A numeric helper run is required'; exit 1;; esac
+          mkdir -p "$RUNNER_TEMP/whisper-smoke/helper"
+          gh run download "$HELPER_RUN" --repo "$REPOSITORY" --name optional-whisper-arm64 --dir "$RUNNER_TEMP/whisper-smoke/helper"
+          curl --fail --location --retry 2 'https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin' -o "$RUNNER_TEMP/whisper-smoke/model.bin"
+          curl --fail --location --retry 2 'https://raw.githubusercontent.com/ggml-org/whisper.cpp/d1be6fde11ac6e0407606b4e42fe72d34add8037/samples/jfk.wav' -o "$RUNNER_TEMP/whisper-smoke/recording.wav"
+          echo '60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe  '"$RUNNER_TEMP/whisper-smoke/model.bin" | shasum -a 256 -c -
+          echo '59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e  '"$RUNNER_TEMP/whisper-smoke/recording.wav" | shasum -a 256 -c -
+          echo "SOLMU_HELPER_FIXTURE=$RUNNER_TEMP/whisper-smoke/helper" >> "$GITHUB_ENV"
+          echo "SOLMU_MODEL_FIXTURE=$RUNNER_TEMP/whisper-smoke/model.bin" >> "$GITHUB_ENV"
+          echo "SOLMU_RECORDING_FIXTURE=$RUNNER_TEMP/whisper-smoke/recording.wav" >> "$GITHUB_ENV"
+      - name: Verify distributed bundle before compilation
+        run: |
+          set -euo pipefail
+          ditto -x -k "$SOLMU_HELPER_FIXTURE/solmu-whisper-v1.9.5-arm64.zip" "$RUNNER_TEMP/whisper-preflight"
+          app="$RUNNER_TEMP/whisper-preflight/SolmuWhisper.app"
+          codesign -dvv "$app"
+          codesign --verify --strict --deep -R '=anchor apple generic and identifier "fi.sulopuisto.solmu.whisper" and certificate leaf[subject.OU] = "LWSR8T5392"' "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          xcrun stapler validate "$app"
+      - name: Opt into public downloader validation
+        if: inputs.validate_public_download
+        run: echo 'SOLMU_VALIDATE_PUBLIC_DOWNLOAD=1' >> "$GITHUB_ENV"
+      - name: Production installer, repair, decoder and real Opus transcription
+        run: mbx test --locked --lib --features demo local_whisper_real_recording -- --ignored
+
+  whisper-helper:
+    if: github.event.repository.private == false && inputs.target == 'whisper-helper' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    uses: ./.github/workflows/whisper-helper.yml
+    secrets: inherit
 
   build:
     needs: select
@@ -60,7 +124,7 @@ jobs:
     # Skip by condition on shots-only runs: an empty matrix skips the job
     # too, but GitHub then concludes the whole run as failed despite
     # every real job passing.
-    if: github.event.repository.private == false && inputs.target != 'shots-only'
+    if: github.event.repository.private == false && inputs.target != 'shots-only' && inputs.target != 'whisper-helper' && inputs.target != 'whisper-smoke'
 
     timeout-minutes: 90
     strategy:
@@ -160,8 +224,105 @@ jobs:
       - uses: jdx/mr-boxington-action@v1
         with:
           cache-generation: test-v1
+      - name: Long bubble behavior regressions
+        run: |
+          mbx test --locked --lib --features demo long_bubble_collapse -- --test-threads=1
       - name: Build the demo
         run: mbx build --locked --features demo
+      - name: Capture long bubble review evidence
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/long-bubble-shots"
+          mkdir -p "$out"
+          for page in collapse,light collapse,dark collapse-expanded,light collapse-expanded,dark; do
+            ./target/debug/solmu --demo-shot "$out/$page.png" --demo-size 1180x1200 --demo-page "$page" --demo-shot-delay 6000
+          done
+          ./target/debug/solmu --demo-shot "$out/collapse-narrow.png" --demo-size 760x1200 --demo-page collapse,light --demo-shot-delay 6000
+      - uses: actions/upload-artifact@v7
+        with:
+          name: long-bubble-shots
+          path: ${{ runner.temp }}/long-bubble-shots/*.png
+          retention-days: 7
+      - name: Local avatar behavior regressions
+        run: |
+          mbx test --locked --lib --features demo local_avatars:: -- --test-threads=1
+          mbx test --locked --lib --features demo avatar_owner_tests -- --test-threads=1
+          mbx test --locked --lib --features demo avatar_focus_regression -- --test-threads=1
+      - name: Capture baseline avatar evidence
+        if: ${{ inputs.capture_avatar_baseline }}
+        run: |
+          set -euo pipefail
+          before="$RUNNER_TEMP/avatar-before"
+          out="$RUNNER_TEMP/local-avatar-shots"
+          mkdir -p "$out"
+          git fetch --depth=1 origin 32b63f08270ecee4bbe5f909a4f7e69b49cef5a3
+          git worktree add --detach "$before" FETCH_HEAD
+          mbx build --locked --features demo --manifest-path "$before/Cargo.toml" --target-dir "$RUNNER_TEMP/avatar-before-target"
+          for theme in light dark; do
+            "$RUNNER_TEMP/avatar-before-target/debug/solmu" --demo-shot "$out/before-$theme.png" --demo-size 1180x780 --demo-page "info,$theme" --demo-shot-delay 6000
+          done
+          git worktree remove "$before"
+      - name: Capture local avatar review evidence
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/local-avatar-shots"
+          mkdir -p "$out"
+          for page in avatar-info,light avatar-info,dark avatar-editor,dark avatar-editor,light avatar-custom,dark avatar-custom,light avatar-custom,rail,light avatar-image,rail,dark; do
+            ./target/debug/solmu --demo-shot "$out/$page.png" --demo-size 1180x780 --demo-page "$page" --demo-shot-delay 6000
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: local-avatar-shots
+          path: ${{ runner.temp }}/local-avatar-shots/*.png
+          retention-days: 7
+      - name: Context menu shortcut regressions
+        run: |
+          mbx test --locked --lib --features demo context_menu_shortcut -- --test-threads=1
+          mbx test --locked --lib --features demo context_menu_key_tests -- --test-threads=1
+          mbx test --locked --lib --features demo context_menu_binding_tests -- --test-threads=1
+      - name: Capture context menu review evidence
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/menu-key-shots"
+          mkdir -p "$out"
+          for page in message-menu-keys,light message-menu-keys,dark chat-menu,light chat-menu,dark; do
+            ./target/debug/solmu --demo-shot "$out/$page.png" --demo-size 1180x780 --demo-page "$page" --demo-shot-delay 6000
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: menu-key-shots
+          path: ${{ runner.temp }}/menu-key-shots/*.png
+          retention-days: 7
+      - name: Failing-first settings repaint regression
+        run: |
+          set -euo pipefail
+          cp src/ui/settings.rs "$RUNNER_TEMP/settings-fixed.rs"
+          trap 'cp "$RUNNER_TEMP/settings-fixed.rs" src/ui/settings.rs' EXIT
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/ui/settings.rs')
+          text = p.read_text()
+          old = 'let installed = presence == Some(true);'
+          assert old in text
+          p.write_text(text.replace(old, 'let installed = crate::local_whisper::model_path(&app.dirs.state).is_file();', 1))
+          PY
+          if mbx test --locked --lib --features demo whisper_settings_read_cached_presence_until_explicit_refresh -- --nocapture > "$RUNNER_TEMP/presence-before.log" 2>&1; then
+            cat "$RUNNER_TEMP/presence-before.log"
+            echo 'Regression did not catch the old repaint disk probe'; exit 1
+          fi
+          cat "$RUNNER_TEMP/presence-before.log"
+          grep -q 'render uses cached presence, not the now-missing file' "$RUNNER_TEMP/presence-before.log"
+      - name: Verify fixed settings repaint and background presence lifecycle
+        run: |
+          mbx test --locked --lib --features demo whisper_settings_read_cached_presence_until_explicit_refresh -- --nocapture
+          mbx test --locked --lib --features demo model_presence::tests -- --nocapture
+      - name: Saved transcript behavioral regressions
+        run: |
+          mbx test --locked --lib --features demo transcrib -- --nocapture
+          mbx test --locked --lib --features demo alternating_scoped_panels -- --nocapture
+          mbx test --locked --lib --features demo snapshot_completion_after_mutation -- --nocapture
+          mbx test --locked --lib --features demo scoped_snapshot_bounds -- --nocapture
+          mbx test --locked --lib --features demo voice_panel_search_and_transcript_expansion -- --nocapture
       - name: Capture the layouts
         run: |
           set -euo pipefail
@@ -173,8 +334,29 @@ jobs:
               --demo-size "$size" --demo-page "$page" --demo-shot-delay 6000 "$@"
             test -s "$out/$name.png"
           }
+          # Neighbour-aware bubble widths: near-equal outgoing texts share a
+          # width, in light and dark themes.
+          shot chat-card-widths-1180x780 1180x780 chat,card-widths
+          shot chat-card-widths-dark-1180x780 1180x780 chat,card-widths,theme=Catppuccin.json
+          shot chat-card-widths-messages-1180x780 1180x780 chat,card-widths,messages
+          shot chat-linked-messages-1180x780 1180x780 chat,linked,messages
           # The combined sidebar beside the list, and where it must fall
           # back to the compact rail.
+          shot send-later-menu-1180x780 1180x780 chat,send-later-menu
+          shot send-later-menu-dark-1180x780 1180x780 chat,send-later-menu,theme=Catppuccin.json
+          shot send-later-calendar-1180x780 1180x780 chat,send-later-calendar
+          shot send-later-recurring-1180x780 1180x780 chat,send-later-recurring
+          shot whisper-settings-light-1180x780 1180x780 whisper-setup,light
+          shot whisper-settings-dark-1180x780 1180x780 whisper-setup,theme=Catppuccin.json
+          shot info-photos-1180x780 1180x780 chat,info-media
+          shot info-videos-1180x780 1180x780 chat,info-videos
+          shot info-voice-1180x780 1180x780 chat,info-voice
+          shot info-voice-dark-1180x780 1180x780 chat,info-voice,theme=Catppuccin.json
+          shot info-voice-900x780 900x780 chat,info-voice
+          shot voice-transcripts-1180x780 1180x780 chat,voice-transcripts
+          shot voice-transcripts-dark-1180x780 1180x780 chat,voice-transcripts,theme=Catppuccin.json
+          shot voice-transcripts-search-1180x780 1180x780 chat,voice-transcripts-search
+          shot chat-transcript-search-1180x780 1180x780 chat,chat-transcript-search
           shot chat-1180x780 1180x780 chat
           shot chat-menu-1180x780 1180x780 chat,chat-menu
           shot chat-menu-beeper-1180x780 1180x780 chat,chat-menu-beeper
@@ -259,6 +441,12 @@ jobs:
           # Transcription settings: the local-service fields and the
           # delete control, found by the settings search.
           shot settings-transcription-960x780 960x780 settings-search=Transcription,transcript
+          # The messages run page: the two-emoji message draws free, without
+          # a balloon, between its bubbled neighbours.
+          shot chat-bubbles-1180x780 1180x780 bubbles,messages
+          # The About section, found by the settings search: shortcuts,
+          # source and protocol library chips without a second About dialog.
+          shot settings-about-960x780 960x780 settings-search=About
           # Solmu's own title bar (GNOME): the header clears the buttons.
           shot chat-titlebar-700x600 700x600 chat --demo-titlebar
           # A short window scrolls the rail instead of losing its foot.

@@ -245,7 +245,8 @@ pub(super) fn caption_header(ui: &mut egui::Ui, margin: Vec2) -> super::CaptionR
 /// the search comes back as it was with the header's Search.
 fn search(app: &mut App, ui: &mut egui::Ui, overlay: bool) {
     let palette = app.palette;
-    let (scroll_to, mut picked) = keyboard(app, ui);
+    let hits = app.chat_search_results();
+    let (scroll_to, mut picked) = keyboard(app, ui, &hits);
     let mut calendar_button = Rect::NOTHING;
     Frame::new()
         .inner_margin(Margin::symmetric(14, 10))
@@ -358,13 +359,24 @@ fn search(app: &mut App, ui: &mut egui::Ui, overlay: bool) {
     }) {
         ui.add(egui::Label::new(egui::RichText::new("This API search covers the selected member chat only. Use the linked timeline search for all loaded sources.").color(palette.secondary)).wrap());
     }
+    // Local caps are independent of backend pagination. Show this before
+    // empty/error returns too, since oversized files can leave no visible hit.
+    if !app.chat_search.trim().is_empty()
+        && app.open_chat.as_deref().is_some_and(|chat| {
+            app.transcript_reader().is_some_and(|worker| {
+                worker.saved_truncated(&app.account().id.0, chat, &app.chat_search)
+            })
+        })
+    {
+        ui.label(crate::i18n::gettext(app.locale, "Saved transcript results are partial: up to 500 matches and 2 MB of text, with long transcripts clipped. Refine your search or open the message."));
+    }
     if let Some(error) = &app.beeper_chat_search_error {
         ui.add(egui::Label::new(egui::RichText::new(error).color(palette.warning)).wrap());
-        if app.chat_search_hits.is_empty() {
+        if hits.is_empty() {
             return;
         }
     }
-    if app.chat_search_hits.is_empty() {
+    if hits.is_empty() {
         if app.chat_search_pending {
             ui.add_space(32.0);
             ui.vertical_centered(|ui| theme::spinner(ui, 22.0, palette.secondary));
@@ -379,8 +391,6 @@ fn search(app: &mut App, ui: &mut egui::Ui, overlay: bool) {
         }
         return;
     }
-    // Taken for the frame rather than cloned: the rows only push actions.
-    let hits = std::mem::take(&mut app.chat_search_hits);
     let query = app.chat_search.trim().to_owned();
     egui::ScrollArea::vertical()
         .id_salt("chat-search-hits")
@@ -394,6 +404,17 @@ fn search(app: &mut App, ui: &mut egui::Ui, overlay: bool) {
                 }
             }
             if app.chat_search_truncated {
+                if !app.beeper_accounts.is_empty()
+                    && ui
+                        .button(if app.beeper_chat_search_error.is_some() {
+                            "Retry loading matches"
+                        } else {
+                            "Load more matches"
+                        })
+                        .clicked()
+                {
+                    app.actions.push(Action::ChatSearchMore);
+                }
                 // The list is capped, so say so rather than dropping the rest
                 // without a word.
                 ui.add_space(10.0);
@@ -418,7 +439,6 @@ fn search(app: &mut App, ui: &mut egui::Ui, overlay: bool) {
             }
             ui.add_space(8.0);
         });
-    app.chat_search_hits = hits;
     if picked && overlay {
         // Folded, not closed: the query, day and results wait for the
         // header's Search or Ctrl+F.
@@ -430,7 +450,7 @@ fn search(app: &mut App, ui: &mut egui::Ui, overlay: bool) {
 /// Walks the results from the search field: the arrows move through them
 /// and Enter opens the one reached, or the newest. Returns the row to bring
 /// into view, and whether one was opened.
-fn keyboard(app: &mut App, ui: &egui::Ui) -> (Option<usize>, bool) {
+fn keyboard(app: &mut App, ui: &egui::Ui, hits: &[Message]) -> (Option<usize>, bool) {
     let focused = ui.memory(|memory| memory.has_focus(field_id()));
     if !focused || app.chat_search_calendar {
         return (None, false);
@@ -444,7 +464,7 @@ fn keyboard(app: &mut App, ui: &egui::Ui) -> (Option<usize>, bool) {
             input.consume_key(Modifiers::NONE, Key::Enter),
         )
     });
-    let count = app.chat_search_hits.len();
+    let count = hits.len();
     if count == 0 {
         return (None, false);
     }
@@ -459,7 +479,7 @@ fn keyboard(app: &mut App, ui: &egui::Ui) -> (Option<usize>, bool) {
     if enter {
         let index = selected.unwrap_or(0).min(count - 1);
         selected = Some(index);
-        let hit = &app.chat_search_hits[index];
+        let hit = &hits[index];
         app.actions.push(Action::OpenMessage {
             chat: hit.chat.clone(),
             message: hit.id.clone(),
@@ -705,7 +725,11 @@ fn hit_row(
     }
     theme::reveal_focus(&response);
     theme::focus_outline(ui, response.id, rect.shrink(2.0), 6.0);
-    let stamp = util::chat_stamp(app.locale, hit.timestamp);
+    let stamp = if hit.timestamp > 0 {
+        util::chat_stamp(app.locale, hit.timestamp)
+    } else {
+        String::new()
+    };
     // The preview comes from the line the query matched: the archive searches
     // the whole text, so a hit on a later line would otherwise preview a first
     // line the query is nowhere in.

@@ -12,11 +12,11 @@ use crate::model::{
 };
 use crate::paths::AccountDirs;
 
-#[cfg(any(test, feature = "demo"))]
 pub(crate) mod picture_edit;
 
 // Re-exported so the picker can detect pasted Signal pack links.
 pub mod beeper;
+mod linked_media;
 pub mod local_ai;
 mod local_files;
 pub(crate) mod sticker_import;
@@ -123,6 +123,19 @@ pub struct CreatedPoll {
 
 #[derive(Debug)]
 pub enum Command {
+    BatchArchive {
+        request: u64,
+        expected: crate::merged::Member,
+        chat: ChatId,
+    },
+    BatchDelete {
+        request: u64,
+        expected: crate::merged::Member,
+        chat: ChatId,
+        id: String,
+        everyone: bool,
+    },
+    BeeperMedia(crate::pending_media::Job),
     RefreshPoll {
         chat: ChatId,
         message: String,
@@ -178,6 +191,14 @@ pub enum Command {
     /// Forwards archived messages to each chat in `to_chats`, oldest first.
     /// The whole batch is refused when it names more chats than
     /// [`forward_limit`](crate::model::forward_limit) allows for these messages.
+    /// Resume identity-only confirmation reads; never submits messages.
+    BeeperResumeForwards(Vec<crate::composed_forward::ForwardedMessage>),
+    BeeperForward {
+        generation: u64,
+        prepared: bool,
+        append_at: usize,
+        items: Vec<(usize, crate::composed_forward::Item)>,
+    },
     Forward {
         from_chat: ChatId,
         messages: Vec<String>,
@@ -198,6 +219,12 @@ pub enum Command {
     SaveDraft {
         chat: ChatId,
         text: String,
+    },
+    WriteDraftState {
+        chat: ChatId,
+        revision: u64,
+        text: String,
+        shelf: Vec<crate::draft_state::Parked>,
     },
     /// Marks a visible chat read and optionally sends receipts.
     MarkRead {
@@ -226,6 +253,11 @@ pub enum Command {
     LoadChat {
         chat: ChatId,
         before: Option<PageKey>,
+    },
+    /// Fresh initial history for a restored source, with an opaque request token.
+    LoadRestoredChat {
+        chat: ChatId,
+        token: u64,
     },
     /// Asks for one chat's active pins, for the line under its header.
     LoadPins(ChatId),
@@ -258,6 +290,8 @@ pub enum Command {
     LoadChatMedia {
         chat: ChatId,
         around: Option<String>,
+        /// True for an open/live refresh; false continues the older edge.
+        fresh: bool,
     },
     Download {
         /// Asked for by the reader: no size limit, a deadline that grows
@@ -286,6 +320,17 @@ pub enum Command {
     /// Searches visible archived message text.
     SearchMessages {
         query: String,
+    },
+    /// Expands a global search by one cursor page.
+    SearchMessagesMore {
+        query: String,
+    },
+    /// Expands an in-chat search by one cursor page.
+    SearchChatMessagesMore {
+        chat: ChatId,
+        query: String,
+        from: Option<i64>,
+        until: Option<i64>,
     },
     /// Searches one chat, optionally inside a Unix-second day range.
     SearchChatMessages {
@@ -346,6 +391,12 @@ pub enum Command {
         request_generation: u64,
         /// Whether the server refusal is permanent.
         permanent: bool,
+    },
+    PrepareEdit {
+        chat: ChatId,
+        id: String,
+        account: String,
+        request: u64,
     },
     EditText {
         chat: ChatId,
@@ -749,6 +800,26 @@ pub enum Command {
         to_phone: bool,
         registered: Result<bool, String>,
     },
+    /// Prepare a sticker locally before it joins the owning linked draft.
+    PrepareSticker {
+        owner: ChatId,
+        source: PathBuf,
+        crop: crate::model::StickerCrop,
+        transparent: bool,
+    },
+    /// Retrieve a public GIF without using the authenticated Beeper client.
+    PrepareGif {
+        owner: ChatId,
+        gif: Gif,
+    },
+    /// Send a staged native GIF or sticker with its exact source/reply.
+    SendTypedMedia {
+        chat: ChatId,
+        path: PathBuf,
+        kind: MediaKind,
+        caption: Option<String>,
+        quoting: Option<crate::model::ReplyTarget>,
+    },
     /// Downloads and sends a GIF as a short looping video.
     SendGif {
         chat: ChatId,
@@ -787,6 +858,8 @@ pub enum Command {
     ListScheduled {
         scheduler_url: String,
         scheduler_token: String,
+        /// A background refresh: an unreachable scheduler is not announced.
+        quiet: bool,
     },
     /// Acts on one scheduled item (cancel, retry, send-now).
     ScheduledAction {
@@ -805,6 +878,7 @@ pub enum Command {
         due_at: i64,
         quoting: Option<String>,
         replaces: Option<String>,
+        repeat: Option<crate::recurrence::Repeat>,
     },
     /// Leaves a group or channel. `archive` also hides the chat in Archived.
     LeaveGroup {
@@ -1067,6 +1141,59 @@ pub struct BeeperAccountInfo {
 
 #[derive(Debug)]
 pub enum Event {
+    MutationResult {
+        request: Option<u64>,
+        archived: Option<bool>,
+        chat: ChatId,
+        message: Option<String>,
+        everyone: bool,
+        result: Result<(), String>,
+    },
+    BeeperMediaProgress {
+        local: String,
+        member: crate::merged::Member,
+        state: crate::pending_media::State,
+    },
+    BeeperMediaResolved {
+        local: String,
+        member: crate::merged::Member,
+        message: Box<Message>,
+        complete: bool,
+    },
+    BeeperForwardRetryPrepared {
+        generation: u64,
+        items: Vec<(usize, crate::composed_forward::Item)>,
+    },
+    BeeperForwardPrepared {
+        generation: u64,
+        items: Vec<crate::composed_forward::Item>,
+    },
+    BeeperForwardMarked {
+        origin: String,
+        account: String,
+        chat: ChatId,
+        message: String,
+    },
+    BeeperForwardProgress {
+        generation: u64,
+        index: usize,
+        state: crate::composed_forward::State,
+    },
+    BeeperForwardFeedback {
+        origin: String,
+        account: String,
+        chat: ChatId,
+        pending: String,
+        state: crate::composed_forward::State,
+    },
+    BeeperForwardResolved {
+        origin: String,
+        account: String,
+        chat: ChatId,
+        pending: String,
+        final_id: String,
+    },
+
     BeeperAccounts {
         origin: String,
         accounts: Vec<BeeperAccountInfo>,
@@ -1107,6 +1234,13 @@ pub enum Event {
     Labels(Vec<crate::model::Label>),
     /// Unsent text stored for each chat, sent once at startup.
     Drafts(Vec<(ChatId, String)>),
+    DraftShelf(Vec<(ChatId, Vec<crate::draft_state::Parked>)>),
+    DraftShelfUnavailable,
+    DraftWritten {
+        chat: ChatId,
+        revision: u64,
+        ok: bool,
+    },
     /// The favorites in bar order, sent at startup and after each change.
     Favorites(Vec<ChatId>),
     /// The starred messages of one chat, for the mark in the conversation.
@@ -1153,6 +1287,12 @@ pub enum Event {
         around: Option<String>,
         items: Vec<crate::model::MediaItem>,
     },
+    /// Beeper album page, cumulative within its exact source chat.
+    BeeperViewerMedia {
+        chat: ChatId,
+        around: Option<String>,
+        result: Result<(Vec<crate::model::MediaItem>, bool), String>,
+    },
     ChatUpdated(Box<Chat>),
     /// Active pins of one chat, for the line under its header.
     Pins {
@@ -1188,6 +1328,15 @@ pub enum Event {
         paths: Vec<PathBuf>,
         documents: bool,
     },
+    /// The chat row's newest previewable message, as the worker's own
+    /// eligibility rules (the ones the inventory uses) chose it. Sent only for
+    /// messages that are new to the forward poll, never for receipt refreshes
+    /// that re-return old ones.
+    ChatPreview {
+        chat: ChatId,
+        activity: i64,
+        last: crate::model::LastMessage,
+    },
     /// Live incoming message for desktop notification.
     Incoming {
         chat: ChatId,
@@ -1213,6 +1362,9 @@ pub enum Event {
         id: String,
         full: bool,
         path: Option<PathBuf>,
+        /// Width times height from the file header, read by the worker so
+        /// the UI never touches the file; 0 when unknown.
+        pixels: u64,
     },
     MessageDeleted {
         chat: ChatId,
@@ -1226,6 +1378,19 @@ pub enum Event {
     ChatCleared {
         chat: ChatId,
         through: i64,
+    },
+    PreparedMedia {
+        owner: ChatId,
+        kind: MediaKind,
+        result: Result<PathBuf, String>,
+    },
+    TypedMediaUncertain {
+        chat: ChatId,
+        path: PathBuf,
+        kind: MediaKind,
+        caption: Option<String>,
+        quoting: Option<crate::model::ReplyTarget>,
+        message: String,
     },
     /// GIF search results or failure.
     Gifs {
@@ -1391,6 +1556,8 @@ pub enum Event {
     ScheduledList(Vec<crate::scheduler::ScheduledMessage>),
     /// The scheduler accepted the message; the UI clears the composer.
     ScheduledAccepted,
+    /// Scheduling failed; preserve the draft and allow a deliberate retry.
+    ScheduleFailed(String),
     /// A decoded image ready to be written to the clipboard on the interface thread.
     ClipboardImage(Result<crate::model::DecodedImage, String>),
     /// A newer release than this build exists.
@@ -1416,11 +1583,23 @@ pub enum Event {
     /// The account folders were deleted after RemoveAccount.
     AccountRemoved,
     /// The API outcome is uncertain. Restore text without automatically retrying.
+    BeeperEditPrepared {
+        chat: ChatId,
+        id: String,
+        request: u64,
+        result: Result<String, crate::rich_edit::Error>,
+    },
     BeeperEditUncertain {
         chat: ChatId,
         id: String,
         text: String,
         message: String,
+    },
+    /// Tagged initial-fetch outcome, after its messages or failure placeholder.
+    BeeperRestoredHistory {
+        chat: ChatId,
+        token: u64,
+        success: bool,
     },
     BeeperHistoryState {
         chat: ChatId,
@@ -1457,6 +1636,8 @@ pub enum Event {
         paths: Vec<PathBuf>,
         documents: bool,
         caption: Option<String>,
+        /// The reply quote the files carried, so it comes back with them.
+        quoting: Option<crate::model::ReplyTarget>,
         message: String,
     },
     /// A voice note's upload or send failed or ended uncertain. The recording
@@ -1563,6 +1744,12 @@ pub enum Refusal {
     UnsupportedViewOnce,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaKind {
+    Gif,
+    Sticker,
+}
+
 /// The content of a refused send.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Unsent {
@@ -1594,6 +1781,32 @@ pub enum Unsent {
 /// Cross-thread window wake handle: repaints whichever window exists.
 pub use fastframe_shell::Waker;
 
+impl Event {
+    /// A receiver that closes before polling must release media still in transit.
+    pub(crate) fn discard_owned_media(self) {
+        match self {
+            Event::Gifs {
+                results: Ok(results),
+                ..
+            } => {
+                for gif in results {
+                    if let Some(path) = gif.still {
+                        beeper::discard_temp_upload(&path);
+                    }
+                }
+            }
+            Event::PictureEdited {
+                result: Ok(path), ..
+            } => beeper::discard_temp_upload(&path),
+            Event::PreparedMedia {
+                result: Ok(path), ..
+            }
+            | Event::TypedMediaUncertain { path, .. } => beeper::discard_temp_upload(&path),
+            _ => {}
+        }
+    }
+}
+
 /// UI handle to the backend runtime.
 pub struct Backend {
     startup: Option<tokio::sync::oneshot::Sender<()>>,
@@ -1602,6 +1815,8 @@ pub struct Backend {
     thread: Option<std::thread::JoinHandle<()>>,
     offline: bool,
     local_events: Option<(std::sync::mpsc::Sender<Event>, Waker)>,
+    local_picture_dir: Option<PathBuf>,
+    gif_search: Option<linked_media::SearchQueue>,
     #[cfg(any(test, feature = "demo"))]
     demo_commands: Option<std::sync::Mutex<Vec<Command>>>,
 }
@@ -1613,6 +1828,8 @@ impl Backend {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         let local_events = Some((event_tx.clone(), waker.clone()));
+        let local_picture_dir = Some(dirs.media_cache_dir());
+        let gif_search = linked_media::search_queue(event_tx.clone(), waker.clone());
         let thread = std::thread::Builder::new()
             .name("solmu-beeper-backend".to_string())
             .spawn(move || beeper::run(cfg, dirs, event_tx, command_rx, waker))
@@ -1624,6 +1841,8 @@ impl Backend {
             thread: Some(thread),
             offline: false,
             local_events,
+            local_picture_dir,
+            gif_search,
             #[cfg(any(test, feature = "demo"))]
             demo_commands: None,
         }
@@ -1641,6 +1860,8 @@ impl Backend {
                 thread: None,
                 offline: true,
                 local_events: None,
+                local_picture_dir: None,
+                gif_search: None,
                 #[cfg(any(test, feature = "demo"))]
                 demo_commands: None,
             },
@@ -1688,6 +1909,24 @@ impl Backend {
     }
 
     pub fn send(&self, command: Command) {
+        if let Command::SearchGifs { query, key } = &command
+            && let Some((events, waker)) = &self.local_events
+        {
+            if let Some(queue) = &self.gif_search {
+                queue.enqueue(query.clone(), key.clone());
+            } else {
+                let _ = events.send(Event::Gifs {
+                    query: query.clone(),
+                    results: Err(crate::model::GifError {
+                        message: "Could not start GIF search worker".into(),
+                        bad_key: false,
+                    }),
+                });
+                waker.wake();
+            }
+            return;
+        }
+
         // Copy/save are desktop operations, not API commands. Handle them
         // even when the network worker is disconnected or has stopped.
         if local_files::handles(&command)
@@ -1695,20 +1934,38 @@ impl Backend {
         {
             let events = events.clone();
             let waker = waker.clone();
+            let picture_dir = self.local_picture_dir.clone();
+            let failed_target = match &command {
+                Command::InspectPicture { target, .. } => Some((*target, false)),
+                Command::ApplyPictureEdit { target, .. } => Some((*target, true)),
+                _ => None,
+            };
             let failed_events = events.clone();
             let failed_waker = waker.clone();
             if let Err(error) = std::thread::Builder::new()
                 .name("solmu-local-file".into())
                 .spawn(move || {
-                    if let Some(event) = local_files::run(command) {
-                        let _ = events.send(event);
+                    if let Some(event) = local_files::run(command, picture_dir.as_deref()) {
+                        if let Err(error) = events.send(event) {
+                            error.0.discard_owned_media();
+                        }
                         waker.wake();
                     }
                 })
             {
-                let _ = failed_events.send(Event::Error(format!(
-                    "Could not start attachment action: {error}"
-                )));
+                let message = format!("Could not start attachment action: {error}");
+                let event = match failed_target {
+                    Some((target, false)) => Event::PictureInspected {
+                        target,
+                        result: Err(message),
+                    },
+                    Some((target, true)) => Event::PictureEdited {
+                        target,
+                        result: Err(message),
+                    },
+                    None => Event::Error(message),
+                };
+                let _ = failed_events.send(event);
                 failed_waker.wake();
             }
             return;
@@ -1753,6 +2010,16 @@ impl Backend {
     }
 
     pub fn shutdown(&mut self) {
+        self.gif_search.take();
+        self.local_events.take();
+        // Search has joined, so every produced thumbnail is now queued.
+        // Other late workers clean their rejected event after receiver close.
+        let (_, empty) = std::sync::mpsc::channel();
+        let events = std::mem::replace(&mut self.events, empty);
+        for event in events.try_iter() {
+            event.discard_owned_media();
+        }
+        drop(events);
         self.startup.take();
         self.send(Command::Shutdown);
         if let Some(thread) = self.thread.take() {
@@ -1764,6 +2031,72 @@ impl Backend {
 #[cfg(test)]
 mod local_file_routing_tests {
     use super::*;
+
+    #[test]
+    fn picture_pencil_inspects_and_applies_offline_without_a_server() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input.png");
+        image::RgbaImage::from_pixel(8, 6, image::Rgba([30, 80, 150, 255]))
+            .save(&source)
+            .unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let (mut backend, events) = Backend::detached();
+        backend.local_events = Some((events, Waker::default()));
+        backend.local_picture_dir = Some(root.path().join("edited"));
+        backend.send(Command::InspectPicture {
+            target: 7,
+            path: source.clone(),
+        });
+        assert!(matches!(
+            backend
+                .events
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            Event::PictureInspected {
+                target: 7,
+                result: Ok((8, 6))
+            }
+        ));
+        backend.send(Command::ApplyPictureEdit {
+            target: 7,
+            source: crate::model::PictureSource::File(source.clone()),
+            width: 8,
+            height: 6,
+            crop: crate::model::PictureCrop {
+                x: 1,
+                y: 1,
+                width: 3,
+                height: 4,
+            },
+            turns: 0,
+        });
+        let Event::PictureEdited {
+            target: 7,
+            result: Ok(output),
+        } = backend
+            .events
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+        else {
+            panic!("crop result missing")
+        };
+        assert_eq!(image::image_dimensions(output).unwrap(), (3, 4));
+        assert_eq!(std::fs::read(source).unwrap(), original);
+        backend.send(Command::InspectPicture {
+            target: 8,
+            path: root.path().join("missing.png"),
+        });
+        assert!(matches!(
+            backend
+                .events
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            Event::PictureInspected {
+                target: 8,
+                result: Err(_)
+            }
+        ));
+    }
 
     #[test]
     fn local_copy_bypasses_the_network_even_when_offline_or_disconnected() {

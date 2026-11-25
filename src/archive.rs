@@ -243,6 +243,7 @@ fn chat_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Chat> {
                 what: "unreadable".into(),
             });
             Some(LastMessage {
+                reaction: None,
                 labelled: content.labelled(),
                 from_me: row.get(8)?,
                 sender: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
@@ -261,6 +262,7 @@ fn chat_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Chat> {
         backend_account: None,
         backend_origin: None,
         poll_capability: None,
+        mutation_capabilities: Default::default(),
         backend_network: None,
         id: row.get(0)?,
         name: row.get(1)?,
@@ -277,6 +279,7 @@ fn chat_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Chat> {
         last,
         participants: serde_json::from_str(&participants).unwrap_or_default(),
         participant_names: Default::default(),
+        handles: Vec::new(),
         read_only: row.get(14)?,
         labels: Vec::new(),
         ephemeral_expiration: row.get::<_, Option<u32>>(16)?,
@@ -309,14 +312,14 @@ const BARE_COLUMNS: &str = "chat, id, sender, sender_name, from_me, timestamp, c
 /// The lowercased text a search matches: text, captions, file names, poll
 /// questions, contact names and places, one per line.
 /// `Content::text_matching` previews from the same fields.
-const SEARCHED_TEXT: &str = "lower(
+const SEARCHED_TEXT: &str = "lower(replace(replace(replace(replace(
     coalesce(json_extract(content, '$.text'), '') || char(10) ||
     coalesce(json_extract(content, '$.caption'), '') || char(10) ||
     coalesce(json_extract(content, '$.file_name'), '') || char(10) ||
     coalesce(json_extract(content, '$.question'), '') || char(10) ||
     coalesce(json_extract(content, '$.display_name'), '') || char(10) ||
     coalesce(json_extract(content, '$.name'), '')
-)";
+, '*' || char(8291), '*'), '_' || char(8291), '_'), '~' || char(8291), '~'), '`' || char(8291), '`'))";
 
 /// A `LIKE` pattern that finds `needle` anywhere, with its wildcards taken
 /// as text, or `None` for a blank needle.
@@ -422,6 +425,23 @@ pub const GALLERY_PAGE: usize = 200;
 /// `meta` keys for the phone's "Keep chats archived" and when it changed.
 const UNARCHIVE_CHATS: &str = "unarchive_chats";
 const UNARCHIVE_CHATS_AT: &str = "unarchive_chats_at";
+
+/// A separate keyed connection for local derived text. Never opens plaintext.
+pub(crate) fn transcript_connection(path: &Path) -> anyhow::Result<Connection> {
+    let key = encryption::key_for(path)?;
+    transcript_connection_with_key(path, &key)
+}
+
+pub(crate) fn transcript_connection_with_key(
+    path: &Path,
+    key: &[u8; 32],
+) -> anyhow::Result<Connection> {
+    let connection = encryption::open(path, key)?;
+    connection.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA secure_delete=ON;",
+    )?;
+    Ok(connection)
+}
 
 impl Archive {
     /// Unlocks the on-disk archive with its OS keyring key, migrating plaintext
@@ -1461,9 +1481,17 @@ impl Archive {
     /// The rows the info panel files as media, documents and links: this
     /// chat's pictures and videos, its documents, and its text messages that
     /// hold a web link, each kind newest first and cut at `limit`.
-    pub fn media_docs_links(&self, chat: &str, limit: usize) -> Result<Vec<Message>> {
-        let mut rows = self.rows_of_kind(chat, "IN ('image', 'video')", limit)?;
+    /// Returns at most five times `limit` rows: photos/videos/docs/audio/links.
+    /// No runtime caller currently uses this archive helper; Beeper uses its
+    /// bounded metadata worker and ChatMedia applies independent per-kind caps.
+    pub fn media_docs_links_per_kind(&self, chat: &str, limit: usize) -> Result<Vec<Message>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut rows = self.rows_of_kind(chat, "= 'image'", limit)?;
+        rows.extend(self.rows_of_kind(chat, "= 'video'", limit)?);
         rows.extend(self.rows_of_kind(chat, "= 'document'", limit)?);
+        rows.extend(self.rows_of_kind(chat, "= 'audio'", limit)?);
         // Only text rows with a preview or an address that names its scheme
         // or starts with `www.` are read: finding a bare domain the way the
         // bubble underlines it would parse every text row of a long chat on
@@ -3392,6 +3420,35 @@ pub(crate) mod tests {
     }
 
     /// Checks that archive search indexes fixture text, attachment captions and file names.
+    #[test]
+    fn archive_search_and_snippets_ignore_only_literal_marker_hints() {
+        let archive = Archive::in_memory().expect("opens");
+        let chat = "1@s.whatsapp.net";
+        archive.ensure_chat(chat, "Ada").expect("chat");
+        let body =
+            "run_\u{2063}widths.rs https://example.com/a_\u{2063}b *\u{2063}literal*\u{2063}";
+        let mut row = message(chat, "literal-hints", 10, false);
+        row.content = Content::text(body);
+        archive.insert_message(&row, None).expect("insert");
+        for query in ["run_widths.rs", "https://example.com/a_b", "*literal*"] {
+            let all = archive.search_messages(query, 10).expect("all search");
+            assert_eq!(all.len(), 1, "{query}");
+            assert_eq!(
+                archive
+                    .search_chat_messages(chat, query, None, None, 10)
+                    .expect("chat search")
+                    .len(),
+                1
+            );
+            let snippet = all[0].content.text_matching(query).unwrap();
+            assert!(crate::markup::plain(&snippet, &[]).contains(query));
+        }
+        assert_eq!(
+            crate::literal_hints::without_literal_hints("a\u{2063}b"),
+            "a\u{2063}b"
+        );
+    }
+
     #[test]
     fn search_finds_text_captions_and_file_names() {
         let archive = Archive::in_memory().expect("opens");
@@ -5953,18 +6010,27 @@ mod media_path_tests {
             archive.insert_message(&row, None).expect("stored");
         }
         let ids = |rows: Vec<Message>| rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
-        let rows = archive.media_docs_links(chat, 10).expect("rows");
+        let rows = archive.media_docs_links_per_kind(chat, 10).expect("rows");
         // Text rows leave their preview blob behind: the panel never draws it.
         for row in &rows {
             let text = matches!(row.content, Content::Text { .. });
             assert_eq!(row.thumbnail.is_none(), text, "{}", row.id);
         }
-        assert_eq!(ids(rows), ["preview", "clip", "link", "doc", "photo"]);
+        assert_eq!(
+            ids(rows),
+            ["preview", "clip", "link", "doc", "voice", "photo"]
+        );
+        assert!(
+            archive
+                .media_docs_links_per_kind(chat, 0)
+                .unwrap()
+                .is_empty()
+        );
         // The limit applies to each kind, so a chat full of photos still
         // lists its documents and links.
         assert_eq!(
-            ids(archive.media_docs_links(chat, 1).expect("rows")),
-            ["preview", "clip", "doc"]
+            ids(archive.media_docs_links_per_kind(chat, 1).expect("rows")),
+            ["preview", "clip", "doc", "voice", "photo"]
         );
     }
 
@@ -5988,7 +6054,7 @@ mod media_path_tests {
         }
         let ids = |rows: Vec<Message>| rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
         assert_eq!(
-            ids(archive.media_docs_links(chat, 2).expect("rows")),
+            ids(archive.media_docs_links_per_kind(chat, 2).expect("rows")),
             ["link"]
         );
     }

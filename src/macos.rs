@@ -125,13 +125,60 @@ fn build_menu() -> tray_icon::menu::Result<Menu> {
         &registered("select-all"),
         &Native::separator(),
         &registered("find"),
+        &registered("search-chats"),
     ])?;
     let view = Submenu::new("View", true);
     view.append_items(&[
         &registered("sidebar"),
         &registered("info-sidebar"),
         &Native::separator(),
+        &item("view-mode-all", "Recent Chats", None),
+        &item("view-mode-unread", "Unread Chats", None),
+        &item("view-mode-needs-me", "Needs Me", None),
+        &registered("list-mode"),
+        &registered("list-layout"),
+        &Native::separator(),
+        &item("view-page-up", "Scroll Up a Page", Some("PageUp")),
+        &item("view-page-down", "Scroll Down a Page", Some("PageDown")),
+        // No accelerators here on purpose: AppKit would turn them into menu
+        // events before egui sees the key, bypassing the key handler's
+        // text-field rules. The chords are in the shortcuts dialog.
+        &item("view-next-group", "Jump to Next Group", None),
+        &item("view-previous-group", "Jump to Previous Group", None),
+        &Native::separator(),
+        &item("view-collapse-all", "Collapse All Groups", None),
+        &item("view-expand-all", "Expand All Groups", None),
+        &Native::separator(),
         &Native::fullscreen(None),
+    ])?;
+    let go = Submenu::new("Go", true);
+    go.append_items(&[
+        &item("go-chats", "Chats", None),
+        &registered("bookmarks"),
+        &item("go-starred", "Starred Messages", None),
+        &item("go-archived", "Archived", None),
+        &item("go-locked", "Locked", None),
+        &Native::separator(),
+        &registered("jump-to-chat"),
+        &registered("palette"),
+        &Native::separator(),
+        &item("go-next-number", "Next Number", None),
+        &item("go-previous-number", "Previous Number", None),
+    ])?;
+    let chat = Submenu::new("Chat", true);
+    chat.append_items(&[
+        &registered("archive"),
+        &item("chat-favorite", "Favorite", None),
+        &registered("reply-later"),
+        &registered("read-later"),
+        &Native::separator(),
+        &item("chat-quote-reply", "Quote Reply", None),
+        &item("chat-forward", "Forward\u{2026}", None),
+        &registered("scroll-bottom"),
+        &registered("scroll-top"),
+        &Native::separator(),
+        &item("chat-clear", "Clear Chat\u{2026}", None),
+        &item("chat-leave", "Leave\u{2026}", None),
     ])?;
     let window = Submenu::new("Window", true);
     window.append_items(&[
@@ -146,7 +193,7 @@ fn build_menu() -> tray_icon::menu::Result<Menu> {
         &registered("shortcuts"),
         &item("help", "Solmu Help", None),
     ])?;
-    menu.append_items(&[&app, &file, &edit, &view, &window, &help])?;
+    menu.append_items(&[&app, &file, &edit, &view, &go, &chat, &window, &help])?;
     window.set_as_windows_menu_for_nsapp();
     help.set_as_help_menu_for_nsapp();
     Ok(menu)
@@ -267,7 +314,7 @@ unsafe extern "C-unwind" fn reopen(
 /// forward activation to the app: AppKit's window list also contains the
 /// status item's window, which can outlive the closed chat window.
 /// The shell knows whether its resident window exists. Native miniaturized
-/// windows are restored here only with the experimental opt-in enabled.
+/// windows are restored here by default, with an explicit opt-out available.
 unsafe extern "C-unwind" fn did_become_active(
     _this: &objc2::runtime::AnyObject,
     _sel: objc2::runtime::Sel,
@@ -278,7 +325,7 @@ unsafe extern "C-unwind" fn did_become_active(
     };
     let app = NSApplication::sharedApplication(mtm);
     dock_diag(&format!("did_become_active {}", window_counts(&app)));
-    // Experimental native restoration is opt-in until real Cmd-Tab acceptance.
+    // Native restoration is on after the owner's minimized Cmd-Tab acceptance.
     if direct_restore_enabled(
         std::env::var("SOLMU_EXPERIMENTAL_RESTORE_MINIMIZED")
             .ok()
@@ -300,9 +347,9 @@ unsafe extern "C-unwind" fn did_become_active(
     }
 }
 
-/// Only an explicit opt-in enables the unaccepted native restoration path.
+/// Restore by default; keep the existing variable as an explicit opt-out.
 fn direct_restore_enabled(value: Option<&str>) -> bool {
-    value == Some("1")
+    value != Some("0")
 }
 
 /// Adds `reopen` to the application delegate's class once winit has set its
@@ -535,14 +582,17 @@ fn action(id: &str) -> Option<Action> {
         "new" => Action::ShowDialog(Dialog::NewChat),
         "close" => Action::CloseWindow,
         "quit" => Action::Quit,
-        "search" => Action::FocusSearch,
+        "search" => Action::OpenChatSearch,
+        "search-all" => Action::FocusSearch,
         "sidebar" => Action::ToggleSidebar,
         "info-sidebar" => Action::ToggleInfoSidebar,
+        "flat-groups" => Action::ToggleFlatGroups,
         "whats-new" => Action::ShowDialog(Dialog::WhatsNew),
         "shortcuts" => Action::ShowDialog(Dialog::Shortcuts),
         "help" => Action::OpenUrl("https://zapfast.rocks/using-zapfast/".into()),
         "show-window" => Action::ShowWindow,
         "activate-window" => Action::ActivateWindow,
+        id if crate::ui::keys::MENU_COMMANDS.contains(&id) => Action::MenuCommand(id.to_owned()),
         _ => return None,
     })
 }
@@ -562,7 +612,11 @@ pub fn drain(hidden: bool) -> Vec<Action> {
             if hidden
                 && matches!(
                     action,
-                    Action::ShowDialog(_) | Action::Open(_) | Action::FocusSearch
+                    Action::ShowDialog(_)
+                        | Action::MenuCommand(_)
+                        | Action::Open(_)
+                        | Action::FocusSearch
+                        | Action::OpenChatSearch
                 )
             {
                 actions.push(Action::ShowWindow);
@@ -578,11 +632,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_minimized_restoration_is_off_unless_explicitly_enabled() {
-        for value in [None, Some(""), Some("0"), Some("false"), Some("true")] {
-            assert!(!direct_restore_enabled(value));
+    fn native_find_and_global_search_have_fixed_separate_scopes() {
+        assert!(matches!(action("search"), Some(Action::OpenChatSearch)));
+        assert!(matches!(action("search-all"), Some(Action::FocusSearch)));
+        let find = crate::ui::keys::shortcut("find").menu.as_ref().unwrap();
+        let global = crate::ui::keys::shortcut("search-chats")
+            .menu
+            .as_ref()
+            .unwrap();
+        assert_eq!(find.accelerator, "Super+KeyF");
+        assert_eq!(global.accelerator, "Super+Shift+KeyF");
+        assert_ne!(find.id, global.id);
+    }
+
+    #[test]
+    fn direct_minimized_restoration_is_on_unless_explicitly_disabled() {
+        for value in [None, Some(""), Some("1"), Some("false"), Some("true")] {
+            assert!(direct_restore_enabled(value));
         }
-        assert!(direct_restore_enabled(Some("1")));
+        assert!(!direct_restore_enabled(Some("0")));
     }
 
     #[test]
@@ -849,4 +917,83 @@ pub fn vibrancy(frame: &eframe::Frame, palette: &crate::theme::Palette, on: bool
             *dark = palette.dark;
         }
     });
+}
+
+// A separate Apple-event target survives window/tray delegate replacement.
+static WHATSAPP_URLS: Mutex<Vec<crate::target::Request>> = Mutex::new(Vec::new());
+thread_local! {
+    static URL_HANDLER: RefCell<Option<objc2::rc::Retained<objc2::runtime::AnyObject>>> = const { RefCell::new(None) };
+}
+extern "C-unwind" fn receive_whatsapp_url(
+    _this: &objc2::runtime::AnyObject,
+    _sel: objc2::runtime::Sel,
+    event: &objc2::runtime::AnyObject,
+    _reply: &objc2::runtime::AnyObject,
+) {
+    // keyDirectObject = '----'. URL contents are data, never commands or logs.
+    let descriptor: Option<objc2::rc::Retained<objc2::runtime::AnyObject>> =
+        unsafe { objc2::msg_send![event, paramDescriptorForKeyword: u32::from_be_bytes(*b"----")] };
+    let Some(descriptor) = descriptor else {
+        return;
+    };
+    let value: Option<objc2::rc::Retained<objc2_foundation::NSString>> =
+        unsafe { objc2::msg_send![&*descriptor, stringValue] };
+    let Some(value) = value else {
+        return;
+    };
+    let value = value.to_string();
+    if value.len() > 32 * 1024 || !value.to_ascii_lowercase().starts_with("whatsapp:") {
+        return;
+    }
+    if let Some(request) = crate::target::parse(&value) {
+        let mut queue = WHATSAPP_URLS.lock().unwrap_or_else(|p| p.into_inner());
+        if queue.len() < 32 {
+            queue.push(request);
+        }
+        if let Some(ctx) = REPAINT.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+            ctx.request_repaint();
+        }
+    }
+}
+
+/// Install before the first AppKit event pump, including cold/hidden launch.
+pub fn install_whatsapp_handler() {
+    use objc2::ClassType;
+    URL_HANDLER.with(|slot| {
+        if slot.borrow().is_some() {
+            return;
+        }
+        let Some(mut builder) = objc2::runtime::ClassBuilder::new(
+            c"SolmuWhatsAppURLHandler",
+            objc2_foundation::NSObject::class(),
+        ) else {
+            return;
+        };
+        unsafe {
+            builder.add_method(
+                objc2::sel!(handleURL:withReplyEvent:),
+                receive_whatsapp_url as extern "C-unwind" fn(_, _, _, _),
+            );
+        }
+        let class = builder.register();
+        let handler: objc2::rc::Retained<objc2::runtime::AnyObject> =
+            unsafe { objc2::msg_send![class, new] };
+        let Some(manager_class) = objc2::runtime::AnyClass::get(c"NSAppleEventManager") else {
+            return;
+        };
+        let manager: &objc2::runtime::AnyObject =
+            unsafe { objc2::msg_send![manager_class, sharedAppleEventManager] };
+        unsafe {
+            let _: () = objc2::msg_send![manager,
+            setEventHandler: &*handler,
+            andSelector: objc2::sel!(handleURL:withReplyEvent:),
+            forEventClass: u32::from_be_bytes(*b"GURL"),
+            andEventID: u32::from_be_bytes(*b"GURL")];
+        }
+        *slot.borrow_mut() = Some(handler);
+    });
+}
+
+pub fn drain_whatsapp() -> Vec<crate::target::Request> {
+    std::mem::take(&mut *WHATSAPP_URLS.lock().unwrap_or_else(|p| p.into_inner()))
 }

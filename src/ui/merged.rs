@@ -4,6 +4,15 @@ use crate::{
     merged::{Member, Person},
     model::{Action, Chat, ChatKind},
 };
+/// These actions need a source-specific conversation state. Translation only
+/// carries explicit text into a review form and has no source routing to guess.
+fn requires_source_conversation(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Edit(_) | Action::SelectMessage(_) | Action::SweepMessages { .. }
+    )
+}
+
 #[derive(Clone, Default)]
 struct RowCache {
     width: f32,
@@ -11,6 +20,7 @@ struct RowCache {
     /// strings instead of copying them for every loaded row of every frame.
     heights: std::collections::HashMap<String, std::collections::HashMap<String, f32>>,
     count: usize,
+    widths: crate::run_widths::WidthBook,
 }
 
 impl RowCache {
@@ -48,6 +58,145 @@ struct State {
     source_filter: Option<Member>,
     search_open: bool,
 }
+/// Cancel the displayed person's cached reply at the deferred action boundary.
+/// Clearing only App::reply_to lets the next linked frame restore the quote.
+/// An explicitly chosen destination remains useful for the unquoted draft.
+pub(crate) fn cancel_reply(app: &App, ctx: &egui::Context) {
+    let Some(current) = app
+        .open_chat
+        .as_deref()
+        .and_then(|id| app.chat(id))
+        .and_then(Member::of)
+    else {
+        return;
+    };
+    let Some(person) = app
+        .settings
+        .beeper
+        .people
+        .iter()
+        .find(|person| person.members.contains(&current))
+    else {
+        return;
+    };
+    let key = egui::Id::new(("linked-person-state", &person.members));
+    ctx.data_mut(|data| {
+        if let Some(mut state) = data.get_temp::<State>(key) {
+            state.reply = None;
+            if !state.explicit {
+                state.destination = None;
+            }
+            data.insert_temp(key, state);
+        }
+    });
+}
+
+/// Reply-only drafts also own their existing source and quote.
+pub(crate) fn has_reply(app: &App, ctx: &egui::Context, source: &Member) -> bool {
+    app.settings
+        .beeper
+        .people
+        .iter()
+        .find(|p| p.members.contains(source))
+        .is_some_and(|p| {
+            let key = egui::Id::new(("linked-person-state", &p.members));
+            ctx.data(|data| data.get_temp::<State>(key))
+                .is_some_and(|state| state.reply.is_some())
+        })
+}
+
+/// Explicit New message source selection, never a primary-source fallback.
+pub(crate) fn prepare_destination(app: &App, ctx: &egui::Context, source: &Member) {
+    let Some(person) = app
+        .settings
+        .beeper
+        .people
+        .iter()
+        .find(|p| p.members.contains(source))
+    else {
+        return;
+    };
+    let key = egui::Id::new(("linked-person-state", &person.members));
+    ctx.data_mut(|data| {
+        let mut state = data.get_temp::<State>(key).unwrap_or_default();
+        state.destination = Some(source.clone());
+        state.explicit = true;
+        state.reply = None;
+        data.insert_temp(key, state);
+    });
+}
+
+/// Resolve attachments through the same exact source picker as new text.
+/// The visible member is only the draft owner, never an implicit fallback.
+pub(crate) fn attachment_destination(
+    app: &App,
+    ctx: &egui::Context,
+) -> Result<Option<String>, std::borrow::Cow<'static, str>> {
+    let Some(chat) = app.open_chat.as_deref().and_then(|id| app.chat(id)) else {
+        return Ok(None);
+    };
+    let Some(current) = Member::of(chat) else {
+        return Ok(None);
+    };
+    let Some(person) = app
+        .settings
+        .beeper
+        .people
+        .iter()
+        .find(|p| p.members.contains(&current))
+    else {
+        return Ok(None);
+    };
+    let valid = valid_members(app, person, chat);
+    if !(2..=8).contains(&valid.len()) {
+        return Err(crate::i18n::gettext(
+            app.locale,
+            "Linked person unavailable. Open a source chat separately.",
+        ));
+    }
+    let key = egui::Id::new(("linked-person-state", &person.members));
+    let state = ctx
+        .data(|data| data.get_temp::<State>(key))
+        .unwrap_or_default();
+    let destination = if state.destination.is_some() {
+        state.destination.as_ref()
+    } else {
+        person
+            .default_destination(&valid)
+            .map_err(|_| crate::i18n::gettext(app.locale, "Primary chat unavailable. Choose a destination explicitly; no fallback was selected."))?
+    };
+    let Some(destination) = destination.filter(|member| valid.contains(member)) else {
+        return Err(crate::i18n::gettext(
+            app.locale,
+            "Choose a destination for this linked chat before attaching files.",
+        ));
+    };
+    if !app.chat(&destination.chat).is_some_and(Chat::can_send) {
+        return Err(crate::i18n::gettext(
+            app.locale,
+            "The selected source chat cannot send messages.",
+        ));
+    }
+    Ok(Some(destination.chat.clone()))
+}
+
+pub(super) fn valid_members(app: &App, person: &Person, chat: &Chat) -> Vec<Member> {
+    person
+        .members
+        .iter()
+        .filter(|m| {
+            app.chats.iter().any(|c| {
+                m.matches(c)
+                    && !c.locked
+                    && c.kind == ChatKind::Direct
+                    && c.backend_origin == chat.backend_origin
+                    && app.chats.iter().filter(|known| known.id == c.id).count() == 1
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 /// What "Load older" could not do, once it stopped: the networks whose older
 /// messages did not come, and why. `None` when every chat caught up or ran out.
 fn older_note(app: &App, catch_up: &crate::merged::CatchUp) -> Option<String> {
@@ -85,6 +234,33 @@ pub fn latest_reply_shortcut() -> egui::KeyboardShortcut {
         egui::Key::R,
     )
 }
+/// A plain reply resumes the conversation on the other person's latest source.
+pub fn incoming_bridge_shortcut() -> egui::KeyboardShortcut {
+    egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::R)
+}
+
+fn incoming_reply(app: &App, valid: &[Member]) -> Option<(Member, String)> {
+    let latest = valid
+        .iter()
+        .filter_map(|member| app.conversations.get(&member.chat))
+        .flat_map(|conversation| &conversation.messages)
+        .filter(|message| {
+            !message.from_me && !matches!(message.content, crate::model::Content::Revoked)
+        })
+        .max_by(|a, b| {
+            a.timestamp
+                .cmp(&b.timestamp)
+                .then(a.chat.cmp(&b.chat))
+                .then(a.history_order.cmp(&b.history_order))
+                .then(a.id.cmp(&b.id))
+        })?;
+    valid
+        .iter()
+        .find(|member| member.chat == latest.chat)
+        .cloned()
+        .map(|member| (member, latest.id.clone()))
+}
+
 fn bounded_note(ui: &mut egui::Ui, palette: &crate::theme::Palette, text: &str, small: bool) {
     let width = (ui.clip_rect().right() - ui.cursor().left())
         .min(ui.available_width())
@@ -104,48 +280,33 @@ fn bounded_note(ui: &mut egui::Ui, palette: &crate::theme::Palette, text: &str, 
     ui.painter().galley(rect.min, galley, palette.text);
 }
 
-pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
-    if chat.backend_account.is_none() {
-        return false;
+/// Whether this exact chat is owned by the linked view, including its
+/// unavailable-member state. Shortcut dispatch must use the same predicate.
+pub(super) fn person_for_view<'a>(app: &'a App, chat: &Chat) -> Option<&'a Person> {
+    if chat.backend_account.is_none()
+        || chat.kind != ChatKind::Direct
+        || app.chats.iter().filter(|c| c.id == chat.id).count() != 1
+    {
+        return None;
     }
-    if chat.kind != ChatKind::Direct {
-        return false;
-    }
-    if app.chats.iter().filter(|c| c.id == chat.id).count() != 1 {
-        return false;
-    }
-    let current = Member::of(chat);
-    let person = app
-        .settings
+    let current = Member::of(chat)?;
+    app.settings
         .beeper
         .people
         .iter()
-        .find(|p| p.members.iter().any(|m| Some(m) == current.as_ref()))
-        .cloned();
-    if person.is_none() {
+        .find(|p| p.members.contains(&current))
+}
+
+pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
+    let Some(person) = person_for_view(app, chat).cloned() else {
         // Linking lives in Contact info; the conversation top stays clean.
         return false;
-    }
-    let person = person.unwrap();
-    let valid: Vec<_> = person
-        .members
-        .iter()
-        .filter(|m| {
-            app.chats.iter().any(|c| {
-                m.matches(c)
-                    && !c.locked
-                    && c.kind == ChatKind::Direct
-                    && c.backend_origin == chat.backend_origin
-                    && app.chats.iter().filter(|known| known.id == c.id).count() == 1
-            })
-        })
-        .cloned()
-        .collect();
+    };
+    let valid = valid_members(app, &person, chat);
     if valid.len() < 2 {
         app.ensure_person_loaded(&[]);
         if ui.button("Remove local link").clicked() {
-            app.settings.beeper.people.retain(|p| p != &person);
-            app.mark_settings_dirty();
+            app.unlink_person(&person);
         }
         ui.colored_label(egui::Color32::YELLOW,"Linked person unavailable: member identity missing or locked. Open members separately.");
         return true;
@@ -156,6 +317,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     }
     let ids: Vec<_> = valid.iter().map(|m| m.chat.clone()).collect();
     app.ensure_person_loaded(&ids);
+    super::reply_threads::begin(app, ui, &ids);
     let key = egui::Id::new(("linked-person-state", &person.members));
     let mut state = ui
         .ctx()
@@ -243,8 +405,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             }
         }
         if waiting || !requests.is_empty() {
-            let ctx = ui.ctx().clone();
-            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            // No polling: each answered page arrives as a backend event,
+            // and events wake the window, so the next pass plans the next
+            // request. The header spinner shows the wait meanwhile.
             state.catch_up = Some(catch_up);
         } else {
             state.older_note = older_note(app, &catch_up);
@@ -262,44 +425,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     // Contact info panel, so the timeline keeps its room.
     let searching =
         state.search_open || !state.search.trim().is_empty() || state.source_filter.is_some();
-    // Right-aligned beside the identity while both fit; on their own row
-    // below when they would collide, as in the squeezed info layout. The
-    // right_to_left block cannot wrap, so measure instead of hoping.
     let tail = format!("{} linked chats · local only", valid.len());
-    let painter = ui.painter();
-    let actions_width = ["Load older", "Search"]
-        .iter()
-        .map(|label| {
-            painter
-                .layout_no_wrap(
-                    (*label).to_owned(),
-                    egui::TextStyle::Button.resolve(ui.style()),
-                    egui::Color32::WHITE,
-                )
-                .size()
-                .x
-                + 2.0 * ui.spacing().button_padding.x
-        })
-        .sum::<f32>()
-        + ui.spacing().item_spacing.x;
-    let identity_width = painter
-        .layout_no_wrap(
-            person.name.clone(),
-            egui::TextStyle::Heading.resolve(ui.style()),
-            egui::Color32::WHITE,
-        )
-        .size()
-        .x
-        + painter
-            .layout_no_wrap(
-                tail.clone(),
-                egui::TextStyle::Body.resolve(ui.style()),
-                egui::Color32::WHITE,
-            )
-            .size()
-            .x
-        + 2.0 * ui.spacing().item_spacing.x;
-    let actions_inline = identity_width + actions_width <= ui.available_width();
     let actions = |ui: &mut egui::Ui, app: &mut App, state: &mut State| {
         // A load over the tunnel is otherwise invisible: while one runs, the
         // button rests and a spinner beside it says the fetch is on its way.
@@ -310,7 +436,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                     .is_some_and(|c| c.loading_older || c.fetching_phone)
             });
         if ui
-            .add_enabled(!fetching, egui::Button::new("Load older"))
+            .add_enabled_ui(!fetching, |ui| {
+                super::conversation::header_icon(ui, &app.conversation_palette(), crate::theme::Icon::Clock, fetching, "Load older messages from each linked chat")
+            }).inner
             .on_hover_text(format!(
                 "Load older from each chat. {message_count} loaded messages · Each member pages independently; this is not the full remote history."
             ))
@@ -327,10 +455,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         if fetching {
             crate::theme::spinner(ui, 14.0, app.conversation_palette().accent);
         }
-        if ui
-            .selectable_label(searching, "Search")
-            .on_hover_text("Search the loaded messages and narrow by source")
-            .clicked()
+        if super::conversation::header_icon(
+            ui,
+            &app.conversation_palette(),
+            crate::theme::Icon::Search,
+            searching,
+            "Search the loaded messages and narrow by source",
+        )
+        .clicked()
         {
             state.search_open = !searching;
             if !state.search_open {
@@ -339,18 +471,48 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             }
         }
     };
-    ui.horizontal(|ui| {
-        ui.heading(&person.name);
-        ui.label(&tail);
-        if actions_inline {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                actions(ui, app, &mut state);
+    egui::Frame::new()
+        .fill(app.conversation_palette().surface)
+        .inner_margin(8.0)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                // Linked chats have their own header. When the list is
+                // collapsed, the traffic lights extend beyond the icon rail.
+                let lights = if crate::theme::macos_chrome(ui.ctx()) {
+                    (crate::theme::traffic_light_inset(ui.ctx()) - ui.cursor().left()).max(0.0)
+                } else {
+                    0.0
+                };
+                ui.add_space(lights);
+                let has_error = valid
+                    .iter()
+                    .any(|member| app.beeper_live_errors.contains_key(&member.chat));
+                let actions_width = if has_error { 224.0 } else { 192.0 };
+                let identity_width = (ui.available_width() - actions_width).max(30.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(identity_width, 40.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&person.name).strong()).truncate(),
+                        )
+                        .on_hover_text(&person.name);
+                        ui.add(egui::Label::new(&tail).truncate())
+                            .on_hover_text(&tail);
+                    },
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    actions(ui, app, &mut state);
+                    super::conversation::chat_actions_toolbar(app, ui, chat);
+                    super::conversation::connection_status(
+                        app,
+                        ui,
+                        &valid.iter().map(|m| m.chat.as_str()).collect::<Vec<_>>(),
+                    );
+                });
             });
-        }
-    });
-    if !actions_inline {
-        ui.horizontal(|ui| actions(ui, app, &mut state));
-    }
+        });
     if let Some(error) = routing_error {
         ui.colored_label(egui::Color32::YELLOW, error);
     }
@@ -358,41 +520,23 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         let warning = app.conversation_palette().warning;
         ui.colored_label(warning, note);
     }
-    // One compact line per distinct connection problem, sources combined;
-    // the full backend text stays on hover instead of stacking per member.
-    let mut warnings: Vec<(Vec<&str>, &String)> = Vec::new();
     for member in &valid {
-        if let Some(error) = app.beeper_live_errors.get(&member.chat) {
-            let source = app.chat(&member.chat).map(network_label).unwrap_or("Chat");
-            match warnings.iter_mut().find(|(_, known)| *known == error) {
-                Some((sources, _)) if !sources.contains(&source) => sources.push(source),
-                Some(_) => {}
-                None => warnings.push((vec![source], error)),
-            }
-        }
-    }
-    for (sources, error) in warnings {
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(format!(
-                    "{}: live updates unavailable; updates may be incomplete. Retrying automatically.",
-                    sources.join(", ")
-                ))
-                .color(app.conversation_palette().warning),
-            )
-            .wrap(),
-        )
-        .on_hover_text(error);
-    }
-    for member in &valid {
-        if let Some(error) = app.beeper_history_errors.get(&member.chat).cloned() {
+        if let Some(error) = app.person_history_error(&member.chat) {
             let source = source_label(app, &valid, member);
             ui.horizontal(|ui| {
                 ui.colored_label(
                     egui::Color32::YELLOW,
-                    format!("Partial timeline: {source} history failed: {error}"),
+                    crate::i18n::gettext(
+                        app.locale,
+                        "Partial timeline: {source} history failed: {error}",
+                    )
+                    .replace("{source}", &source)
+                    .replace("{error}", &error),
                 );
-                if ui.button("Retry history").clicked() {
+                if ui
+                    .button(crate::i18n::gettext(app.locale, "Retry history"))
+                    .clicked()
+                {
                     app.retry_person_history(&member.chat);
                 }
             });
@@ -436,6 +580,80 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             }
         });
     }
+    // Handle before the composer so Enter in the same frame cannot use the old
+    // route. Search filters do not change which incoming source is newest.
+    let can_resume = app.dialog.is_none()
+        && !app.show_update
+        && app.picker.is_none()
+        && app.reaction_target.is_none()
+        && app.recording.is_none()
+        && app.image_preview.is_none()
+        && app.picture_edit.is_none()
+        && app.sticker_view.is_none()
+        && !egui::Popup::is_any_open(ui.ctx());
+    let incoming_shortcut = can_resume
+        && ui.input_mut(|input| {
+            let shortcut = incoming_bridge_shortcut();
+            let mut pressed = false;
+            input.events.retain(|event| {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                    && *key == shortcut.logical_key
+                    && modifiers.matches_exact(shortcut.modifiers)
+                {
+                    pressed = true;
+                    return false;
+                }
+                true
+            });
+            pressed
+        });
+    if incoming_shortcut {
+        if app.editing.is_some() || state.reply.is_some() || !app.pending.is_empty() {
+            app.toast(crate::i18n::gettext(app.locale,
+                "Finish or cancel the current reply, edit or attachment before changing bridges").as_ref());
+        } else if let Some((member, id)) = incoming_reply(app, &valid) {
+            state.reply = Some((member.clone(), id.clone()));
+            state.destination = Some(member.clone());
+            state.explicit = false;
+            app.reply_to = crate::merged::reply_route(&member, &member, &id);
+            app.focus_composer = true;
+        } else {
+            app.toast(
+                crate::i18n::gettext(
+                    app.locale,
+                    "No incoming message is loaded in this linked chat",
+                )
+                .as_ref(),
+            );
+        }
+    }
+    if state.reply.is_none()
+        && let Some(source) = app.unsent_voice_source.as_ref()
+        && let Some(quote) = app.unsent_voice_quote.as_ref()
+        && valid.contains(source)
+    {
+        state.reply = Some((source.clone(), quote.id.clone()));
+        state.destination = Some(source.clone());
+    }
+    // Seed a recovered quote only on its exact original source. Each staged
+    // item retains its quote independently; a newer reply cannot replace it.
+    if state.reply.is_none()
+        && let Some((source, quote)) = app.pending.iter().find_map(|item| {
+            Some((
+                app.attachment_retry_sources.get(&item.id)?,
+                app.attachment_retry_quotes.get(&item.id)?,
+            ))
+        })
+        && valid.contains(source)
+    {
+        state.reply = Some((source.clone(), quote.id.clone()));
+        state.destination = Some(source.clone());
+    }
     // Routing safety: no reply target and no chosen destination means no
     // route at all - new text goes nowhere without an explicit choice.
     if state.reply.is_none() {
@@ -462,7 +680,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         let had_quote = app.reply_to.is_some();
         let before = app.actions.len();
         let chosen = destination_label(app, state.destination.as_ref());
-        let extras_width = measure_extras(ui);
+        let extras_width = SELECTOR_SIZE + 10.0;
         let mut render = |app: &mut App, ui: &mut egui::Ui| {
             destination_extras(app, ui, &mut state, &valid, &person, cross_over, &chosen);
         };
@@ -470,7 +688,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             app,
             ui,
             destination,
-            false,
+            true,
             Some(super::conversation::ComposerExtras {
                 width: extras_width,
                 render: &mut render,
@@ -484,7 +702,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         }
         if app.actions[before..]
             .iter()
-            .any(|a| matches!(a, Action::SendText { .. } | Action::SendPending { .. }))
+            .any(|a| matches!(a, Action::SendText { .. }))
         {
             state.reply = None;
             if !state.explicit {
@@ -614,10 +832,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 .and_then(|conv| conv.messages.get(*idx))
         })
         .collect();
-    let filtered = !state.search.trim().is_empty() || state.source_filter.is_some();
+    super::reply_threads::bar(ui, app.locale);
+    let thread_root = super::reply_threads::current(ui.ctx());
+    let filtered =
+        thread_root.is_some() || !state.search.trim().is_empty() || state.source_filter.is_some();
     let visible: Vec<_> = messages
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|message| {
+            if !super::reply_threads::includes(ui.ctx(), message) {
+                return false;
+            }
+
             if state
                 .source_filter
                 .as_ref()
@@ -675,7 +901,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     let mut actions = Vec::new();
     let mut refused_action = false;
     let redo = ui.ctx().current_pass_index() > 0;
-    let rows_key = key.with("row-heights");
+    let rows_key = key.with(("row-heights", &thread_root));
     let mut cache = ui
         .ctx()
         .data_mut(|data| data.remove_temp::<RowCache>(rows_key).unwrap_or_default());
@@ -698,6 +924,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     let mut previous: Option<&crate::model::Message> = None;
     let mut previous_laid_out = false;
     let mut previous_on_screen = false;
+    let mut displayed_sources = std::collections::HashSet::new();
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new("linked-chip-geometry"),
+            Vec::<(egui::Rect, egui::Rect, bool)>::new(),
+        )
+    });
     let output = ui
         // The scroll area runs to the pane's edge so its overlay bar sits in
         // the side margin; rows keep the inset width and never sit under it.
@@ -708,8 +942,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             // height is known; everything else is an offset the area can
             // clamp itself.
             if pending_scroll.is_some() || forced_bottom {
-                let scroll_id =
-                    ui.make_persistent_id(egui::IdSalt::new(("person-timeline", &person.members)));
+                let scroll_id = ui.make_persistent_id(if thread_root.is_some() {
+                    egui::IdSalt::new(key.with(("thread", &thread_root)))
+                } else {
+                    egui::IdSalt::new(("person-timeline", &person.members))
+                });
                 let mut state =
                     egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
                 let page = remaining * 0.9;
@@ -724,15 +961,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 state.store(ui.ctx(), scroll_id);
             }
             egui::ScrollArea::vertical()
-                .id_salt(("person-timeline", &person.members))
+                .id_salt(if thread_root.is_some() {
+                    egui::IdSalt::new(key.with(("thread", &thread_root)))
+                } else {
+                    egui::IdSalt::new(("person-timeline", &person.members))
+                })
                 .stick_to_bottom(!filtered)
                 .min_scrolled_height(remaining)
                 .max_height(remaining)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.set_max_width(timeline.width());
-                    // The same tight row rhythm as an ordinary chat's transcript.
-                    ui.spacing_mut().item_spacing.y = 3.0;
+                    let run_widths = super::conversation::linked_run_widths(
+                        app,
+                        ui,
+                        &messages,
+                        &mut cache.widths,
+                    );
+                    ui.spacing_mut().item_spacing.y = 4.0;
                     let viewport = ui.clip_rect();
                     if visible.is_empty() {
                         ui.label(if filtered {
@@ -741,7 +987,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                             "Loading linked histories…"
                         });
                     }
-                    for original_message in visible {
+                    for (visible_index, original_message) in visible.iter().copied().enumerate() {
                         let top = ui.cursor().top();
                         // A row the reader cannot see costs its cached or
                         // estimated height and nothing else: no timezone
@@ -851,9 +1097,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                 message.sender_name.as_deref().unwrap_or("Sender")
                             };
                             if day_boundary {
+                                ui.add_space(super::conversation::DAY_SPACE_ABOVE);
                                 ui.small(crate::util::day_label(app.locale, message.timestamp));
+                                ui.add_space(super::conversation::DAY_SPACE_BELOW);
                             } else if boundary {
-                                ui.add_space(4.0);
+                                ui.add_space(10.0);
                             }
                             // The mark earns its place only where the
                             // network changes from the previous message (or
@@ -916,11 +1164,34 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                             ui,
                                             &source_chat,
                                             message,
+                                            visible_index
+                                                .checked_sub(1)
+                                                .and_then(|i| visible.get(i).copied()),
+                                            super::conversation::starts_sender_run(
+                                                message,
+                                                visible_index
+                                                    .checked_sub(1)
+                                                    .and_then(|i| visible.get(i).copied()),
+                                            ),
+                                            super::conversation::last_minute_in_run(
+                                                original_message,
+                                                visible.get(visible_index + 1).copied(),
+                                            ),
+                                            // The shared renderer also aligns outgoing bubbles to
+                                            // this edge. Do not restore the full timeline width:
+                                            // that would reclaim the network chip's reserved lane.
+                                            area.right(),
+                                            run_widths
+                                                .get(&super::conversation::width_key(message))
+                                                .copied(),
                                             &mut actions,
                                         )
                                     },
                                 )
                                 .inner;
+                            if bubble_rect.is_some_and(|rect| rect.intersects(viewport)) {
+                                displayed_sources.insert(message.chat.clone());
+                            }
                             if show_mark && let Some(rect) = bubble_rect {
                                 let side = if message.from_me {
                                     area.max.x + ui.spacing().item_spacing.x
@@ -931,6 +1202,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                 let centre = egui::pos2(side + chip / 2.0, y);
                                 let slot =
                                     egui::Rect::from_center_size(centre, egui::Vec2::splat(chip));
+                                #[cfg(test)]
+                                ui.ctx().data_mut(|data| {
+                                    let mut geometry = data
+                                        .get_temp::<Vec<(egui::Rect, egui::Rect, bool)>>(
+                                            egui::Id::new("linked-chip-geometry"),
+                                        )
+                                        .unwrap_or_default();
+                                    geometry.push((rect, slot, message.from_me));
+                                    data.insert_temp(
+                                        egui::Id::new("linked-chip-geometry"),
+                                        geometry,
+                                    );
+                                });
                                 let response = ui.interact(
                                     slot,
                                     ui.id().with(("network-chip", &message.chat, &message.id)),
@@ -947,10 +1231,27 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                     Action::Reply(id) => {
                                         selected_reply = Some((member.clone(), id));
                                     }
-                                    Action::Edit(_)
-                                    | Action::SelectMessage(_)
-                                    | Action::SweepMessages { .. }
-                                    | Action::TranslateLocally(_) => refused_action = true,
+                                    Action::PrefillComposer { text, mentions, .. } => {
+                                        if app.composer.trim().is_empty()
+                                            && app.reply_to.is_none()
+                                            && app.editing.is_none()
+                                            && app.recording.is_none()
+                                            && !app.drafts.contains_key(&chat.id)
+                                        {
+                                            state.destination = Some(member.clone());
+                                            state.explicit = true;
+                                            actions.push(Action::PrefillComposer {
+                                                chat: chat.id.clone(),
+                                                text,
+                                                mentions,
+                                            });
+                                        } else {
+                                            refused_action = true;
+                                        }
+                                    }
+                                    action if requires_source_conversation(&action) => {
+                                        refused_action = true;
+                                    }
                                     other => actions.push(other),
                                 }
                             }
@@ -968,6 +1269,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 })
         })
         .inner;
+    super::reply_threads::finish(ui, app.conversation_palette().accent);
+    // The linked timeline shows the thread in place, so it never gets the
+    // modal; the jump chips still apply, and a way back into another chat
+    // becomes plain navigation.
+    if let Some(key) = super::reply_threads::paint_jump_chips(ui, app.locale) {
+        actions.push(Action::OpenMessage {
+            chat: key.chat,
+            message: key.id,
+        });
+    }
+    if thread_root.is_none() {
+        super::reply_threads::complete_full_scroll(ui.ctx(), output.id, output.state);
+    }
     let bottom = (output.content_size.y - output.inner_rect.height()).max(0.0);
     if matches!(pending_scroll, Some(crate::model::Scroll::Bottom)) || forced_bottom {
         let mut scroll = output.state;
@@ -988,25 +1302,33 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     }
     ui.ctx().data_mut(|data| data.insert_temp(rows_key, cache));
     if let Some((member, id)) = selected_reply {
-        state.reply = Some((member.clone(), id.clone()));
-        // Each reply routes home by default: the source's own network and
-        // account. Picking another destination afterwards is the explicit
-        // cross-over, and the warning says the reply reference does not travel.
-        state.explicit = false;
-        state.destination = Some(member.clone());
-        app.reply_to = state
-            .destination
-            .as_ref()
-            .and_then(|destination| crate::merged::reply_route(&member, destination, &id));
+        apply_selected_reply(app, &mut state, member, id);
     }
     if refused_action {
         app.toast(
             "Open this source chat separately for that action; linked routing was not guessed",
         );
     }
+    app.finish_deferred_linked_reads(&displayed_sources.into_iter().collect::<Vec<_>>());
     app.actions.extend(actions);
     ui.ctx().data_mut(|d| d.insert_temp(key, state));
     true
+}
+
+/// Starts the reply a bubble's arrow, a double-click or "Reply to latest match"
+/// picked, and hands the composer focus like the Cmd-R path does.
+fn apply_selected_reply(app: &mut App, state: &mut State, member: Member, id: String) {
+    state.reply = Some((member.clone(), id.clone()));
+    // Each reply routes home by default: the source's own network and
+    // account. Picking another destination afterwards is the explicit
+    // cross-over, and the warning says the reply reference does not travel.
+    state.explicit = false;
+    state.destination = Some(member.clone());
+    app.reply_to = state
+        .destination
+        .as_ref()
+        .and_then(|destination| crate::merged::reply_route(&member, destination, &id));
+    app.focus_composer = true;
 }
 
 /// The saved default destination for new messages, kept per linked person
@@ -1050,6 +1372,22 @@ fn destination_entries(
         {
             state.explicit = true;
             state.destination = Some(member.clone());
+            let returned_here = app.unsent_voice.as_ref().is_some_and(|(source, _)| {
+                app.open_chat.as_deref() == Some(app.linked_draft_owner(source).as_str())
+            });
+            if returned_here
+                && app.unsent_voice_quote.is_none()
+                && let Some((source, _)) = &mut app.unsent_voice
+            {
+                *source = member.chat.clone();
+                app.unsent_voice_source = Some(member.clone());
+            }
+            // Choosing a route is explicit approval to move a returned draft.
+            for staged in &app.pending {
+                if !app.attachment_retry_quotes.contains_key(&staged.id) {
+                    app.attachment_retry_sources.remove(&staged.id);
+                }
+            }
             app.reply_to = state
                 .reply
                 .as_ref()
@@ -1092,12 +1430,6 @@ fn destination_label(app: &App, destination: Option<&Member>) -> String {
     short
 }
 
-/// The width the composer's extras reserve: the clock, its gap, and the
-/// selector's icon button, plus slack.
-fn measure_extras(ui: &egui::Ui) -> f32 {
-    34.0 + ui.spacing().item_spacing.x + SELECTOR_SIZE + 10.0
-}
-
 /// The destination selector is the network's icon alone; the network and
 /// account names stay on its tooltip, accessible label and menu rows.
 const SELECTOR_SIZE: f32 = 28.0;
@@ -1120,24 +1452,6 @@ fn destination_extras(
         .and_then(|member| app.chat(&member.chat))
         .map(|chat| format!("{}{}", network_label(chat), account_name(app, chat)))
         .unwrap_or_else(|| chosen.to_owned());
-    let schedulable =
-        app.editing.is_none() && (!app.composer.trim().is_empty() || !app.pending.is_empty());
-    let clock = ui
-        .add_enabled_ui(schedulable, |ui| {
-            crate::theme::icon_button(
-                ui,
-                crate::theme::Icon::Clock,
-                22.0,
-                palette.secondary,
-                palette.text,
-                "Send later",
-            )
-        })
-        .inner;
-    if clock.clicked() {
-        app.actions
-            .push(Action::ShowDialog(crate::model::Dialog::SendLater));
-    }
     let network = state
         .destination
         .as_ref()
@@ -1178,6 +1492,10 @@ fn destination_extras(
     let response = response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(hint);
+    #[cfg(feature = "demo")]
+    if crate::demo::attachment_picker() {
+        egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&response));
+    }
     egui::Popup::menu(&response).show(|ui| destination_entries(app, ui, state, valid, person));
 }
 
@@ -1324,11 +1642,14 @@ fn picker(
             format!("A linked person supports up to 8 chats; {room} left."),
         );
     }
+    // The main action of an open picker: filled accent, faded only while
+    // nothing is ticked.
+    let palette = app.palette;
     if ui
-        .add_enabled(
-            !state.selected.is_empty() && !over,
-            egui::Button::new("Link selected"),
-        )
+        .add_enabled_ui(!state.selected.is_empty() && !over, |ui| {
+            crate::theme::pill_button(ui, &palette, "Link selected", true)
+        })
+        .inner
         .clicked()
     {
         return state
@@ -1464,6 +1785,57 @@ fn rename_field(
     );
 }
 
+fn reason_text(reason: &crate::suggest::Reason) -> &'static str {
+    match reason {
+        crate::suggest::Reason::Name(_) => "has the same name",
+        crate::suggest::Reason::Handle(_) => "has the same phone number or username",
+    }
+}
+
+/// "Same person?" cards for this chat: exact name or handle matches on other
+/// networks. Nothing is linked until the user says so.
+fn suggestion_cards(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
+    let mine: Vec<_> = app
+        .link_suggestions()
+        .into_iter()
+        .filter(|s| s.involves(&chat.id))
+        .take(3)
+        .collect();
+    let palette = app.palette;
+    for suggestion in mine {
+        let other = if suggestion.a.chat == chat.id {
+            &suggestion.b
+        } else {
+            &suggestion.a
+        };
+        let Some(other) = app.chat(&other.chat).cloned() else {
+            continue;
+        };
+        ui.add_space(4.0);
+        egui::Frame::new()
+            .stroke(egui::Stroke::new(1.0, palette.outline))
+            .corner_radius(6)
+            .inner_margin(8)
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Same person?").strong());
+                ui.label(format!(
+                    "{} on {} {}.",
+                    other.name,
+                    network_label(&other),
+                    reason_text(&suggestion.reason)
+                ));
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Link").clicked() {
+                        app.accept_link_suggestion(&suggestion);
+                    }
+                    if ui.button("Not the same person").clicked() {
+                        app.dismiss_link_suggestion(&suggestion);
+                    }
+                });
+            });
+    }
+}
+
 /// The Contact info section owning person links: the explanation, primary
 /// destination, unlinking, and the searchable picker. Returns false when
 /// the chat is not a linkable Beeper direct chat.
@@ -1485,6 +1857,7 @@ pub(crate) fn sidebar(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     let palette = app.palette;
     ui.add_space(4.0);
     rename_field(app, ui, chat, person.as_ref(), &palette);
+    suggestion_cards(app, ui, chat);
     ui.add_space(4.0);
     ui.label(egui::RichText::new("Linked person").strong());
     let key = egui::Id::new(("link-picker", &chat.id));
@@ -1580,17 +1953,13 @@ pub(crate) fn sidebar(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         ui.ctx().data_mut(|d| d.insert_temp(state_key, linked));
         if ui.button("Unlink").clicked() {
             app.ensure_person_loaded(&[]);
-            app.settings.beeper.people.retain(|p| p != person);
-            app.mark_settings_dirty();
+            app.unlink_person(person);
             ui.ctx().data_mut(|d| d.insert_temp(key, Picker::default()));
             return true;
         }
         let base = person.name.clone();
         let already = person.members.len();
-        if ui
-            .selectable_label(state.open, "Add chats to this person…")
-            .clicked()
-        {
+        if crate::theme::pill_button(ui, &palette, "Add chats to this person…", false).clicked() {
             state.open = !state.open;
         }
         if state.open {
@@ -1616,7 +1985,7 @@ pub(crate) fn sidebar(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             "Local link only: combine this chat with the same person's other chats on this Beeper server.",
             true,
         );
-        if ui.selectable_label(state.open, "Link person…").clicked() {
+        if crate::theme::pill_button(ui, &palette, "Link person…", false).clicked() {
             state.open = !state.open;
         }
         if state.open {
@@ -1690,6 +2059,164 @@ mod tests {
         handled
     }
 
+    #[test]
+    fn linked_translation_stages_exact_text_without_source_routing_or_send() {
+        let chats = same_name_pair();
+        let source = chats[1].clone();
+        let destination = Member::of(&chats[0]).unwrap();
+        let person = Person {
+            name: "Ada".into(),
+            members: chats.iter().map(|c| Member::of(c).unwrap()).collect(),
+            primary: Some(destination.clone()),
+        };
+        let (_directory, mut app, ctx) = linked_app(chats, vec![person]);
+        app.open_chat = Some(source.id.clone());
+        app.composer = "existing draft must survive".into();
+        let (backend, mut inbox) = crate::backend::Backend::recording();
+        app.backend = backend;
+        let text = "Vain tämä viesti, ei koko keskustelua.";
+        let action = Action::TranslateLocally(text.into());
+        assert!(!requires_source_conversation(&action));
+        app.apply(action, &ctx);
+        assert_eq!(app.local_ai.input, text);
+        assert!(!app.local_ai.busy());
+        assert_eq!(app.page, crate::model::Page::Settings);
+        assert_eq!(app.settings_search, "Local AI");
+        assert_eq!(app.composer, "existing draft must survive");
+        assert_eq!(app.open_chat.as_deref(), Some(source.id.as_str()));
+        assert_eq!(app.settings.beeper.people[0].primary, Some(destination));
+        assert!(
+            inbox.try_recv().is_err(),
+            "staging must not contact a bridge"
+        );
+        assert!(requires_source_conversation(&Action::Edit("id".into())));
+        assert!(requires_source_conversation(&Action::SelectMessage(
+            "id".into()
+        )));
+    }
+
+    fn same_name_pair() -> Vec<Chat> {
+        let mut wa = member_chat("ada-wa@s.whatsapp.net", "whatsapp");
+        wa.name = "Ada Lovelace".into();
+        wa.backend_network = Some("WhatsApp".into());
+        let mut tg = member_chat("ada-tg@telegram", "telegram");
+        tg.name = "Ada Lovelace".into();
+        tg.backend_network = Some("Telegram".into());
+        vec![wa, tg]
+    }
+
+    #[test]
+    fn accepting_a_suggestion_links_the_pair_and_undo_restores_it() {
+        let (_directory, mut app, ctx) = linked_app(same_name_pair(), Vec::new());
+        let found = app.link_suggestions();
+        assert_eq!(found.len(), 1);
+        app.accept_link_suggestion(&found[0]);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert_eq!(app.settings.beeper.people[0].members.len(), 2);
+        assert!(app.link_suggestions().is_empty());
+        let before = match &app.toasts.last().expect("an Undo toast").kind {
+            crate::model::ToastKind::Undo(added) => added.clone(),
+            other => panic!("expected an Undo toast, got {other:?}"),
+        };
+        app.apply(crate::model::Action::UndoLinks(before), &ctx);
+        assert!(app.settings.beeper.people.is_empty());
+        assert_eq!(app.link_suggestions().len(), 1);
+    }
+
+    #[test]
+    fn undo_takes_back_only_its_own_link() {
+        let mut chats = same_name_pair();
+        for (id, account, network) in [
+            ("bob-wa@s.whatsapp.net", "whatsapp", "WhatsApp"),
+            ("bob-tg@telegram", "telegram", "Telegram"),
+        ] {
+            let mut chat = member_chat(id, account);
+            chat.name = "Bob Berg".into();
+            chat.backend_network = Some(network.into());
+            chats.push(chat);
+        }
+        let (_directory, mut app, ctx) = linked_app(chats, Vec::new());
+        let found = app.link_suggestions();
+        assert_eq!(found.len(), 2);
+        let alice = found
+            .iter()
+            .find(|s| s.a.chat.starts_with("ada"))
+            .unwrap()
+            .clone();
+        let bob = found
+            .iter()
+            .find(|s| s.a.chat.starts_with("bob"))
+            .unwrap()
+            .clone();
+        app.accept_link_suggestion(&alice);
+        app.accept_link_suggestion(&bob);
+        assert_eq!(app.settings.beeper.people.len(), 2);
+        let first = app
+            .toasts
+            .iter()
+            .find_map(|t| match &t.kind {
+                crate::model::ToastKind::Undo(added) if added.contains(&alice.a) => {
+                    Some(added.clone())
+                }
+                _ => None,
+            })
+            .expect("Alice's Undo toast");
+        app.apply(crate::model::Action::UndoLinks(first), &ctx);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert!(app.settings.beeper.people[0].members.contains(&bob.a));
+        assert!(
+            app.toasts
+                .iter()
+                .any(|t| matches!(&t.kind, crate::model::ToastKind::Undo(a) if a.contains(&bob.a))),
+            "Bob's Undo toast stays"
+        );
+    }
+
+    #[test]
+    fn joining_a_linked_person_retires_the_earlier_undo() {
+        let mut chats = same_name_pair();
+        let mut signal = member_chat("ada-sg@signal", "signal");
+        signal.name = "Ada Lovelace".into();
+        signal.backend_network = Some("Signal".into());
+        chats.push(signal);
+        let (_directory, mut app, ctx) = linked_app(chats, Vec::new());
+        let first = app.link_suggestions()[0].clone();
+        app.accept_link_suggestion(&first);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert_eq!(app.settings.beeper.people[0].members.len(), 2);
+        let second = app.link_suggestions()[0].clone();
+        app.accept_link_suggestion(&second);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert_eq!(app.settings.beeper.people[0].members.len(), 3);
+        let undos: Vec<_> = app
+            .toasts
+            .iter()
+            .filter_map(|t| match &t.kind {
+                crate::model::ToastKind::Undo(added) => Some(added.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(undos.len(), 1, "only the newest Undo survives");
+        assert_eq!(undos[0].len(), 1, "it takes back just the third chat");
+        app.apply(crate::model::Action::UndoLinks(undos[0].clone()), &ctx);
+        assert_eq!(app.settings.beeper.people.len(), 1);
+        assert_eq!(
+            app.settings.beeper.people[0].members.len(),
+            2,
+            "the first link is still there"
+        );
+    }
+
+    #[test]
+    fn a_dismissed_suggestion_is_saved_and_not_offered_again() {
+        let (_directory, mut app, _ctx) = linked_app(same_name_pair(), Vec::new());
+        let found = app.link_suggestions();
+        app.dismiss_link_suggestion(&found[0]);
+        assert_eq!(app.settings.beeper.dismissed_links, vec![found[0].pair()]);
+        assert!(app.link_suggestions().is_empty());
+        assert!(app.settings.beeper.people.is_empty());
+    }
+
     fn ada_pair() -> (Chat, Chat, Person) {
         let wa = member_chat("ada-wa@s.whatsapp.net", "whatsapp");
         let tg = member_chat("ada-tg@telegram", "telegram");
@@ -1699,6 +2226,82 @@ mod tests {
             primary: None,
         };
         (wa, tg, person)
+    }
+
+    #[test]
+    fn linked_attachments_use_explicit_picker_then_default_without_fallback() {
+        let (wa, tg, mut person) = ada_pair();
+        person.primary = Some(person.members[1].clone());
+        let (_dir, mut app, ctx) = linked_app(vec![wa.clone(), tg.clone()], vec![person.clone()]);
+        app.open_chat = Some(wa.id.clone());
+        assert_eq!(attachment_destination(&app, &ctx), Ok(Some(tg.id.clone())));
+        let key = egui::Id::new(("linked-person-state", &person.members));
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                key,
+                State {
+                    destination: Some(person.members[0].clone()),
+                    explicit: true,
+                    ..Default::default()
+                },
+            )
+        });
+        assert_eq!(attachment_destination(&app, &ctx), Ok(Some(wa.id.clone())));
+        // Explicit valid choice still works if the saved default is unavailable.
+        app.settings.beeper.people[0]
+            .primary
+            .as_mut()
+            .unwrap()
+            .account = "stale-account".into();
+        assert_eq!(attachment_destination(&app, &ctx), Ok(Some(wa.id.clone())));
+        ctx.data_mut(|data| data.remove::<State>(key));
+        assert!(attachment_destination(&app, &ctx).is_err());
+        app.settings.beeper.people[0].primary = None;
+        assert!(
+            attachment_destination(&app, &ctx).is_err(),
+            "no visible-chat fallback"
+        );
+        app.chats[1].backend_account = Some("replacement-account".into());
+        assert!(attachment_destination(&app, &ctx).is_err());
+    }
+
+    #[test]
+    fn cancelling_only_clears_the_displayed_reply_and_keeps_explicit_routes() {
+        for explicit in [false, true] {
+            let (wa, tg, person) = ada_pair();
+            let mut other = person.clone();
+            other.members[0].chat = "another-person".into();
+            let (_dir, mut app, ctx) =
+                linked_app(vec![wa.clone(), tg], vec![person.clone(), other.clone()]);
+            app.open_chat = Some(wa.id.clone());
+            let key = egui::Id::new(("linked-person-state", &person.members));
+            let other_key = egui::Id::new(("linked-person-state", &other.members));
+            let state = State {
+                reply: Some((person.members[0].clone(), "original".into())),
+                destination: Some(person.members[0].clone()),
+                explicit,
+                search: "keep filter".into(),
+                ..Default::default()
+            };
+            ctx.data_mut(|data| {
+                data.insert_temp(key, state.clone());
+                data.insert_temp(other_key, state.clone());
+            });
+            cancel_reply(&app, &ctx);
+            let cleared = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+            assert!(cleared.reply.is_none());
+            assert_eq!(
+                cleared.destination,
+                if explicit { state.destination } else { None }
+            );
+            assert_eq!(cleared.search, "keep filter");
+            assert!(
+                ctx.data(|data| data.get_temp::<State>(other_key))
+                    .unwrap()
+                    .reply
+                    .is_some()
+            );
+        }
     }
 
     #[test]
@@ -1936,5 +2539,328 @@ mod tests {
                 (tg.id.clone(), 1)
             ]
         );
+    }
+    fn command_r(app: &mut App, ctx: &egui::Context, chat: &Chat) {
+        reply_key(app, ctx, chat, egui::Modifiers::COMMAND);
+    }
+
+    fn reply_key(app: &mut App, ctx: &egui::Context, chat: &Chat, modifiers: egui::Modifiers) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::R,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            },
+            |ui| {
+                show(app, ui, chat);
+            },
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn new_message_keeps_linked_reply_only_draft_and_refuses_prepared_replacement() {
+        for prepared in [false, true] {
+            let (wa, tg, person) = ada_pair();
+            let members = person.members.clone();
+            let (_dir, mut app, ctx) =
+                linked_app(vec![wa.clone(), tg.clone()], vec![person.clone()]);
+            app.open_chat = Some(wa.id.clone());
+            let key = egui::Id::new(("linked-person-state", &person.members));
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    key,
+                    State {
+                        destination: Some(members[0].clone()),
+                        reply: Some((members[0].clone(), "quoted".into())),
+                        explicit: true,
+                        ..Default::default()
+                    },
+                )
+            });
+            app.reply_to = Some("quoted".to_owned().into());
+            let member = crate::ui::flat_groups::member(&app, &tg);
+            app.apply(
+                Action::PrepareNewMessage {
+                    member,
+                    text: if prepared {
+                        "replacement".into()
+                    } else {
+                        String::new()
+                    },
+                    files: vec![],
+                },
+                &ctx,
+            );
+            let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+            assert_eq!(state.reply, Some((members[0].clone(), "quoted".into())));
+            assert_eq!(state.destination, Some(members[0].clone()));
+            assert_eq!(app.reply_to, Some("quoted".to_owned().into()));
+            assert!(app.composer.is_empty());
+            if prepared {
+                assert!(app.new_message.notice.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn command_r_quotes_latest_incoming_exact_source_despite_outgoing_and_search() {
+        let (wa, tg, mut person) = ada_pair();
+        person.primary = Member::of(&wa);
+        let valid = person.members.clone();
+        let (_dir, mut app, ctx) = linked_app(vec![wa.clone(), tg.clone()], vec![person.clone()]);
+        app.composer = "unsent draft".into();
+        let mut outgoing = sample_message(&wa.id, "outgoing", 40);
+        outgoing.from_me = true;
+        let mut revoked = sample_message(&wa.id, "deleted", 50);
+        revoked.content = crate::model::Content::Revoked;
+        app.conversations.insert(
+            wa.id.clone(),
+            crate::app::Conversation {
+                messages: vec![sample_message(&wa.id, "same-id", 10), outgoing, revoked],
+                complete: true,
+                ..Default::default()
+            },
+        );
+        app.conversations.insert(
+            tg.id.clone(),
+            crate::app::Conversation {
+                messages: vec![sample_message(&tg.id, "same-id", 30)],
+                complete: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            incoming_reply(&app, &valid),
+            Some((valid[1].clone(), "same-id".into()))
+        );
+        let key = egui::Id::new(("linked-person-state", &person.members));
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                key,
+                State {
+                    destination: Some(valid[0].clone()),
+                    explicit: true,
+                    search: "does not match".into(),
+                    source_filter: Some(valid[0].clone()),
+                    ..Default::default()
+                },
+            )
+        });
+        command_r(&mut app, &ctx, &wa);
+        let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+        assert_eq!(state.destination, Some(valid[1].clone()));
+        assert_eq!(state.reply, Some((valid[1].clone(), "same-id".into())));
+        assert_eq!(
+            app.reply_to,
+            crate::merged::reply_route(&valid[1], &valid[1], "same-id")
+        );
+        assert_eq!(app.composer, "unsent draft");
+        assert_eq!(
+            app.settings.beeper.people[0].primary,
+            Some(valid[0].clone())
+        );
+        assert!(
+            !app.actions.iter().any(|action| matches!(
+                action,
+                Action::SendText { .. } | Action::SendPending { .. }
+            ))
+        );
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            Some(egui::Id::new("composer-text"))
+        );
+    }
+
+    #[test]
+    fn clicking_a_reply_arrow_focuses_the_composer_like_command_r() {
+        let (wa, tg, person) = ada_pair();
+        let valid = person.members.clone();
+        let (_dir, mut app, _ctx) = linked_app(vec![wa, tg], vec![person]);
+        let mut state = State::default();
+        assert!(!app.focus_composer);
+        apply_selected_reply(&mut app, &mut state, valid[0].clone(), "same-id".into());
+        assert!(app.focus_composer);
+        assert_eq!(state.reply, Some((valid[0].clone(), "same-id".into())));
+        assert_eq!(state.destination, Some(valid[0].clone()));
+        assert_eq!(
+            app.reply_to,
+            crate::merged::reply_route(&valid[0], &valid[0], "same-id")
+        );
+    }
+
+    #[test]
+    fn incoming_reply_stays_within_valid_exact_accounts_and_orders_ties() {
+        let first = member_chat("ada-personal", "wa-personal");
+        let second = member_chat("ada-work", "wa-work");
+        let valid = vec![Member::of(&first).unwrap(), Member::of(&second).unwrap()];
+        let (_dir, mut app, _ctx) = linked_app(vec![first.clone(), second.clone()], vec![]);
+        for chat in [&second, &first] {
+            app.conversations.insert(
+                chat.id.clone(),
+                crate::app::Conversation {
+                    messages: vec![sample_message(&chat.id, "same-id", 20)],
+                    complete: true,
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(
+            incoming_reply(&app, &valid),
+            Some((valid[1].clone(), "same-id".into()))
+        );
+        assert_eq!(
+            incoming_reply(&app, &valid[..1]),
+            Some((valid[0].clone(), "same-id".into()))
+        );
+        assert!(incoming_reply(&app, &[]).is_none());
+    }
+
+    #[test]
+    fn modified_r_keeps_filtered_reply_shortcut_and_other_modifiers() {
+        for modifiers in [
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT | egui::Modifiers::ALT,
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Modifiers::COMMAND | egui::Modifiers::ALT,
+        ] {
+            let (wa, tg, mut person) = ada_pair();
+            person.primary = Member::of(&wa);
+            let (_dir, mut app, ctx) =
+                linked_app(vec![wa.clone(), tg.clone()], vec![person.clone()]);
+            for (chat, timestamp, text) in [(&wa, 10, "meeting"), (&tg, 20, "unrelated")] {
+                let mut message = sample_message(&chat.id, text, timestamp);
+                message.content = crate::model::Content::text(text);
+                app.conversations.insert(
+                    chat.id.clone(),
+                    crate::app::Conversation {
+                        messages: vec![message],
+                        complete: true,
+                        ..Default::default()
+                    },
+                );
+            }
+            let key = egui::Id::new(("linked-person-state", &person.members));
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    key,
+                    State {
+                        search: "meeting".into(),
+                        ..Default::default()
+                    },
+                )
+            });
+            reply_key(&mut app, &ctx, &wa, modifiers);
+            let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+            if modifiers == latest_reply_shortcut().modifiers {
+                assert_eq!(
+                    state.reply,
+                    Some((person.members[0].clone(), "meeting".into()))
+                );
+                assert_eq!(state.destination, Some(person.members[0].clone()));
+            } else {
+                assert!(state.reply.is_none());
+                assert_eq!(state.destination, person.primary);
+            }
+        }
+    }
+
+    #[test]
+    fn the_filtered_reply_shortcut_focuses_the_composer_after_the_view_draws() {
+        let (wa, tg, mut person) = ada_pair();
+        person.primary = Member::of(&wa);
+        let (_dir, mut app, ctx) = linked_app(vec![wa.clone(), tg], vec![person.clone()]);
+        let mut message = sample_message(&wa.id, "meeting", 10);
+        message.content = crate::model::Content::text("meeting");
+        app.conversations.insert(
+            wa.id.clone(),
+            crate::app::Conversation {
+                messages: vec![message],
+                complete: true,
+                ..Default::default()
+            },
+        );
+        assert!(!app.focus_composer);
+        // The same selection path as the reply arrow and a double-click: the
+        // view picks a message, then draws.
+        reply_key(&mut app, &ctx, &wa, latest_reply_shortcut().modifiers);
+        assert!(app.reply_to.is_some(), "the shortcut starts a reply");
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                show(&mut app, ui, &wa);
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            Some(egui::Id::new("composer-text")),
+            "the reply starts with the composer focused"
+        );
+    }
+
+    #[test]
+    fn command_r_without_incoming_keeps_destination_and_no_quote() {
+        let (wa, tg, mut person) = ada_pair();
+        person.primary = Member::of(&wa);
+        let (_dir, mut app, ctx) = linked_app(vec![wa.clone(), tg], vec![person.clone()]);
+        let mut outgoing = sample_message(&wa.id, "ours", 20);
+        outgoing.from_me = true;
+        app.conversations.insert(
+            wa.id.clone(),
+            crate::app::Conversation {
+                messages: vec![outgoing],
+                complete: true,
+                ..Default::default()
+            },
+        );
+        command_r(&mut app, &ctx, &wa);
+        let key = egui::Id::new(("linked-person-state", &person.members));
+        let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+        assert_eq!(state.destination, person.primary);
+        assert!(state.reply.is_none());
+        assert!(app.reply_to.is_none());
+    }
+
+    #[test]
+    fn command_r_does_not_retarget_an_edit_or_modal() {
+        for modal in [false, true] {
+            let (wa, tg, mut person) = ada_pair();
+            person.primary = Member::of(&wa);
+            let (_dir, mut app, ctx) =
+                linked_app(vec![wa.clone(), tg.clone()], vec![person.clone()]);
+            app.conversations.insert(
+                tg.id.clone(),
+                crate::app::Conversation {
+                    messages: vec![sample_message(&tg.id, "incoming", 30)],
+                    complete: true,
+                    ..Default::default()
+                },
+            );
+            if modal {
+                app.show_update = true;
+            } else {
+                app.editing = Some("ours".into());
+            }
+            command_r(&mut app, &ctx, &wa);
+            let key = egui::Id::new(("linked-person-state", &person.members));
+            let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
+            assert_eq!(state.destination, person.primary);
+            assert!(state.reply.is_none());
+        }
     }
 }

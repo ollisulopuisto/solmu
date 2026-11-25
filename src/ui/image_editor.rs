@@ -189,7 +189,7 @@ fn fitted(shape: Vec2, room: Rect) -> Rect {
 /// strip no longer has it. Cropping a pasted picture leaves a file on disk and
 /// takes the strip's copy of the pixels with it, so on the second visit the
 /// pixels have to come from the buffer the crop was taken from.
-fn pasted_texture(
+pub(super) fn pasted_texture(
     app: &mut App,
     ctx: &egui::Context,
     edit: &crate::model::PictureEdit,

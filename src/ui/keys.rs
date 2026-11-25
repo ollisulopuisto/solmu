@@ -11,8 +11,50 @@ fn jump_keys_reach_chat(editing_text: bool, composer_focused: bool, composer_emp
     !editing_text || (composer_focused && composer_empty)
 }
 
+/// The macOS menu accelerators for the scroll jumps bypass the key handler:
+/// AppKit turns Command-Up/Down into a menu event before egui sees the key.
+/// This re-applies the text-field rule to the menu route so the chord keeps
+/// its caret meaning while the composer or another field holds text.
+pub(crate) fn menu_scroll_reaches_chat(app: &App, ctx: &egui::Context) -> bool {
+    jump_keys_reach_chat(
+        ctx.text_edit_focused(),
+        ctx.memory(|memory| memory.has_focus(egui::Id::new("composer-text"))),
+        app.composer.is_empty(),
+    )
+}
+
 /// Routes keyboard commands to actions, respecting overlays and text focus.
 pub fn handle(app: &mut App, ctx: &egui::Context) {
+    // Results own keyboard input, even after the new-message dialog closes.
+    if let Some(queue) = app.audience_queue.as_mut().filter(|queue| queue.visible) {
+        if !egui::Popup::is_any_open(ctx)
+            && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape))
+        {
+            queue.visible = false;
+        }
+        return;
+    }
+    if super::send_later::keyboard(ctx) {
+        return;
+    }
+    if app.batch_ui.reviewing_archive {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            app.batch_ui.reviewing_archive = false;
+        }
+        return;
+    }
+    if app.flat_group_ui.assigning.is_some() {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            app.flat_group_ui.assigning = None;
+        }
+        return;
+    }
+    if app.pending_picture_preview.is_some() {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+            app.pending_picture_preview = None;
+        }
+        return;
+    }
     if app.picture_edit.is_some() {
         editor_keys(app, ctx);
         return;
@@ -26,12 +68,18 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         sticker_view_keys(app, ctx);
         return;
     }
+    // An open context menu owns its explicit target and consumes its own
+    // exact chords. Global shortcuts must not act on the background chat.
+    if egui::Popup::is_any_open(ctx) {
+        return;
+    }
     if app.page == Page::Chats
         && app.dialog.is_none()
         && !app.show_update
         && app.picker.is_none()
         && app.reaction_target.is_none()
         && app.recording.is_none()
+        && app.image_preview.is_none()
         && !egui::Popup::is_any_open(ctx)
     {
         let networks = app.beeper_browse_networks();
@@ -126,23 +174,36 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     // or with no field focused.
     let jump_allowed =
         jump_keys_reach_chat(editing_text, composer_focused, app.composer.is_empty());
+    let menu_open = egui::Popup::is_any_open(ctx);
     let mut actions = Vec::new();
     ctx.input_mut(|input| {
-        // The message list's key counts only with its modifier alone:
-        // `consume_key` would also take Alt+Shift+2, and on macOS
-        // Command+Control+2, which is Command+2's favorite.
+        // Shifted digits report symbols on Finnish and other layouts;
+        // focus uses the physical digit, with exactly Command-Shift.
         #[cfg(target_os = "macos")]
-        let messages_key_free = input.events.iter().any(|event| {
-            matches!(
-                event,
-                egui::Event::Key {
-                    key: Key::Num2,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } if messages_modifier_alone(*modifiers)
-            )
-        });
+        if app.dialog.is_none()
+            && !app.show_update
+            && app.picker.is_none()
+            && app.reaction_target.is_none()
+            && app.recording.is_none()
+            && take_message_focus(input)
+        {
+            actions.push(Action::FocusMessages);
+        }
+        // Cmd+Shift+G folds every group heading (unfolds when all are
+        // folded). Consumed before plain Cmd+G below: consume_key also
+        // matches an event carrying extra modifiers, so the layout toggle
+        // would swallow the chord. In a flat list the chord is reserved and
+        // does nothing. The list pass owns the sections, so this only queues.
+        if input.consume_key(COMMAND_SHIFT, Key::G)
+            && app.grouped_list_showing()
+            && app.dialog.is_none()
+            && !app.show_update
+            && app.picker.is_none()
+            && app.reaction_target.is_none()
+            && !menu_open
+        {
+            actions.push(Action::ToggleFoldAllGroups);
+        }
         let mut key = |modifiers: Modifiers, key: Key, action: Action| {
             if input.consume_key(modifiers, key) {
                 actions.push(action);
@@ -151,6 +212,11 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         // Checked first: a plain Ctrl+F binding also matches Ctrl+Shift+F.
         let (modifiers, key_code) = SEARCH_CHATS.keys[0];
         key(modifiers, key_code, Action::FocusSearch);
+        key(
+            Modifiers::COMMAND | Modifiers::ALT,
+            Key::F,
+            Action::FindEverywhere,
+        );
         let (modifiers, key_code) = FIND.keys[0];
         key(modifiers, key_code, find);
         // App lock lives on the Option variant, when a PIN is set.
@@ -169,6 +235,11 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             let (modifiers, key_code) = READ_LATER.keys[0];
             key(modifiers, key_code, read_later);
         }
+        // Cmd+Alt+I is consumed before plain Cmd+I: consume_key also matches
+        // when the event carries extra modifiers, so Reply later would
+        // otherwise swallow the info-sidebar chord.
+        let (modifiers, key_code) = INFO_SIDEBAR.keys[0];
+        key(modifiers, key_code, Action::ToggleInfoSidebar);
         if let Some(reply_later) = reply_later {
             let (modifiers, key_code) = REPLY_LATER.keys[0];
             key(modifiers, key_code, reply_later);
@@ -193,10 +264,23 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             let (modifiers, key_code) = ARCHIVE.keys[0];
             key(modifiers, key_code, archive);
         }
+        // Cmd+Shift+B opens Bookmarks (the Saved list) and closes it again. It is
+        // consumed before plain Cmd+B: consume_key also matches extra modifiers,
+        // so the sidebar toggle would otherwise swallow it.
+        let (modifiers, key_code) = BOOKMARKS.keys[0];
+        key(modifiers, key_code, Action::ToggleSaved);
         let (modifiers, key_code) = SIDEBAR.keys[0];
         key(modifiers, key_code, Action::ToggleSidebar);
-        let (modifiers, key_code) = INFO_SIDEBAR.keys[0];
-        key(modifiers, key_code, Action::ToggleInfoSidebar);
+        // Cmd+D steps the chat list through Recent, Unread and Needs me.
+        let (modifiers, key_code) = LIST_MODE.keys[0];
+        key(
+            modifiers,
+            key_code,
+            Action::SetListMode(app.list_mode.next()),
+        );
+        // Cmd+G switches the list between group sections and one flat list.
+        let (modifiers, key_code) = LIST_LAYOUT.keys[0];
+        key(modifiers, key_code, Action::ToggleListLayout);
         let (modifiers, key_code) = SETTINGS.keys[0];
         key(modifiers, key_code, Action::ToggleSettings);
         let (modifiers, key_code) = QUIT.keys[0];
@@ -212,27 +296,13 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         let (modifiers, key_code) = SHORTCUTS_DIALOG.keys[1];
         key(modifiers, key_code, Action::ShowDialog(Dialog::Shortcuts));
         if jump_allowed {
-            let (modifiers, key_code) = SCROLL_BOTTOM.keys[0];
-            key(modifiers, key_code, Action::ScrollToBottom);
-        }
-        // The message list keeps Control+2 on macOS, where Command+1 to 9
-        // open favorites and Option with a digit types characters some
-        // keyboard layouts need, such as # and €. Elsewhere Alt+2 now
-        // picks the second network, so the list is reached by Tab.
-        #[cfg(target_os = "macos")]
-        if app.dialog.is_none()
-            && !app.show_update
-            && app.picker.is_none()
-            && app.reaction_target.is_none()
-            && app.recording.is_none()
-            // The call screen covers the chats.
-                && messages_key_free
-        {
-            #[cfg(target_os = "macos")]
-            {
-                let (modifiers, key_code) = FOCUS_MESSAGES.keys[0];
-                key(modifiers, key_code, Action::FocusMessages);
+            // Cmd+Down and the Cmd+End alias both reach the newest message;
+            // Cmd+Up mirrors Home to the oldest loaded one.
+            for &(modifiers, key_code) in SCROLL_BOTTOM.keys {
+                key(modifiers, key_code, Action::ScrollToBottom);
             }
+            let (modifiers, key_code) = SCROLL_TOP.keys[0];
+            key(modifiers, key_code, Action::ScrollPage(Scroll::Top));
         }
         // The rail's Chats, by the digit's place on the keyboard: with
         // Shift held, layouts report the digit as its symbol.
@@ -243,9 +313,26 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             actions.extend(super::rail::Destination::Chats.actions(app));
         }
     });
+    // Exact modifiers keep the linked search variant and app-lock binding
+    // separate. Linked Cmd-R is handled before its composer in merged::show.
+    if message_shortcuts_allowed(app, ctx) {
+        let ordinary_reply = latest_incoming_action(app);
+        if let Some(ordinary_reply) = ordinary_reply
+            && take_exact(ctx, Modifiers::COMMAND, Key::R)
+        {
+            if app.selection.is_some() {
+                actions.push(Action::CancelSelection);
+            }
+            actions.push(ordinary_reply);
+        }
+        if take_exact(ctx, Modifiers::COMMAND, Key::L)
+            && let Some(forward) = forward_action(app)
+        {
+            actions.push(forward);
+        }
+    }
     drop_shortcut_text(ctx);
     // Escape cancels the topmost state. Menus handle Escape themselves.
-    let menu_open = egui::Popup::is_any_open(ctx);
     let search_focused = ctx.memory(|memory| memory.has_focus(egui::Id::new("chat-search")));
     if app.chat_view()
         && app.selection.as_ref().is_some_and(|(chat, selected)| {
@@ -287,6 +374,32 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     {
         actions.push(Action::MessageCursor(step));
     }
+    // Option+Tab (and Shift) cycles the sidebar's group headings; the list
+    // pass owns the section order. On macOS the combination has no system
+    // meaning, unlike Command+Tab. A focused text field keeps it: the jump
+    // focuses a heading, which would steal the field's typing focus. The
+    // grouped list must be on screen: queued in a heading-free view (search
+    // results, starred, saved, locked, archived), the jump would sit pending
+    // and fire when the grouped list returns.
+    if app.grouped_list_showing()
+        && !editing_text
+        && app.dialog.is_none()
+        && !app.show_update
+        && app.picker.is_none()
+        && app.reaction_target.is_none()
+        && !menu_open
+    {
+        ctx.input_mut(|input| {
+            // Shift with Alt is consumed first: consume_key also matches an
+            // event carrying extra modifiers, so plain Alt would take it.
+            if input.consume_key(ALT_SHIFT, Key::Tab) {
+                app.flat_group_ui.jump = Some(false);
+            }
+            if input.consume_key(Modifiers::ALT, Key::Tab) {
+                app.flat_group_ui.jump = Some(true);
+            }
+        });
+    }
     // PgUp/PgDn/Home/End scroll the open chat. PgUp/PgDn also work while the
     // composer has focus, since egui's TextEdit does not handle them itself;
     // Home/End keep moving the text cursor in a non-empty field, as ↑ keeps
@@ -317,6 +430,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         });
     }
     let escape = (!menu_open || app.reaction_target.is_some())
+        // The ghost-group dialog closes itself on Escape.
+        && app.ghost_ui.compose.is_none()
         && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape));
     if escape {
         if app.show_update {
@@ -333,6 +448,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             actions.push(Action::CancelSelection);
         } else if app.show_starred {
             actions.push(Action::ToggleStarred);
+        } else if app.show_saved {
+            actions.push(Action::ToggleSaved);
         } else if app.chat_search_visible() && app.chat_search_calendar {
             // The day filter first, then the pane it hangs from.
             app.chat_search_calendar = false;
@@ -365,6 +482,8 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             } else {
                 Action::CloseInfo
             });
+        } else if super::reply_threads::owns(app, ctx) {
+            super::reply_threads::close(ctx);
         } else if app.page == Page::Wallpaper {
             actions.push(Action::Open(Page::Settings));
         } else if app.page == Page::Settings && !app.settings_search.is_empty() {
@@ -463,6 +582,22 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
         None => {}
     }
+    // Queue the keep that holds a chat in a filtered list. Recent's
+    // grouped sections keep a row only when its destination is unread now;
+    // a read row in a quiet section keeps nothing, so the section stays
+    // full. The Unread queue filter and the non-Recent modes list unread
+    // rows throughout, so every destination is kept, as before.
+    fn push_keep_unread(app: &App, id: &str, actions: &mut Vec<Action>) {
+        let keep = app.chat_filter == crate::model::ChatFilter::Unread
+            || app.list_mode != crate::model::ListMode::Recent
+            || app.chat(id).is_some_and(|chat| {
+                let preview = app.beeper_person_preview(chat);
+                preview.looks_unread() && !preview.muted(crate::util::now())
+            });
+        if keep {
+            actions.push(Action::KeepUnread(id.into()));
+        }
+    }
     if step != 0 || number.is_some() {
         // Switching chats from the keyboard is keyboard navigation, as Tab
         // is: a chat without a message field then hands its focus to the
@@ -474,15 +609,15 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
                 .map(|chat| chat.id.clone())
         {
             app.search_selected = None;
-            // Opening a chat must not shift the Unread list underfoot.
+            // Opening a chat must not shift a filtered list underfoot.
             if app.search.trim().is_empty() && !app.show_archived {
-                actions.push(Action::KeepUnread(next.clone()));
+                push_keep_unread(app, &next, &mut actions);
             }
             app.scroll_chat_into_view = Some(next.clone());
             actions.push(Action::OpenChat(next));
         }
         if step != 0 {
-            let visible = app.visible_chats();
+            let visible = super::flat_groups::navigation_chats(app);
             if !visible.is_empty() {
                 let current = app
                     .open_chat
@@ -493,9 +628,9 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
                     None => 0,
                 };
                 if let Some(next) = visible.get(next).map(|chat| chat.id.clone()) {
-                    // Stepping through the Unread list must not shift it underfoot.
+                    // Stepping through a filtered list must not shift it underfoot.
                     if app.search.trim().is_empty() && !app.show_archived {
-                        actions.push(Action::KeepUnread(next.clone()));
+                        push_keep_unread(app, &next, &mut actions);
                     }
                     app.scroll_chat_into_view = Some(next.clone());
                     actions.push(Action::OpenChat(next));
@@ -504,11 +639,10 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         }
     }
     // Arrow Up in an empty, focused composer edits the user's most recent
-    // message, as WhatsApp does. The key keeps its normal meaning everywhere
-    // else: it navigates open overlays and moves the cursor in a non-empty
-    // field.
-    let edit_previous = composer_focused
-        && app.chat_view()
+    // message, as WhatsApp does; Ctrl+E does the same wherever the focus
+    // is. The key keeps its normal meaning everywhere else: it navigates
+    // open overlays and moves the cursor in a non-empty field.
+    let can_edit_latest = app.chat_view()
         && app.open_chat.is_some()
         && app
             .open_chat
@@ -523,8 +657,10 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         && app.dialog.is_none()
         && !app.show_update
         && app.recording.is_none()
-        && !menu_open
-        && ctx.input_mut(|input| take_plain(input, Key::ArrowUp));
+        && !menu_open;
+    let edit_previous = can_edit_latest
+        && ((composer_focused && ctx.input_mut(|input| take_plain(input, Key::ArrowUp)))
+            || take_exact(ctx, Modifiers::COMMAND, Key::E));
     if let Some(id) = edit_previous.then(|| app.previous_own_editable()).flatten() {
         actions.push(Action::Edit(id));
     }
@@ -727,7 +863,7 @@ fn take_control_tab(input: &mut egui::InputState) -> Option<i32> {
 }
 
 /// Handles keys while the image preview is open. No chat shortcut runs, and
-/// typing and clipboard input are swallowed; Left/Right browse photos, while
+/// typing and clipboard input are swallowed; Left/Right browse photos and videos, while
 /// Tab, Enter, Space and Up/Down stay for the preview's own controls.
 fn preview_keys(app: &mut App, ctx: &egui::Context) {
     let mut actions = Vec::new();
@@ -907,8 +1043,8 @@ fn editor_keys(app: &mut App, ctx: &egui::Context) {
 }
 
 /// Handles a playing clip's keys while the viewer shows it: Space plays or
-/// pauses, M mutes, S changes the speed, and the arrows jump five seconds, as
-/// they step through the album only while a picture is on the stage. Escape
+/// pauses, M mutes, S changes the speed, and Alt+arrows jump five seconds.
+/// Plain arrows step through the album for both photos and videos. Escape
 /// closes the viewer, which puts a video back in its message.
 fn video_keys(app: &mut App, ctx: &egui::Context) {
     let Some((message, path)) = app
@@ -951,10 +1087,10 @@ fn video_keys(app: &mut App, ctx: &egui::Context) {
         if input.consume_key(Modifiers::NONE, Key::S) {
             actions.push(Action::CycleVideoSpeed);
         }
-        if input.consume_key(Modifiers::NONE, Key::ArrowLeft) {
+        if input.consume_key(Modifiers::ALT, Key::ArrowLeft) {
             actions.extend(jump(-5.0));
         }
-        if input.consume_key(Modifiers::NONE, Key::ArrowRight) {
+        if input.consume_key(Modifiers::ALT, Key::ArrowRight) {
             actions.extend(jump(5.0));
         }
     });
@@ -976,18 +1112,122 @@ fn sticker_view_keys(app: &mut App, ctx: &egui::Context) {
     }
 }
 
-/// Ctrl+F searches the open chat, as in WhatsApp, the chat list when no
-/// chat is open, and the settings on the Settings page.
+/// Consume one exact modifier chord without swallowing its shifted variants.
+pub(crate) fn take_exact(ctx: &egui::Context, modifiers: Modifiers, key: Key) -> bool {
+    ctx.input_mut(|input| {
+        let mut pressed = false;
+        input.events.retain(|event| {
+            if matches!(event, egui::Event::Key { key: found, pressed: true, modifiers: actual, .. }
+                if *found == key && actual.matches_exact(modifiers))
+            {
+                pressed = true;
+                false
+            } else {
+                true
+            }
+        });
+        pressed
+    })
+}
+
+fn message_shortcuts_allowed(app: &App, ctx: &egui::Context) -> bool {
+    app.chat_view()
+        && app.current_chat().is_some()
+        && app.dialog.is_none()
+        && !app.show_update
+        && app.picker.is_none()
+        && app.reaction_target.is_none()
+        && app.recording.is_none()
+        && !egui::Popup::is_any_open(ctx)
+}
+
+/// Whether the open chat is a linked person's view. Its Cmd+R reply is
+/// routed by the view's own state, which a menu command cannot reach.
+pub fn linked_view(app: &App) -> bool {
+    app.current_chat()
+        .is_some_and(|chat| linked_person(app, chat).is_some())
+}
+
+fn linked_person<'a>(app: &'a App, chat: &Chat) -> Option<&'a crate::merged::Person> {
+    super::merged::person_for_view(app, chat)
+}
+
+fn latest_incoming_action(app: &App) -> Option<Action> {
+    let chat = app.current_chat()?;
+    // Preserve the linked view's exact-source reply state and routing.
+    if linked_person(app, chat).is_some() {
+        return None;
+    }
+    app.conversations
+        .get(&chat.id)?
+        .messages
+        .iter()
+        .filter(|message| {
+            message.chat == chat.id
+                && !message.from_me
+                && !matches!(
+                    message.content,
+                    crate::model::Content::Revoked | crate::model::Content::Call { .. }
+                )
+        })
+        .max_by_key(|message| (message.timestamp, message.history_order, &message.id))
+        .map(|message| Action::Reply(message.id.clone()))
+}
+
+fn forward_action(app: &App) -> Option<Action> {
+    let chat = app.current_chat()?;
+    if let Some((selected_chat, selected)) = &app.selection
+        && selected_chat == &chat.id
+    {
+        return (!selected.is_empty()).then(|| {
+            Action::ShowDialog(Dialog::Forward {
+                chat: chat.id.clone(),
+                messages: selected.clone(),
+            })
+        });
+    }
+    let candidates =
+        linked_person(app, chat).map(|person| super::merged::valid_members(app, person, chat));
+    let latest = app
+        .conversations
+        .iter()
+        .filter(|(id, _)| {
+            candidates.as_ref().map_or(*id == &chat.id, |members| {
+                members.iter().any(|member| &member.chat == *id)
+            })
+        })
+        .flat_map(|(id, history)| {
+            history
+                .messages
+                .iter()
+                .filter(move |message| &message.chat == id)
+        })
+        .filter(|message| crate::app::can_select(&message.content))
+        .max_by_key(|message| {
+            (
+                message.timestamp,
+                &message.chat,
+                message.history_order,
+                &message.id,
+            )
+        })?;
+    Some(Action::ShowDialog(Dialog::Forward {
+        chat: latest.chat.clone(),
+        messages: vec![latest.id.clone()],
+    }))
+}
+
+/// First find searches the chat; a second find widens globally.
 fn find_action(app: &App) -> Action {
-    match app.page {
-        Page::Settings => Action::FocusSettingsSearch,
-        Page::Chats if app.open_chat.is_some() => Action::OpenChatSearch,
-        _ => Action::FocusSearch,
+    if app.chat_search_visible() || app.open_chat.is_none() {
+        Action::FindEverywhere
+    } else {
+        Action::OpenChatSearch
     }
 }
 
-/// Ctrl+E archives the open chat, or unarchives an archived one, as in
-/// WhatsApp. Archiving closes the chat, as the chat menus do.
+/// Ctrl+Shift+E archives the open chat, or unarchives an archived one, as
+/// in WhatsApp. Archiving closes the chat, as the chat menus do.
 fn archive_action(app: &App) -> Option<Action> {
     if !app.chat_view()
         || app.dialog.is_some()
@@ -1004,12 +1244,12 @@ fn archive_action(app: &App) -> Option<Action> {
 
 /// Cmd+U queues the open chat for reading later, as the chat menus do.
 fn read_later_action(app: &App) -> Option<Action> {
-    Some(Action::ToggleReadLater(later_queue_target(app)?))
+    Some(Action::ToggleDealLater(later_queue_target(app)?))
 }
 
 /// Cmd+I queues the open chat for replying later, as the chat menus do.
 fn reply_later_action(app: &App) -> Option<Action> {
-    Some(Action::ToggleReplyLater(later_queue_target(app)?))
+    Some(Action::ToggleDealLater(later_queue_target(app)?))
 }
 
 /// The open chat a later-queue key would mark, when no overlay owns keys.
@@ -1049,23 +1289,39 @@ fn account_switch_action(app: &App, forward: bool) -> Option<Action> {
     Some(Action::SwitchAccount(app.accounts[next].id.clone()))
 }
 
-/// Control held with no other modifier: on macOS, Command+Control is
-/// Command's, which `consume_key` would also match as Control.
+/// Exact Command-Shift on macOS, never physical Control (Spaces).
 #[cfg(any(target_os = "macos", test))]
-fn control_alone(modifiers: Modifiers) -> bool {
-    modifiers.ctrl && !modifiers.command && !modifiers.mac_cmd && !modifiers.alt && !modifiers.shift
-}
-
-/// The message list's modifier held alone: Control on macOS, Alt elsewhere.
-#[cfg(target_os = "macos")]
 fn messages_modifier_alone(modifiers: Modifiers) -> bool {
-    control_alone(modifiers)
+    modifiers.command && modifiers.shift && !modifiers.ctrl && !modifiers.alt
 }
 
-/// The message list's shortcut on macOS: Control+2, where Command with a
-/// digit opens a favorite. Elsewhere Alt+2 picks the second network.
-#[cfg(target_os = "macos")]
-const MESSAGES_KEYS: &str = "Control+2";
+#[cfg(any(target_os = "macos", test))]
+fn take_message_focus(input: &mut egui::InputState) -> bool {
+    let mut taken = false;
+    input.events.retain(|event| {
+        if !taken
+            && let egui::Event::Key {
+                key,
+                physical_key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            && physical_key.unwrap_or(*key) == FOCUS_MESSAGES.keys[0].1
+            && messages_modifier_alone(*modifiers)
+        {
+            taken = true;
+            return false;
+        }
+        true
+    });
+    taken
+}
+
+/// The message list uses Command-Shift-2 on macOS. Control-2 stays with
+/// Spaces; Command-2 opens a favorite, Option-2 picks a network.
+#[cfg(any(target_os = "macos", test))]
+const MESSAGES_KEYS: &str = "Ctrl+Shift+2";
 
 /// Command (Ctrl elsewhere) with Shift held, as a constant for the table:
 /// `Modifiers::COMMAND | Modifiers::SHIFT` is not a const expression.
@@ -1079,6 +1335,13 @@ const COMMAND_SHIFT: Modifiers = Modifiers {
 const COMMAND_ALT: Modifiers = Modifiers {
     alt: true,
     command: true,
+    ..Modifiers::NONE
+};
+
+/// Alt with Shift held, for the table.
+const ALT_SHIFT: Modifiers = Modifiers {
+    alt: true,
+    shift: true,
     ..Modifiers::NONE
 };
 
@@ -1118,38 +1381,110 @@ const JUMP_TO_CHAT: Shortcut = Shortcut {
     keys: &[(Modifiers::COMMAND, Key::K)],
     label: Some("Ctrl+K"),
     description: Some("Jump between recent chats"),
-    menu: None,
+    menu: Some(MenuItem {
+        id: "go-jump",
+        text: "Jump to Chat\u{2026}",
+        accelerator: "Super+KeyK",
+    }),
 };
 const SEARCH_CHATS: Shortcut = Shortcut {
     id: "search-chats",
     keys: &[(COMMAND_SHIFT, Key::F)],
     label: Some("Ctrl+Shift+F"),
-    description: Some("Search chats"),
-    menu: None,
+    description: Some("Search all messages and chats"),
+    menu: Some(MenuItem {
+        id: "search-all",
+        text: "Search All Messages and Chats\u{2026}",
+        accelerator: "Super+Shift+KeyF",
+    }),
 };
 const PALETTE: Shortcut = Shortcut {
     id: "palette",
     keys: &[(Modifiers::COMMAND, Key::P)],
     label: Some("Ctrl+P"),
     description: Some("Command palette: chats, filters, actions"),
-    menu: None,
+    menu: Some(MenuItem {
+        id: "go-palette",
+        text: "Command Palette\u{2026}",
+        accelerator: "Super+KeyP",
+    }),
 };
 const FIND: Shortcut = Shortcut {
     id: "find",
     keys: &[(Modifiers::COMMAND, Key::F)],
     label: Some("Ctrl+F"),
-    description: Some("Search the open chat or the settings"),
+    description: Some("Search within this chat"),
     menu: Some(MenuItem {
         id: "search",
-        text: "Find\u{2026}",
+        text: "Search Within This Chat\u{2026}",
         accelerator: "Super+KeyF",
     }),
 };
+const INCOMING_BRIDGE: Shortcut = Shortcut {
+    id: "incoming-bridge",
+    keys: &[(Modifiers::COMMAND, Key::R)],
+    label: Some("Ctrl+R"),
+    description: Some("Quote-reply to the latest incoming message (on its source in linked chats)"),
+    menu: None,
+};
+const MESSAGE_STAR: Shortcut = Shortcut {
+    id: "message-star",
+    keys: &[(COMMAND_ALT, Key::S)],
+    label: Some("Ctrl+Alt+S"),
+    description: Some("Star or unstar the context-menu message"),
+    menu: None,
+};
+const MESSAGE_SAVE: Shortcut = Shortcut {
+    id: "message-save",
+    keys: &[(COMMAND_ALT, Key::B)],
+    label: Some("Ctrl+Alt+B"),
+    description: Some("Save or unsave the context-menu message"),
+    menu: None,
+};
+const FORWARD: Shortcut = Shortcut {
+    id: "forward-message",
+    keys: &[(Modifiers::COMMAND, Key::L)],
+    label: Some("Ctrl+L"),
+    description: Some("Forward selected messages, or the latest message"),
+    menu: None,
+};
 const SCROLL_BOTTOM: Shortcut = Shortcut {
     id: "scroll-bottom",
-    keys: &[(Modifiers::COMMAND, Key::End)],
-    label: Some("Ctrl+End"),
+    keys: &[
+        (Modifiers::COMMAND, Key::ArrowDown),
+        (Modifiers::COMMAND, Key::End),
+    ],
+    label: Some("Ctrl+\u{2193}"),
     description: Some("Jump to the newest message"),
+    menu: Some(MenuItem {
+        id: "chat-newest",
+        text: "Jump to Newest",
+        accelerator: "Super+ArrowDown",
+    }),
+};
+const SCROLL_TOP: Shortcut = Shortcut {
+    id: "scroll-top",
+    keys: &[(Modifiers::COMMAND, Key::ArrowUp)],
+    label: Some("Ctrl+\u{2191}"),
+    description: Some("Jump to the oldest loaded message"),
+    menu: Some(MenuItem {
+        id: "chat-oldest",
+        text: "Jump to Oldest Loaded",
+        accelerator: "Super+ArrowUp",
+    }),
+};
+const GROUP_CYCLE: Shortcut = Shortcut {
+    id: "group-cycle",
+    keys: &[(Modifiers::ALT, Key::Tab), (ALT_SHIFT, Key::Tab)],
+    label: Some("Alt+Tab / Alt+Shift+Tab"),
+    description: Some("Jump to the next group in the sidebar (Shift: previous)"),
+    menu: None,
+};
+const FOLD_TOGGLE: Shortcut = Shortcut {
+    id: "fold-toggle",
+    keys: &[(COMMAND_SHIFT, Key::G)],
+    label: Some("Ctrl+Shift+G"),
+    description: Some("Collapse all groups in the sidebar (again: expand)"),
     menu: None,
 };
 const RAIL_CHATS: Shortcut = Shortcut {
@@ -1172,9 +1507,20 @@ const NEW_CHAT: Shortcut = Shortcut {
 };
 const ARCHIVE: Shortcut = Shortcut {
     id: "archive",
+    keys: &[(COMMAND_SHIFT, Key::E)],
+    label: Some("Ctrl+Shift+E"),
+    description: Some("Archive or unarchive the open chat"),
+    menu: Some(MenuItem {
+        id: "chat-archive",
+        text: "Archive Chat",
+        accelerator: "Super+Shift+KeyE",
+    }),
+};
+const MESSAGE_EDIT: Shortcut = Shortcut {
+    id: "message-edit",
     keys: &[(Modifiers::COMMAND, Key::E)],
     label: Some("Ctrl+E"),
-    description: Some("Archive or unarchive the open chat"),
+    description: Some("Edit the context-menu message, or the latest own message"),
     menu: None,
 };
 const NEXT_ACCOUNT: Shortcut = Shortcut {
@@ -1198,15 +1544,51 @@ const SIDEBAR: Shortcut = Shortcut {
         accelerator: "Super+KeyB",
     }),
 };
-const INFO_SIDEBAR: Shortcut = Shortcut {
-    id: "info-sidebar",
+const LIST_MODE: Shortcut = Shortcut {
+    id: "list-mode",
     keys: &[(Modifiers::COMMAND, Key::D)],
     label: Some("Ctrl+D"),
+    description: Some("Switch the chat list between Recent, Unread and Needs me"),
+    menu: Some(MenuItem {
+        id: "view-mode-next",
+        text: "Next List Mode",
+        accelerator: "Super+KeyD",
+    }),
+};
+const LIST_LAYOUT: Shortcut = Shortcut {
+    id: "list-layout",
+    keys: &[(Modifiers::COMMAND, Key::G)],
+    label: Some("Ctrl+G"),
+    description: Some("Show the chat list as group sections or as one flat list"),
+    menu: Some(MenuItem {
+        id: "view-layout",
+        text: "Group Sections or Flat List",
+        accelerator: "Super+KeyG",
+    }),
+};
+const BOOKMARKS: Shortcut = Shortcut {
+    id: "bookmarks",
+    // Cmd+B already collapses the chat list, so Bookmarks takes Shift.
+    keys: &[(COMMAND_SHIFT, Key::B)],
+    label: Some("Ctrl+Shift+B"),
+    description: Some("Open or close Bookmarks"),
+    menu: Some(MenuItem {
+        id: "go-bookmarks",
+        text: "Bookmarks",
+        accelerator: "Super+Shift+KeyB",
+    }),
+};
+const INFO_SIDEBAR: Shortcut = Shortcut {
+    id: "info-sidebar",
+    // Shared Postilaatikko/Solmu keymap: the info sidebar lives on
+    // Cmd+Alt+I; Cmd+D cycles the chat-list mode.
+    keys: &[(COMMAND_ALT, Key::I)],
+    label: Some("Ctrl+Alt+I"),
     description: Some("Show or hide the info sidebar"),
     menu: Some(MenuItem {
         id: "info-sidebar",
         text: "Toggle Info Sidebar",
-        accelerator: "Super+KeyD",
+        accelerator: "Super+Alt+KeyI",
     }),
 };
 const SETTINGS: Shortcut = Shortcut {
@@ -1256,10 +1638,10 @@ const QUIT: Shortcut = Shortcut {
         accelerator: "Super+KeyQ",
     }),
 };
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const FOCUS_MESSAGES: Shortcut = Shortcut {
     id: "focus-messages",
-    keys: &[(Modifiers::CTRL, Key::Num2)],
+    keys: &[(COMMAND_SHIFT, Key::Num2)],
     label: Some(MESSAGES_KEYS),
     description: Some("Go to the message list"),
     menu: None,
@@ -1276,15 +1658,23 @@ const READ_LATER: Shortcut = Shortcut {
     id: "read-later",
     keys: &[(Modifiers::COMMAND, Key::U)],
     label: Some("Ctrl+U"),
-    description: Some("Mark the open chat to read later"),
-    menu: None,
+    description: Some("Mark the open chat to deal with later"),
+    menu: Some(MenuItem {
+        id: "chat-read-later",
+        text: "Read Later",
+        accelerator: "Super+KeyU",
+    }),
 };
 const REPLY_LATER: Shortcut = Shortcut {
     id: "reply-later",
     keys: &[(Modifiers::COMMAND, Key::I)],
     label: Some("Ctrl+I"),
-    description: Some("Mark the open chat to reply later"),
-    menu: None,
+    description: Some("Mark the open chat to deal with later"),
+    menu: Some(MenuItem {
+        id: "chat-reply-later",
+        text: "Reply Later",
+        accelerator: "Super+KeyI",
+    }),
 };
 /// Menu accelerators that edit text natively rather than through `handle`:
 /// winit's view is no NSTextView, so the menu sends the events itself.
@@ -1369,6 +1759,10 @@ pub static REGISTRY: &[Row] = &[
     Row::Binding(&SEARCH_CHATS),
     Row::Binding(&PALETTE),
     Row::Binding(&FIND),
+    Row::Binding(&INCOMING_BRIDGE),
+    Row::Binding(&FORWARD),
+    Row::Binding(&MESSAGE_STAR),
+    Row::Binding(&MESSAGE_SAVE),
     Row::Help(
         "\u{2191} / \u{2193}, Enter",
         "Walk the open chat's search results and jump to one",
@@ -1382,6 +1776,9 @@ pub static REGISTRY: &[Row] = &[
         "Jump to the oldest loaded / newest message (with the input empty)",
     ),
     Row::Binding(&SCROLL_BOTTOM),
+    Row::Binding(&SCROLL_TOP),
+    Row::Binding(&GROUP_CYCLE),
+    Row::Binding(&FOLD_TOGGLE),
     Row::Help("Alt+\u{2191} / Alt+\u{2193}", "Previous / next chat"),
     Row::Help("Ctrl+Shift+[ / ]", "Previous / next chat, as in WhatsApp"),
     Row::Help(TAB_STEP_KEYS, "Next / previous chat, as in Safari's tabs"),
@@ -1403,6 +1800,7 @@ pub static REGISTRY: &[Row] = &[
         "\u{2191}",
         "Edit the previous message (when the input is empty)",
     ),
+    Row::Binding(&MESSAGE_EDIT),
     Row::Help("Enter", "Send (Shift+Enter for a new line)"),
     Row::Help(
         "Escape",
@@ -1419,6 +1817,9 @@ pub static REGISTRY: &[Row] = &[
     ),
     Row::Help("Ctrl+C", "Copy the selected messages"),
     Row::Binding(&SIDEBAR),
+    Row::Binding(&LIST_MODE),
+    Row::Binding(&LIST_LAYOUT),
+    Row::Binding(&BOOKMARKS),
     Row::Binding(&INFO_SIDEBAR),
     Row::Help(
         "Ctrl+End",
@@ -1453,6 +1854,12 @@ pub static REGISTRY: &[Row] = &[
     Row::Binding(&EDIT_SELECT_ALL),
 ];
 
+/// The chord of binding `id` in the platform's notation, for menu hints.
+/// None when the binding has no label of its own.
+pub fn hint(id: &str) -> Option<String> {
+    shortcut(id).label.map(label)
+}
+
 /// Looks a registry entry up by its stable id.
 pub fn shortcut(id: &str) -> &'static Shortcut {
     REGISTRY
@@ -1470,6 +1877,195 @@ pub fn help_rows() -> impl Iterator<Item = (&'static str, &'static str)> {
         Row::Binding(shortcut) => shortcut.label.zip(shortcut.description),
         Row::Help(label, description) => Some((*label, *description)),
     })
+}
+
+/// Every command the macOS Go, Chat and View menus send beyond the registry's
+/// own accelerators. `menu_actions` builds each one.
+pub const MENU_COMMANDS: &[&str] = &[
+    "go-chats",
+    "go-bookmarks",
+    "go-starred",
+    "go-archived",
+    "go-locked",
+    "go-jump",
+    "go-palette",
+    "go-next-number",
+    "go-previous-number",
+    "view-mode-all",
+    "view-mode-unread",
+    "view-mode-unread-7d",
+    "view-mode-needs-me",
+    "view-mode-next",
+    "view-layout",
+    "chat-archive",
+    "chat-favorite",
+    "chat-reply-later",
+    "chat-read-later",
+    "chat-quote-reply",
+    "chat-forward",
+    "chat-newest",
+    "chat-oldest",
+    "view-page-up",
+    "view-page-down",
+    "view-next-group",
+    "view-previous-group",
+    "view-collapse-all",
+    "view-expand-all",
+    "chat-clear",
+    "chat-leave",
+];
+
+/// AppKit consumes registered menu accelerators before egui receives a key.
+/// Re-inject the matching chord while a popup is open so the popup, not the
+/// background chat, owns the target. Kept platform-independent for regression
+/// coverage of the exact native-action route.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn route_native_actions(ctx: &egui::Context, actions: Vec<Action>) -> Vec<Action> {
+    if !egui::Popup::is_any_open(ctx) {
+        return actions;
+    }
+    actions
+        .into_iter()
+        .filter_map(|action| {
+            let binding = match &action {
+                Action::MenuCommand(id) => match id.as_str() {
+                    "chat-archive" => "archive",
+                    "chat-reply-later" => "reply-later",
+                    "chat-quote-reply" => "incoming-bridge",
+                    "chat-forward" => "forward-message",
+                    _ => return Some(action),
+                },
+                Action::ToggleInfoSidebar => "info-sidebar",
+                _ => return Some(action),
+            };
+            let (modifiers, key) = shortcut(binding).keys[0];
+            ctx.input_mut(|input| {
+                input.events.push(egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                })
+            });
+            None
+        })
+        .collect()
+}
+
+/// The actions behind a menu command, from the helpers the keys use, so a
+/// menu click and its key cannot differ. Empty while a viewer, editor or
+/// recording owns the window, as the keys are.
+/// True while a viewer, editor, picker, dialog or recording owns the window:
+/// menu commands and shortcuts stay out of the background then.
+pub(crate) fn window_owned(app: &App) -> bool {
+    app.pending_picture_preview.is_some()
+        || app.picture_edit.is_some()
+        || app.image_preview.is_some()
+        || app.sticker_view.is_some()
+        || app.recording.is_some()
+        || app.picker.is_some()
+        || app.dialog.is_some()
+}
+
+/// The native macOS menu maps some items straight to actions, bypassing the
+/// keyboard guards. While a viewer, editor or recording owns the window, drop
+/// the actions that would act behind it; window management stays.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn guard_native_menu(app: &App, actions: Vec<Action>) -> Vec<Action> {
+    if !window_owned(app) {
+        return actions;
+    }
+    actions
+        .into_iter()
+        .filter(|action| {
+            !match action {
+                // The caret chords go on to the dispatcher, which hands them
+                // to a focused dialog or picker field; menu_actions still
+                // blocks the background chat jump while the window is owned.
+                Action::MenuCommand(id) => id != "chat-newest" && id != "chat-oldest",
+                // Help opens an external browser behind the preview, so it
+                // is blocked like the dialogs.
+                action => matches!(
+                    action,
+                    Action::ShowDialog(_)
+                        | Action::Open(_)
+                        | Action::OpenUrl(_)
+                        | Action::OpenChatSearch
+                        | Action::FocusSearch
+                        | Action::ToggleSidebar
+                        | Action::ToggleInfoSidebar
+                        | Action::ToggleFlatGroups
+                ),
+            }
+        })
+        .collect()
+}
+
+pub fn menu_actions(app: &App, id: &str) -> Vec<Action> {
+    use super::rail::Destination;
+    use crate::model::ListMode;
+    if window_owned(app) {
+        return Vec::new();
+    }
+    let chat = app.current_chat();
+    let action = match id {
+        "go-chats" => return Destination::Chats.actions(app),
+        "go-starred" => return Destination::Starred.actions(app),
+        "go-archived" => return Destination::Archived.actions(app),
+        "go-locked" => return Destination::Locked.actions(app),
+        "go-bookmarks" => Some(Action::ToggleSaved),
+        "go-jump" => Some(Action::ShowDialog(Dialog::JumpToChat)),
+        "go-palette" => Some(Action::ShowDialog(Dialog::Palette)),
+        "go-next-number" => account_switch_action(app, true),
+        "go-previous-number" => account_switch_action(app, false),
+        "view-mode-all" => Some(Action::SetListMode(ListMode::Recent)),
+        "view-mode-unread" => Some(Action::SetListMode(ListMode::Unread)),
+        "view-mode-unread-7d" => Some(Action::SetListMode(ListMode::Recent)),
+        "view-mode-needs-me" => Some(Action::SetListMode(ListMode::NeedsMe)),
+        "view-mode-next" => Some(Action::SetListMode(app.list_mode.next())),
+        "view-layout" => Some(Action::ToggleListLayout),
+        "chat-archive" => archive_action(app),
+        "chat-favorite" => chat.map(|chat| Action::SetFavorite(chat.id.clone(), !chat.favorite)),
+        "chat-reply-later" => reply_later_action(app),
+        "chat-read-later" => read_later_action(app),
+        "chat-quote-reply" => {
+            // As Cmd+R: leave selection mode first, or the toolbar hides the composer.
+            let mut actions = Vec::new();
+            if let Some(reply) = latest_incoming_action(app) {
+                if app.selection.is_some() {
+                    actions.push(Action::CancelSelection);
+                }
+                actions.push(reply);
+            }
+            return actions;
+        }
+        "chat-forward" => forward_action(app),
+        "chat-newest" => chat.map(|_| Action::ScrollToBottom),
+        "chat-oldest" => chat.map(|_| Action::ScrollPage(Scroll::Top)),
+        "view-page-up" => chat.map(|_| Action::ScrollPage(Scroll::PageUp)),
+        "view-page-down" => chat.map(|_| Action::ScrollPage(Scroll::PageDown)),
+        "view-next-group" => app
+            .grouped_list_showing()
+            .then_some(Action::JumpGroup(true)),
+        "view-previous-group" => app
+            .grouped_list_showing()
+            .then_some(Action::JumpGroup(false)),
+        "view-collapse-all" => app
+            .grouped_list_showing()
+            .then_some(Action::FoldAllGroups(true)),
+        "view-expand-all" => app
+            .grouped_list_showing()
+            .then_some(Action::FoldAllGroups(false)),
+        "chat-clear" => chat
+            .filter(|_| app.is_connected())
+            .map(|chat| Action::ShowDialog(Dialog::ConfirmClearChat(chat.id.clone()))),
+        "chat-leave" => chat
+            .filter(|chat| chat.can_leave(&app.our_ids()))
+            .map(|chat| Action::ShowDialog(Dialog::ConfirmLeaveGroup(chat.id.clone()))),
+        _ => None,
+    };
+    action.into_iter().collect()
 }
 
 /// The muda accelerator string for a binding, for the menu keys the
@@ -1493,9 +2089,15 @@ pub fn menu_accelerator(modifiers: Modifiers, key: Key) -> Option<String> {
         Key::B => "KeyB",
         Key::C => "KeyC",
         Key::D => "KeyD",
+        Key::E => "KeyE",
         Key::F => "KeyF",
+        Key::G => "KeyG",
+        Key::I => "KeyI",
+        Key::K => "KeyK",
         Key::N => "KeyN",
+        Key::P => "KeyP",
         Key::Q => "KeyQ",
+        Key::U => "KeyU",
         Key::V => "KeyV",
         Key::W => "KeyW",
         Key::X => "KeyX",
@@ -1504,6 +2106,14 @@ pub fn menu_accelerator(modifiers: Modifiers, key: Key) -> Option<String> {
         Key::Equals => "Equal",
         Key::Minus => "Minus",
         Key::Slash => "Slash",
+        Key::ArrowUp => "ArrowUp",
+        Key::ArrowDown => "ArrowDown",
+        Key::ArrowLeft => "ArrowLeft",
+        Key::ArrowRight => "ArrowRight",
+        Key::Home => "Home",
+        Key::End => "End",
+        Key::PageUp => "PageUp",
+        Key::PageDown => "PageDown",
         Key::Num0 => "Digit0",
         _ => return None,
     };
@@ -1681,9 +2291,16 @@ mod tests {
     fn the_help_rows_stay_exactly_as_written() {
         let expected: Vec<(&str, &str)> = vec![
             ("Ctrl+K", "Jump between recent chats"),
-            ("Ctrl+Shift+F", "Search chats"),
+            ("Ctrl+Shift+F", "Search all messages and chats"),
             ("Ctrl+P", "Command palette: chats, filters, actions"),
-            ("Ctrl+F", "Search the open chat or the settings"),
+            ("Ctrl+F", "Search within this chat"),
+            (
+                "Ctrl+R",
+                "Quote-reply to the latest incoming message (on its source in linked chats)",
+            ),
+            ("Ctrl+L", "Forward selected messages, or the latest message"),
+            ("Ctrl+Alt+S", "Star or unstar the context-menu message"),
+            ("Ctrl+Alt+B", "Save or unsave the context-menu message"),
             (
                 "\u{2191} / \u{2193}, Enter",
                 "Walk the open chat's search results and jump to one",
@@ -1696,7 +2313,16 @@ mod tests {
                 "Home / End",
                 "Jump to the oldest loaded / newest message (with the input empty)",
             ),
-            ("Ctrl+End", "Jump to the newest message"),
+            ("Ctrl+\u{2193}", "Jump to the newest message"),
+            ("Ctrl+\u{2191}", "Jump to the oldest loaded message"),
+            (
+                "Alt+Tab / Alt+Shift+Tab",
+                "Jump to the next group in the sidebar (Shift: previous)",
+            ),
+            (
+                "Ctrl+Shift+G",
+                "Collapse all groups in the sidebar (again: expand)",
+            ),
             ("Alt+\u{2191} / Alt+\u{2193}", "Previous / next chat"),
             ("Ctrl+Shift+[ / ]", "Previous / next chat, as in WhatsApp"),
             (TAB_STEP_KEYS, "Next / previous chat, as in Safari's tabs"),
@@ -1718,15 +2344,19 @@ mod tests {
                 "\u{2191}",
                 "Edit the previous message (when the input is empty)",
             ),
+            (
+                "Ctrl+E",
+                "Edit the context-menu message, or the latest own message",
+            ),
             ("Enter", "Send (Shift+Enter for a new line)"),
             (
                 "Escape",
                 "Dismiss the current action, return from search or Starred, or close the chat",
             ),
             ("Ctrl+N", "New chat or message yourself"),
-            ("Ctrl+E", "Archive or unarchive the open chat"),
-            ("Ctrl+U", "Mark the open chat to read later"),
-            ("Ctrl+I", "Mark the open chat to reply later"),
+            ("Ctrl+Shift+E", "Archive or unarchive the open chat"),
+            ("Ctrl+U", "Mark the open chat to deal with later"),
+            ("Ctrl+I", "Mark the open chat to deal with later"),
             (
                 "Ctrl+Alt+\u{2192} / Ctrl+Alt+\u{2190}",
                 "Switch to the next / previous linked number",
@@ -1737,7 +2367,16 @@ mod tests {
             ),
             ("Ctrl+C", "Copy the selected messages"),
             ("Ctrl+B", "Collapse or expand the chat list"),
-            ("Ctrl+D", "Show or hide the info sidebar"),
+            (
+                "Ctrl+D",
+                "Switch the chat list between Recent, Unread and Needs me",
+            ),
+            (
+                "Ctrl+G",
+                "Show the chat list as group sections or as one flat list",
+            ),
+            ("Ctrl+Shift+B", "Open or close Bookmarks"),
+            ("Ctrl+Alt+I", "Show or hide the info sidebar"),
             (
                 "Ctrl+End",
                 "Jump to the newest message (when the input is empty)",
@@ -1764,6 +2403,14 @@ mod tests {
             ("Ctrl+Q", "Quit"),
         ];
         assert_eq!(help_rows().collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn menu_hints_come_from_the_registry_and_skip_unlabelled_bindings() {
+        assert_eq!(hint("archive"), Some(label("Ctrl+Shift+E")));
+        assert_eq!(hint("message-edit"), Some(label("Ctrl+E")));
+        assert_eq!(hint("info-sidebar"), Some(label("Ctrl+Alt+I")));
+        assert_eq!(hint("close-chat"), None);
     }
 
     #[test]
@@ -1870,6 +2517,116 @@ mod tests {
         }
     }
 
+    /// Bindings with keys whose menu item carries no accelerator, because the
+    /// handler owns the key (it depends on focus or an exact modifier), with
+    /// the menu command offering the same action. None: no menu item fits;
+    /// a context menu owns the chord for its own target instead.
+    const KEYLESS_MENU: &[(&str, Option<&str>)] = &[
+        ("rail-chats", Some("go-chats")),
+        ("next-account", Some("go-next-number")),
+        ("group-cycle", Some("view-next-group")),
+        ("group-cycle", None),
+        ("fold-toggle", None),
+        ("forward-message", Some("chat-forward")),
+        ("focus-messages", None),
+        ("close-chat", None),
+        ("incoming-bridge", None),
+        ("message-edit", None),
+        ("message-star", None),
+        ("message-save", None),
+    ];
+
+    #[test]
+    fn every_key_binding_has_a_menu_item_or_a_named_reason() {
+        for row in REGISTRY {
+            let Row::Binding(entry) = row else { continue };
+            if entry.keys.is_empty() || entry.menu.is_some() {
+                continue;
+            }
+            let (_, command) = KEYLESS_MENU
+                .iter()
+                .find(|(id, _)| *id == entry.id)
+                .unwrap_or_else(|| panic!("{}: no menu item and no listed reason", entry.id));
+            if let Some(command) = command {
+                assert!(MENU_COMMANDS.contains(command), "{command} is not built");
+            }
+        }
+    }
+
+    #[test]
+    fn menu_commands_do_nothing_while_a_dialog_is_open() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        assert!(!menu_actions(&app, "chat-favorite").is_empty());
+        app.dialog = Some(Dialog::Palette);
+        for id in ["chat-favorite", "chat-clear", "chat-leave", "go-jump"] {
+            assert!(menu_actions(&app, id).is_empty(), "{id}");
+        }
+    }
+
+    #[test]
+    fn menu_quote_reply_leaves_selection_mode_as_command_r_does() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![
+                    shortcut_message(&chat, "older", true, 10),
+                    shortcut_message(&chat, "latest-incoming", true, 20),
+                ],
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            menu_actions(&app, "chat-quote-reply"),
+            [Action::Reply("latest-incoming".into())]
+        );
+        app.selection = Some((chat, vec!["older".into()]));
+        assert_eq!(
+            menu_actions(&app, "chat-quote-reply"),
+            [
+                Action::CancelSelection,
+                Action::Reply("latest-incoming".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn menu_commands_queue_what_their_keys_queue() {
+        let (_root, mut app, ids) = app_with_chats(2);
+        assert_eq!(menu_actions(&app, "go-bookmarks"), [Action::ToggleSaved]);
+        assert_eq!(
+            menu_actions(&app, "view-mode-unread"),
+            [Action::SetListMode(crate::model::ListMode::Unread)]
+        );
+        assert_eq!(
+            menu_actions(&app, "view-mode-next"),
+            [Action::SetListMode(app.list_mode.next())]
+        );
+        assert_eq!(
+            menu_actions(&app, "go-palette"),
+            [Action::ShowDialog(Dialog::Palette)]
+        );
+        // Chat commands need an open chat, as the keys do.
+        assert!(menu_actions(&app, "chat-archive").is_empty());
+        assert!(menu_actions(&app, "chat-favorite").is_empty());
+        app.open_chat = Some(ids[0].clone());
+        assert_eq!(
+            menu_actions(&app, "chat-archive"),
+            [Action::SetArchived(ids[0].clone(), true)]
+        );
+        assert_eq!(
+            menu_actions(&app, "chat-favorite"),
+            [Action::SetFavorite(ids[0].clone(), true)]
+        );
+        assert!(menu_actions(&app, "no-such-command").is_empty());
+        for id in MENU_COMMANDS {
+            menu_actions(&app, id);
+        }
+    }
+
     #[test]
     fn shortcut_ids_are_unique() {
         let mut ids: Vec<&str> = REGISTRY
@@ -1886,21 +2643,37 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_f_searches_the_open_chat_the_list_or_the_settings() {
+    fn search_shortcuts_have_distinct_keys_and_menu_scopes() {
+        assert_eq!(FIND.keys, &[(Modifiers::COMMAND, Key::F)]);
+        assert_eq!(SEARCH_CHATS.keys, &[(COMMAND_SHIFT, Key::F)]);
+        assert_eq!(JUMP_TO_CHAT.keys, &[(Modifiers::COMMAND, Key::K)]);
+        assert_eq!(FIND.menu.as_ref().unwrap().accelerator, "Super+KeyF");
+        assert_eq!(
+            SEARCH_CHATS.menu.as_ref().unwrap().accelerator,
+            "Super+Shift+KeyF"
+        );
+        assert_ne!(
+            FIND.menu.as_ref().unwrap().id,
+            SEARCH_CHATS.menu.as_ref().unwrap().id
+        );
+    }
+
+    #[test]
+    fn ctrl_f_widens_after_the_chat_search_is_open() {
         let root = tempfile::tempdir().unwrap();
         let mut app = App::headless(
             crate::paths::AppDirs::under(root.path()),
             crate::settings::Settings::default(),
         )
         .0;
-        assert!(matches!(find_action(&app), Action::FocusSearch));
+        assert!(matches!(find_action(&app), Action::FindEverywhere));
         app.open_chat = Some("1@s.whatsapp.net".into());
         app.page = Page::Chats;
         assert!(matches!(find_action(&app), Action::OpenChatSearch));
         app.page = Page::Settings;
-        assert!(matches!(find_action(&app), Action::FocusSettingsSearch));
+        assert!(matches!(find_action(&app), Action::OpenChatSearch));
         app.page = Page::Wallpaper;
-        assert!(matches!(find_action(&app), Action::FocusSearch));
+        assert!(matches!(find_action(&app), Action::OpenChatSearch));
     }
 
     #[test]
@@ -2238,6 +3011,163 @@ mod tests {
         survived
     }
 
+    fn shortcut_message(
+        chat: &str,
+        id: &str,
+        incoming: bool,
+        timestamp: i64,
+    ) -> crate::model::Message {
+        crate::model::Message {
+            id: id.into(),
+            chat: chat.into(),
+            sender: "synthetic-sender".into(),
+            sender_name: None,
+            from_me: !incoming,
+            timestamp,
+            history_order: None,
+            content: crate::model::Content::text(id),
+            status: crate::model::Delivery::Sent,
+            delivered_at: None,
+            read_at: None,
+            quoted: None,
+            reactions: vec![],
+            edited: false,
+            mentions: vec![],
+            forwarded: false,
+            thumbnail: None,
+        }
+    }
+
+    #[test]
+    fn command_r_quotes_latest_incoming_in_ordinary_chat_despite_later_outgoing() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.composer = "preserve draft".into();
+        let mut revoked = shortcut_message(&chat, "revoked", true, 40);
+        revoked.content = crate::model::Content::Revoked;
+        let mut call = shortcut_message(&chat, "call-entry", true, 50);
+        call.content = crate::model::Content::Call {
+            video: false,
+            status: crate::model::CallStatus::Missed,
+            duration: 0,
+            group: false,
+        };
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![
+                    shortcut_message(&chat, "older", true, 10),
+                    shortcut_message(&chat, "latest-incoming", true, 20),
+                    shortcut_message(&chat, "outgoing-quote", false, 30),
+                    revoked,
+                    call,
+                ],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        assert!(!press(&mut app, &ctx, Key::R, Modifiers::COMMAND));
+        assert_eq!(app.actions, [Action::Reply("latest-incoming".into())]);
+        app.actions.clear();
+        assert_eq!(app.composer, "preserve draft");
+        app.selection = Some((chat.clone(), vec!["older".into()]));
+        assert!(!press(&mut app, &ctx, Key::R, Modifiers::COMMAND));
+        assert_eq!(
+            app.actions,
+            [
+                Action::CancelSelection,
+                Action::Reply("latest-incoming".into())
+            ]
+        );
+        app.actions.clear();
+        assert!(press(
+            &mut app,
+            &ctx,
+            Key::R,
+            Modifiers::COMMAND | Modifiers::ALT
+        ));
+        assert!(app.actions.is_empty());
+    }
+
+    #[test]
+    fn ordinary_reply_remains_owned_when_saved_link_cannot_render() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.chats[0].backend_origin = Some("origin".into());
+        app.chats[0].backend_account = Some("account".into());
+        let member = crate::merged::Member::of(&app.chats[0]).unwrap();
+        app.settings.beeper.people.push(crate::merged::Person {
+            name: "Person".into(),
+            members: vec![member],
+            primary: None,
+        });
+        app.open_chat = Some(chat.clone());
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![shortcut_message(&chat, "incoming", true, 10)],
+                ..Default::default()
+            },
+        );
+        assert!(
+            latest_incoming_action(&app).is_none(),
+            "linked view owns its unavailable state"
+        );
+        let duplicate = app.chats[0].clone();
+        app.chats.push(duplicate);
+        assert_eq!(
+            latest_incoming_action(&app),
+            Some(Action::Reply("incoming".into()))
+        );
+        app.chats.pop();
+        app.chats[0].kind = crate::model::ChatKind::Group;
+        assert_eq!(
+            latest_incoming_action(&app),
+            Some(Action::Reply("incoming".into()))
+        );
+    }
+
+    #[test]
+    fn command_l_opens_existing_forward_dialog_for_selection_or_latest_without_sending() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![
+                    shortcut_message(&chat, "first", true, 10),
+                    shortcut_message(&chat, "last", false, 20),
+                ],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        assert!(!press(&mut app, &ctx, Key::L, Modifiers::COMMAND));
+        assert_eq!(
+            app.actions,
+            [Action::ShowDialog(Dialog::Forward {
+                chat: chat.clone(),
+                messages: vec!["last".into()]
+            })]
+        );
+        app.actions.clear();
+        app.selection = Some((chat.clone(), vec!["first".into(), "last".into()]));
+        assert!(!press(&mut app, &ctx, Key::L, Modifiers::COMMAND));
+        assert_eq!(
+            app.actions,
+            [Action::ShowDialog(Dialog::Forward {
+                chat: chat.clone(),
+                messages: vec!["first".into(), "last".into()]
+            })]
+        );
+        app.actions.clear();
+        app.dialog = Some(Dialog::Shortcuts);
+        assert!(press(&mut app, &ctx, Key::L, Modifiers::COMMAND));
+        assert!(app.actions.is_empty());
+    }
+
     /// The modifiers a real Ctrl+Shift press carries on Linux and Windows,
     /// and a real Cmd+Shift press on macOS.
     fn ctrl_shift() -> [Modifiers; 3] {
@@ -2259,21 +3189,56 @@ mod tests {
     }
 
     #[test]
-    fn command_d_opens_info_not_the_chat_list_or_reply_later() {
+    fn command_alt_i_opens_info_and_command_d_cycles_the_list_mode() {
         let (_root, mut app, ids) = app_with_chats(1);
         app.open_chat = Some(ids[0].clone());
         let ctx = egui::Context::default();
+        // Info stays on Cmd+Alt+I. Cmd+D steps Recent > Unread > Needs me.
         assert!(!press(&mut app, &ctx, Key::D, Modifiers::COMMAND));
+        assert!(matches!(
+            app.actions.as_slice(),
+            [Action::SetListMode(crate::model::ListMode::Unread)]
+        ));
+        app.actions.clear();
+        // The extra Alt must not leak the press into plain Cmd+I (Reply
+        // later): the info binding is consumed before that one.
+        assert!(!press(
+            &mut app,
+            &ctx,
+            Key::I,
+            Modifiers::COMMAND | Modifiers::ALT
+        ));
         assert!(matches!(
             app.actions.as_slice(),
             [Action::ToggleInfoSidebar]
         ));
-        assert!(app.sidebar_visible, "Cmd+D does not toggle the left list");
+        assert!(
+            app.sidebar_visible,
+            "Cmd+Alt+I does not toggle the left list"
+        );
+        assert_eq!(
+            INFO_SIDEBAR.keys,
+            &[(Modifiers::COMMAND | Modifiers::ALT, Key::I)]
+        );
         assert_eq!(REPLY_LATER.keys, &[(Modifiers::COMMAND, Key::I)]);
         assert_eq!(SIDEBAR.keys, &[(Modifiers::COMMAND, Key::B)]);
+        // Bookmarks takes Cmd+Shift+B because plain Cmd+B collapses the list.
+        app.actions.clear();
+        assert!(!press(&mut app, &ctx, Key::B, COMMAND_SHIFT));
+        assert!(matches!(app.actions.as_slice(), [Action::ToggleSaved]));
+        assert_eq!(BOOKMARKS.keys, &[(COMMAND_SHIFT, Key::B)]);
+        assert!(!REGISTRY.iter().any(|row| matches!(
+            row,
+            Row::Binding(entry)
+                if entry.id == "flat-groups" && entry.keys.contains(&(Modifiers::COMMAND, Key::D))
+        )));
         assert_eq!(
             menu_accelerator(Modifiers::COMMAND, Key::D).as_deref(),
             Some("Super+KeyD")
+        );
+        assert_eq!(
+            menu_accelerator(Modifiers::COMMAND | Modifiers::ALT, Key::I).as_deref(),
+            Some("Super+Alt+KeyI")
         );
     }
 
@@ -2305,22 +3270,53 @@ mod tests {
     }
 
     #[test]
-    fn only_control_alone_counts_as_the_macos_messages_key() {
-        assert!(control_alone(Modifiers::CTRL));
-        // Command+Control+2 stays Command+2's chat.
-        assert!(!control_alone(Modifiers {
-            ctrl: true,
-            command: true,
-            ..Modifiers::NONE
-        }));
-        assert!(!control_alone(Modifiers {
-            ctrl: true,
+    fn message_focus_matches_physical_two_with_shifted_layout_symbols() {
+        let ctx = egui::Context::default();
+        for (key, physical, modifiers, expected) in [
+            (Key::Exclamationmark, Some(Key::Num2), COMMAND_SHIFT, true),
+            (Key::Num2, None, COMMAND_SHIFT, true),
+            (Key::Num2, Some(Key::Num2), Modifiers::CTRL, false),
+            (
+                Key::Exclamationmark,
+                Some(Key::Num2),
+                COMMAND_SHIFT | Modifiers::ALT,
+                false,
+            ),
+            (Key::Num1, Some(Key::Num1), COMMAND_SHIFT, false),
+        ] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: physical,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.input_mut(|input| {
+                        assert_eq!(take_message_focus(input), expected);
+                        assert_eq!(input.events.is_empty(), expected);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn message_focus_uses_command_shift_not_spaces_control_digit() {
+        assert!(messages_modifier_alone(COMMAND_SHIFT));
+        assert!(messages_modifier_alone(Modifiers {
             mac_cmd: true,
-            command: true,
-            ..Modifiers::NONE
+            ..COMMAND_SHIFT
         }));
-        assert!(!control_alone(Modifiers::CTRL | Modifiers::SHIFT));
-        assert!(!control_alone(Modifiers::NONE));
+        assert!(!messages_modifier_alone(Modifiers::CTRL));
+        assert!(!messages_modifier_alone(Modifiers::COMMAND));
+        assert!(!messages_modifier_alone(COMMAND_SHIFT | Modifiers::CTRL));
+        assert!(!messages_modifier_alone(COMMAND_SHIFT | Modifiers::ALT));
     }
 
     #[test]
@@ -2703,14 +3699,11 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_e_archives_and_unarchives_the_open_chat() {
+    fn ctrl_shift_e_archives_and_unarchives_the_open_chat() {
         let (_root, mut app, ids) = app_with_chats(2);
         app.open_chat = Some(ids[1].clone());
         let ctx = egui::Context::default();
-        for modifiers in ctrl_shift().map(|modifiers| Modifiers {
-            shift: false,
-            ..modifiers
-        }) {
+        for modifiers in ctrl_shift() {
             app.chats[1].archived = false;
             app.actions.clear();
             assert!(!press(&mut app, &ctx, Key::E, modifiers));
@@ -2720,6 +3713,72 @@ mod tests {
             assert!(!press(&mut app, &ctx, Key::E, modifiers));
             assert_eq!(app.actions, [Action::SetArchived(ids[1].clone(), false)]);
         }
+    }
+
+    #[test]
+    fn ctrl_e_edits_the_latest_own_editable_message() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        let now = crate::util::now();
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![
+                    shortcut_message(&chat, "incoming", true, now),
+                    shortcut_message(&chat, "own-older", false, now - 60),
+                    shortcut_message(&chat, "own-latest", false, now - 10),
+                ],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        assert!(!press(&mut app, &ctx, Key::E, Modifiers::COMMAND));
+        assert_eq!(app.actions, [Action::Edit("own-latest".into())]);
+    }
+
+    #[test]
+    fn ctrl_e_skips_messages_outside_the_edit_window() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        let now = crate::util::now();
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![shortcut_message(
+                    &chat,
+                    "own-stale",
+                    false,
+                    now - crate::app::EDIT_WINDOW.as_secs() as i64 - 1,
+                )],
+                ..Default::default()
+            },
+        );
+        let ctx = egui::Context::default();
+        assert!(!press(&mut app, &ctx, Key::E, Modifiers::COMMAND));
+        assert!(app.actions.is_empty(), "nothing editable: no edit action");
+    }
+
+    #[test]
+    fn ctrl_e_leaves_a_nonempty_composer_alone() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.conversations.insert(
+            chat.clone(),
+            crate::app::Conversation {
+                messages: vec![shortcut_message(&chat, "own", false, crate::util::now())],
+                ..Default::default()
+            },
+        );
+        app.composer = "draft".into();
+        let ctx = egui::Context::default();
+        assert!(press(&mut app, &ctx, Key::E, Modifiers::COMMAND));
+        assert!(
+            app.actions.is_empty(),
+            "a draft must survive: no edit starts"
+        );
     }
 
     #[test]
@@ -2847,13 +3906,11 @@ mod tests {
         let (_root, mut app, ids) = app_with_chats(1);
         app.open_chat = Some(ids[0].clone());
         let ctx = egui::Context::default();
-        let modifiers = if cfg!(target_os = "macos") {
-            Modifiers::CTRL
-        } else {
-            Modifiers::ALT
-        };
-        assert!(!press(&mut app, &ctx, Key::Num2, modifiers));
+        assert!(!press(&mut app, &ctx, Key::Num2, COMMAND_SHIFT));
         assert_eq!(app.actions, [Action::FocusMessages]);
+        app.actions.clear();
+        assert!(press(&mut app, &ctx, Key::Num2, Modifiers::CTRL));
+        assert!(app.actions.is_empty());
     }
 
     /// Ctrl+Alt+2 picks the second sidebar filter, and keeps working with
@@ -2881,8 +3938,7 @@ mod tests {
         );
     }
 
-    /// The list's shortcut and the rail's Ctrl+Shift+1 (Cmd on macOS) never
-    /// take each other's keys, and Shift does not turn one into the other.
+    /// Message focus and rail destinations never take extra modifiers.
     #[cfg(target_os = "macos")]
     #[test]
     fn the_messages_shortcut_and_the_rail_keys_stay_apart() {
@@ -2890,15 +3946,11 @@ mod tests {
         app.link = crate::backend::LinkStatus::Connected;
         app.open_chat = Some(ids[0].clone());
         let ctx = egui::Context::default();
-        let messages = if cfg!(target_os = "macos") {
-            Modifiers::CTRL
-        } else {
-            Modifiers::ALT
-        };
+        let messages = COMMAND_SHIFT;
         press(&mut app, &ctx, Key::Num2, messages);
         assert_eq!(app.actions, [Action::FocusMessages]);
         app.actions.clear();
-        press(&mut app, &ctx, Key::Num2, messages | Modifiers::SHIFT);
+        press(&mut app, &ctx, Key::Num2, messages | Modifiers::ALT);
         assert!(
             !app.actions.contains(&Action::FocusMessages),
             "{:?}",
@@ -2926,6 +3978,109 @@ mod tests {
         let survived = press(&mut app, &ctx, Key::End, Modifiers::COMMAND);
         assert!(!survived);
         assert_eq!(app.actions, [Action::ScrollToBottom]);
+    }
+
+    #[test]
+    fn option_tab_stays_with_a_focused_text_field() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        let field = egui::Id::new("composer-text");
+        egui::widgets::text_edit::TextEditState::default().store(&ctx, field);
+        ctx.memory_mut(|memory| memory.request_focus(field));
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
+        assert!(survived, "a text field keeps Option+Tab");
+        assert_eq!(app.flat_group_ui.jump, None);
+    }
+
+    #[test]
+    fn menu_group_jump_routes_like_the_key() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        assert_eq!(
+            menu_actions(&app, "view-next-group"),
+            [Action::JumpGroup(true)]
+        );
+        assert_eq!(
+            menu_actions(&app, "view-previous-group"),
+            [Action::JumpGroup(false)]
+        );
+        // The flat list has no groups to jump between.
+        let ctx = egui::Context::default();
+        app.apply(Action::ToggleListLayout, &ctx);
+        assert!(app.list_is_flat());
+        assert!(menu_actions(&app, "view-next-group").is_empty());
+        assert!(menu_actions(&app, "view-previous-group").is_empty());
+    }
+
+    #[test]
+    fn shift_command_g_queues_a_fold_toggle() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        let survived = press(&mut app, &ctx, Key::G, COMMAND_SHIFT);
+        assert!(!survived);
+        assert_eq!(app.actions, [Action::ToggleFoldAllGroups]);
+        // Plain Cmd+G still switches the list layout.
+        app.actions.clear();
+        let survived = press(&mut app, &ctx, Key::G, Modifiers::COMMAND);
+        assert!(!survived);
+        assert_eq!(app.actions, [Action::ToggleListLayout]);
+    }
+
+    #[test]
+    fn group_jump_waits_for_the_grouped_list() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        // Search results replace the headings: no jump queues, by key or menu.
+        app.search = "Alice".into();
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
+        assert!(survived, "search results own the sidebar");
+        assert_eq!(app.flat_group_ui.jump, None);
+        assert!(menu_actions(&app, "view-next-group").is_empty());
+        // Back on the grouped list, both routes queue again.
+        app.search.clear();
+        assert_eq!(
+            menu_actions(&app, "view-next-group"),
+            [Action::JumpGroup(true)]
+        );
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
+        assert!(!survived);
+        assert_eq!(app.flat_group_ui.jump, Some(true));
+    }
+
+    #[test]
+    fn option_tab_queues_a_group_jump() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT);
+        assert!(!survived);
+        assert_eq!(app.flat_group_ui.jump, Some(true));
+        let survived = press(&mut app, &ctx, Key::Tab, Modifiers::ALT | Modifiers::SHIFT);
+        assert!(!survived);
+        assert_eq!(app.flat_group_ui.jump, Some(false));
+        // Plain and Ctrl+Tab never queue a jump: focus traversal and chat
+        // switching own them.
+        app.flat_group_ui.jump = None;
+        press(&mut app, &ctx, Key::Tab, Modifiers::NONE);
+        press(&mut app, &ctx, Key::Tab, Modifiers::COMMAND);
+        assert_eq!(app.flat_group_ui.jump, None);
+    }
+
+    #[test]
+    fn command_arrows_jump_to_the_end_and_the_oldest_loaded() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        app.open_chat = Some(ids[0].clone());
+        let ctx = egui::Context::default();
+        let survived = press(&mut app, &ctx, Key::ArrowDown, Modifiers::COMMAND);
+        assert!(!survived);
+        assert_eq!(app.actions, [Action::ScrollToBottom]);
+        app.actions.clear();
+        let survived = press(&mut app, &ctx, Key::ArrowUp, Modifiers::COMMAND);
+        assert!(!survived);
+        assert_eq!(app.actions, [Action::ScrollPage(Scroll::Top)]);
     }
 
     #[test]

@@ -53,6 +53,7 @@ fn main() {
             paths: vec![std::path::PathBuf::from("fixture.txt")],
             documents: true,
             caption: Some("failed caption".into()),
+            quoting: None,
             message: "Attachment unconfirmed".into(),
         })
         .unwrap();

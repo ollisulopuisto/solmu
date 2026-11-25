@@ -1028,15 +1028,28 @@ pub fn call_duration(seconds: u64) -> String {
 
 /// Formats a phone number with a plus sign and country-appropriate grouping.
 pub fn phone(digits: &str) -> String {
-    let digits: String = digits.chars().filter(char::is_ascii_digit).collect();
-    if digits.is_empty() {
-        return String::new();
-    }
+    use std::borrow::Cow;
+    // Fast-path: borrow directly when `digits` is already purely ASCII digits
+    // (the common case from JIDs and normalized contacts), avoiding a heap
+    // allocation of an intermediate String.
+    let digits: Cow<'_, str> = if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        Cow::Borrowed(digits)
+    } else {
+        let filtered: String = digits.chars().filter(char::is_ascii_digit).collect();
+        if filtered.is_empty() {
+            return String::new();
+        }
+        Cow::Owned(filtered)
+    };
     if let Some(formatted) = brazilian_phone(&digits).or_else(|| french_phone(&digits)) {
         return formatted;
     }
     let (country, national) = digits.split_at(country_code_len(&digits).min(digits.len()));
-    let mut out = format!("+{country}");
+    // Pre-allocate capacity for "+{country} " + grouped chunks with spaces.
+    let estimated_capacity = 1 + country.len() + 1 + national.len() + national.len() / 3;
+    let mut out = String::with_capacity(estimated_capacity);
+    out.push('+');
+    out.push_str(country);
     // Approximate national grouping: threes, with the last four together
     // rather than leaving a lone digit.
     let mut start = 0;
@@ -1154,7 +1167,12 @@ fn french_phone(digits: &str) -> Option<String> {
     } else {
         3
     };
-    let mut out = format!("+{country} {}", &national[..lead]);
+    // Pre-allocate capacity: "+{country} " + national digits with spaces.
+    let mut out = String::with_capacity(1 + country.len() + 1 + national.len() + 5);
+    out.push('+');
+    out.push_str(country);
+    out.push(' ');
+    out.push_str(&national[..lead]);
     for start in (lead..national.len()).step_by(2) {
         out.push(' ');
         out.push_str(&national[start..start + 2]);
@@ -1930,6 +1948,46 @@ mod international_phone_tests {
             "١٥٥٥١٢٣٤٥٦٧",
         ] {
             assert!(super::international_phone(input).is_none(), "{input}");
+        }
+    }
+}
+
+/// Next 08:00 in the system timezone, including before today's 08:00.
+pub fn next_mute_morning(now: i64) -> Option<i64> {
+    let local = jiff::Timestamp::from_second(now).ok()?.to_zoned(zone());
+    let mut date = local.date();
+    if local.time() >= jiff::civil::time(8, 0, 0, 0) {
+        date = date.tomorrow().ok()?;
+    }
+    Some(
+        date.at(8, 0, 0, 0)
+            .to_zoned(zone())
+            .ok()?
+            .timestamp()
+            .as_second(),
+    )
+}
+
+#[cfg(test)]
+mod mute_morning_tests {
+    use super::*;
+    #[test]
+    fn next_morning_is_local_eight_across_midnight_and_dst() {
+        for (now, expected) in [
+            ("2026-11-13T00:30:00+02:00", "2026-11-13T08:00:00+02:00"),
+            ("2026-11-13T08:00:00+02:00", "2026-11-14T08:00:00+02:00"),
+            ("2026-10-24T12:00:00+03:00", "2026-10-25T08:00:00+02:00"),
+        ] {
+            let now = now.parse::<Timestamp>().unwrap().as_second();
+            let _clock = fixed_clock::set(fixed_clock::Clock {
+                now,
+                zone: jiff::tz::TimeZone::get("Europe/Helsinki").unwrap(),
+                twelve_hour: false,
+            });
+            assert_eq!(
+                next_mute_morning(now),
+                Some(expected.parse::<Timestamp>().unwrap().as_second())
+            );
         }
     }
 }

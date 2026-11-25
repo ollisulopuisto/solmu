@@ -6,6 +6,12 @@
     <key>CFBundleDisplayName</key><string>Solmu</string>
     <!-- Keep the installed app identity across the rename. -->
     <key>CFBundleIdentifier</key><string>me.paolino.fastsapp</string>
+    <key>CFBundleURLTypes</key>
+    <array><dict>
+        <key>CFBundleURLName</key><string>WhatsApp chat link</string>
+        <key>CFBundleTypeRole</key><string>Viewer</string>
+        <key>CFBundleURLSchemes</key><array><string>whatsapp</string></array>
+    </dict></array>
     <key>CFBundleExecutable</key><string>solmu</string>
     <key>CFBundleIconFile</key><string>solmu</string>
     <key>CFBundlePackageType</key><string>APPL</string>

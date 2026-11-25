@@ -174,3 +174,38 @@ Use `linked-day-separators` for the same dates in a linked-person timeline.
 `--demo-page queue-counts` shows 12 available chats, 3 unread, 5 Reply later and 2 Read later. Add `,queue-counts-off` for the original icon-only control, `,light` for light theme, or `,settings-search=queue` for the preference. Counts are local queue items, not message totals.
 
 `--demo-page active-avatar` opens the unread group in the collapsed rail to check its selected ring and unread badge. Add `,light` for the light theme; `--demo-hover 26,195` checks hover without moving the real pointer.
+
+### Linked network chip lanes
+
+`--demo-page linked-chip-lanes` starts a WhatsApp network run with an outgoing
+message and a Signal run with an incoming message. Use `--demo-size 620x1000`
+and `1180x1000`, with and without `,light`, to inspect the icon lanes and
+wrapped message/footer layout. The runtime geometry regression also checks
+both directions, themes and widths.
+
+The chip-lanes fixture always puts WhatsApp before Signal, independent of the
+launch hour. Signal timestamps are rebased after the fixed WhatsApp sample.
+
+### Speaker-change streaks
+
+`--demo-page group-stacks` shows synthetic three-speaker text streaks, a
+returning speaker, reactions, and outgoing read receipts. Add `,light` for the
+light theme; compare `--demo-size 1180x1100` and `--demo-size 620x1400`.
+Each eligible pair overlaps by 6 logical points with its older lower edge in
+front. Every bubble has a triangular top sender-side tail. Incoming group
+shadows choose contrasting colours per sender streak, not a permanent colour
+identity; names/avatars remain the identity cues. There are no accent rails or
+stack separator borders. Reactions and time share a wrapping footer row.
+
+
+`--demo-page card-widths` shows a file, voice note, reply and link preview at
+one shared320pt content width, a reply and preview sharing the next400pt
+step, plus plain text at80/160/240pt and longer text on the same320/400pt
+grid. Both text and cards grow in80pt steps up to the viewport cap. Use `,light` and a narrow `--demo-size` to check viewport caps.
+
+Use `--demo-page link-menu` to right-click a synthetic named web link through
+the normal pointer handler. Its compact menu keeps only Open link and Copy
+link for the clicked destination, including the original query and fragment.
+`--demo-page supplied-preview` maps a fixed synthetic Beeper `links[]` payload
+through the real adapter into the card renderer. Its image URL is deliberately
+not fetched. No account or public website is contacted.

@@ -7,6 +7,10 @@ use crate::model::{Action, ChatId, Dialog};
 use crate::theme::{self, Icon};
 
 pub fn show(app: &mut App, ctx: &egui::Context) {
+    if matches!(app.dialog, Some(Dialog::CustomizeAvatar)) {
+        super::local_avatars::show(app, ctx);
+        return;
+    }
     let Some(dialog) = app.dialog.clone() else {
         return;
     };
@@ -26,6 +30,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         .backdrop_color(palette.shadow)
         .show(ctx, |ui| {
             ui.set_width(match dialog {
+                Dialog::CustomizeAvatar => 420.0,
                 Dialog::Shortcuts => shortcuts_width(ui.ctx().content_rect().width()),
                 Dialog::About => 380.0,
                 Dialog::ConfirmUnlink => 380.0,
@@ -33,7 +38,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Dialog::ConfirmClearMediaCache(_) => 380.0,
                 Dialog::ConfirmLeaveGroup(_) => 380.0,
                 Dialog::NewContact => 380.0,
-                Dialog::NewChat => 420.0,
+                Dialog::NewChat => 500.0,
                 Dialog::Palette => 480.0,
                 Dialog::JumpToChat => 480.0,
                 Dialog::WhatsNew => 480.0,
@@ -70,6 +75,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             });
             ui.spacing_mut().item_spacing.y = 8.0;
             match dialog {
+                Dialog::CustomizeAvatar => {}
                 Dialog::CreatePoll(chat) => super::polls::create(app, ui, &chat),
                 Dialog::SendLocation(chat) => super::locations::send(app, ui, &chat),
                 Dialog::PollResults { chat, message } => {
@@ -92,7 +98,13 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 Dialog::Palette => super::palette::show(app, ui),
                 Dialog::JumpToChat => super::switcher::show(app, ui),
                 Dialog::WhatsNew => whats_new(app, ui),
-                Dialog::SendLater => send_later(app, ui),
+                Dialog::SendLater => {
+                    let height = (ui.ctx().content_rect().height() - 64.0).max(100.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("send-later-dialog")
+                        .max_height(height)
+                        .show(ui, |ui| send_later(app, ui));
+                }
                 Dialog::ScheduledList => scheduled_list(app, ui),
                 Dialog::TranscriptionLanguage { chat, message } => {
                     transcription_language(app, ui, &chat, &message)
@@ -477,56 +489,7 @@ fn new_chat(app: &mut App, ui: &mut egui::Ui) {
         super::new_group::show(app, ui);
         return;
     }
-    let palette = app.palette;
-    title(ui, app, &crate::i18n::gettext(app.locale, "New chat"));
-    let width = ui.available_width();
-    let search_hint = crate::i18n::gettext(app.locale, "Search contacts");
-    let search = super::widgets::search_field(
-        ui,
-        &palette,
-        egui::Id::new("new-chat-search"),
-        &mut app.new_chat_search,
-        &search_hint,
-        width,
-    );
-    if ui.memory(|memory| memory.focused().is_none()) {
-        search.request_focus();
-    }
-    let needle = crate::util::search_key(app.new_chat_search.trim());
-    let contacts = contact_choices(app, &needle);
-    egui::ScrollArea::vertical()
-        .id_salt("new-chat-contacts")
-        .max_height((ui.ctx().content_rect().height() - 280.0).clamp(100.0, 420.0))
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            // New group and Add contact head the list, then "Message
-            // yourself", as on the phone.
-            let new_group = crate::i18n::gettext(app.locale, "New group");
-            if super::chats::action_row(app, ui, Icon::Users, &new_group).clicked() {
-                app.actions.push(Action::StartNewGroup);
-            }
-            let add_contact = crate::i18n::gettext(app.locale, "Add contact");
-            if super::chats::action_row(app, ui, Icon::Plus, &add_contact).clicked() {
-                app.actions.push(Action::ShowDialog(Dialog::NewContact));
-            }
-            let offer_self = app.offers_self(&needle);
-            if offer_self {
-                super::chats::self_row(app, ui);
-            }
-            if contacts.is_empty() && !offer_self {
-                theme::text(
-                    ui,
-                    crate::i18n::gettext(app.locale, "No matching contacts"),
-                    theme::regular(13.0),
-                    palette.secondary,
-                );
-            }
-            for contact in contacts {
-                ui.push_id(&contact.id, |ui| {
-                    super::chats::contact_row(app, ui, &contact)
-                });
-            }
-        });
+    super::new_message::show(app, ui);
 }
 
 /// The people New chat and New call offer, by name: the contacts and the
@@ -586,7 +549,13 @@ fn forward(app: &mut App, ui: &mut egui::Ui, messages: &[String]) {
             .clamp(300.0, 800.0)
             .min((height - 48.0).max(1.0)),
     );
-    let heading = if messages.len() == 1 {
+    let heading = if !app.forward_items.is_empty() {
+        if app.composed_forward_running() {
+            crate::i18n::gettext(app.locale, "Forwarding messages").into_owned()
+        } else {
+            crate::i18n::gettext(app.locale, "Forwarding results").into_owned()
+        }
+    } else if messages.len() == 1 {
         crate::i18n::gettext(app.locale, "Forward message").into_owned()
     } else {
         crate::i18n::ngettext(
@@ -598,6 +567,29 @@ fn forward(app: &mut App, ui: &mut egui::Ui, messages: &[String]) {
         .replace("{count}", &messages.len().to_string())
     };
     title(ui, app, &heading);
+    if !app.forward_items.is_empty() {
+        forward_results(app, ui);
+        return;
+    }
+    if let Some(Dialog::Forward { chat, .. }) = &app.dialog
+        && app
+            .chat(chat)
+            .is_some_and(|source| source.backend_origin.is_some())
+    {
+        ui.label(crate::i18n::gettext(
+            app.locale,
+            "Re-send with sender, network and original time. This is not a native forward.",
+        ));
+        if app
+            .chat(chat)
+            .is_some_and(|source| source.kind == crate::model::ChatKind::Group)
+        {
+            ui.checkbox(
+                &mut app.forward_include_group,
+                crate::i18n::gettext(app.locale, "Include source group name"),
+            );
+        }
+    }
     // Lay out the real footer first, upwards from the bottom. Wrapped notes
     // and translated buttons then leave exactly their measured room for the
     // list, rather than relying on a guessed header/footer height.
@@ -647,7 +639,7 @@ fn forward(app: &mut App, ui: &mut egui::Ui, messages: &[String]) {
         &palette,
         egui::Id::new("forward-search"),
         &mut app.forward_search,
-        "Search chats",
+        &crate::i18n::gettext(app.locale, "Search name or group"),
         width,
     );
     if ui.memory(|memory| memory.focused().is_none()) {
@@ -774,6 +766,57 @@ fn forward(app: &mut App, ui: &mut egui::Ui, messages: &[String]) {
     let _ = list;
 }
 
+/// Remains available after the results view closes, including while sending.
+pub fn forward_status(app: &mut App, ui: &mut egui::Ui) {
+    if app.forward_items.is_empty() {
+        return;
+    }
+    let label = if app.composed_forward_running() {
+        crate::i18n::gettext(app.locale, "Forwarding in progress")
+    } else {
+        crate::i18n::gettext(app.locale, "Forwarding results")
+    };
+    ui.label(label);
+    if ui
+        .add(egui::Button::new(crate::i18n::gettext(app.locale, "View forwarding results")).wrap())
+        .clicked()
+    {
+        app.actions.push(Action::ShowForwardResults);
+    }
+}
+
+fn forward_results(app: &mut App, ui: &mut egui::Ui) {
+    use crate::i18n::gettext;
+    let locale = app.locale;
+    let running = app.composed_forward_running();
+    ui.label(gettext(locale,"You may close this view. Results stay available. Accepted is not confirmed; unknown outcomes are never retried."));
+    egui::ScrollArea::vertical().id_salt("forward-results").max_height((ui.available_height()-70.0).max(40.0)).show(ui,|ui|{
+        for group in crate::forward_results::recipients(&app.forward_items) {
+            let title=app.chats.iter().filter(|chat|chat.id==group.chat).find(|chat|crate::merged::Member::of(chat).is_some_and(|member|member.origin==group.origin&&member.account==group.account)).map(|chat|if chat.locked {gettext(locale,"Locked chat").into_owned()}else{app.chat_title(chat)}).unwrap_or_else(||gettext(locale,"Unavailable chat").into_owned());
+            ui.group(|ui|{
+                ui.strong(title);
+                if group.confirmed==group.total {ui.label(gettext(locale,"Confirmed in chat"));} else {
+                    for (count,label) in [(group.waiting,gettext(locale,"Waiting")),(group.sending,gettext(locale,"Sending")),(group.accepted,gettext(locale,"Submitted, waiting for echo")),(group.confirmed,gettext(locale,"Confirmed in chat")),(group.unsent,gettext(locale,"Not submitted")),(group.unknown,gettext(locale,"Outcome unknown. Check chat before retrying"))] {if count>0 {ui.label(format!("{label}: {count} / {}",group.total));}}
+                }
+                if group.unsent>0 {
+                    ui.add_enabled_ui(!running,|ui|{ui.menu_button(gettext(locale,"Review unsent messages"),|ui|{
+                        ui.set_max_width(360.0);
+                        ui.label(gettext(locale,"Only messages known not to have been submitted will be retried. Successful and unknown outcomes will not be sent again."));
+                        let label=crate::i18n::ngettext(locale,"Retry {count} unsent message","Retry {count} unsent messages",group.unsent as u32).replace("{count}",&group.unsent.to_string());
+                        if ui.button(label).clicked(){app.actions.push(Action::RetryForwardRecipient{origin:group.origin.clone(),account:group.account.clone(),chat:group.chat.clone()});ui.close();}
+                    });});
+                }
+                let errors:Vec<_>=group.indices.iter().filter_map(|index|match &app.forward_items[*index].state {crate::composed_forward::State::FailedBeforeSend(error)|crate::composed_forward::State::Uncertain(error)=>Some(error),_=>None}).collect();
+                if !errors.is_empty() {ui.push_id((&group.origin,&group.account,&group.chat),|ui|{ui.collapsing(gettext(locale,"Technical details"),|ui|{for error in errors {ui.add(egui::Label::new(error).wrap());}});});}
+            });ui.add_space(8.0);
+        }
+    });
+    ui.label(gettext(locale, "Original messages stay selected."));
+    if ui.button(gettext(locale, "Close view")).clicked() {
+        app.actions.push(Action::HideForwardResults);
+    }
+}
+
 fn forward_footer(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     if app.forward_reviewing {
@@ -802,18 +845,15 @@ fn forward_footer(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
     let count = app.forward_recipients.len();
-    // Keep the action visible even when the translated count needs truncation.
-    let (label, action) = if count > 1 {
-        (
-            crate::i18n::gettext(app.locale, "Review recipients"),
-            Action::ReviewForward,
-        )
-    } else {
-        (
-            crate::i18n::gettext(app.locale, "Forward"),
-            Action::ConfirmForward,
-        )
-    };
+    // The recipient count is explicit on the send action; no second picker.
+    let label = crate::i18n::ngettext(
+        app.locale,
+        "Forward to {count} chat",
+        "Forward to {count} chats",
+        count as u32,
+    )
+    .replace("{count}", &count.to_string());
+    let action = Action::ForwardToSelected;
     ui.horizontal(|ui| {
         let button_width = ui
             .painter()
@@ -1101,7 +1141,7 @@ fn about(app: &mut App, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             theme::text(ui, "Solmu", theme::bold(17.0), palette.text);
             let version_label = crate::i18n::gettext(app.locale, "Version {version}")
-                .replace("{version}", env!("CARGO_PKG_VERSION"));
+                .replace("{version}", crate::version::display());
             theme::text(ui, version_label, theme::regular(13.0), palette.secondary);
         });
     });
@@ -1558,6 +1598,179 @@ fn confirm_delete_messages(
     for_everyone: bool,
     selection: bool,
 ) {
+    // Beeper scopes come from the selected chat's actual capabilities, not
+    // the inherited WhatsApp age window. Missing support fails closed.
+    if app.chat(chat).is_some_and(|c| c.backend_account.is_some()) {
+        let Some(known) = app.chat(chat).cloned() else {
+            return;
+        };
+        let caps = &known.mutation_capabilities;
+        ui.heading(crate::i18n::gettext(app.locale, "Delete selected messages"));
+        let identity_known = crate::merged::Member::of(&known).is_some();
+        let supported = identity_known
+            && if for_everyone {
+                matches!(caps.delete, Some(2))
+            } else {
+                caps.delete_for_me == Some(true)
+            };
+        for (label, scope, allowed) in [
+            (
+                crate::i18n::gettext(app.locale, "Delete for me"),
+                false,
+                caps.delete_for_me == Some(true),
+            ),
+            (
+                crate::i18n::gettext(app.locale, "Delete for everyone"),
+                true,
+                matches!(caps.delete, Some(2)),
+            ),
+        ] {
+            if allowed && ui.radio(for_everyone == scope, label).clicked() {
+                app.dialog = Some(Dialog::ConfirmDeleteSelection {
+                    chat: chat.into(),
+                    messages: ids.to_vec(),
+                    for_everyone: scope,
+                });
+            }
+        }
+        if let Some(age) = caps.delete_max_age.filter(|_| for_everyone) {
+            ui.label(
+                crate::i18n::gettext(
+                    app.locale,
+                    "Bridge delete-for-everyone age limit: {age} seconds",
+                )
+                .replace("{age}", &age.to_string()),
+            );
+        }
+        let failures: Vec<_> = ids
+            .iter()
+            .filter_map(|id| {
+                let message = app
+                    .conversations
+                    .get(chat)
+                    .and_then(|c| c.messages.iter().find(|m| &m.id == id));
+                match message {
+                    None => Some(
+                        crate::i18n::gettext(app.locale, "{id}: message unavailable")
+                            .replace("{id}", id),
+                    ),
+                    Some(message)
+                        if message.chat != chat
+                            || matches!(message.content, crate::model::Content::Revoked)
+                            || matches!(
+                                message.status,
+                                crate::model::Delivery::Pending | crate::model::Delivery::Failed
+                            ) =>
+                    {
+                        Some(
+                            crate::i18n::gettext(
+                                app.locale,
+                                "{id}: message is unavailable or not final",
+                            )
+                            .replace("{id}", id),
+                        )
+                    }
+                    Some(message) => caps
+                        .delete_refusal(
+                            for_everyone,
+                            message.from_me,
+                            message.timestamp,
+                            crate::util::now(),
+                        )
+                        .map(|why| {
+                            format!(
+                                "{id}: {}",
+                                super::batch_actions::refusal_text(app.locale, why)
+                            )
+                        }),
+                }
+            })
+            .collect();
+        for failure in &failures {
+            ui.label(failure);
+        }
+        if !supported || !failures.is_empty() {
+            ui.label(crate::i18n::gettext(
+                app.locale,
+                "Unsupported items: nothing will be sent. Change scope or selection explicitly.",
+            ));
+        }
+        let owner = app.account().id.0.clone();
+        let pending = app
+            .batch_ui
+            .results
+            .iter()
+            .any(|item| item.result.is_none());
+        if pending {
+            ui.label(crate::i18n::gettext(
+                app.locale,
+                "An earlier batch still has pending results.",
+            ));
+        }
+        let prompt = if for_everyone {
+            crate::i18n::ngettext(
+                app.locale,
+                "Delete {count} message for everyone? This cannot be undone in Solmu.",
+                "Delete {count} messages for everyone? This cannot be undone in Solmu.",
+                ids.len() as u32,
+            )
+        } else {
+            crate::i18n::ngettext(
+                app.locale,
+                "Delete {count} message for me? This cannot be undone in Solmu.",
+                "Delete {count} messages for me? This cannot be undone in Solmu.",
+                ids.len() as u32,
+            )
+        };
+        ui.label(prompt.replace("{count}", &ids.len().to_string()));
+        ui.horizontal(|ui| {
+            let confirm = if for_everyone {
+                crate::i18n::gettext(app.locale, "Delete for everyone")
+            } else {
+                crate::i18n::gettext(app.locale, "Delete for me")
+            };
+            if ui
+                .add_enabled(
+                    supported && failures.is_empty() && !pending && !ids.is_empty(),
+                    egui::Button::new(confirm).fill(app.palette.danger),
+                )
+                .clicked()
+            {
+                app.batch_ui.owner = owner;
+                let request = super::batch_actions::next_request();
+                app.batch_ui.request = Some(request);
+                app.batch_ui.results = ids
+                    .iter()
+                    .map(|id| super::batch_actions::Item {
+                        chat: chat.into(),
+                        message: Some(id.clone()),
+                        everyone: for_everyone,
+                        accepted_delete_at: None,
+                        result: None,
+                    })
+                    .collect();
+                for id in ids {
+                    app.actions.push(Action::BatchDelete {
+                        expected: crate::merged::Member::of(&known)
+                            .expect("Beeper identity verified"),
+                        request,
+                        chat: chat.into(),
+                        id: id.clone(),
+                        everyone: for_everyone,
+                    });
+                }
+                app.actions.push(Action::CancelSelection);
+                app.actions.push(Action::CloseDialog);
+            }
+            if ui
+                .button(crate::i18n::gettext(app.locale, "Cancel"))
+                .clicked()
+            {
+                app.actions.push(Action::CloseDialog);
+            }
+        });
+        return;
+    }
     let locale = app.locale;
     let heading = if for_everyone {
         crate::i18n::gettext(locale, "Delete for everyone?")
@@ -2401,45 +2614,16 @@ fn send_later(app: &mut App, ui: &mut egui::Ui) {
 
     let now = jiff::Zoned::now();
     let mut chosen: Option<i64> = None;
-    // Every preset names the actual resolved local time, so a preset that
-    // rolled to the next day can never look like today.
-    let mut preset = |ui: &mut egui::Ui, label: String, due: Option<jiff::Zoned>| {
-        if let Some(due) = due {
-            let when = due.strftime("%a %d %b %H:%M");
-            if ui.button(format!("{label} ({when})")).clicked() {
-                chosen = Some(due.timestamp().as_second());
-            }
-        }
-    };
-    ui.horizontal_wrapped(|ui| {
-        preset(
-            ui,
-            "In 1 hour".to_string(),
-            Some(now.clone() + jiff::SignedDuration::from_hours(1)),
-        );
-        let evening = now
-            .date()
-            .at(20, 0, 0, 0)
-            .to_zoned(now.time_zone().clone())
-            .ok()
-            .and_then(|z| if z <= now { z.tomorrow().ok() } else { Some(z) });
-        preset(ui, "This evening".to_string(), evening);
-        let morning = now
-            .date()
-            .at(9, 0, 0, 0)
-            .to_zoned(now.time_zone().clone())
-            .ok()
-            .and_then(|z| if z <= now { z.tomorrow().ok() } else { Some(z) });
-        preset(ui, "Tomorrow morning".to_string(), morning);
-    });
+    super::send_later::calendar(app, ui);
 
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.label("Date (YYYY-MM-DD):");
-        ui.text_edit_singleline(&mut app.send_later_date);
+        ui.add(egui::TextEdit::singleline(&mut app.send_later_date).desired_width(110.0));
         ui.label("Time (HH:MM):");
-        ui.text_edit_singleline(&mut app.send_later_time);
+        ui.add(egui::TextEdit::singleline(&mut app.send_later_time).desired_width(70.0));
     });
+    repeat_controls(app, ui);
     if ui.button("Schedule at this time").clicked() {
         let date = app.send_later_date.trim().parse::<jiff::civil::Date>();
         let time = app.send_later_time.trim().parse::<jiff::civil::Time>();
@@ -2524,20 +2708,192 @@ fn send_later(app: &mut App, ui: &mut egui::Ui) {
     });
 
     if let Some(due_at) = chosen {
-        let chat = app.open_chat.clone().unwrap_or_default();
-        let text = app.composer.trim().to_string();
-        if !text.is_empty() && !chat.is_empty() {
-            let quoting = app.reply_to.as_ref().map(|target| target.id.clone());
-            app.actions.push(crate::model::Action::ScheduleSend {
-                chat,
-                text,
-                due_at,
-                quoting,
-                replaces: None,
-            });
+        match build_repeat(app, due_at) {
+            Err(error) => app.send_later_error = Some(error),
+            Ok(repeat) => {
+                let chat = app.send_later_chat.clone().unwrap_or_default();
+                let text = app.composer.trim().to_string();
+                if !text.is_empty() && !chat.is_empty() {
+                    let quoting = app.reply_to.as_ref().map(|target| target.id.clone());
+                    app.actions.push(crate::model::Action::ScheduleSend {
+                        chat,
+                        text,
+                        due_at,
+                        quoting,
+                        replaces: None,
+                        repeat,
+                    });
+                }
+                app.actions.push(crate::model::Action::CloseDialog);
+            }
         }
-        app.actions.push(crate::model::Action::CloseDialog);
     }
+}
+
+const REPEAT_UNITS: [&str; 4] = ["Never", "Days", "Weeks", "Months"];
+const WEEKDAY_NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/// The first occurrence typed into the date and time fields, when both
+/// parse and name a real local time.
+fn typed_due(app: &App) -> Option<i64> {
+    let date = app
+        .send_later_date
+        .trim()
+        .parse::<jiff::civil::Date>()
+        .ok()?;
+    let time = app
+        .send_later_time
+        .trim()
+        .parse::<jiff::civil::Time>()
+        .ok()?;
+    let zoned = date
+        .at(time.hour(), time.minute(), 0, 0)
+        .to_zoned(jiff::tz::TimeZone::system())
+        .ok()?;
+    Some(zoned.timestamp().as_second())
+}
+
+/// The repeat rule the dialog describes, anchored on the first occurrence.
+/// `Ok(None)` is a one-time send. The wall time, month day and zone come
+/// from the first occurrence, so "09:00" stays 09:00 across daylight saving.
+fn build_repeat(app: &App, first_due: i64) -> Result<Option<crate::recurrence::Repeat>, String> {
+    use crate::recurrence::{Repeat, Unit};
+    let unit = match app.send_later_repeat {
+        1 => Unit::Day,
+        2 => Unit::Week,
+        3 => Unit::Month,
+        _ => return Ok(None),
+    };
+    let every: u32 = app
+        .send_later_every
+        .trim()
+        .parse()
+        .map_err(|_| "Repeat interval must be a whole number from 1 to 365".to_string())?;
+    let zone = jiff::tz::TimeZone::system();
+    let first = jiff::Timestamp::from_second(first_due)
+        .map_err(|e| e.to_string())?
+        .to_zoned(zone.clone());
+    let value = app.send_later_ends_value.trim();
+    let (mut ends_after, mut until) = (None, None);
+    match app.send_later_ends {
+        1 => {
+            if value.parse::<jiff::civil::Date>().is_err() {
+                return Err("End date must be YYYY-MM-DD".into());
+            }
+            until = Some(value.to_string());
+        }
+        2 => {
+            ends_after = Some(
+                value
+                    .parse::<u32>()
+                    .map_err(|_| "Number of sends must be a whole number".to_string())?,
+            );
+        }
+        _ => {}
+    }
+    let mut weekdays = app.send_later_weekdays;
+    if unit == Unit::Week && weekdays == 0 {
+        weekdays = 1u8 << first.weekday().to_monday_zero_offset();
+    }
+    let repeat = Repeat {
+        series: String::new(),
+        every,
+        unit,
+        weekdays,
+        hour: first.hour() as u8,
+        minute: first.minute() as u8,
+        day: first.day() as u8,
+        tz: zone.iana_name().unwrap_or("").to_string(),
+        ends_after,
+        until,
+        sent: 0,
+        paused: false,
+        planned: None,
+    };
+    repeat.validate()?;
+    Ok(Some(repeat))
+}
+
+/// The Repeat row of the Send Later dialog: how often, which weekdays, when
+/// it ends, and a preview that names the real dates.
+fn repeat_controls(app: &mut App, ui: &mut egui::Ui) {
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(crate::i18n::gettext(app.locale, "Repeat:"));
+        egui::ComboBox::from_id_salt("send-later-repeat")
+            .selected_text(REPEAT_UNITS[usize::from(app.send_later_repeat.min(3))])
+            .show_ui(ui, |ui| {
+                for (index, name) in REPEAT_UNITS.iter().enumerate() {
+                    ui.selectable_value(&mut app.send_later_repeat, index as u8, *name);
+                }
+            });
+        if app.send_later_repeat != 0 {
+            ui.label("every");
+            ui.add(egui::TextEdit::singleline(&mut app.send_later_every).desired_width(36.0));
+        }
+    });
+    if app.send_later_repeat == 0 {
+        return;
+    }
+    if app.send_later_repeat == 2 {
+        ui.horizontal_wrapped(|ui| {
+            for (bit, name) in WEEKDAY_NAMES.iter().enumerate() {
+                let mut on = app.send_later_weekdays & (1u8 << bit) != 0;
+                if ui.checkbox(&mut on, *name).changed() {
+                    app.send_later_weekdays ^= 1u8 << bit;
+                }
+            }
+        });
+    }
+    ui.horizontal(|ui| {
+        ui.label(crate::i18n::gettext(app.locale, "Ends:"));
+        egui::ComboBox::from_id_salt("send-later-ends")
+            .selected_text(
+                ["Never", "On date", "After sends"][usize::from(app.send_later_ends.min(2))],
+            )
+            .show_ui(ui, |ui| {
+                for (index, name) in ["Never", "On date", "After sends"].iter().enumerate() {
+                    ui.selectable_value(&mut app.send_later_ends, index as u8, *name);
+                }
+            });
+        if app.send_later_ends != 0 {
+            let hint = if app.send_later_ends == 1 {
+                "YYYY-MM-DD"
+            } else {
+                "number"
+            };
+            ui.add(
+                egui::TextEdit::singleline(&mut app.send_later_ends_value)
+                    .hint_text(hint)
+                    .desired_width(100.0),
+            );
+        }
+    });
+    if let Some(first) = typed_due(app)
+        && let Ok(Some(repeat)) = build_repeat(app, first)
+    {
+        let zone = jiff::tz::TimeZone::system();
+        let dates: Vec<String> = repeat
+            .upcoming(first, 3)
+            .into_iter()
+            .filter_map(|at| jiff::Timestamp::from_second(at).ok())
+            .map(|at| {
+                at.to_zoned(zone.clone())
+                    .strftime("%a %d %b %H:%M")
+                    .to_string()
+            })
+            .collect();
+        ui.label(
+            crate::i18n::gettext(app.locale, "Next: {dates}").replace("{dates}", &dates.join(", ")),
+        );
+    }
+    ui.label(
+        egui::RichText::new(crate::i18n::gettext(
+            app.locale,
+            "Sends automatically, to this chat only, until you stop it or it ends.",
+        ))
+        .small(),
+    );
 }
 
 fn preview_text(text: &str) -> String {
@@ -2575,10 +2931,51 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
     };
     let mut items = items.clone();
     items.sort_by_key(|m| m.due_at);
+    ui.horizontal(|ui| {
+        if ui
+            .selectable_label(
+                !app.scheduled_repeating_tab,
+                crate::i18n::gettext(app.locale, "One-time"),
+            )
+            .clicked()
+        {
+            app.scheduled_repeating_tab = false;
+        }
+        if ui
+            .selectable_label(
+                app.scheduled_repeating_tab,
+                crate::i18n::gettext(app.locale, "Repeating"),
+            )
+            .clicked()
+        {
+            app.scheduled_repeating_tab = true;
+        }
+    });
+    ui.add_space(4.0);
+    let repeating_tab = app.scheduled_repeating_tab;
+    // Sent occurrences of a series are history of the series, not queue
+    // rows: the Repeating tab lists each series once, by its pending item.
+    items.retain(|m| {
+        if repeating_tab {
+            m.repeat.is_some()
+                && matches!(
+                    m.state,
+                    State::Scheduled
+                        | State::Sending
+                        | State::Failed
+                        | State::Missed
+                        | State::Uncertain
+                )
+        } else {
+            m.repeat.is_none()
+        }
+    });
     if items.is_empty() {
-        ui.label(
-            "Nothing scheduled. Right-click or long-press the Send button to schedule a message.",
-        );
+        ui.label(if repeating_tab {
+            crate::i18n::gettext(app.locale, "No repeating messages. Choose Repeat in Send Later to start one.")
+        } else {
+            crate::i18n::gettext(app.locale, "Nothing scheduled. Right-click or long-press the Send button to schedule a message.")
+        });
         return;
     }
     egui::ScrollArea::vertical()
@@ -2619,6 +3016,19 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
                     });
                     let preview: String = m.text.chars().take(120).collect();
                     ui.label(preview);
+                    if let Some(repeat) = &m.repeat {
+                        let paused = if repeat.paused { ", paused" } else { "" };
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}, {} sent{}",
+                                repeat.describe(),
+                                repeat.sent,
+                                paused
+                            ))
+                            .small()
+                            .color(palette.secondary),
+                        );
+                    }
                     if m.reply_to.is_some() {
                         ui.label(
                             egui::RichText::new("reply")
@@ -2634,9 +3044,46 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
                         );
                     }
                     ui.horizontal(|ui| {
-                        if matches!(m.state, State::Scheduled)
+                        let is_series = m.repeat.is_some();
+                        let paused = m.repeat.as_ref().is_some_and(|r| r.paused);
+                        if is_series
+                            && matches!(m.state, State::Scheduled | State::Failed | State::Missed)
+                        {
+                            if ui
+                                .small_button(crate::i18n::gettext(app.locale, "Skip next"))
+                                .clicked()
+                            {
+                                app.actions.push(Action::ScheduledItemAction {
+                                    id: m.id.clone(),
+                                    action: "skip".into(),
+                                });
+                                app.actions.push(Action::ShowDialog(Dialog::ScheduledList));
+                            }
+                            let label = if paused {
+                                crate::i18n::gettext(app.locale, "Resume")
+                            } else {
+                                crate::i18n::gettext(app.locale, "Pause")
+                            };
+                            if ui.small_button(label).clicked() {
+                                app.actions.push(Action::ScheduledItemAction {
+                                    id: m.id.clone(),
+                                    action: if paused { "resume" } else { "pause" }.into(),
+                                });
+                                app.actions.push(Action::ShowDialog(Dialog::ScheduledList));
+                            }
+                        }
+                        if (matches!(m.state, State::Scheduled)
+                            || (is_series
+                                && matches!(
+                                    m.state,
+                                    State::Failed | State::Missed | State::Uncertain
+                                )))
                             && ui
-                                .small_button(crate::i18n::gettext(app.locale, "Cancel"))
+                                .small_button(if is_series {
+                                    crate::i18n::gettext(app.locale, "Stop series")
+                                } else {
+                                    crate::i18n::gettext(app.locale, "Cancel")
+                                })
                                 .clicked()
                         {
                             app.actions.push(Action::ScheduledItemAction {
@@ -2660,9 +3107,10 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
                             m.state,
                             State::Scheduled | State::Failed | State::Missed | State::Uncertain
                         ) {
-                            if ui
-                                .small_button(crate::i18n::gettext(app.locale, "Send now"))
-                                .clicked()
+                            if !paused
+                                && ui
+                                    .small_button(crate::i18n::gettext(app.locale, "Send now"))
+                                    .clicked()
                             {
                                 app.actions.push(Action::ScheduledItemAction {
                                     id: m.id.clone(),
@@ -2697,6 +3145,29 @@ fn scheduled_list(app: &mut App, ui: &mut egui::Ui) {
                                     app.send_later_date = zoned.strftime("%Y-%m-%d").to_string();
                                     app.send_later_time = zoned.strftime("%H:%M").to_string();
                                 }
+                                app.send_later_repeat = 0;
+                                app.send_later_every = "1".into();
+                                app.send_later_weekdays = 0;
+                                app.send_later_ends = 0;
+                                app.send_later_ends_value.clear();
+                                if let Some(r) = &m.repeat {
+                                    use crate::recurrence::Unit;
+                                    app.send_later_repeat = match r.unit {
+                                        Unit::Day => 1,
+                                        Unit::Week => 2,
+                                        Unit::Month => 3,
+                                    };
+                                    app.send_later_every = r.every.to_string();
+                                    app.send_later_weekdays = r.weekdays;
+                                    if let Some(until) = &r.until {
+                                        app.send_later_ends = 1;
+                                        app.send_later_ends_value = until.clone();
+                                    } else if let Some(count) = r.ends_after {
+                                        app.send_later_ends = 2;
+                                        app.send_later_ends_value = count.to_string();
+                                    }
+                                }
+                                app.send_later_chat = Some(m.chat_id.clone());
                                 app.send_later_replaces = Some(m.id.clone());
                                 app.dialog = Some(Dialog::SendLater);
                             }

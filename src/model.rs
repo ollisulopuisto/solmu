@@ -108,6 +108,46 @@ impl ChatKind {
     }
 }
 
+/// Live bridge-reported destructive capabilities. Missing is never permission.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MutationCapabilities {
+    pub archive: Option<bool>,
+    pub delete_for_me: Option<bool>,
+    pub delete: Option<i8>,
+    pub delete_max_age: Option<i64>,
+}
+impl MutationCapabilities {
+    pub fn delete_refusal(
+        &self,
+        everyone: bool,
+        from_me: bool,
+        timestamp: i64,
+        now: i64,
+    ) -> Option<&'static str> {
+        if !everyone {
+            return (self.delete_for_me != Some(true))
+                .then_some("Delete for me is not confirmed by this bridge");
+        }
+        if !matches!(self.delete, Some(2)) {
+            return Some("Delete for everyone is not confirmed by this bridge");
+        }
+        if !from_me {
+            return Some("Only your own messages can be deleted for everyone here");
+        }
+        if timestamp <= 0 || timestamp > now {
+            return Some("Message age could not be verified");
+        }
+        if self
+            .delete_max_age
+            .is_some_and(|limit| limit < 0 || now.saturating_sub(timestamp) > limit)
+        {
+            return Some("The bridge's delete age limit has passed");
+        }
+        None
+    }
+}
+
 /// A local chat label: a name, a colour, and nothing that leaves this computer.
 /// Not a WhatsApp Business label; Solmu neither reads nor syncs those.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +185,77 @@ pub enum ChatFilter {
 pub enum ListFilter {
     Chip(ChatFilter),
     Label(String),
+}
+
+/// The chat list's primary mode: which chats the list is for, before any
+/// scope (type, network, label) narrows it. Groups arrange every mode's
+/// list as sections; a mode never hides a chat's section membership, but
+/// outside Recent a section with no chats in it drops its heading.
+/// Bookmarks is not a mode: it is the Saved list, opened from its own tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub enum ListMode {
+    /// Everything, latest first: the full list. Shown as "Recent".
+    #[default]
+    Recent,
+    /// Every chat with something unread, muted ones included.
+    Unread,
+    /// Unread and manually marked chats only, and never a muted chat.
+    NeedsMe,
+}
+
+/// Retired Focus and RecentUnread settings open the full Recent list. A
+/// future name must not make the whole settings file unreadable: both read
+/// as Recent.
+impl<'de> Deserialize<'de> for ListMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Ok(match name.as_str() {
+            "Unread" => Self::Unread,
+            "NeedsMe" => Self::NeedsMe,
+            _ => Self::Recent,
+        })
+    }
+}
+
+impl ListMode {
+    pub const EVERY: [Self; 3] = [Self::Recent, Self::Unread, Self::NeedsMe];
+
+    pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
+        use crate::i18n::gettext;
+        match self {
+            Self::Recent => gettext(locale, "Recent"),
+            Self::Unread => gettext(locale, "Unread"),
+            Self::NeedsMe => gettext(locale, "Needs me"),
+        }
+    }
+
+    /// The text settings store; anything unknown reads as Recent.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Recent => "recent",
+            Self::Unread => "unread",
+            Self::NeedsMe => "needs-me",
+        }
+    }
+
+    /// The mode Cmd+D moves to: Recent, Unread, then Needs me, and round.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Recent => Self::Unread,
+            Self::Unread => Self::NeedsMe,
+            Self::NeedsMe => Self::Recent,
+        }
+    }
+
+    pub fn parse(key: &str) -> Option<Self> {
+        match key {
+            "recent" => Some(Self::Recent),
+            "unread" => Some(Self::Unread),
+            "recent-unread" => Some(Self::Recent),
+            "needs-me" => Some(Self::NeedsMe),
+            _ => None,
+        }
+    }
 }
 
 impl ListFilter {
@@ -312,6 +423,10 @@ pub struct Chat {
     /// capabilities. Informational only: the API has no poll content or
     /// vote endpoint to use it with yet.
     pub poll_capability: Option<i8>,
+    pub mutation_capabilities: MutationCapabilities,
+    /// The other person's phone numbers and usernames in a direct chat, as the
+    /// network reports them. Used only to suggest links on this computer.
+    pub handles: Vec<String>,
 }
 
 /// A group's permissions and admins, as its metadata says. Kept in the
@@ -334,7 +449,16 @@ pub struct GroupSettings {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct ReactionPreview {
+    pub emojis: String,
+    /// Some(true): only us; Some(false): only others; None: mixed/unknown.
+    pub from_me: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct LastMessage {
+    /// Aggregate metadata, never a claimed chronological "latest reactor".
+    pub reaction: Option<ReactionPreview>,
     pub from_me: bool,
     pub sender: String,
     /// Group-message sender.
@@ -365,11 +489,22 @@ impl LastMessage {
         locale: crate::i18n::Locale,
         text: &'a str,
     ) -> std::borrow::Cow<'a, str> {
-        if self.labelled {
+        let body = if self.labelled {
             localized_summary(locale, text)
         } else {
             std::borrow::Cow::Borrowed(text)
-        }
+        };
+        let Some(reaction) = &self.reaction else {
+            return body;
+        };
+        let label = match (reaction.from_me, self.from_me) {
+            (Some(true), _) => crate::i18n::gettext(locale, "You reacted {emoji} to the message "),
+            (Some(false), true) => crate::i18n::gettext(locale, "{emoji} to your message "),
+            (Some(false), false) => crate::i18n::gettext(locale, "{emoji} to the message "),
+            (None, _) => crate::i18n::gettext(locale, "Reactions {emoji} to the message "),
+        };
+        let label = label.replace("{emoji}", &reaction.emojis);
+        std::borrow::Cow::Owned(format!("{label}\"{body}\""))
     }
 }
 
@@ -410,6 +545,8 @@ impl Chat {
             backend_origin: None,
             backend_network: None,
             poll_capability: None,
+            mutation_capabilities: Default::default(),
+            handles: Vec::new(),
         }
     }
 
@@ -637,12 +774,41 @@ pub struct MentionRef {
     pub id: String,
 }
 
-/// Link metadata attached by WhatsApp.
+/// Link metadata supplied with a message. Rendering it does not fetch the site.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LinkPreview {
     pub url: String,
     pub title: Option<String>,
     pub description: Option<String>,
+}
+
+impl LinkPreview {
+    /// Match the same canonical address used by Content::web_links, without
+    /// changing the original click/copy target or merging distinct queries.
+    pub fn covers_url(&self, url: &str) -> bool {
+        let normalise =
+            |value: &str| crate::safety::preview_url(value).unwrap_or_else(|| value.to_owned());
+        normalise(&self.url) == normalise(url)
+    }
+}
+
+#[cfg(test)]
+mod local_preview_identity_tests {
+    use super::LinkPreview;
+    #[test]
+    fn supplied_card_equivalence_keeps_distinct_links_separate() {
+        let card = LinkPreview {
+            url: "https://example.com/".into(),
+            title: None,
+            description: None,
+        };
+        assert!(card.covers_url("https://example.com"));
+        assert!(card.covers_url("HTTPS://EXAMPLE.COM:443/"));
+        assert!(!card.covers_url("https://example.com/other"));
+        assert!(!card.covers_url("https://example.com/?query=exact"));
+        assert!(!card.covers_url("http://example.com/"));
+        assert_eq!(card.url, "https://example.com/");
+    }
 }
 
 impl Message {
@@ -696,6 +862,12 @@ pub const MEDIA_LIST_LIMIT: usize = 500;
 pub struct ChatMedia {
     pub chat: ChatId,
     pub media: Vec<Message>,
+    pub voice: Vec<Message>,
+    pub voice_truncated: bool,
+    pub photos_truncated: bool,
+    pub videos_truncated: bool,
+    /// The backend checked a bounded history window, not the entire chat.
+    pub history_incomplete: bool,
     pub docs: Vec<Message>,
     pub links: Vec<ChatLink>,
     /// Whether the archive held more than each list carries.
@@ -706,7 +878,7 @@ pub struct ChatMedia {
 
 impl ChatMedia {
     /// Files `rows` under their tabs, newest first, each list cut at
-    /// `limit`. Stickers, audio, deleted and phone-only messages, and text
+    /// `limit`. Stickers, deleted and phone-only messages, and text
     /// without a web link are left out.
     pub fn collect(chat: ChatId, mut rows: Vec<Message>, limit: usize) -> Self {
         rows.sort_by_key(|row| std::cmp::Reverse(row.timestamp));
@@ -718,6 +890,7 @@ impl ChatMedia {
             match &row.content {
                 Content::Image { .. } | Content::Video { .. } => media.media.push(row),
                 Content::Document { .. } => media.docs.push(row),
+                Content::Audio { .. } => media.voice.push(row),
                 Content::Text { .. } => {
                     for (url, title) in row.content.web_links() {
                         media.links.push(ChatLink {
@@ -731,18 +904,41 @@ impl ChatMedia {
                 _ => {}
             }
         }
-        media.media_truncated = media.media.len() > limit;
+        media.voice_truncated = media.voice.len() > limit;
+        media.voice.truncate(limit);
+        let mut photos = 0;
+        let mut videos = 0;
+        media.media.retain(|row| {
+            let count = if matches!(row.content, Content::Image { .. }) {
+                &mut photos
+            } else {
+                &mut videos
+            };
+            *count += 1;
+            *count <= limit
+        });
+        media.photos_truncated = photos > limit;
+        media.videos_truncated = videos > limit;
+        media.media_truncated = media.photos_truncated || media.videos_truncated;
         media.docs_truncated = media.docs.len() > limit;
         media.links_truncated = media.links.len() > limit;
-        media.media.truncate(limit);
         media.docs.truncate(limit);
         media.links.truncate(limit);
         media
     }
 
+    /// Count of the items currently listed, including audio.
+    pub fn listed_count(&self) -> usize {
+        self.media.len() + self.voice.len() + self.docs.len() + self.links.len()
+    }
+
     /// Whether any list was cut.
     pub fn truncated(&self) -> bool {
-        self.media_truncated || self.docs_truncated || self.links_truncated
+        self.history_incomplete
+            || self.voice_truncated
+            || self.media_truncated
+            || self.docs_truncated
+            || self.links_truncated
     }
 }
 
@@ -1250,7 +1446,11 @@ impl Content {
         self.searchable_fields()
             .into_iter()
             .flat_map(str::lines)
-            .find(|line| line.to_lowercase().contains(&needle))
+            .find(|line| {
+                crate::literal_hints::without_literal_hints(line)
+                    .to_lowercase()
+                    .contains(&needle)
+            })
             .map(|line| line.trim().to_owned())
     }
 
@@ -1499,7 +1699,22 @@ impl Content {
     /// left out.
     pub fn gallery_kind(&self) -> Option<GalleryKind> {
         match self {
-            Self::Image { .. } => Some(GalleryKind::Photo),
+            Self::Image { media, .. } => {
+                // Before the file downloads there is no extension to check,
+                // so the declared MIME decides: a format the image crate is
+                // not built to draw (a GIF, a TIFF, a BMP) stays in its own
+                // surface instead of opening the viewer and failing. An
+                // unknown or missing MIME keeps the old behavior and lets
+                // the downloaded-path check decide.
+                let mime = media.mime.to_ascii_lowercase();
+                let mime = mime.split(';').next().unwrap_or("").trim();
+                match mime {
+                    "" | "image/jpeg" | "image/jpg" | "image/pjpeg" | "image/png"
+                    | "image/webp" => Some(GalleryKind::Photo),
+                    _ if mime.starts_with("image/") => None,
+                    _ => Some(GalleryKind::Photo),
+                }
+            }
             Self::Video { gif: false, .. } => Some(GalleryKind::Video),
             _ => None,
         }
@@ -1749,6 +1964,39 @@ impl Media {
     /// still enforces the limit while streaming an automatic download.
     pub fn is_within_download_limit(&self) -> bool {
         self.size <= ATTACHMENT_DOWNLOAD_LIMIT
+    }
+}
+
+/// Marks the attachment index inside the displayed id of one part of a
+/// bridge message that carried several attachments. The Beeper API delivers
+/// a multi-attachment message as one event, while the conversation list
+/// shows each attachment as its own message; the extra parts carry the
+/// bridge id with this mark and the attachment's 1-based-onward index.
+const ATTACHMENT_PART_MARK: &str = "#att";
+
+/// Displayed message id for the part showing attachment `index` (0-based) of
+/// the bridge message `wire_id`. Attachment 0 keeps the bridge id itself, so
+/// single-attachment messages and every id the bridge returns stay as they
+/// are, and replies or deletions naming the bridge id hit the first part.
+pub fn attachment_part_id(wire_id: &str, index: usize) -> String {
+    if index == 0 {
+        wire_id.to_string()
+    } else {
+        format!("{wire_id}{ATTACHMENT_PART_MARK}{index}")
+    }
+}
+
+/// The bridge message id behind a displayed id, and which attachment that
+/// part shows: `(id, 0)` for anything that is not a split part. Only the
+/// exact mark plus a positive index is read as a part suffix, so a bridge id
+/// that merely contains the mark keeps its own identity.
+pub fn attachment_part(id: &str) -> (&str, usize) {
+    let Some((base, suffix)) = id.rsplit_once(ATTACHMENT_PART_MARK) else {
+        return (id, 0);
+    };
+    match suffix.parse::<usize>() {
+        Ok(index) if index >= 1 && !base.is_empty() => (base, index),
+        _ => (id, 0),
     }
 }
 
@@ -2274,9 +2522,11 @@ pub struct Gif {
 }
 
 /// The tab open in the info panel's media view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MediaTab {
     Media,
+    Videos,
+    Voice,
     Docs,
     Links,
 }
@@ -2301,6 +2551,8 @@ pub struct InfoPanel {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dialog {
+    /// Local-only avatar presentation editor, never a remote profile edit.
+    CustomizeAvatar,
     Shortcuts,
     About,
     ConfirmUnlink,
@@ -2503,6 +2755,9 @@ pub struct InviteInfo {
 pub enum ToastKind {
     Info,
     Error,
+    /// An info toast with an Undo button; holds the chats that link added,
+    /// so undoing it leaves every other link alone.
+    Undo(Vec<crate::merged::Member>),
 }
 
 /// Info toasts fade after a few seconds; errors stay until dismissed so they
@@ -2544,7 +2799,28 @@ pub fn forward_limit(frequently_forwarded: bool) -> usize {
 /// Actions queued by views and applied after drawing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    PrepareNewMessage {
+        member: crate::flat_groups::Member,
+        text: String,
+        files: Vec<PathBuf>,
+    },
+    BatchArchive {
+        request: u64,
+        expected: crate::merged::Member,
+        chat: ChatId,
+    },
+    BatchDelete {
+        request: u64,
+        expected: crate::merged::Member,
+        chat: ChatId,
+        id: String,
+        everyone: bool,
+    },
+    RetryPendingMedia(String),
     TranslateLocally(String),
+    /// A macOS Go, Chat or View menu command, turned into the actions its key
+    /// would queue (`ui::keys::menu_actions`).
+    MenuCommand(String),
     Open(Page),
     /// Opens settings, or closes them when they are already showing.
     ToggleSettings,
@@ -2563,9 +2839,11 @@ pub enum Action {
     /// Puts a template in the named chat's composer without sending it, the
     /// way a share link's `text=` asks. Carries the chat it belongs to, since
     /// a chat the app refuses to open must not put its text in another one.
+    OpenWhatsApp(crate::target::Request),
     PrefillComposer {
         chat: ChatId,
         text: String,
+        mentions: Vec<crate::app::ComposerMention>,
     },
     /// Opens a chat at a message search result.
     OpenMessage {
@@ -2599,6 +2877,8 @@ pub enum Action {
         /// Quoted message id.
         quoting: Option<crate::model::ReplyTarget>,
     },
+    /// Reloads the Send Later queue in the background (no dialog).
+    RefreshScheduled,
     /// Acts on one queued Send Later item (cancel, retry, send-now).
     ScheduledItemAction {
         id: String,
@@ -2616,6 +2896,8 @@ pub enum Action {
         /// Queue item this schedule replaces; the daemon cancels it only
         /// once the replacement is queued.
         replaces: Option<String>,
+        /// Repeat rule when this schedules a series; `None` is one send.
+        repeat: Option<crate::recurrence::Repeat>,
     },
     /// Sends a spot as a location message.
     SendLocation {
@@ -2694,6 +2976,11 @@ pub enum Action {
         message: String,
     },
     /// Plays or pauses a downloaded voice or audio message.
+    PlayInfoVoice {
+        chat: ChatId,
+        message: String,
+        path: PathBuf,
+    },
     PlayVoice {
         message: String,
         path: PathBuf,
@@ -2801,10 +3088,25 @@ pub enum Action {
         files: Vec<(PathBuf, String)>,
     },
     OpenUrl(String),
+    /// A URL copy, distinct from copying original message text.
+    CopyLink(String),
+    FetchLinkPreview {
+        account: String,
+        chat: ChatId,
+        message: String,
+        url: String,
+        automatic: bool,
+        retry: bool,
+    },
+    ClearLinkPreviews,
+    LinkPreviewPreferences,
     CopyText(String),
     CopyImage(PathBuf),
     /// Closes the toast at this index. Only errors wait to be dismissed.
     DismissToast(usize),
+    /// Puts the people list back as it was before a link suggestion was
+    /// accepted, from the Undo toast: takes only those chats back out.
+    UndoLinks(Vec<crate::merged::Member>),
     /// Starts a reply to a message in the open chat.
     Reply(String),
     /// Opens the group sender's direct chat with this message quoted.
@@ -2825,6 +3127,15 @@ pub enum Action {
     /// Forwards to the chosen recipients: one at once, several after
     /// their confirmation.
     ConfirmForward,
+    ForwardToSelected,
+    RetryComposedForward,
+    RetryForwardRecipient {
+        origin: String,
+        account: String,
+        chat: String,
+    },
+    ShowForwardResults,
+    HideForwardResults,
     /// Starts selecting messages in the open chat, beginning with this one.
     SelectMessage(String),
     /// Adds a message to the selection or removes it.
@@ -2843,6 +3154,12 @@ pub enum Action {
     CancelSelection,
     /// Loads an outgoing message into the composer for editing.
     Edit(String),
+    PreparedEdit {
+        chat: ChatId,
+        id: String,
+        request: u64,
+        result: Result<String, crate::rich_edit::Error>,
+    },
     CancelEdit,
     /// Revokes an outgoing message for everyone. The chat travels with the
     /// message because the reader may switch chats before confirming.
@@ -2851,6 +3168,11 @@ pub enum Action {
         id: String,
     },
     /// Deletes a message locally, in the chat it belongs to.
+    SetMessageHidden {
+        chat: ChatId,
+        message: String,
+        hidden: bool,
+    },
     DeleteForMe {
         chat: ChatId,
         id: String,
@@ -2860,6 +3182,14 @@ pub enum Action {
         chat: ChatId,
         message: String,
         starred: bool,
+    },
+    /// Saves the message locally for later, or removes the bookmark. Local
+    /// only: nothing is starred or pinned on the account, and removing the
+    /// bookmark never deletes the message.
+    SetSaved {
+        chat: ChatId,
+        message: String,
+        saved: bool,
     },
     /// Opens the attachment picker for the current chat. With `documents`
     /// the picked files go as documents, pictures included.
@@ -2881,10 +3211,13 @@ pub enum Action {
     /// Opens the full emoji picker to react to a message. `beside_menu` keeps
     /// the message's context menu open next to it, as when the picker comes
     /// from the menu's "+"; the hover button opens the picker alone.
+    /// `from_thread` says the click came from the open thread's rendering
+    /// pass, whose anchor rects are stored under the thread's salted ids.
     OpenReactionPicker {
         chat: ChatId,
         message: String,
         beside_menu: bool,
+        from_thread: bool,
     },
     /// Inserts an emoji at the composer cursor.
     InsertEmoji(String),
@@ -2996,16 +3329,45 @@ pub enum Action {
     MoveFavorite(ChatId, usize),
     /// Flags a chat to reply to later, or clears the flag. Local only:
     /// person-level, persisted in settings, never sent anywhere.
+    ToggleDealLater(ChatId),
     ToggleReplyLater(ChatId),
     /// Flags a chat to read later, or clears the flag. Local only:
     /// person-level, persisted in settings, never sent anywhere.
     ToggleReadLater(ChatId),
     ShowDialog(Dialog),
+    /// Open the date selector for the exact composer destination.
+    OpenSendLater {
+        chat: ChatId,
+        recurring: bool,
+    },
     CloseDialog,
     ToggleSidebar,
+    ToggleFlatGroups,
     SetChatFilter(ChatFilter),
+    /// Picks the chat list's mode (All, Unread or Needs me).
+    SetListMode(ListMode),
+    /// Cmd+G: the current list mode switches between group sections and one
+    /// flat list. The choice is remembered per mode.
+    ToggleListLayout,
+    /// Jumps the sidebar to the next (true) or previous (false) group
+    /// heading, from the View menu; the key route queues the same jump.
+    JumpGroup(bool),
+    /// Collapses (true) or expands (false) every group heading in the chat
+    /// list, from the View menu.
+    FoldAllGroups(bool),
+    /// Shift+Cmd+G: collapse every group heading, or expand them all when
+    /// everything already is folded.
+    ToggleFoldAllGroups,
+    /// Widens an in-chat find to every chat: the query moves to the chat
+    /// list's search field, which then searches all chats.
+    FindEverywhere,
     /// Picks the label the chat list shows; `None` shows every chat.
     SelectLabel(Option<String>),
+    /// Shows one automatic category in the chat list; `None` shows every chat.
+    SelectAutoCategory(Option<crate::categories::AutoCategory>),
+    /// Moves a chat to a category for good, or back to the automatic rules
+    /// with `None`. Local only.
+    SetChatCategory(ChatId, Option<crate::categories::AutoCategory>),
     /// Replaces the labels worn by one chat.
     SetChatLabels {
         chat: ChatId,
@@ -3028,6 +3390,8 @@ pub enum Action {
     ShowArchived(bool),
     /// Shows or hides the starred messages in the left panel.
     ToggleStarred,
+    /// Opens or closes the locally saved messages list.
+    ToggleSaved,
     /// Mutes (`true`) or unmutes every followed channel.
     MuteAllChannels(bool),
     /// Joins the group of the invite being previewed.
@@ -3095,6 +3459,9 @@ pub enum Action {
     ScrollTo(String),
     /// Updates chat-list search text.
     Search(String),
+    SearchMore,
+    SwitcherSearch(String),
+    ChatSearchMore,
     ShowUpdate,
     CloseUpdate,
     DownloadUpdate,
@@ -3117,6 +3484,9 @@ pub enum Action {
     ReloadThemes,
     OpenThemesFolder,
     SettingsChanged,
+    DownloadLocalWhisper,
+    CancelLocalWhisperDownload,
+    RemoveLocalWhisperModel,
     /// Writes one WhatsApp account privacy category on the phone.
     SetAccountPrivacy {
         kind: crate::privacy::PrivacyKind,
@@ -3245,6 +3615,8 @@ pub enum Action {
     RemovePending(usize),
     /// Sends the one eligible staged photo as a WhatsApp view-once message.
     SetPendingViewOnce(bool),
+    /// Inspects a staged picture without changing or sending it.
+    PreviewPendingPicture(crate::app::AttachmentId),
     /// Opens the cropper on a staged picture.
     EditPicture(crate::app::AttachmentId),
     /// Keeps the crop and the turn, replacing the staged picture.
@@ -3319,6 +3691,43 @@ mod storage_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn attachment_part_ids_round_trip_to_the_bridge_message() {
+        use super::{attachment_part, attachment_part_id};
+        assert_eq!(attachment_part_id("m1", 0), "m1");
+        assert_eq!(attachment_part(&attachment_part_id("m1", 3)), ("m1", 3));
+        assert_eq!(attachment_part("m1"), ("m1", 0));
+        // Lookalikes keep their own identity.
+        assert_eq!(attachment_part("m1#att"), ("m1#att", 0));
+        assert_eq!(attachment_part("m1#attx"), ("m1#attx", 0));
+        assert_eq!(attachment_part("#att2"), ("#att2", 0));
+    }
+
+    #[test]
+    fn list_mode_next_cycles_all_unread_needs_me() {
+        use super::ListMode;
+        assert_eq!(ListMode::Recent.next(), ListMode::Unread);
+        assert_eq!(ListMode::Unread.next(), ListMode::NeedsMe);
+        assert_eq!(ListMode::NeedsMe.next(), ListMode::Recent);
+    }
+
+    #[test]
+    fn list_mode_reads_the_retired_focus_as_recent() {
+        use super::ListMode;
+        let read = |text: &str| serde_json::from_str::<ListMode>(text).unwrap();
+        assert_eq!(read("\"Recent\""), ListMode::Recent);
+        assert_eq!(read("\"Unread\""), ListMode::Unread);
+        assert_eq!(read("\"RecentUnread\""), ListMode::Recent);
+        assert_eq!(read("\"NeedsMe\""), ListMode::NeedsMe);
+        assert_eq!(ListMode::parse("recent-unread"), Some(ListMode::Recent));
+        assert_eq!(read("\"Focus\""), ListMode::Recent);
+        assert_eq!(read("\"Whatever\""), ListMode::Recent);
+        assert_eq!(
+            serde_json::to_string(&ListMode::Unread).unwrap(),
+            "\"Unread\""
+        );
+    }
+
     /// Checks compatibility with older archived quotes that omitted a source chat.
     #[test]
     fn archived_quotes_without_a_source_chat_remain_readable() {
@@ -3820,6 +4229,23 @@ mod tests {
         };
         assert_eq!(clip(false).gallery_kind(), Some(GalleryKind::Video));
         assert_eq!(clip(true).gallery_kind(), None, "a GIF plays inline");
+        // Beeper can send a still `img` attachment whose format the viewer
+        // cannot draw (a GIF, a TIFF); with no downloaded path the extension
+        // check cannot run, so the declared MIME keeps it out of the album.
+        for mime in ["image/gif", "image/tiff", "image/bmp"] {
+            let mut still = media();
+            still.mime = mime.into();
+            let picture = Content::Image {
+                caption: None,
+                media: still,
+                motion: None,
+            };
+            assert_eq!(
+                picture.gallery_kind(),
+                None,
+                "{mime} is not a drawable photo"
+            );
+        }
         let file = Content::Document {
             media: media(),
             file_name: "holiday.jpg".into(),
@@ -3968,6 +4394,7 @@ mod tests {
         // A quote archived before `labelled` was kept still translates.
         assert_eq!(quote(None).summary_in(Locale::Spanish), "Foto: look");
         let last = |labelled| LastMessage {
+            reaction: None,
             from_me: false,
             sender: String::new(),
             sender_name: None,
@@ -4226,6 +4653,7 @@ mod tests {
         let ids = |rows: &[Message]| rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&listed.media), ["new-photo", "clip", "old-photo"]);
         assert_eq!(ids(&listed.docs), ["notes"]);
+        assert_eq!(ids(&listed.voice), ["voice"]);
         assert_eq!(
             listed
                 .links
@@ -4267,6 +4695,72 @@ mod tests {
     }
 
     #[test]
+    fn photos_videos_and_audio_have_independent_limits() {
+        let mut rows = Vec::new();
+        for index in 0..4 {
+            for (prefix, content) in [
+                (
+                    "photo",
+                    Content::Image {
+                        motion: None,
+                        caption: None,
+                        media: media(),
+                    },
+                ),
+                (
+                    "video",
+                    Content::Video {
+                        caption: None,
+                        media: media(),
+                        seconds: None,
+                        gif: false,
+                        note: false,
+                    },
+                ),
+                (
+                    "voice",
+                    Content::Audio {
+                        media: media(),
+                        seconds: None,
+                        voice_note: true,
+                        waveform: Vec::new(),
+                    },
+                ),
+            ] {
+                rows.push(row(&format!("{prefix}-{index}"), index, content));
+            }
+        }
+        let listing = ChatMedia::collect("c".into(), rows, 2);
+        assert_eq!(
+            listing
+                .media
+                .iter()
+                .filter(|m| matches!(m.content, Content::Image { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(
+            listing
+                .media
+                .iter()
+                .filter(|m| matches!(m.content, Content::Video { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(listing.voice.len(), 2);
+        assert_eq!(listing.listed_count(), 6);
+        assert_eq!(
+            ChatMedia {
+                voice: listing.voice.clone(),
+                ..Default::default()
+            }
+            .listed_count(),
+            2
+        );
+        assert!(listing.photos_truncated && listing.videos_truncated && listing.voice_truncated);
+    }
+
+    #[test]
     fn links_are_capped_per_address_and_each_list_reports_its_own_cut() {
         let rows = (0..300)
             .map(|index| {
@@ -4281,5 +4775,203 @@ mod tests {
         assert_eq!(listed.links.len(), MEDIA_LIST_LIMIT, "cut to what is shown");
         assert!(listed.links_truncated, "600 addresses do not fit");
         assert!(!listed.media_truncated && !listed.docs_truncated);
+    }
+}
+
+#[cfg(test)]
+mod mutation_capability_tests {
+    use super::MutationCapabilities;
+    #[test]
+    fn scope_is_never_widened_and_unknown_or_partial_fails_closed() {
+        let mut caps = MutationCapabilities::default();
+        assert!(caps.delete_refusal(false, true, 10, 20).is_some());
+        assert!(caps.delete_refusal(true, true, 10, 20).is_some());
+        caps.delete_for_me = Some(true);
+        assert_eq!(caps.delete_refusal(false, false, 10, 20), None);
+        assert!(caps.delete_refusal(true, true, 10, 20).is_some());
+        caps.delete = Some(1);
+        assert!(caps.delete_refusal(true, true, 10, 20).is_some());
+        caps.delete = Some(2);
+        caps.delete_max_age = Some(5);
+        assert!(caps.delete_refusal(true, true, 10, 20).is_some());
+        assert_eq!(caps.delete_refusal(true, true, 18, 20), None);
+        assert!(caps.delete_refusal(true, false, 18, 20).is_some());
+        assert!(caps.delete_refusal(true, true, 0, 20).is_some());
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchItem {
+    pub chat: String,
+    pub message: Option<String>,
+    pub everyone: bool,
+    pub result: Option<Result<(), String>>,
+    /// Starts only after an accepted delete, never pending or failed work.
+    pub accepted_delete_at: Option<Instant>,
+}
+#[derive(Default)]
+pub struct BatchState {
+    pub request: Option<u64>,
+    pub selected_chats: Vec<String>,
+    pub selected_identities: std::collections::HashMap<String, crate::merged::Member>,
+    pub owner: String,
+    pub reviewing_archive: bool,
+    pub results: Vec<BatchItem>,
+    pub previous_session_results: Vec<BatchItem>,
+}
+/// A short receipt notice, not a claim of remote deletion completion.
+pub const DELETE_RESULT_NOTICE_LIFETIME: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl BatchState {
+    /// Remove only accepted delete notices once their receipt notice expires.
+    /// Return the next expiry so the UI schedules one repaint, not a poll loop.
+    pub fn expire_delete_notices(&mut self, now: Instant) -> Option<std::time::Duration> {
+        let mut next = None;
+        self.results.retain(|item| {
+            let Some(accepted) = item
+                .accepted_delete_at
+                .filter(|_| item.message.is_some() && matches!(item.result, Some(Ok(()))))
+            else {
+                return true;
+            };
+            let remaining = DELETE_RESULT_NOTICE_LIFETIME
+                .saturating_sub(now.saturating_duration_since(accepted));
+            if remaining.is_zero() {
+                return false;
+            }
+            next = Some(next.map_or(remaining, |wait: std::time::Duration| wait.min(remaining)));
+            true
+        });
+        next
+    }
+
+    /// A new connection cannot inherit current outcomes. Preserve only unresolved
+    /// work, explicitly separated as uncertain history of the old connection.
+    pub fn replace_session(&mut self) {
+        self.selected_chats.clear();
+        self.selected_identities.clear();
+        self.reviewing_archive = false;
+        self.request = None;
+        for mut item in self.results.drain(..) {
+            if !matches!(item.result, Some(Ok(()))) {
+                if item.result.is_none() {
+                    item.result = Some(Err("Connection changed before confirmation; check the previous connection before retrying".into()));
+                }
+                self.previous_session_results.push(item);
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod batch_session_tests {
+    use super::*;
+    #[test]
+    fn replacement_clears_completed_current_results_and_retains_only_uncertain_history() {
+        let mut state = BatchState {
+            request: Some(4),
+            selected_chats: vec!["old".into()],
+            reviewing_archive: true,
+            ..Default::default()
+        };
+        state.results = vec![
+            BatchItem {
+                chat: "old".into(),
+                message: None,
+                everyone: false,
+                accepted_delete_at: None,
+                result: Some(Ok(())),
+            },
+            BatchItem {
+                chat: "pending".into(),
+                message: None,
+                everyone: false,
+                accepted_delete_at: None,
+                result: None,
+            },
+        ];
+        state.results.push(BatchItem {
+            chat: "uncertain".into(),
+            message: Some("message".into()),
+            everyone: true,
+            accepted_delete_at: None,
+            result: Some(Err("POST accepted but confirmation failed".into())),
+        });
+        state.replace_session();
+        assert!(state.results.is_empty());
+        assert!(state.selected_chats.is_empty());
+        assert!(!state.reviewing_archive);
+        assert_eq!(state.request, None);
+        assert_eq!(state.previous_session_results.len(), 2);
+        assert_eq!(
+            state.previous_session_results[1].result,
+            Some(Err("POST accepted but confirmation failed".into()))
+        );
+        assert_eq!(state.previous_session_results[0].chat, "pending");
+        assert!(
+            state.previous_session_results[0]
+                .result
+                .as_ref()
+                .unwrap()
+                .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod delete_notice_tests {
+    use super::*;
+    #[test]
+    fn only_accepted_delete_notices_expire_and_the_next_deadline_is_reported() {
+        let now = Instant::now();
+        let item = |message: Option<&str>, result, age, everyone| BatchItem {
+            chat: "synthetic".into(),
+            message: message.map(String::from),
+            everyone,
+            result,
+            accepted_delete_at: Some(now - std::time::Duration::from_secs(age)),
+        };
+        let mut state = BatchState {
+            results: vec![
+                item(Some("old-for-everyone"), Some(Ok(())), 10, true),
+                item(Some("old-for-me"), Some(Ok(())), 11, false),
+                item(Some("recent"), Some(Ok(())), 4, true),
+                item(Some("pending"), None, 99, true),
+                item(Some("failed"), Some(Err("uncertain".into())), 99, true),
+                item(None, Some(Ok(())), 99, false),
+                BatchItem {
+                    accepted_delete_at: None,
+                    ..item(Some("untimed"), Some(Ok(())), 99, true)
+                },
+            ],
+            previous_session_results: vec![item(
+                Some("previous"),
+                Some(Err("check previous connection".into())),
+                99,
+                true,
+            )],
+            ..Default::default()
+        };
+        assert_eq!(
+            state.expire_delete_notices(now),
+            Some(std::time::Duration::from_secs(6))
+        );
+        assert_eq!(state.results.len(), 5);
+        assert!(state.results.iter().all(|r| !matches!(
+            r.message.as_deref(),
+            Some("old-for-everyone" | "old-for-me")
+        )));
+        assert_eq!(state.previous_session_results.len(), 1);
+        assert_eq!(
+            state.expire_delete_notices(now + std::time::Duration::from_secs(6)),
+            None
+        );
+        assert_eq!(state.results.len(), 4);
+        assert!(state.results.iter().any(|r| r.result.is_none()));
+        assert!(
+            state
+                .results
+                .iter()
+                .any(|r| matches!(r.result, Some(Err(_))))
+        );
     }
 }

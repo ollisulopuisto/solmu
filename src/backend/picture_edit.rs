@@ -48,6 +48,7 @@ pub fn edit_pasted(
 /// Turns and crops a staged picture, writes the result in `dir` beside the
 /// other media, and answers with the file it wrote. The name comes from the
 /// picture's own bytes, so the same crop of the same picture is written once.
+#[cfg(any(test, feature = "demo"))]
 pub fn write(
     source: &PictureSource,
     width: u32,
@@ -66,6 +67,35 @@ pub fn write(
     let name = super::sticker_store::content_hash(&picture.bytes);
     let path = dir.join(format!("{name}.{}", picture.extension));
     std::fs::write(&path, picture.bytes).map_err(|error| error.to_string())?;
+    Ok(path)
+}
+
+/// Production edits are unique private disposable files. They participate in
+/// the existing cache scan and temporary-upload ownership lifecycle.
+pub fn write_temporary(
+    source: &PictureSource,
+    width: u32,
+    height: u32,
+    crop: PictureCrop,
+    turns: u8,
+    dir: &Path,
+) -> Result<PathBuf, String> {
+    use std::io::Write;
+    let picture = match source {
+        PictureSource::File(path) => std::fs::read(path)
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| edit(&bytes, crop, turns)),
+        PictureSource::Pasted(rgba) => edit_pasted(rgba, width, height, crop, turns),
+    }?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let mut file = tempfile::Builder::new()
+        .prefix("beeper-edited-")
+        .suffix(&format!(".{}", picture.extension))
+        .tempfile_in(dir)
+        .map_err(|e| e.to_string())?;
+    file.write_all(&picture.bytes).map_err(|e| e.to_string())?;
+    let (_, path) = file.keep().map_err(|e| e.to_string())?;
+    super::beeper::register_temp_upload(&path);
     Ok(path)
 }
 

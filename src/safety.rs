@@ -6,7 +6,8 @@ use std::path::Path;
 /// e.g. `%2500` (double-encoded null) that could inject arguments into desktop handlers.
 fn has_encoded_control(value: &str) -> bool {
     let mut current = value.as_bytes().to_vec();
-    for _ in 0..3 {
+    // Decode bounded nested percent-encoding layers to detect hidden control characters.
+    for _ in 0..16 {
         if current.windows(3).any(|w| {
             w[0] == b'%'
                 && (w[1] as char).to_digit(16).and_then(|h1| {
@@ -37,11 +38,13 @@ fn has_encoded_control(value: &str) -> bool {
             i += 1;
         }
         if !changed {
-            break;
+            return false;
         }
         current = next;
     }
-    false
+    // Decoding was still progressing at the layer bound: a deeper-nested
+    // control could survive, so reject rather than pass it through.
+    true
 }
 
 /// Preview metadata may supply a bare host, but never a desktop URI scheme.
@@ -197,12 +200,32 @@ pub fn call_link(value: &str) -> Option<(String, bool)> {
 /// Only common document/media formats go to their desktop application.
 /// Unknown files, scripts, installers and application bundles can be revealed
 /// in their folder instead. Sender-provided MIME types cannot grant permission.
+pub(crate) fn is_reserved_dos_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "con" | "prn" | "aux" | "nul" | "clock$" | "conin$" | "conout$"
+    ) || (lower.starts_with("com") || lower.starts_with("lpt"))
+        && lower.len() == 4
+        && lower.as_bytes()[3].is_ascii_digit()
+}
+
 pub fn can_open_attachment(path: &Path) -> bool {
     // Reject filenames with trailing whitespace or periods which can mask extensions or alter execution.
     let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
         return false;
     };
-    if name.ends_with('.') || name.ends_with(' ') {
+    if name.ends_with('.') || name.ends_with(' ') || name.contains(':') {
+        return false;
+    }
+    // Reject Windows DOS device names (e.g. CON, PRN, AUX, NUL, CLOCK$, COM0..9, LPT0..9).
+    // Windows checks the primary prefix before any dot, so con.custom.pdf also accesses CON.
+    let primary_stem = name.split('.').next().unwrap_or(name);
+    let file_stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    if is_reserved_dos_name(primary_stem) || is_reserved_dos_name(file_stem) {
         return false;
     }
     let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
@@ -359,16 +382,37 @@ mod tests {
             "https://example.com/%7f",
             "mailto:user@example.com%00payload",
             "mailto:user@example.com%0D%0Acc:admin@example.com",
-            // Nested / double percent-encoded control characters
+            // Nested / double / multi percent-encoded control characters
             "https://example.com/%2500evil",
             "https://example.com/%250d%250ainjection",
             "https://example.com/%252500nested",
+            "https://example.com/%25252500quad",
+            "https://example.com/%2525250dquad_cr",
+            "https://example.com/%2525252500deep",
             "https://example.com/%257f",
             "mailto:user@example.com%2500payload",
+            "mailto:user@example.com%25252500payload",
             "mailto:user@example.com%250D%250Acc:admin@example.com",
         ] {
             assert_eq!(preview_url(bad), None, "{bad}");
             assert_eq!(external_url(bad), None, "{bad}");
+        }
+
+        // Decode-cap boundary: nested(l) applies l extra percent-encoding layers
+        // around %00. The loop checks 16 layers, so l=15 is still caught inside
+        // the budget and l=16/17 must be rejected by failing closed at the bound
+        // rather than passing a deeper-nested control through.
+        fn nested(layers: u32) -> String {
+            let mut s = "%00".to_string();
+            for _ in 0..layers {
+                s = s.replace('%', "%25");
+            }
+            s
+        }
+        for layers in [15u32, 16, 17, 40] {
+            let bad = format!("https://example.com/{}", nested(layers));
+            assert_eq!(preview_url(&bad), None, "{bad}");
+            assert_eq!(external_url(&bad), None, "{bad}");
         }
         assert_eq!(
             external_url("https://example.com/hello%20world"),
@@ -476,6 +520,26 @@ mod tests {
             "malware.vbe",
             "document.docx.",
             "document.pdf ",
+            "document.pdf:stream",
+            "file.png:$DATA",
+            "CON.txt",
+            "con.png",
+            "prn.pdf",
+            "AUX.docx",
+            "NUL.jpg",
+            "com1.txt",
+            "lpt1.pdf",
+            "COM0.txt",
+            "lpt0.csv",
+            "CONIN$.txt",
+            "conout$.png",
+            "CLOCK$.txt",
+            "clock$.pdf",
+            "CON.custom.pdf",
+            "con.tar.gz",
+            "aux.backup.png",
+            "NUL.preview.jpg",
+            "com1.data.csv",
         ] {
             assert!(!can_open_attachment(Path::new(name)), "{name}");
         }

@@ -35,6 +35,8 @@ pub const VENUE: Photo = photo!("venue.jpg", 1024, 683);
 pub const DUSK: Photo = photo!("dusk.jpg", 1200, 800);
 /// An astronaut on a spacewalk, a portrait.
 pub const SPACEWALK: Photo = photo!("spacewalk.jpg", 900, 1200);
+/// A harbour tower at dusk, a slim portrait for caption wrapping.
+pub const TOWER: Photo = photo!("tower.jpg", 540, 1620);
 /// Spotifast's logo, for its link preview.
 pub const SPOTIFAST: Photo = photo!("spotifast.png", 256, 256);
 

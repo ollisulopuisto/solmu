@@ -15,7 +15,9 @@ import subprocess
 
 # Workflow/selector edits always keep every check family.
 FULL_TRIGGER = {'.github/workflows/ci.yml', '.github/scripts/ci-scope.py',
-                '.github/scripts/test-ci-scope.py', '.github/scripts/test-ci-workflows.py'}
+                '.github/scripts/test-ci-scope.py', '.github/scripts/test-ci-workflows.py',
+                '.github/scripts/install-ubuntu-build-deps.py',
+                '.github/scripts/test-install-ubuntu-build-deps.py'}
 
 
 def ignored(path):
@@ -51,6 +53,8 @@ def classify(paths, full=False):
     for path in paths:
         if path.startswith(('docs/',)) or path.endswith('.md'):
             continue
+        if path.endswith(('/Cargo.toml', '/Cargo.lock')):
+            flags['audit'] = True
         if path.startswith('contrib/beeper-tools/'):
             flags['portable'] = True
         elif path in ('flake.nix', 'flake.lock') or path.startswith('packaging/flatpak/'):
@@ -64,7 +68,7 @@ def classify(paths, full=False):
             flags['portable'] = flags['native'] = True
         elif path.startswith('harness/'):
             flags['portable'] = True
-        elif path in ('.github/workflows/ci.yml', '.github/scripts/ci-scope.py', '.github/scripts/test-ci-scope.py', '.github/scripts/test-ci-workflows.py'):
+        elif path in FULL_TRIGGER:
             flags.update(dict.fromkeys(flags, True))
         elif path.startswith('.github/') or path in ('.gitignore', '.gitattributes', 'LICENSE', 'THIRD-PARTY-NOTICES.md'):
             continue

@@ -7,6 +7,11 @@ edition = "2024"
 # and stub only unrelated UI/platform leaves. Full native tests run in CI.
 
 [dependencies]
+memchr = "2"
+sha2 = "0.11"
+tempfile = "3"
+scraper = "0.29"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 base64 = "0.23"
 serde = { version = "1", features = ["derive"] }

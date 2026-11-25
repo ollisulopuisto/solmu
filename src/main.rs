@@ -79,7 +79,7 @@ struct Cli {
     #[arg(long, conflicts_with = "demo_macos")]
     demo_titlebar: bool,
 
-    /// Demo view: `chat`, `phone-menu`, `empty`, `settings`, `login`,
+    /// Demo view: `chat`, `phone-menu`, `link-menu`, `empty`, `settings`, `login`,
     /// `pair`, `shortcuts`, `about`, `info`, `mention`, `light`, or a comma-separated
     /// mix such as `chat,light`.
     #[cfg(feature = "demo")]
@@ -186,6 +186,9 @@ impl Drop for RemoveOnDrop {
 }
 
 fn main() -> eframe::Result<()> {
+    #[cfg(target_os = "macos")]
+    solmu::macos::install_whatsapp_handler();
+    solmu::version::initialize();
     let result = run();
     // A Windows release has no console, so an error that ends the start
     // would otherwise leave the reader nothing to see (#349). `run` has
@@ -193,6 +196,11 @@ fn main() -> eframe::Result<()> {
     #[cfg(windows)]
     if let Err(error) = &result {
         startup_failure_dialog(error);
+    }
+    if let Err(error) = &result {
+        log::error!("exit: the event loop ended with an error: {error}");
+    } else {
+        log::info!("exit: the event loop ended normally");
     }
     result
 }
@@ -378,17 +386,8 @@ fn run() -> eframe::Result<()> {
     // The first launch owns the slot, so no verb reached a running copy and
     // the chat is opened here. The app drains its queue after the frame.
     if let Some(request) = &target {
-        app.actions.push(solmu::model::Action::StartChat {
-            name: request.display_name(),
-            id: request.chat.clone(),
-            dismiss_dialog: true,
-        });
-        if let Some(text) = &request.text {
-            app.actions.push(solmu::model::Action::PrefillComposer {
-                chat: request.chat.clone(),
-                text: text.clone(),
-            });
-        }
+        app.actions
+            .push(solmu::model::Action::OpenWhatsApp(request.clone()));
     }
     if let Some(code) = &invite {
         app.actions.push(solmu::model::Action::OpenUrl(format!(
@@ -419,6 +418,16 @@ fn run() -> eframe::Result<()> {
         .demo_page
         .as_deref()
         .is_some_and(|page| page.split(',').any(|part| part.trim() == "phone-menu"));
+    #[cfg(feature = "demo")]
+    let demo_link_menu = cli
+        .demo_page
+        .as_deref()
+        .is_some_and(|page| page.split(',').any(|part| part.trim() == "link-menu"));
+    #[cfg(feature = "demo")]
+    let demo_thread = cli.demo_page.as_deref().is_some_and(|page| {
+        page.split(',')
+            .any(|part| matches!(part.trim(), "thread" | "tail-thread"))
+    });
     let mut update_receipt = launch.receipt;
     // The link, archive, and tray outlive windows. The shell recreates a
     // window when the tray, a notification, or another launch requests one;
@@ -499,6 +508,10 @@ fn run() -> eframe::Result<()> {
                         hover: demo_hover,
                         #[cfg(feature = "demo")]
                         open_phone_menu: demo_phone_menu,
+                        #[cfg(feature = "demo")]
+                        link_menu_click: if demo_link_menu { 12 } else { 0 },
+                        #[cfg(feature = "demo")]
+                        open_thread: demo_thread,
                         #[cfg(feature = "demo")]
                         tour,
                     }))
@@ -663,6 +676,10 @@ struct Shell {
     hover: Option<egui::Pos2>,
     #[cfg(feature = "demo")]
     open_phone_menu: bool,
+    #[cfg(feature = "demo")]
+    open_thread: bool,
+    #[cfg(feature = "demo")]
+    link_menu_click: u8,
 }
 
 /// Pending screenshot request.
@@ -728,6 +745,26 @@ impl eframe::App for Shell {
         if let Some(tour) = &mut self.tour {
             tour.input(&mut self.app, ctx, input);
         }
+        if self.link_menu_click > 2 {
+            self.link_menu_click -= 1;
+            ctx.request_repaint();
+        } else if self.link_menu_click != 0 {
+            let id = solmu::ui::conversation::bubble_id(solmu::demo::sample_ids()[0], "ada-link");
+            if let Some(pos) = ctx
+                .data(|data| data.get_temp::<Vec<(egui::Rect, String)>>(id.with("web-link-hits")))
+                .and_then(|hits| hits.first().map(|(rect, _)| rect.center()))
+            {
+                input.events.push(egui::Event::PointerMoved(pos));
+                input.events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed: self.link_menu_click == 2,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                self.link_menu_click -= 1;
+                ctx.request_repaint();
+            }
+        }
         // Moves the pointer only while it is elsewhere: each move restarts
         // egui's tooltip delay, so a fake pointer that kept moving in place
         // would never show one.
@@ -759,6 +796,7 @@ impl eframe::App for Shell {
 
     /// Saves essential state before the window closes.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        log::info!("exit: window closing, saving state");
         self.app.save_state();
     }
 }
@@ -814,6 +852,10 @@ impl Shell {
         #[cfg(feature = "demo")]
         if std::mem::take(&mut self.open_phone_menu) {
             egui::Popup::open_id(ui.ctx(), solmu::demo::phone_menu_popup_id());
+        }
+        #[cfg(feature = "demo")]
+        if std::mem::take(&mut self.open_thread) {
+            solmu::demo::open_thread_shot(app, ui.ctx());
         }
         app.frame_ui(ui);
         let startups: Vec<_> = app

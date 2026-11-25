@@ -12,6 +12,21 @@ from collections import Counter
 from run_client import validate_endpoint, resolve_beeper_target, LOOPBACK
 
 
+def page_items(page, kind):
+    # Error-shaped or partial JSON is not evidence of an empty inventory.
+    # Keep diagnostics static: response text may contain private chat data.
+    if not isinstance(page, dict) or not isinstance(page.get('items'), list):
+        raise ValueError('%s response was not an items page' % kind)
+    if any(not isinstance(item, dict) for item in page['items']):
+        raise ValueError('%s items were not objects' % kind)
+    if 'hasMore' in page and not isinstance(page['hasMore'], bool):
+        raise ValueError('%s pagination flag was not a boolean' % kind)
+    if page.get('hasMore') and (
+            not isinstance(page.get('oldestCursor'), str) or not page['oldestCursor']):
+        raise ValueError('%s pagination cursor was missing or invalid' % kind)
+    return page['items']
+
+
 def check(base, token, sample_history=False):
     parsed = validate_endpoint(base)
     handlers = [NoRedirect()]
@@ -29,8 +44,11 @@ def check(base, token, sample_history=False):
                 raise ValueError('response exceeded size limit')
             return json.loads(body)
     accounts = get('/v1/accounts')
-    if not isinstance(accounts, list):
-        raise ValueError('accounts response was not an array')
+    if not isinstance(accounts, list) or any(
+            not isinstance(account, dict)
+            or not isinstance(account.get('accountID'), str)
+            or not account['accountID'] for account in accounts):
+        raise ValueError('accounts response was not a valid account array')
     rows, seen, cursor = [], set(), None
     pages = 0
     while True:
@@ -41,11 +59,13 @@ def check(base, token, sample_history=False):
         if cursor:
             query.update(cursor=cursor, direction='before')
         page = get('/v1/chats', query)
-        items = page.get('items', [])
-        if not isinstance(items, list):
-            raise ValueError('chat items were not an array')
+        items = page_items(page, 'chat inventory')
         if len(rows) + len(items) > 100000:
             raise ValueError('inventory exceeded size limit')
+        if any(not isinstance(row.get('id'), str) or not row['id']
+               or not isinstance(row.get('accountID'), str) or not row['accountID']
+               for row in items):
+            raise ValueError('chat inventory contained missing or invalid identities')
         rows.extend(items)
         if not page.get('hasMore'):
             break
@@ -71,7 +91,8 @@ def check(base, token, sample_history=False):
               'unmatched_chat_account_count': len(set(by_account) - account_ids)}
     if sample_history and rows:
         page = get('/v1/chats/' + urllib.parse.quote(rows[0]['id'], safe='') + '/messages')
-        result['sample_history'] = {'messages': len(page.get('items', [])),
+        items = page_items(page, 'sample history')
+        result['sample_history'] = {'messages': len(items),
                                     'has_more': bool(page.get('hasMore'))}
     return result
 

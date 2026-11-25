@@ -112,7 +112,7 @@ attach the archive, keys, or full logs from older releases.
 ## Settings
 
 Changes on the Settings page are saved to `settings.json` immediately. The
-search field at the top (`Ctrl+F`, Command+F on macOS) finds a setting by its
+search field at the top finds a setting by its
 name or description, in the interface language or in English.
 
 **Appearance**
@@ -214,6 +214,23 @@ name or description, in the interface language or in English.
   as on the phone. Group receipts and voice-message played receipts are
   unaffected.
 - **Show when you are typing**: send typing and recording state.
+- **Automatically fetch link previews**: off by default. Visible HTTPS links in
+  the unlocked focused conversation can be fetched directly from their websites.
+  Websites receive your IP address and requested URL, including its query.
+  With this off, **Fetch preview** requests only that selected link and does not
+  change the automatic setting. Supplied Beeper cards are not fetched again.
+  HTTP URLs, private/local destinations and configured proxies are not fetched.
+- **Cached link previews**: memory-only on this device, not saved when Solmu
+  closes. **Clear cached previews** removes local cards and thumbnails and
+  cancels pending requests. Locking, changing accounts/chats or disabling the
+  feature also cancels outstanding work; a request already sent cannot be undone.
+  Requests and cache sizes are bounded, and unavailable links can be retried.
+- **Remove tracking parameters when opening, copying and fetching links**: off
+  by default. Removes known tracking query keys at explicit Open URL, Copy URL
+  and hyperlink Copy link actions. Original messages and general Copy text stay
+  unchanged. Recognized signed/token URLs remain intact. An unrecognized signed
+  link may still need its original parameters; turn this off for that link.
+  If local preview fetching is installed, it uses the same action-time policy.
 - **Last seen**, **Online**, **Profile photo**, **About**, **Groups**, **Read
   receipts**, **Calls**: your WhatsApp account privacy, stored on WhatsApp's
   servers and shared with your phone. They can be changed while connected.
@@ -320,6 +337,12 @@ message contents, phone numbers, or keys. Include the end of this file when
 reporting an issue. **Settings > Files > Log > Open** shows it. The run before
 is kept beside it as `solmu.previous.log`: if Solmu froze and you had to
 restart it, that file holds what happened.
+
+Sleep and wake show here too: going to sleep, the session ending, waking up,
+the window closing and the event loop's end each write a line, so a run that
+vanished shows which of them it saw last. On a wake the chats and messages
+refresh at once instead of on their usual timers, so the first seconds after
+opening the lid make a few more requests than usual.
 
 During a call the log also records the call's numbers every few seconds: the
 video rate, loss and keyframes in each direction, and the audio devices'

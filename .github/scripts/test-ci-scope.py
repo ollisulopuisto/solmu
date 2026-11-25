@@ -12,6 +12,18 @@ spec.loader.exec_module(scope)
 
 
 class ScopeTests(unittest.TestCase):
+    def test_nested_crate_manifests_and_locks_select_audit(self):
+        for folder in ('harness', 'contrib/signin-check'):
+            for name in ('Cargo.toml', 'Cargo.lock'):
+                self.assertTrue(scope.classify([folder + '/' + name])['audit'])
+        self.assertFalse(scope.classify(['harness/src/lib.rs'])['audit'])
+
+    def test_apt_helper_changes_keep_native_validation(self):
+        for path in ['.github/scripts/install-ubuntu-build-deps.py',
+                     '.github/scripts/test-install-ubuntu-build-deps.py']:
+            self.assertTrue(all(scope.classify([path]).values()), path)
+            self.assertFalse(scope.ignored(path))
+
     def test_real_git_diff_includes_deletions_and_literal_odd_filenames(self):
         script = Path(__file__).with_name('ci-scope.py').resolve()
         with tempfile.TemporaryDirectory() as tmp:

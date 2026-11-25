@@ -228,7 +228,12 @@ fn control_token() -> Option<String> {
 
 fn persist(queue: &Queue, path: &std::path::Path) {
     if let Err(e) = queue.save(path) {
-        eprintln!("solmu-scheduler: queue save failed: {e}");
+        eprintln!(
+            "solmu-scheduler: fatal queue save failure: {e}; stopping before any further dispatch or successful control response"
+        );
+        // Continuing would violate claim-before-send durability. The last
+        // durable Sending record recovers as Uncertain, never auto-retried.
+        std::process::exit(1);
     }
 }
 
@@ -287,6 +292,16 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // The listening port is the ownership guard: bind before the queue is
+    // read or written, so a second process exits without touching the file.
+    let listener = match TcpListener::bind(&listen) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("solmu-scheduler: cannot bind {listen}: {e}");
+            std::process::exit(1);
+        }
+    };
+    listener.set_nonblocking(true).ok();
     let queue = match Queue::load(&path) {
         Ok(queue) => queue,
         Err(e) => {
@@ -302,17 +317,11 @@ fn main() {
             recovered.len(),
             recovered.join(", ")
         );
-        persist(&scheduler.queue, &path);
     }
+    // Recovery may also have written missing successors of repeating
+    // series; save them even when nothing was mid-send.
+    persist(&scheduler.queue, &path);
 
-    let listener = match TcpListener::bind(&listen) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("solmu-scheduler: cannot bind {listen}: {e}");
-            std::process::exit(1);
-        }
-    };
-    listener.set_nonblocking(true).ok();
     eprintln!(
         "solmu-scheduler: listening on {listen}, queue {}",
         path.display()
@@ -341,5 +350,31 @@ fn main() {
             eprintln!("solmu-scheduler: {outcome:?}");
         }
         std::thread::sleep(tick.saturating_sub(started.elapsed()));
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    #[test]
+    fn failed_persistence_stops_the_process() {
+        const CHILD: &str = "SOLMU_TEST_PERSIST_FAILURE";
+        if std::env::var_os(CHILD).is_some() {
+            let directory = tempfile::tempdir().unwrap();
+            let blocked = directory.path().join("not-a-directory");
+            std::fs::write(&blocked, b"fixture").unwrap();
+            super::persist(&Default::default(), &blocked.join("queue.json"));
+            panic!("persist failure returned");
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "persistence_tests::failed_persistence_stops_the_process",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("fatal queue save failure"));
     }
 }

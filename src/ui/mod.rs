@@ -1,30 +1,41 @@
 //! Window layout: panels, overlays, keyboard shortcuts.
 
 pub mod accounts;
+pub mod batch_actions;
 pub mod call_log;
 pub mod chats;
 pub mod conversation;
 pub mod dialogs;
+pub mod flat_groups;
 pub(crate) mod focus;
+pub mod ghost_groups;
 mod glass;
+pub(crate) mod hover_actions;
 pub mod image_editor;
 pub mod image_preview;
 pub mod info;
 pub mod keys;
 pub mod labels;
 pub mod list_nav;
+pub mod local_avatars;
 pub mod locations;
 pub mod lock;
 pub mod login;
+mod media_tools;
 pub mod message_info;
 pub mod new_group;
 pub mod palette;
 pub mod pane;
+pub(crate) mod pending_picture_preview;
 pub mod picker;
 pub mod polls;
 pub mod rail;
+mod reply_tail;
+pub(crate) mod reply_threads;
+pub(crate) mod send_later;
 pub mod settings;
 pub mod switcher;
+mod transcript_text;
 pub mod update;
 pub mod widgets;
 
@@ -38,6 +49,23 @@ use crate::theme::{self, Icon};
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let ctx = &ctx;
+    // Session replacement and account navigation can close a dialog outside its
+    // own event handler. Never leave its draft blocking the next screen's keys.
+    if app.local_avatar_editor.as_ref().is_some_and(|editor| {
+        app.app_lock.is_locked()
+            || !matches!(app.dialog, Some(crate::model::Dialog::CustomizeAvatar))
+            || editor
+                .identities
+                .first()
+                .is_none_or(|key| key.account != app.account().id.0)
+    }) {
+        crate::image_cache::forget_prefix(ctx, "bytes://local-avatar-");
+        app.local_avatar_editor = None;
+        if matches!(app.dialog, Some(crate::model::Dialog::CustomizeAvatar)) {
+            app.dialog = None;
+        }
+    }
+    local_avatars::install(app, ctx);
     track_keyboard_focus(ctx);
     info::release_thumbnails(app, ctx);
     // The message list sets it again when it is drawn with focus.
@@ -52,14 +80,32 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         window_chrome(app, ui);
         return;
     }
+    // The full-window staged preview owns keyboard focus and input. Do not
+    // construct hidden background widgets, especially the independent composer.
+    if app.pending_picture_preview.is_some() {
+        keys::handle(app, ctx);
+        pending_picture_preview::show(app, ctx);
+        // A refused action (say, a second crop while one is being written)
+        // answers with a toast; it must not wait for the preview to close.
+        toasts(app, ctx);
+        focus_ring(app, ctx);
+        announce(app, ctx);
+        window_chrome(app, ui);
+        return;
+    }
     app.beeper_signin.show(ctx);
     if let Some(cfg) = app.beeper_signin.connect.take() {
         app.connect_beeper_session(cfg);
     }
-    keys::handle(app, ctx);
-    history_buttons(app, ctx);
-    let main_navigation = app.is_linked()
+    if app.local_avatar_editor.is_none() {
+        keys::handle(app, ctx);
+        history_buttons(app, ctx);
+    }
+    let main_navigation = !app.audience_queue.as_ref().is_some_and(|queue|queue.visible)
+        && app.ghost_ui.compose.is_none()
+        && app.is_linked()
         && app.chat_view()
+        && app.local_avatar_editor.is_none()
         && app.dialog.is_none()
         && !app.show_update
         && app.picker.is_none()
@@ -67,6 +113,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         && app.recording.is_none()
         && app.image_preview.is_none()
         && app.picture_edit.is_none()
+        && app.pending_picture_preview.is_none()
         && app.sticker_view.is_none()
         && app.emoji_start.is_none()
         && app.mention_start.is_none()
@@ -120,9 +167,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     update::show(app, ctx);
     picker::show(app, ctx);
     dialogs::show(app, ctx);
+    batch_actions::dialogs(app, ctx);
+    flat_groups::dialogs(app, ctx);
+    ghost_groups::dialogs(app, ctx);
     image_preview::show(app, ctx);
     image_preview::show_sticker(app, ctx);
     image_editor::show(app, ctx);
+    pending_picture_preview::show(app, ctx);
     drop_target(app, ctx);
     toasts(app, ctx);
     focus_ring(app, ctx);
@@ -188,7 +239,15 @@ fn main_view(app: &mut App, ui: &mut egui::Ui, list_only: bool) {
             );
             match app.page {
                 Page::Settings => settings::show(app, ui),
-                Page::Chats => conversation::show(app, ui),
+                Page::Chats => {
+                    let global_search = app.global_search;
+                    ui.scope(|ui| {
+                        if global_search {
+                            ui.set_opacity(0.38);
+                        }
+                        conversation::show(app, ui);
+                    });
+                }
                 Page::Wallpaper => settings::wallpaper_show(app, ui),
             }
         });
@@ -672,7 +731,7 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
     let has_error = app
         .toasts
         .iter()
-        .any(|toast| toast.kind == ToastKind::Error);
+        .any(|toast| matches!(toast.kind, ToastKind::Error | ToastKind::Undo(_)));
     let mut actions = Vec::new();
     // Stay clear of the composer: an error waiting to be dismissed must not
     // cover the send button.
@@ -689,6 +748,12 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
             ui.spacing_mut().item_spacing.y = 8.0;
             for (index, toast) in app.toasts.iter().enumerate() {
                 let error = toast.kind == ToastKind::Error;
+                let undo = matches!(toast.kind, ToastKind::Undo(_));
+                let lifetime = if undo {
+                    crate::app::UNDO_TOAST_LIFETIME.as_secs_f32()
+                } else {
+                    lifetime
+                };
                 // Errors appear at once: fading in needs frames that an idle
                 // window does not draw.
                 let alpha = if error {
@@ -719,7 +784,12 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
                             palette.text,
                             (ctx.content_rect().width() - 150.0).clamp(80.0, 360.0),
                         );
-                        let buttons = if error { 2.0 * 26.0 + 12.0 } else { 0.0 };
+                        // An error carries two buttons, an Undo toast one wide one.
+                        let buttons = if error || undo {
+                            2.0 * 26.0 + 12.0
+                        } else {
+                            0.0
+                        };
                         let text = widgets::line(
                             ui,
                             &toast.message,
@@ -744,6 +814,19 @@ fn toasts(app: &mut App, ctx: &egui::Context) {
                             ui.ctx().data_mut(|data| {
                                 data.insert_temp(toast_close_id(index).with("text"), rect);
                             });
+                            if let ToastKind::Undo(added) = &toast.kind {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .button(crate::i18n::gettext(app.locale, "Undo"))
+                                            .clicked()
+                                        {
+                                            actions.push(Action::UndoLinks(added.clone()));
+                                        }
+                                    },
+                                );
+                            }
                             if error {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -1665,3 +1748,9 @@ mod idle_tests {
 }
 
 pub mod merged;
+
+mod view_once;
+
+pub(crate) mod new_message;
+
+mod thread_entry;

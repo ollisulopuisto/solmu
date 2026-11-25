@@ -16,9 +16,26 @@ use crate::model::{
 use crate::paths::{AccountDirs, AppDirs};
 use crate::settings::AccountSettings;
 
+/// The composer snapshot held until the scheduler accepts or refuses a request.
+#[derive(Clone, Debug)]
+pub struct SchedulingDraft {
+    pub chat: ChatId,
+    pub source: Option<ChatId>,
+    pub text: String,
+    pub quoting: Option<String>,
+}
+
 /// One WhatsApp account's runtime state.
 pub struct Account {
+    /// Pending mutations and outcomes stay with their owning account.
+    pub batch_ui: crate::model::BatchState,
+    pub audience_queue: Option<crate::audience_queue::Queue>,
+    pub new_message: crate::audience_queue::Draft,
     pub id: AccountId,
+    pub forward_dialog_hidden: bool,
+    pub forward_view_closed: bool,
+    pub forward_generation: u64,
+    pub forward_items: Vec<crate::composed_forward::Item>,
     pub dirs: AccountDirs,
     pub settings: AccountSettings,
     pub(crate) settings_dirty: bool,
@@ -36,6 +53,7 @@ pub struct Account {
     pub favorites: Option<Vec<ChatId>>,
     pub contacts: HashMap<String, Contact>,
     pub conversations: HashMap<ChatId, Conversation>,
+    pub pending_media: HashMap<String, crate::pending_media::Record>,
     pub open_chat: Option<ChatId>,
     /// Recently opened chats, most recent last; `open_chat` is the open
     /// one and is always a member. Feeds the Cmd+K switcher; was the tab
@@ -46,6 +64,8 @@ pub struct Account {
     pub(crate) prefetch_sent: Option<(bool, Option<ChatId>)>,
     pub scroll_chat_into_view: Option<ChatId>,
     pub drafts: HashMap<ChatId, String>,
+    pub draft_shelves_loaded: bool,
+    pub draft_states: HashMap<ChatId, crate::draft_state::State>,
     /// Whether the open chat had a draft when opened. Keep its list priority
     /// stable while the reader types, clears, or sends that draft.
     pub(crate) open_draft_priority: bool,
@@ -101,9 +121,25 @@ pub struct Account {
     pub transcription_language_draft: String,
     /// Send Later dialog draft: custom date (YYYY-MM-DD) and time (HH:MM),
     /// plus a validation error to show. Prefilled when the dialog opens.
+    pub scheduling_draft: Option<SchedulingDraft>,
+    pub send_later_chat: Option<ChatId>,
     pub send_later_date: String,
     pub send_later_time: String,
     pub send_later_error: Option<String>,
+    /// Send Later repeat controls: 0 never, 1 days, 2 weeks, 3 months.
+    pub send_later_repeat: u8,
+    /// The repeat interval as typed ("3").
+    pub send_later_every: String,
+    /// Weeks only: bit 0 Monday to bit 6 Sunday.
+    pub send_later_weekdays: u8,
+    /// 0 never ends, 1 on a date, 2 after a number of sends.
+    pub send_later_ends: u8,
+    /// The end date (YYYY-MM-DD) or send count as typed.
+    pub send_later_ends_value: String,
+    /// Repeating tab (true) or one-time tab of the Send Later queue.
+    pub scheduled_repeating_tab: bool,
+    /// The queue was requested this session (or since the last change).
+    pub scheduled_requested: bool,
     /// Queue item the Send Later dialog is replacing: cancelled by the
     /// daemon only once the replacement is queued.
     pub send_later_replaces: Option<String>,
@@ -115,6 +151,8 @@ pub struct Account {
     pub scheduled_messages: Option<Vec<crate::scheduler::ScheduledMessage>>,
     pub show_archived: bool,
     pub chat_filter: ChatFilter,
+    /// The chat list's mode (All, Unread or Needs me); All by default.
+    pub list_mode: crate::model::ListMode,
     pub category_filter: Option<ChatFilter>,
     pub favorites_only: bool,
     /// The chip the Calls page's history shows.
@@ -123,6 +161,10 @@ pub struct Account {
     /// them instead of the chats.
     pub starred: Vec<crate::archive::Starred>,
     pub show_starred: bool,
+    /// Whether the left panel lists the locally saved messages instead of
+    /// the chats, and the text the panel's own search filters them by.
+    pub show_saved: bool,
+    pub saved_search: String,
     /// Ids of the starred messages of each chat, for the mark in the
     /// conversation. Filled when a chat opens and on every confirmed star.
     pub stars: HashMap<ChatId, HashSet<String>>,
@@ -147,7 +189,7 @@ impl Account {
     pub fn new(
         id: AccountId,
         dirs: AccountDirs,
-        settings: AccountSettings,
+        mut settings: AccountSettings,
         backend: Backend,
     ) -> Self {
         let open_chat = settings.last_chat.clone();
@@ -165,17 +207,31 @@ impl Account {
             Some(crate::model::ListFilter::Chip(chip)) => chip,
             _ => ChatFilter::All,
         };
-        let category_filter = settings.chat_category.or(match chat_filter {
-            ChatFilter::Private | ChatFilter::Groups | ChatFilter::Channels => Some(chat_filter),
-            _ => None,
-        });
-        let favorites_only = settings.favorites_only || chat_filter == ChatFilter::Favorites;
+        // The retired Filters row must not leave an invisible saved scope.
+        // Explicit palette filters remain available during the session.
+        let category_filter = None;
+        let favorites_only = false;
         let chat_filter = settings.chat_queue.unwrap_or(chat_filter);
+        let list_mode = settings.list_mode.unwrap_or(match chat_filter {
+            ChatFilter::Unread | ChatFilter::ReplyLater | ChatFilter::ReadLater => {
+                crate::model::ListMode::NeedsMe
+            }
+            _ => crate::model::ListMode::Recent,
+        });
+        let retired_scope =
+            settings.list_filter.take().is_some() | settings.chat_category.take().is_some();
         Self {
+            audience_queue: None,
+            new_message: Default::default(),
+            batch_ui: Default::default(),
             id,
+            forward_dialog_hidden: false,
+            forward_view_closed: false,
+            forward_generation: 0,
+            forward_items: Vec::new(),
             dirs,
             settings,
-            settings_dirty: false,
+            settings_dirty: retired_scope,
             backend,
             link: LinkStatus::Starting,
             syncing: false,
@@ -188,11 +244,14 @@ impl Account {
             favorites: None,
             contacts: HashMap::new(),
             conversations: HashMap::new(),
+            pending_media: HashMap::new(),
             open_chat,
             open_tabs,
             prefetch_sent: None,
             scroll_chat_into_view: None,
             drafts: HashMap::new(),
+            draft_shelves_loaded: false,
+            draft_states: HashMap::new(),
             open_draft_priority: false,
             storage_stats: None,
             storage_token: 0,
@@ -234,29 +293,31 @@ impl Account {
             new_group_sequence: 0,
             new_group_request: None,
             transcription_language_draft: String::new(),
+            scheduling_draft: None,
+            send_later_chat: None,
             send_later_date: String::new(),
             send_later_time: String::new(),
             send_later_error: None,
+            send_later_repeat: 0,
+            send_later_every: "1".into(),
+            send_later_weekdays: 0,
+            send_later_ends: 0,
+            send_later_ends_value: String::new(),
+            scheduled_repeating_tab: false,
+            scheduled_requested: false,
             send_later_replaces: None,
             send_later_draft_backup: None,
             scheduled_messages: None,
             show_archived: false,
-            chat_filter: if matches!(
-                chat_filter,
-                ChatFilter::Private
-                    | ChatFilter::Groups
-                    | ChatFilter::Channels
-                    | ChatFilter::Favorites
-            ) {
-                ChatFilter::All
-            } else {
-                chat_filter
-            },
+            chat_filter: ChatFilter::All,
+            list_mode,
             category_filter,
             favorites_only,
             labels: Vec::new(),
             starred: Vec::new(),
             show_starred: false,
+            show_saved: false,
+            saved_search: String::new(),
             stars: HashMap::new(),
             pins: HashMap::new(),
             chat_pins: HashMap::new(),
@@ -298,6 +359,9 @@ impl Account {
             crate::backend::beeper::BeeperConfig::from_env()
                 .expect("Beeper session or environment config"),
         );
+        backend.send(crate::backend::Command::BeeperResumeForwards(
+            legacy.beeper.forwarded_messages.clone(),
+        ));
         Ok(Self::new(id, dirs, settings, backend))
     }
 

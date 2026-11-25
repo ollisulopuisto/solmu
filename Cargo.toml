@@ -1,6 +1,6 @@
 [package]
 name = "solmu"
-version = "0.24.0"
+version = "26.11.16"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
@@ -26,12 +26,27 @@ path = "src/bin/solmu-scheduler.rs"
 name = "solmu-reader"
 path = "src/bin/solmu-reader.rs"
 
+[[bin]]
+name = "solmu-control"
+path = "src/bin/solmu-control.rs"
+
+[[bin]]
+name = "solmu-mcp"
+path = "src/bin/solmu-mcp.rs"
+
 [dependencies]
+# Private temporary audio and verified atomic model installation. Already in lockfile.
+tempfile = "3"
 anyhow = "1"
+# Already in the tree transitively; fast first-byte skip for the merged-view search.
+memchr = "2"
 # Hashes saved stickers by content.
 sha2 = "0.11"
 # Already in the tree through rustls; verifies lock codes.
 ring = "0.17"
+# Already in the tree transitively; opens libvoikko at runtime so the app
+# starts without it (see src/hyphenate.rs).
+libloading = "0.8"
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -54,12 +69,15 @@ http = "1"
 base64 = "0.23"
 # SQLCipher encrypts the archive; the device store shares the same library.
 # Bundle OpenSSL so all release platforms use the same encryption provider.
-rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.42", features = ["bundled-sqlcipher-vendored-openssl"] }
 keyring-core = "1"
 getrandom = "0.4"
 zeroize = "1"
 rand = "0.10"
 # The updater's HTTP client, with the proxy setting.
+scraper = "0.29"
+# Verifies that reconstructed edit Markdown retains its rich-text meaning.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "socks", "json"] }
 # Downloads profile pictures. The protocol library already includes this crate
 # and TLS stack.
@@ -194,17 +212,19 @@ fastframe-update = { git = "https://github.com/crmne/fastframe", tag = "v0.15.2"
 # emilk/egui#8655), and a saved window size keeps its zoom factor so a window
 # no longer shrinks each time it reopens (#293, emilk/egui#8656).
 # Every egui crate comes from the same revision so they share one emath and
-# epaint. Drop this once egui releases all three.
-ecolor = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-eframe = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui-wgpu = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui-winit = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui_extras = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-egui_glow = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-emath = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-epaint = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
-epaint_default_fonts = { git = "https://github.com/crmne/egui", rev = "6ce633ba5f7f64d19ef6d204f9377da560bb546b" }
+# epaint. The owner-approved ollisulopuisto fork adds only the viewport-scoped
+# selection endpoint API on top of the existing crmne pin (egui PR #1).
+# Drop the fork when upstream includes the endpoint API and carried fixes.
+ecolor = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+eframe = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+egui = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+egui-wgpu = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+egui-winit = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+egui_extras = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+egui_glow = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+emath = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+epaint = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
+epaint_default_fonts = { git = "https://github.com/ollisulopuisto/egui", rev = "97916754a8ec918be112ec80095c351922c4fc73" }
 # crmne/winit apps-0.30, shared with the same apps: winit 0.30.13 plus Wayland
 # `Occluded` for the xdg-shell suspended state with commits on the app's behalf
 # while it isn't presenting (rust-windowing/winit#4709, #4710), macOS Quit
@@ -220,13 +240,15 @@ epaint_default_fonts = { git = "https://github.com/crmne/egui", rev = "6ce633ba5
 # window opens after the headless AppKit loop has already launched (#4770).
 winit = { git = "https://github.com/crmne/winit", rev = "0bed9dc0a7db02590a279fb8bac795fa39ee6948" }
 
+[target.'cfg(unix)'.dependencies]
+# Existing locked OS bindings used for free disk space before optional downloads.
+libc = "0.2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-tokio-crypto-rust"] }
 # Pauses MPRIS media players while recording or playing voice messages.
 # Already in the tree through fastframe-notifications and fastframe-tray.
 zbus = { version = "5.19", default-features = false, features = ["blocking-api", "tokio"] }
-# Reads the time locale's clock format.
-libc = "0.2"
 # The camera for video calls, through Video4Linux, in Rust: no build-time
 # bindings, so building on Linux needs nothing new.
 linuxvideo = "0.3.5"
@@ -275,7 +297,6 @@ windows = { version = "0.62", features = ["Media_Control", "Foundation_Collectio
 winresource = "0.1"
 
 [dev-dependencies]
-tempfile = "3"
 # Checks the default log filter the way fastframe-log's logger reads it.
 # Already in the tree through fastframe-log, at this version.
 env_logger = { version = "0.11", default-features = false }
@@ -310,3 +331,7 @@ opt-level = 2
 # Compiles the PO catalogs to Rust, leaving out unfinished entries. Ordinary
 # builds do not need gettext tools.
 fastframe-i18n = { git = "https://github.com/crmne/fastframe", tag = "v0.15.2", features = ["build"] }
+
+[[example]]
+name = "flat_group_review"
+required-features = ["demo"]

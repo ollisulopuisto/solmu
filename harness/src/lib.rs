@@ -1,10 +1,14 @@
 //! Test harness crate: solmu sources (staged from current src/ by check-source.sh) + minimal stubs for
 //! leaf modules outside the Beeper adapter's reach. See Cargo.toml.
 pub mod account;
+pub mod draft_state;
 pub mod app;
 pub mod app_lock;
 pub mod archive;
 pub mod backend;
+pub mod composed_forward;
+pub mod forward_results;
+pub mod categories;
 pub mod group_admin;
 pub mod i18n;
 pub mod markup;
@@ -12,16 +16,23 @@ pub mod mentions;
 pub mod model;
 pub mod new_group;
 pub mod paths;
+pub mod pending_media;
 pub mod privacy;
+pub mod recurrence;
+pub mod read_sync;
+pub mod run_widths;
 pub mod safety;
+pub mod saved;
 pub mod scheduler;
 pub mod scheduler_client;
 pub mod settings;
+pub mod text_replace;
 pub mod ui;
 pub mod updates;
 pub mod util;
 
 pub mod merged;
+pub mod suggest;
 
 // Credential access is outside this portable adapter harness; source sign-in harness tests it separately.
 pub mod beeper_signin { pub fn stored(_: &str) -> Result<String, String> { Ok(String::new()) } }
@@ -33,3 +44,13 @@ pub mod voice {
     pub fn normalize(_: &mut [f32]) {}
     pub fn encode(_: &[f32]) -> Result<Vec<u8>, String> { Err("Opus encoder is not part of the adapter harness".into()) }
 }
+
+pub mod rich_edit;
+
+pub mod audience_queue;
+
+pub mod flat_groups;
+
+pub mod literal_hints;
+
+pub mod target;

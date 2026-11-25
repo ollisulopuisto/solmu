@@ -22,10 +22,20 @@ Product boundaries and upstream responsibilities:
 - Solmu will not embed a browser engine, add telemetry, or introduce a
   Solmu-operated service. Features that send message content to a third
   party are out of scope.
-- Solmu will never automate WhatsApp: no bots, MCP server, or API,
-  command-line or scripting interface that reads or sends messages, and no
-  scheduled, bulk or automatic replies. WhatsApp's terms forbid automated
-  use and it bans accounts for it.
+- Scripted access, command-line control, APIs and MCP may read or send messages,
+  including WhatsApp, only through authenticated, revocable, scoped tokens.
+  Reading does not grant sending: writes require a separate send scope and
+  explicit destination limits. No unauthenticated read or write route is allowed.
+  Bind loopback-only by default, keep the upstream credential private, and audit
+  write attempts without message bodies or credentials. Expiry, revocation and
+  account/destination restrictions must be enforced at each request.
+- Authentication is necessary, not sufficient: validate request sizes, routes,
+  rate limits and destination identity, and test refusals. Do not claim that
+  authenticated automation avoids network terms or account restrictions. Remote
+  exposure needs an explicit secure-transport and access-control decision.
+- Send Later and ghost groups remain visible user-controlled workflows: your
+  text and chosen recipients, cancellable by you, with no unsolicited replies.
+
 
 The guide's [current limitations](https://zapfast.rocks/what-is-zapfast/#what-it-does-not-do-yet)
 describe what is implemented today, not permanent exclusions. Missing features,
@@ -60,7 +70,10 @@ release status stated. Reopen the issue if it persists after updating.
    dependency, send the fix upstream and ask the maintainer to carry it in a
    crmne fork until a release includes it. The maintainer has explicitly
    approved pinned commits from the official `github.com/oxidezap/whatsapp-rust`
-   repository once our carried fixes have merged upstream. CI fails on any
+   repository once our carried fixes have merged upstream. The owner also
+   approved the pinned `github.com/ollisulopuisto/egui` fork for the viewport
+   selection endpoint API, based on the existing crmne revision. These are
+   exact repository exceptions, not approval for other forks. CI fails on any
    other source.
 6. **Private data.** The archive is personal data. Never log message contents,
    phone numbers, keys, or QR payloads.

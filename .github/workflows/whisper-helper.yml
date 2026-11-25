@@ -1,0 +1,98 @@
+name: Optional Whisper helper
+# Separate runtime pipeline. Solmu builds never invoke this workflow or link Whisper.
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  helper:
+    if: github.event.repository.private == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            os: macos-15
+          - arch: x86_64
+            os: macos-15-intel
+    env:
+      WHISPER_REVISION: d1be6fde11ac6e0407606b4e42fe72d34add8037
+      APPLE_TEAM_ID: LWSR8T5392
+      SIGNING_IDENTITY: 'Developer ID Application: Olli Sulopuisto (LWSR8T5392)'
+      NOTARY_PROFILE: solmu-whisper
+    steps:
+      - name: Runtime paths
+        run: |
+          echo "KEYCHAIN_PATH=$RUNNER_TEMP/whisper-signing.keychain-db" >> "$GITHUB_ENV"
+          echo "CERTIFICATE_PATH=$RUNNER_TEMP/whisper-signing.p12" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
+      - name: Fetch pinned official runtime source
+        run: |
+          git init "$RUNNER_TEMP/whisper-source"
+          git -C "$RUNNER_TEMP/whisper-source" remote add origin https://github.com/ggml-org/whisper.cpp.git
+          git -C "$RUNNER_TEMP/whisper-source" fetch --depth 1 origin "$WHISPER_REVISION"
+          git -C "$RUNNER_TEMP/whisper-source" checkout --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/whisper-source" rev-parse HEAD)" = "$WHISPER_REVISION"
+      - name: Build standalone optional helper
+        run: bash packaging/macos/build-whisper-helper.sh "$RUNNER_TEMP/whisper-source" "$RUNNER_TEMP/helper" '${{ matrix.arch }}'
+      - name: Set up signing credentials without command-line secrets
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import base64, os, pathlib, secrets, subprocess
+          certificate = pathlib.Path(os.environ['CERTIFICATE_PATH'])
+          certificate.write_bytes(base64.b64decode(os.environ['BUILD_CERTIFICATE_BASE64'], validate=True))
+          certificate.chmod(0o600)
+          env = dict(os.environ, KEYCHAIN_PASSWORD=secrets.token_urlsafe(32))
+          helper = 'packaging/macos/macos_ci_credentials.py'
+          subprocess.run(['python3', helper, 'import-certificate'], env=env, check=True)
+          subprocess.run(['python3', helper, 'store-notary-credentials'], env=env, check=True)
+          certificate.unlink()
+          PY
+      - name: Sign, notarize and staple
+        run: |
+          app="$RUNNER_TEMP/helper/SolmuWhisper.app"
+          codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY" "$app/Contents/MacOS/whisper-cli"
+          codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY" "$app"
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notary.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notary.zip" --keychain-profile "$NOTARY_PROFILE" --keychain "$KEYCHAIN_PATH" --wait
+          xcrun stapler staple "$app"
+          xcrun stapler validate "$app"
+          codesign --verify --strict --deep "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          # Gatekeeper is tested with quarantine present, not stripped or bypassed.
+          xattr -w com.apple.quarantine '0083;00000000;Solmu;' "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          "$app/Contents/MacOS/whisper-cli" --help
+          mkdir -p dist
+          ditto -c -k --keepParent "$app" 'dist/solmu-whisper-v1.9.5-${{ matrix.arch }}.zip'
+      - name: Record exact download metadata
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,pathlib,os
+          archive = next(pathlib.Path('dist').glob('*.zip'))
+          metadata = dict(filename=archive.name, size=archive.stat().st_size,
+                          sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+                          upstream_revision=os.environ['WHISPER_REVISION'],
+                          executable='SolmuWhisper.app/Contents/MacOS/whisper-cli',
+                          executable_sha256=hashlib.sha256(pathlib.Path(os.environ['RUNNER_TEMP'], 'helper/SolmuWhisper.app/Contents/MacOS/whisper-cli').read_bytes()).hexdigest())
+          archive.with_suffix('.json').write_text(json.dumps(metadata, indent=2)+'\n')
+          print(json.dumps(metadata, indent=2))
+          PY
+      - uses: actions/upload-artifact@v7
+        if: vars.FAST_BEEPER_UPLOAD_ARTIFACTS == 'true'
+        with:
+          name: optional-whisper-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 1
+      - name: Remove signing keychain
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" || true
+          rm -f "$CERTIFICATE_PATH"

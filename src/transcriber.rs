@@ -6,6 +6,8 @@
 //! never a cloud API; the transcript store is bounded and private; a global
 //! default language with an optional per-message override.
 
+#[path = "transcriber/encrypted.rs"]
+mod encrypted;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -124,6 +126,7 @@ pub fn resolve_language(per_message: Option<&str>, global: Option<&str>) -> Opti
 #[derive(Clone)]
 pub struct Store {
     root: PathBuf,
+    encrypted: Option<Arc<encrypted::Encrypted>>,
     /// Total bytes the store may hold before evicting oldest.
     max_bytes: u64,
     /// Bumped on every mutation so cached searches invalidate.
@@ -140,9 +143,76 @@ impl Store {
         }
         Ok(Self {
             root,
+            encrypted: None,
             max_bytes,
             version: Arc::new(AtomicU64::new(0)),
         })
+    }
+
+    /// Production storage uses only each account's existing encrypted archive.
+    /// Legacy plaintext files are purged only after committed, verified migration.
+    /// Migration is keyring/database/file work: it runs on a worker thread via
+    /// `migrate_legacy`, never on the caller's (settings UI) thread.
+    pub fn encrypted(root: PathBuf, max_bytes: u64) -> std::io::Result<Self> {
+        if std::fs::symlink_metadata(&root).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(std::io::Error::other(
+                "Transcript migration root must not be a symlink",
+            ));
+        }
+        let mut store = Self::new(root.clone(), max_bytes)?;
+        let backend = encrypted::Encrypted::new(
+            root.parent()
+                .ok_or_else(|| std::io::Error::other("Transcript state directory unavailable"))?
+                .into(),
+        );
+        store.encrypted = Some(Arc::new(backend));
+        Ok(store)
+    }
+
+    /// Migrates legacy plaintext transcripts into the encrypted archives.
+    /// Safe to repeat; call off the UI thread. Each account migrates
+    /// independently: a failing account keeps its plaintext for the next
+    /// attempt and never blocks the others. Returns how many transcripts
+    /// moved and the first per-account error, if any; 0 with no error means
+    /// nothing changed, so no bump or view wake is needed.
+    pub fn migrate_legacy(&self) -> (usize, Option<std::io::Error>) {
+        if let Some(backend) = &self.encrypted {
+            let (migrated, error) = backend.migrate(&self.root);
+            if migrated > 0 {
+                self.bump();
+            }
+            (migrated, error)
+        } else {
+            (0, None)
+        }
+    }
+
+    pub fn remove_account(&self, account: &str) -> std::io::Result<()> {
+        let result = if let Some(backend) = &self.encrypted {
+            let mut result = backend.remove(account, None, None);
+            // Pending legacy plaintext goes too, or a later migration would
+            // resurrect the removed account's transcripts.
+            let path = self.root.join(encode(account));
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    if result.is_ok() {
+                        result = Err(error);
+                    }
+                }
+            }
+            result
+        } else {
+            let path = self.root.join(encode(account));
+            if path.exists() {
+                std::fs::remove_dir_all(path)
+            } else {
+                Ok(())
+            }
+        };
+        self.bump();
+        result
     }
 
     /// Mutation counter: search results are cached against it.
@@ -162,11 +232,30 @@ impl Store {
     }
 
     pub fn get(&self, account_id: &str, chat_id: &str, message_id: &str) -> Option<String> {
+        if let Some(backend) = &self.encrypted {
+            return backend.get(account_id, chat_id, message_id);
+        }
         std::fs::read_to_string(self.file_for(account_id, chat_id, message_id)).ok()
     }
 
     /// Removes one transcript, e.g. when its message is deleted.
     pub fn remove(&self, account_id: &str, chat_id: &str, message_id: &str) -> std::io::Result<()> {
+        if let Some(backend) = &self.encrypted {
+            let mut result = backend.remove(account_id, Some(chat_id), Some(message_id));
+            // Pending legacy plaintext goes too, or a later migration would
+            // resurrect the deleted transcript.
+            match std::fs::remove_file(self.file_for(account_id, chat_id, message_id)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    if result.is_ok() {
+                        result = Err(error);
+                    }
+                }
+            }
+            self.bump();
+            return result;
+        }
         match std::fs::remove_file(self.file_for(account_id, chat_id, message_id)) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -178,6 +267,24 @@ impl Store {
 
     /// Privacy control: removes every transcript of one chat.
     pub fn remove_chat(&self, account_id: &str, chat_id: &str) -> std::io::Result<()> {
+        if let Some(backend) = &self.encrypted {
+            let mut result = backend.remove(account_id, Some(chat_id), None);
+            // Pending legacy plaintext goes too, or a later migration would
+            // resurrect the deleted chat's transcripts.
+            let file = self.file_for(account_id, chat_id, "_");
+            let dir = file.parent().map(Path::to_path_buf).unwrap_or(file);
+            match std::fs::remove_dir_all(&dir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    if result.is_ok() {
+                        result = Err(error);
+                    }
+                }
+            }
+            self.bump();
+            return result;
+        }
         let file = self.file_for(account_id, chat_id, "_");
         let dir = file.parent().map(Path::to_path_buf).unwrap_or(file);
         match std::fs::remove_dir_all(&dir) {
@@ -189,8 +296,29 @@ impl Store {
         Ok(())
     }
 
-    /// Privacy control: removes every transcript of every chat.
+    /// Privacy control: removes every transcript of every chat. Every account
+    /// is attempted even when one fails, so one unreadable archive cannot hide
+    /// the survivors of the rest; the first failure is still reported. Legacy
+    /// plaintext awaiting or spared by migration is deleted too, so a later
+    /// migration cannot resurrect cleared transcripts.
     pub fn clear(&self) -> std::io::Result<()> {
+        if let Some(backend) = &self.encrypted {
+            let mut result = Ok(());
+            // Sorted for a deterministic attempt order: every account is
+            // tried, a failing one never blocks or hides the others.
+            let mut accounts = backend.accounts();
+            accounts.sort();
+            for account in accounts {
+                if let Err(error) = backend.remove(&account, None, None)
+                    && result.is_ok()
+                {
+                    result = Err(error);
+                }
+            }
+            self.clear_legacy(&mut result);
+            self.bump();
+            return result;
+        }
         for entry in std::fs::read_dir(&self.root)?.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -201,6 +329,29 @@ impl Store {
         Ok(())
     }
 
+    /// Removes unmigrated plaintext transcripts from the store root, keeping
+    /// the first failure without skipping the rest.
+    fn clear_legacy(&self, result: &mut std::io::Result<()>) {
+        let entries = match std::fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) => {
+                if result.is_ok() {
+                    *result = Err(error);
+                }
+                return;
+            }
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir()
+                && let Err(error) = std::fs::remove_dir_all(&path)
+                && result.is_ok()
+            {
+                *result = Err(error);
+            }
+        }
+    }
+
     /// Writes one transcript and evicts oldest files past the cap.
     pub fn put(
         &self,
@@ -209,21 +360,50 @@ impl Store {
         message_id: &str,
         text: &str,
     ) -> std::io::Result<()> {
+        if let Some(backend) = &self.encrypted {
+            backend.put(
+                account_id,
+                chat_id,
+                message_id,
+                text,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(std::io::Error::other)?
+                    .as_secs() as i64,
+                self.max_bytes,
+            )?;
+            self.bump();
+            return Ok(());
+        }
         let file = self.file_for(account_id, chat_id, message_id);
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent)?;
+        use std::io::Write;
+        for dir in [
+            self.root.clone(),
+            self.root.join(encode(account_id)),
+            file.parent().unwrap().to_path_buf(),
+        ] {
+            if std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Transcript directory must not be a symlink",
+                ));
+            }
+            std::fs::create_dir_all(&dir)?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
             }
         }
-        std::fs::write(&file, text)?;
+        // tempfile creates a new private0600 file before any text is written.
+        // Atomic replacement never follows a planted destination symlink.
+        let mut temporary = tempfile::NamedTempFile::new_in(file.parent().unwrap())?;
+        temporary.write_all(text.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        temporary.persist(&file).map_err(|error| error.error)?;
+        // File sync protects bytes; directory sync makes the rename durable.
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
-        }
+        std::fs::File::open(file.parent().unwrap())?.sync_all()?;
         self.evict()?;
         self.bump();
         Ok(())
@@ -275,6 +455,12 @@ impl Store {
 /// `-_.` stay, every other UTF-8 byte percent-encodes, so walking the store
 /// recovers the real account/chat/message ids a search hit navigates to.
 fn encode(id: &str) -> String {
+    if id.is_empty() {
+        return "%EMPTY".into();
+    }
+    if matches!(id, "." | "..") {
+        return id.bytes().map(|byte| format!("%{byte:02X}")).collect();
+    }
     let mut out = String::with_capacity(id.len());
     for &byte in id.as_bytes() {
         match byte {
@@ -289,6 +475,9 @@ fn encode(id: &str) -> String {
 
 /// The inverse of [`encode`]; `None` for names it never produced.
 fn decode(name: &str) -> Option<String> {
+    if name == "%EMPTY" {
+        return Some(String::new());
+    }
     let bytes = name.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut at = 0;
@@ -337,17 +526,52 @@ impl Store {
     /// never leaves the machine; matching uses the same normalization as
     /// chat search, and hits carry the real account/chat/message ids.
     pub fn search(&self, query: &str, limit: usize) -> Vec<Hit> {
+        self.search_scoped(query, limit, None)
+    }
+
+    /// Filter account/chat before the cap, so another chat cannot hide hits.
+    /// An empty scoped query returns saved transcripts for the Voice panel.
+    pub fn search_scoped(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: Option<(&str, &str)>,
+    ) -> Vec<Hit> {
+        if let Some(backend) = &self.encrypted {
+            let needle = crate::util::search_key(query.trim());
+            // Match the file store: an unscoped empty query returns nothing;
+            // only the Voice panel's scoped empty query lists transcripts.
+            if needle.is_empty() && scope.is_none() {
+                return Vec::new();
+            }
+            let mut hits = Vec::new();
+            let accounts = scope
+                .map(|(a, _)| vec![a.to_owned()])
+                .unwrap_or_else(|| backend.accounts());
+            for account in accounts {
+                hits.extend(backend.search(query, &account, scope.map(|(_, c)| c)));
+            }
+            hits.sort_by_key(|hit| std::cmp::Reverse(hit.modified));
+            hits.truncate(limit);
+            return hits;
+        }
         let needle = crate::util::search_key(query.trim());
         let mut hits = Vec::new();
-        if !needle.is_empty() {
+        if !needle.is_empty() || scope.is_some() {
             for account in subdirs(&self.root) {
                 let Some(account_id) = decode(&account) else {
                     continue;
                 };
+                if scope.is_some_and(|(wanted, _)| wanted != account_id) {
+                    continue;
+                }
                 for chat in subdirs(&self.root.join(&account)) {
                     let Some(chat_id) = decode(&chat) else {
                         continue;
                     };
+                    if scope.is_some_and(|(_, wanted)| wanted != chat_id) {
+                        continue;
+                    }
                     let dir = self.root.join(&account).join(&chat);
                     let Ok(entries) = std::fs::read_dir(&dir) else {
                         continue;
@@ -417,8 +641,307 @@ pub fn wyoming_pcm_from_mono(samples: &[f32], from_rate: u32) -> Vec<u8> {
     pcm
 }
 
+/// Preview selection uses the same normalization as local transcript search.
+pub fn preview(text: &str, query: &str) -> String {
+    let needle = crate::util::search_key(query.trim());
+    text.lines()
+        .find(|line| crate::util::search_key(line).contains(&needle))
+        .unwrap_or_else(|| text.lines().next().unwrap_or(""))
+        .trim()
+        .to_owned()
+}
+
+pub const SNAPSHOT_HITS: usize = 500;
+pub const SNAPSHOT_TEXT_BYTES: usize = 2 << 20;
+pub const SNAPSHOT_HIT_BYTES: usize = 64 << 10;
+const MAX_SOURCE_BYTES: u64 = 32 << 20;
+
+#[derive(Default)]
+pub struct Snapshot {
+    pub hits: Vec<Hit>,
+    pub truncated: bool,
+}
+
+impl Store {
+    /// A bounded display snapshot, not a second archive. Search all ordinary
+    /// source files before applying the result cap; retain only bounded text.
+    /// Oversized external files are skipped and the partial-state notice stays on.
+    pub fn snapshot(&self, query: &str, account: &str, chat: &str) -> Snapshot {
+        self.snapshot_while(query, account, chat, || true)
+    }
+
+    /// Account-wide search uses the same bounded snapshots, filtering before caps.
+    pub fn account_snapshot_while(
+        &self,
+        query: &str,
+        account: &str,
+        current: impl Fn() -> bool,
+    ) -> Snapshot {
+        if let Some(backend) = &self.encrypted {
+            return if query.trim().is_empty() {
+                Snapshot::default()
+            } else {
+                backend.snapshot(query, account, None, current)
+            };
+        }
+        let mut out = Snapshot::default();
+        if query.trim().is_empty() {
+            return out;
+        }
+        let mut retained = std::collections::BTreeMap::new();
+        let mut bytes = 0;
+        for chat in subdirs(&self.root.join(encode(account))) {
+            if !current() {
+                return Snapshot::default();
+            }
+            let Some(chat) = decode(&chat) else {
+                continue;
+            };
+            let snapshot = self.snapshot_while(query, account, &chat, &current);
+            out.truncated |= snapshot.truncated;
+            for hit in snapshot.hits {
+                bytes += hit.text.len();
+                retained.insert(
+                    (
+                        std::cmp::Reverse(hit.modified),
+                        hit.chat_id.clone(),
+                        hit.message_id.clone(),
+                    ),
+                    hit,
+                );
+                while retained.len() > SNAPSHOT_HITS || bytes > SNAPSHOT_TEXT_BYTES {
+                    if let Some((_, hit)) = retained.pop_last() {
+                        bytes -= hit.text.len();
+                        out.truncated = true;
+                    }
+                }
+            }
+        }
+        out.hits = retained.into_values().collect();
+        out
+    }
+
+    pub fn snapshot_while(
+        &self,
+        query: &str,
+        account: &str,
+        chat: &str,
+        current: impl Fn() -> bool,
+    ) -> Snapshot {
+        if let Some(backend) = &self.encrypted {
+            return backend.snapshot(query, account, Some(chat), current);
+        }
+        use std::io::Read;
+        let mut retained = std::collections::BTreeMap::new();
+        let mut retained_bytes = 0;
+        let mut out = Snapshot::default();
+        let needle = crate::util::search_key(query.trim());
+        let dir = self.root.join(encode(account)).join(encode(chat));
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return out;
+        };
+        for entry in entries.flatten() {
+            if !current() {
+                return Snapshot::default();
+            }
+            let name = entry.file_name();
+            let Some(stem) = name.to_str().and_then(|name| name.strip_suffix(".txt")) else {
+                continue;
+            };
+            let Some(message_id) = decode(stem) else {
+                continue;
+            };
+            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                continue;
+            }
+            let Ok(file) = std::fs::File::open(entry.path()) else {
+                continue;
+            };
+            let modified = file
+                .metadata()
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |time| time.as_secs() as i64);
+            let mut bytes = Vec::new();
+            if file
+                .take(MAX_SOURCE_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .is_err()
+            {
+                continue;
+            }
+            if bytes.len() as u64 > MAX_SOURCE_BYTES {
+                out.truncated = true;
+                continue;
+            }
+            let Ok(mut text) = String::from_utf8(bytes) else {
+                continue;
+            };
+            if !crate::util::search_key(&text).contains(&needle) {
+                continue;
+            }
+            if text.len() > SNAPSHOT_HIT_BYTES {
+                out.truncated = true;
+                // Keep the matching line near the start of a clipped result.
+                let matching = preview(&text, query);
+                text = if needle.is_empty() { text } else { matching };
+                let mut end = text.len().min(SNAPSHOT_HIT_BYTES);
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text.truncate(end);
+            }
+            let hit = Hit {
+                account_id: account.into(),
+                chat_id: chat.into(),
+                message_id,
+                text,
+                modified,
+            };
+            retained_bytes += hit.text.len();
+            retained.insert(
+                (std::cmp::Reverse(hit.modified), hit.message_id.clone()),
+                hit,
+            );
+            while retained.len() > SNAPSHOT_HITS || retained_bytes > SNAPSHOT_TEXT_BYTES {
+                if let Some((_, removed)) = retained.pop_last() {
+                    retained_bytes -= removed.text.len();
+                    out.truncated = true;
+                }
+            }
+        }
+        out.hits = retained.into_values().collect();
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reserved_identifiers_roundtrip_without_filename_collisions() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().into(), 1 << 20).unwrap();
+        let ids = ["", "\0", ".", "..", "%EMPTY", "%00", "ordinary"];
+        let mut names = std::collections::HashSet::new();
+        for id in ids {
+            assert_eq!(decode(&encode(id)).as_deref(), Some(id));
+            assert!(names.insert(encode(id)));
+            store.put("acc", "chat", id, "identity marker").unwrap();
+        }
+        let hits = store.snapshot("identity", "acc", "chat").hits;
+        assert_eq!(hits.len(), ids.len());
+        for id in ids {
+            assert!(hits.iter().any(|hit| hit.message_id == id));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_atomic_writes_harden_parents_and_never_follow_file_links() {
+        use std::os::unix::{fs::PermissionsExt, fs::symlink};
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().join("store"), 1 << 20).unwrap();
+        store
+            .put("account", "chat", "message", "private words")
+            .unwrap();
+        let file = store.file_for("account", "chat", "message");
+        for dir in [
+            root.path().join("store"),
+            root.path().join("store/account"),
+            file.parent().unwrap().into(),
+        ] {
+            assert_eq!(
+                std::fs::metadata(dir).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let outside = root.path().join("outside");
+        std::fs::write(&outside, "untouched").unwrap();
+        std::fs::remove_file(&file).unwrap();
+        symlink(&outside, &file).unwrap();
+        store
+            .put("account", "chat", "message", "replacement")
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "untouched");
+        let link = root.path().join("store/linked");
+        symlink(root.path(), link).unwrap();
+        assert!(store.put("linked", "chat", "message", "no").is_err());
+        assert!(
+            !store
+                .file_for("..", ".", "message")
+                .to_string_lossy()
+                .contains("/../")
+        );
+    }
+
+    #[test]
+    fn scoped_snapshot_bounds_text_and_hits_and_searches_before_caps() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), u64::MAX).unwrap();
+        let file = store.file_for("acc", "chat", "seed");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        for i in 0..520 {
+            std::fs::write(
+                store.file_for("acc", "chat", &format!("m{i:04}")),
+                "ordinary",
+            )
+            .unwrap();
+        }
+        std::fs::write(store.file_for("acc", "chat", "z-match"), "needle").unwrap();
+        let snapshot = store.snapshot("", "acc", "chat");
+        assert_eq!(snapshot.hits.len(), SNAPSHOT_HITS);
+        assert!(snapshot.truncated);
+        let found = store.snapshot("needle", "acc", "chat");
+        assert_eq!(found.hits.len(), 1, "query must run before result cap");
+        assert_eq!(found.hits[0].message_id, "z-match");
+        for i in 0..40 {
+            std::fs::write(
+                store.file_for("acc", "large", &format!("m{i}")),
+                "ää".repeat(40_000),
+            )
+            .unwrap_or_else(|_| {
+                std::fs::create_dir_all(store.file_for("acc", "large", "x").parent().unwrap())
+                    .unwrap();
+                std::fs::write(
+                    store.file_for("acc", "large", &format!("m{i}")),
+                    "ää".repeat(40_000),
+                )
+                .unwrap();
+            });
+        }
+        let snapshot = store.snapshot("", "acc", "large");
+        assert!(snapshot.truncated);
+        assert!(
+            snapshot
+                .hits
+                .iter()
+                .all(|h| h.text.len() <= SNAPSHOT_HIT_BYTES)
+        );
+        assert!(snapshot.hits.iter().map(|h| h.text.len()).sum::<usize>() <= SNAPSHOT_TEXT_BYTES);
+        assert!(store.snapshot("needle", "other", "chat").hits.is_empty());
+    }
+
+    #[test]
+    fn obsolete_snapshot_stops_before_reading_files() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::new(root.path().to_owned(), 1 << 20).unwrap();
+        store.put("acc", "chat", "one", "station").unwrap();
+        let snapshot = store.snapshot_while("station", "acc", "chat", || false);
+        assert!(snapshot.hits.is_empty());
+    }
+
+    #[test]
+    fn preview_uses_search_normalization() {
+        assert_eq!(
+            super::preview("First line.\nMeet at the café.", "cafe"),
+            "Meet at the café."
+        );
+    }
     use super::*;
 
     fn job(id: &str) -> Job {
@@ -668,6 +1191,38 @@ mod tests {
         // Same rate in and out still converts to s16le.
         let same = wyoming_pcm_from_mono(&[0.5, -0.5], 16_000);
         assert_eq!(same.len(), 4);
+    }
+
+    #[test]
+    fn encrypted_clear_also_removes_unmigrated_plaintext() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("state").join("transcripts");
+        let store = Store::encrypted(legacy.clone(), 1 << 20).unwrap();
+        // No account archives exist yet, only plaintext awaiting migration.
+        let plaintext = Store::new(legacy.clone(), 1 << 20).unwrap();
+        plaintext.put("1", "chat", "voice", "legacy words").unwrap();
+        store.clear().unwrap();
+        assert!(store.get("1", "chat", "voice").is_none());
+        assert!(legacy.read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn encrypted_deletions_also_remove_pending_legacy_plaintext() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("state").join("transcripts");
+        let store = Store::encrypted(legacy.clone(), 1 << 20).unwrap();
+        let plaintext = Store::new(legacy.clone(), 1 << 20).unwrap();
+        plaintext.put("1", "chat", "voice", "legacy words").unwrap();
+        plaintext.put("1", "chat", "video", "more legacy").unwrap();
+        plaintext.put("1", "other", "voice", "other chat").unwrap();
+        // No account archive exists here, so the encrypted removal errors;
+        // the legacy plaintext must still be deleted.
+        let _ = store.remove("1", "chat", "voice");
+        assert!(plaintext.get("1", "chat", "voice").is_none());
+        let _ = store.remove_chat("1", "chat");
+        assert!(plaintext.get("1", "chat", "video").is_none());
+        let _ = store.remove_account("1");
+        assert!(plaintext.get("1", "other", "voice").is_none());
     }
 
     struct EchoEngine;

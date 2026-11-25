@@ -34,8 +34,10 @@ review, before any line comments:
   party. That is outside the product boundaries.
 - Flag any automation as outside the product boundaries: bots, an MCP server,
   or any API, command-line, plugin or scripting interface that reads, exports
-  or sends messages for another program, and scheduled, bulk or automatic
-  replies. WhatsApp's terms forbid automated use.
+  or sends messages for another program, and bulk or automatic replies. Send
+  Later, including repeating sends to one chat, is allowed, and so are ghost
+  groups (a local list of up to 50 chats you picked, one message you wrote,
+  sent to each separately). WhatsApp's terms forbid automated use.
 
 ## Review priorities
 

@@ -1,7 +1,5 @@
-//! The recent-chat switcher (Ctrl+K): jump between the chats opened
-//! most recently. Older and never-opened chats stay out on purpose - the
-//! command palette (Ctrl+P) and the chat-list search (Ctrl+Shift+F) find
-//! those.
+//! Ctrl+K: recent chats without a query; matching chat names first, then
+//! chat titles and loaded group-member names when typing.
 
 use egui::{Key, Modifiers, Sense, vec2};
 
@@ -23,9 +21,20 @@ pub struct SwitcherEntry {
 /// Tabs whose chat is not loaded (or is gone) and locked chats outside
 /// the unlocked folder stay out: they cannot be opened from here either.
 pub fn entries(app: &App, query: &str) -> Vec<SwitcherEntry> {
-    let needle = query.trim().to_lowercase();
+    let needle = crate::util::search_key(query.trim());
     let mut out = Vec::new();
-    for id in &app.open_tabs {
+    let all: Vec<_> = app
+        .chats
+        .iter()
+        .filter(|chat| !chat.locked)
+        .map(|chat| chat.id.clone())
+        .collect();
+    let ids = if needle.is_empty() {
+        &app.open_tabs
+    } else {
+        &all
+    };
+    for id in ids {
         let Some(chat) = app.chat(id) else {
             continue;
         };
@@ -33,7 +42,7 @@ pub fn entries(app: &App, query: &str) -> Vec<SwitcherEntry> {
             continue;
         }
         let title = app.chat_title(chat);
-        if !needle.is_empty() && !title.to_lowercase().contains(&needle) {
+        if !needle.is_empty() && !keyword_match(&app.chat_search_names(chat), &needle) {
             continue;
         }
         let current = app.open_chat.as_ref() == Some(id);
@@ -56,6 +65,34 @@ pub fn entries(app: &App, query: &str) -> Vec<SwitcherEntry> {
         });
     }
     out
+}
+
+/// Literal/word-subsequence matches rank ahead of typo-tolerant subsequences.
+fn keyword_match(text: &str, query: &str) -> bool {
+    let text = crate::util::search_key(text);
+    query.split_whitespace().all(|word| {
+        if text.contains(word) {
+            return true;
+        }
+        // Short fuzzy keys are too broad; require at least three characters.
+        if word.chars().count() < 3 {
+            return false;
+        }
+        text.split(|character: char| !character.is_alphanumeric())
+            .any(|candidate| {
+                let mut chars = word.chars();
+                let mut next = chars.next();
+                for character in candidate.chars() {
+                    if next == Some(character) {
+                        next = chars.next();
+                    }
+                    if next.is_none() {
+                        return true;
+                    }
+                }
+                false
+            })
+    })
 }
 
 /// Where the highlight starts: the chat after the current one, wrapping,
@@ -91,30 +128,30 @@ fn execute(app: &mut App, id: &ChatId) {
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let entries = entries(app, &app.jump_query);
-    if entries.is_empty() {
+    let count = entries.len();
+    if count == 0 {
         app.jump_selected = 0;
-    } else if app.jump_selected >= entries.len() {
-        app.jump_selected = entries.len() - 1;
+    } else if app.jump_selected >= count {
+        app.jump_selected = count - 1;
     }
 
     // Consume navigation before the query field can move its caret.
     let down = ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::ArrowDown));
     let up = ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::ArrowUp));
     let enter = ui.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Enter));
-    if down && !entries.is_empty() {
-        app.jump_selected = (app.jump_selected + 1) % entries.len();
+    if down && count > 0 {
+        app.jump_selected = (app.jump_selected + 1) % count;
     }
-    if up && !entries.is_empty() {
-        app.jump_selected = (app.jump_selected + entries.len() - 1) % entries.len();
+    if up && count > 0 {
+        app.jump_selected = (app.jump_selected + count - 1) % count;
     }
-    let chosen = if enter && !entries.is_empty() {
+    let chosen = if enter && app.jump_selected < entries.len() {
         Some(entries[app.jump_selected].id.clone())
     } else {
         None
     };
-
     let width = ui.available_width();
-    let hint = crate::i18n::gettext(app.locale, "Recent chats");
+    let hint = crate::i18n::gettext(app.locale, "Chat names");
     let search = widgets::search_field(
         ui,
         &palette,
@@ -131,7 +168,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 
     ui.add_space(6.0);
-    if entries.is_empty() {
+    if count == 0 {
         theme::text(
             ui,
             crate::i18n::gettext(app.locale, "No open chats match"),
@@ -144,13 +181,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical()
         .id_salt("jump-to-chat-rows")
         .max_height((ui.ctx().content_rect().height() - 280.0).clamp(120.0, 380.0))
-        .auto_shrink([false, true])
+        .min_scrolled_height((ui.ctx().content_rect().height() - 280.0).clamp(120.0, 380.0))
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             for (index, entry) in entries.iter().enumerate() {
                 let (rect, response) =
                     ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::click());
                 if index == app.jump_selected || response.hovered() {
                     widgets::row_highlight(ui, &palette, rect, palette.surface_active);
+                }
+                if index == app.jump_selected && (up || down) {
+                    response.scroll_to_me(Some(egui::Align::Center));
                 }
                 if response.hovered() {
                     app.jump_selected = index;
@@ -214,6 +255,70 @@ mod tests {
         chat.network = Some(network.to_string());
         app.chats.push(chat);
         app.open_tabs.push(id.to_string());
+    }
+
+    #[test]
+    fn group_member_names_match_switcher_global_search_and_palette_without_renaming() {
+        let (_root, mut app) = app();
+        let mut group = crate::model::Chat::new("weekend@g.us".into(), "Weekend plans".into());
+        group.participants = vec!["hanna@lid".into(), "lauri@lid".into()];
+        group
+            .participant_names
+            .insert("hanna@lid".into(), "Hanna Mäkinen".into());
+        group
+            .participant_names
+            .insert("lauri@lid".into(), "Lauri Ojanen".into());
+        app.chats.push(group);
+        let matches = entries(&app, "lauri ojanen");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].title, "Weekend plans");
+        app.search = "Hanna Mäkinen".into();
+        app.global_search = true;
+        assert!(
+            app.visible_chats()
+                .iter()
+                .any(|chat| chat.id == "weekend@g.us")
+        );
+        assert!(super::super::palette::entries(&app,"Lauri Ojanen").iter().any(|entry|matches!(&entry.row,super::super::palette::PaletteRow::Chat(id) if id=="weekend@g.us")));
+        app.chats[0].locked = true;
+        assert!(entries(&app, "lauri").is_empty());
+        assert!(
+            !super::super::palette::entries(&app, "lauri")
+                .iter()
+                .any(|entry| matches!(&entry.row, super::super::palette::PaletteRow::Chat(_)))
+        );
+    }
+
+    #[test]
+    fn fuzzy_keywords_and_never_opened_chat_names_are_searchable() {
+        assert!(keyword_match("Tai kissa kotona", "kssa kot"));
+        assert!(!keyword_match("Tai kissa kotona", "koira"));
+        let (_root, mut app) = app();
+        app.chats.push(crate::model::Chat::new(
+            "new@example".into(),
+            "Never opened".into(),
+        ));
+        assert!(entries(&app, "").is_empty());
+        assert_eq!(entries(&app, "never")[0].id, "new@example");
+    }
+
+    #[test]
+    fn fuzzy_keywords_do_not_span_unrelated_words() {
+        assert!(keyword_match("Let's have coffee", "cofe"));
+        assert!(!keyword_match(
+            "check out our vision and values for healthy collaboration",
+            "cofe"
+        ));
+    }
+
+    #[test]
+    fn message_only_matches_do_not_enter_the_name_switcher() {
+        let (_root, mut app) = app();
+        chat(&mut app, "public", "Ada", "WhatsApp");
+        let mut message = crate::archive::tests::message("public", "hit", 1000, false);
+        message.content = crate::model::Content::text("coffee");
+        app.jump_hits.push(message);
+        assert!(entries(&app, "coffee").is_empty());
     }
 
     #[test]

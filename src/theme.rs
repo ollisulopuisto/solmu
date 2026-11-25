@@ -57,6 +57,22 @@ pub fn theme_status(status: fastframe_theme::Status) -> &'static str {
     }
 }
 
+/// The voice and audio player's colours inside a message bubble, from
+/// [`Palette::player_on`].
+#[derive(Clone, Copy, Debug)]
+pub struct PlayerColours {
+    /// The play disc, played bars, seek knob, unheard dot and the active
+    /// speed chip: the accent, nudged to 3:1 against the bubble.
+    pub player: Color32,
+    /// Icons and labels drawn on `player`, at 4.5:1 against it.
+    pub on_player: Color32,
+    /// The unplayed bars and the resting speed chip: the bubble washed
+    /// toward `player`, with a visible edge (1.35:1) against the bubble.
+    pub quiet: Color32,
+    /// The resting speed chip's label, at 4.5:1 against `quiet`.
+    pub on_quiet: Color32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Palette {
     pub dark: bool,
@@ -389,6 +405,36 @@ impl Palette {
                 self.link
             },
             ..*self
+        }
+    }
+
+    /// The media player's colours on a bubble of `fill`. Call this on the
+    /// bubble's own palette (`on_bubble`), so custom themes steer it.
+    ///
+    /// The accent is not always readable on a bubble: the green sits badly
+    /// on your own green bubble. The player colour is the accent nudged
+    /// toward the pole that contrasts the fill until icons reach 3:1 (WCAG
+    /// 1.4.11); what draws on it reaches 4.5:1. The quiet track is the
+    /// bubble washed 30% toward the player colour, nudged further when the
+    /// edge against the bubble falls under 1.35:1, with a label that
+    /// reaches 4.5:1 on it.
+    pub fn player_on(&self, fill: Color32) -> PlayerColours {
+        let pole = |on: Color32| {
+            if contrast(Color32::WHITE, on) >= contrast(Color32::BLACK, on) {
+                Color32::WHITE
+            } else {
+                Color32::BLACK
+            }
+        };
+        let player = readable_on(fill, self.accent, pole(fill), 3.0);
+        let on_player = readable_on(player, self.on_accent, pole(player), 4.5);
+        let quiet = readable_on(fill, blend(fill, player, 0.3), player, 1.35);
+        let on_quiet = readable_on(quiet, self.secondary, pole(quiet), 4.5);
+        PlayerColours {
+            player,
+            on_player,
+            quiet,
+            on_quiet,
         }
     }
 
@@ -811,6 +857,7 @@ fn primary_font() -> fastframe_fonts::Primary {
 /// for the scripts it lacks, hinted as the desktop asks. Inter also draws
 /// the [`tabular`] timers.
 fn install_fonts(ctx: &egui::Context) {
+    FONT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     let primary = primary_font();
     let mut fonts = fastframe_fonts::FontSetup::default()
         .primary(primary)
@@ -883,6 +930,15 @@ pub fn follow_text_rendering(wake: impl Fn() + Send + 'static) {
     }
 }
 
+/// Counts every font reinstall: width caches keyed on font metrics include
+/// the generation in their epoch, so new metrics never reuse old decisions.
+static FONT_GENERATION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The current font generation; a font change is a new layout epoch.
+pub fn font_generation() -> u32 {
+    FONT_GENERATION.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// Reinstalls the fonts when the desktop's text rendering changed since the
 /// last call. Returns whether it did, so the caller reapplies its visuals.
 pub fn apply_text_rendering_change(ctx: &egui::Context) -> bool {
@@ -916,6 +972,7 @@ fastframe_icons::icons! {
         ArrowLeft => lucide "arrow-left",
         Ban => "ban",
         Bell => "bell",
+        Bookmark => "bookmark",
         BellOff => "bell-off",
         Calendar => "calendar",
         Check => lucide "check",
@@ -927,6 +984,8 @@ fastframe_icons::icons! {
         ListChecks => "list-checks",
         QueueAll => "queue-all",
         QueueUnread => "queue-unread",
+        Unread => "unread",
+        UnreadRecent => "unread-recent",
         QueueReply => "queue-reply",
         QueueRead => "queue-read",
         CircleAlert => lucide "circle-alert",
@@ -1658,6 +1717,15 @@ pub fn titlebar_inset(ctx: &egui::Context) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reinstalling_fonts_bumps_the_generation() {
+        let ctx = egui::Context::default();
+        let before = super::font_generation();
+        super::install_fonts(&ctx);
+        // Other tests reinstall fonts too, so only the bump itself is pinned.
+        assert!(super::font_generation() > before);
+    }
+
     use super::*;
 
     /// Timers count in Inter's tabular figures whatever face draws the
@@ -1891,6 +1959,42 @@ mod tests {
         stored["bubbles"] = "messages".into();
         let palette: Palette = serde_json::from_value(stored).unwrap();
         assert_eq!(palette.bubbles, BubbleStyle::WhatsApp);
+    }
+
+    /// The media player reads on every bubble, custom themes included: the
+    /// disc, played bars, knob, dot and active chip at 3:1 (WCAG 1.4.11),
+    /// what draws on them at 4.5:1, the quiet track with a visible edge
+    /// against the bubble, and its label at 4.5:1.
+    #[test]
+    fn player_colours_read_on_every_bubble() {
+        let palettes = [
+            ("dark", Palette::dark()),
+            ("light", Palette::light()),
+            ("messages", Palette::messages()),
+            ("messages light", Palette::messages_light()),
+        ]
+        .into_iter()
+        .map(|(name, palette)| (name.to_owned(), palette))
+        .chain(presets().map(|theme| (theme.filename.clone(), theme.palette)));
+        for (name, palette) in palettes {
+            for own in [false, true] {
+                let fill = if own {
+                    palette.bubble_out
+                } else {
+                    palette.bubble_in
+                };
+                let colours = palette.on_bubble(own).player_on(fill);
+                let name = format!("{name}, {} bubble", if own { "own" } else { "their" });
+                assert_readable(&name, &[("player", colours.player, fill)], 3.0);
+                assert_readable(
+                    &name,
+                    &[("on player", colours.on_player, colours.player)],
+                    4.5,
+                );
+                assert_readable(&name, &[("quiet track", colours.quiet, fill)], 1.35);
+                assert_readable(&name, &[("on quiet", colours.on_quiet, colours.quiet)], 4.5);
+            }
+        }
     }
 
     /// Bubble contents stay readable for every palette, custom ones included.

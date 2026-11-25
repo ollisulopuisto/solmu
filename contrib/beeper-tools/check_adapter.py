@@ -11,12 +11,11 @@ import tempfile
 # These are real modules, not harness-specific leaf stubs. Always stage them
 # from src/ so a copied harness snapshot cannot hide an active-source regression.
 LIVE_MODULES = (
-    'account.rs', 'backend.rs', 'backend/beeper.rs', 'backend/local_ai.rs', 'backend/local_files.rs',
-    'group_admin.rs', 'i18n.rs', 'mentions.rs', 'merged.rs', 'model.rs',
-    'new_group.rs', 'paths.rs', 'safety.rs', 'scheduler.rs',
-    'scheduler_client.rs',
+    'draft_state.rs', 'account.rs', 'categories.rs', 'backend.rs', 'backend/beeper.rs', 'backend/beeper/gallery.rs', 'backend/beeper/shared.rs', 'backend/beeper/ws.rs', 'backend/local_ai.rs', 'backend/local_files.rs', 'backend/picture_edit.rs', 'backend/sticker_store.rs', 'backend/linked_media.rs', 'flat_groups.rs', 'audience_queue.rs', 'composed_forward.rs', 'group_admin.rs', 'i18n.rs', 'mentions.rs', 'merged.rs', 'model.rs', 'suggest.rs', 'pending_media.rs', 'forward_results.rs',
+    'new_group.rs', 'paths.rs', 'recurrence.rs', 'run_widths.rs', 'safety.rs', 'saved.rs', 'scheduler.rs',
+    'text_replace.rs', 'rich_edit.rs', 'literal_hints.rs', 'read_sync.rs',
+    'scheduler_client.rs', 'target.rs',
 )
-
 
 def stage(root: Path, destination: Path) -> None:
     shutil.copytree(root / 'harness', destination,
@@ -25,6 +24,7 @@ def stage(root: Path, destination: Path) -> None:
         source = root / 'src' / relative
         if not source.is_file():
             raise FileNotFoundError(f'Missing live adapter source: {source}')
+        (destination / 'src' / relative).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination / 'src' / relative)
 
 
