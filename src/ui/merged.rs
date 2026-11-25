@@ -756,6 +756,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                     });
             });
     }
+    if destination.is_none() {
+        egui::Panel::bottom("message-key-dock-no-destination")
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                super::message_key_menu::show(app, ui);
+                if !super::message_key_menu::is_open(ui.ctx()) {
+                    super::message_key_menu::buttons(app, ui);
+                }
+            });
+    }
     // Home/End and PageUp/PageDown from the key map land here: the linked
     // timeline owns its scroll area, and the single-chat message list never
     // runs while this view is up.
@@ -1011,13 +1021,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                     height
                                 }
                             };
-                        if !crate::merged::row_near_view(
-                            top,
-                            height,
-                            viewport.top(),
-                            viewport.bottom(),
-                            250.0,
-                        ) {
+                        let keyboard_target = super::message_key_menu::target_is(
+                            ui.ctx(),
+                            &original_message.chat,
+                            &original_message.id,
+                        );
+                        if !keyboard_target
+                            && !crate::merged::row_near_view(
+                                top,
+                                height,
+                                viewport.top(),
+                                viewport.bottom(),
+                                250.0,
+                            )
+                        {
                             ui.add_space(height);
                             previous_laid_out = false;
                             previous_on_screen = false;
@@ -1189,6 +1206,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                                     },
                                 )
                                 .inner;
+                            if keyboard_target
+                                && let Some(rect) = bubble_rect
+                                && super::message_key_menu::take_reveal(
+                                    ui.ctx(),
+                                    &message.chat,
+                                    &message.id,
+                                )
+                            {
+                                ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                            }
                             if bubble_rect.is_some_and(|rect| rect.intersects(viewport)) {
                                 displayed_sources.insert(message.chat.clone());
                             }

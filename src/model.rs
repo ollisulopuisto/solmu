@@ -2821,6 +2821,11 @@ pub enum Action {
     /// A macOS Go, Chat or View menu command, turned into the actions its key
     /// would queue (`ui::keys::menu_actions`).
     MenuCommand(String),
+    OpenMessageKeyMenu {
+        chat: ChatId,
+        message: String,
+        templates: bool,
+    },
     Open(Page),
     /// Opens settings, or closes them when they are already showing.
     ToggleSettings,

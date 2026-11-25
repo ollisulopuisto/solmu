@@ -1,6 +1,7 @@
 //! Window layout: panels, overlays, keyboard shortcuts.
 
 pub mod accounts;
+mod album_menu_target;
 pub mod batch_actions;
 pub mod call_log;
 pub mod chats;
@@ -23,6 +24,7 @@ pub mod lock;
 pub mod login;
 mod media_tools;
 pub mod message_info;
+pub mod message_key_menu;
 pub mod new_group;
 pub mod palette;
 pub mod pane;

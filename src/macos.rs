@@ -173,6 +173,8 @@ fn build_menu() -> tray_icon::menu::Result<Menu> {
         &registered("read-later"),
         &Native::separator(),
         &item("chat-quote-reply", "Quote Reply", None),
+        &registered("message-react-menu"),
+        &registered("message-template-menu"),
         &item("chat-forward", "Forward\u{2026}", None),
         &registered("scroll-bottom"),
         &registered("scroll-top"),

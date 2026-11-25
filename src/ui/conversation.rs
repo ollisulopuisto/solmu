@@ -1566,6 +1566,10 @@ pub(crate) fn composer_with_capabilities(
                 ui.memory_mut(|memory|memory.surrender_focus(egui::Id::new("composer-text")));
             }
 
+            super::message_key_menu::show(app, ui);
+            if super::message_key_menu::is_open(ui.ctx()) {
+                ui.memory_mut(|memory| memory.surrender_focus(egui::Id::new("composer-text")));
+            }
             if let Some((selected_chat, selected)) = app.selection.clone()
                 && selected_chat == chat.id
             {
@@ -1926,7 +1930,8 @@ pub(crate) fn composer_with_capabilities(
                 // The send button closes the row, flush with the field's end.
                 let drafts_width = if app.editing.is_none() { 22.0 + theme::ICON_BUTTON_PAD + ui.spacing().item_spacing.x } else { 0.0 };
                 let field_width =
-                    (ui.available_width() - drafts_width - button_width - SEND_BUTTON_GAP - view_once_width - schedule_width - extras_width - later_width - ui.spacing().item_spacing.x).max(0.0);
+                    (ui.available_width() - drafts_width - button_width - SEND_BUTTON_GAP - view_once_width - schedule_width - extras_width - later_width - if super::message_key_menu::is_open(ui.ctx()) { 0.0 } else { super::message_key_menu::buttons_width(ui) + ui.spacing().item_spacing.x } - ui.spacing().item_spacing.x).max(0.0);
+
                 // The ink is centred on the controls, not the line box: the
                 // span from a capital's top to a descender's bottom sits as far
                 // from the field's top as from its bottom. Inter's box leaves
@@ -2155,6 +2160,9 @@ pub(crate) fn composer_with_capabilities(
                     });
                 if app.editing.is_none() {
                     last_line(ui, line, |ui| super::send_later::button(app, ui, chat, schedule_key));
+                }
+                if !super::message_key_menu::is_open(ui.ctx()) {
+                    last_line(ui, line, |ui| super::message_key_menu::buttons(app, ui));
                 }
                 if let Some(extras) = send_extras.as_mut() {
                     last_line(ui, line, |ui| (extras.render)(app, ui));
@@ -5030,7 +5038,9 @@ fn grouped_hover_actions(
     actions: &mut Vec<Action>,
 ) -> bool {
     use super::hover_actions::{self, Geometry};
-    if !ui.is_enabled() {
+    // A context menu owns foreground input. Its Reply must not compete with
+    // a still-held hover grid bound to the album row's first member.
+    if !ui.is_enabled() || egui::Popup::is_any_open(ui.ctx()) {
         return false;
     }
     let quick = quick_reactions(message, view.reaction_emoji);
@@ -7056,17 +7066,31 @@ fn bubble_frame(
     // In an album the menu belongs to the member under the pointer, so a
     // reply, reaction, forward or deletion reaches that item, not the first.
     let target_id = bubble_id.with("album-target");
-    if album.is_some() && right_clicked {
+    if album.is_some() {
         let pointer = ui.input(|input| input.pointer.interact_pos());
+        let owned = pointer.is_some_and(|pos| {
+            shown.contains(pos)
+                && ui
+                    .ctx()
+                    .layer_id_at(pos)
+                    .is_none_or(|layer| layer == bubble.layer_id)
+        });
+        let (pressed, clicked) = ui.input(|input| {
+            (
+                input.pointer.button_pressed(egui::PointerButton::Secondary),
+                input.pointer.secondary_clicked(),
+            )
+        });
         let hit = tiles
             .iter()
             .find(|(rect, _)| pointer.is_some_and(|pos| rect.contains(pos)))
             .map(|(_, id)| id.clone());
         ui.ctx().data_mut(|data| {
-            if let Some(id) = hit {
-                data.insert_temp(target_id, id);
-            } else {
-                data.remove::<String>(target_id);
+            let mut target = data.get_temp::<String>(target_id);
+            super::album_menu_target::update(&mut target, owned, pressed, clicked, hit);
+            data.remove::<String>(target_id);
+            if let Some(target) = target {
+                data.insert_temp(target_id, target);
             }
         });
     }
@@ -8446,8 +8470,10 @@ pub(crate) fn menu_width(
 fn message_menu_labels(locale: crate::i18n::Locale) -> Vec<String> {
     use crate::i18n::gettext;
     [
+        gettext(locale, "Reactions"),
         gettext(locale, "Reply"),
         gettext(locale, "Reply privately"),
+        gettext(locale, "Quick Replies"),
         gettext(locale, "Star"),
         gettext(locale, "Unstar"),
         gettext(locale, "Forward"),
@@ -8716,7 +8742,10 @@ pub(crate) fn linked_bubble(
 }
 
 /// Quick reactions plus our current reaction when needed.
-fn quick_reactions<'a>(message: &'a Message, preferred: &'a [(String, u32)]) -> Vec<&'a str> {
+pub(crate) fn quick_reactions<'a>(
+    message: &'a Message,
+    preferred: &'a [(String, u32)],
+) -> Vec<&'a str> {
     let mut list = Vec::new();
     for emoji in preferred
         .iter()
@@ -8974,6 +9003,35 @@ fn context_menu(
             }
         },
     );
+    if !message.from_me
+        && !matches!(message.content, Content::Revoked | Content::Call { .. })
+        && matches!(origin, MenuOrigin::Chat)
+    {
+        for (templates, label, icon, binding) in [
+            (false, "Reactions", Icon::Smile, "message-react-menu"),
+            (
+                true,
+                "Quick Replies",
+                Icon::MessageCircle,
+                "message-template-menu",
+            ),
+        ] {
+            if widgets::menu_item_bound(
+                ui,
+                &palette,
+                Some(icon),
+                &crate::i18n::gettext(view.locale, label),
+                binding,
+            ) {
+                actions.push(Action::OpenMessageKeyMenu {
+                    chat: chat.clone(),
+                    message: message.id.clone(),
+                    templates,
+                });
+                ui.close();
+            }
+        }
+    }
     widgets::menu_separator(ui, &palette);
     if !matches!(message.content, Content::Revoked)
         && widgets::menu_item_bound(
@@ -9006,6 +9064,38 @@ fn context_menu(
         actions.push(Action::ReplyPrivately {
             chat: chat.clone(),
             message: message.id.clone(),
+        });
+    }
+    // Quick Replies: a canned Yes/No/Later the reader reviews in the
+    // composer. Choosing one only fills the composer, the way a share
+    // link's text does; it never sends, and a written draft is kept.
+    if !matches!(message.content, Content::Revoked)
+        && (!matches!(origin, MenuOrigin::Chat) || message.from_me)
+    {
+        let quick_replies = [
+            crate::i18n::gettext(view.locale, "Yes"),
+            crate::i18n::gettext(view.locale, "No"),
+            crate::i18n::gettext(view.locale, "Later"),
+        ];
+        let items: Vec<&str> = quick_replies.iter().map(|text| text.as_ref()).collect();
+        let label = crate::i18n::gettext(view.locale, "Quick Replies");
+        widgets::submenu(ui, &palette, Icon::MessageCircle, &label, &items, |ui| {
+            for text in &quick_replies {
+                if widgets::menu_item(ui, &palette, None, text.as_ref()) {
+                    if matches!(origin, MenuOrigin::List) {
+                        actions.push(Action::OpenMessage {
+                            chat: chat.clone(),
+                            message: message.id.clone(),
+                        });
+                    }
+                    actions.push(Action::PrefillComposer {
+                        chat: chat.clone(),
+                        text: text.to_string(),
+                        mentions: Vec::new(),
+                    });
+                    ui.close();
+                }
+            }
         });
     }
     let starred = view.starred.is_some_and(|ids| ids.contains(&message.id));
@@ -16678,6 +16768,91 @@ mod tests {
     }
 
     #[test]
+    fn context_dock_entry_clicks_open_the_exact_message() {
+        with_still_view(|view| {
+            let message =
+                crate::archive::tests::message("1@s.whatsapp.net", "older-menu-target", 0, false);
+            for (label, templates) in [("Reactions", false), ("Quick Replies", true)] {
+                let ctx = egui::Context::default();
+                crate::theme::install(&ctx);
+                let mut actions = Vec::new();
+                let mut draw = |events| {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(600.0, 1400.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| context_menu(ui, view, &message, MenuOrigin::Chat, &mut actions),
+                    );
+                    output.textures_delta.clear();
+                    output
+                };
+                let output = draw(vec![]);
+                fn find(shape: &egui::Shape, label: &str) -> Option<egui::Pos2> {
+                    match shape {
+                        egui::Shape::Text(t) if t.galley.text() == label => {
+                            Some(t.pos + t.galley.size() / 2.0)
+                        }
+                        egui::Shape::Vec(parts) => parts.iter().find_map(|p| find(p, label)),
+                        _ => None,
+                    }
+                }
+                let at = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| find(&s.shape, label))
+                    .expect("context entry label drawn");
+                for pressed in [true, false] {
+                    draw(vec![
+                        egui::Event::PointerMoved(at),
+                        egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: Modifiers::NONE,
+                        },
+                    ]);
+                }
+                assert!(actions.iter().any(|a|matches!(a,Action::OpenMessageKeyMenu{message,templates:chosen,..}if message=="older-menu-target"&&*chosen==templates)));
+            }
+        });
+    }
+    #[test]
+    fn context_dock_entries_consume_their_chords_on_the_exact_message() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        with_still_view(|view| {
+            let message =
+                crate::archive::tests::message("1@s.whatsapp.net", "older-menu-target", 0, false);
+            for (key, templates) in [(Key::T, false), (Key::Y, true)] {
+                let mut actions = Vec::new();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(600.0, 1400.0),
+                        )),
+                        events: vec![egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: Modifiers::COMMAND,
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| context_menu(ui, view, &message, MenuOrigin::Chat, &mut actions),
+                );
+                output.textures_delta.clear();
+                assert!(actions.iter().any(|a|matches!(a,Action::OpenMessageKeyMenu{message,templates:chosen,..}if message=="older-menu-target"&&*chosen==templates)));
+            }
+        });
+    }
+    #[test]
     fn context_menu_shortcut_targets_the_menu_message_not_the_latest() {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
@@ -17601,10 +17776,13 @@ mod reaction_tests {
         for row in menu_fixtures(&file) {
             let spanish = drawn_menu_words(crate::i18n::Locale::Spanish, &row);
             for english in drawn_menu_words(crate::i18n::Locale::English, &row) {
-                // "Save for later" awaits catalog extraction: until the
-                // maintainer regenerates them, every locale draws it in
-                // English, so it cannot count as untranslated here.
-                if matches!(english.as_str(), "Save for later" | "Hide in Solmu") {
+                // "Save for later" and "Quick Replies" await catalog extraction:
+                // until the maintainer regenerates them, every locale draws them
+                // in English, so they cannot count as untranslated here.
+                if matches!(
+                    english.as_str(),
+                    "Save for later" | "Hide in Solmu" | "Quick Replies" | "Reactions"
+                ) {
                     continue;
                 }
                 assert!(!spanish.contains(&english), "{english} in {spanish:?}");
@@ -17640,6 +17818,8 @@ mod reaction_tests {
                 || text == "Save for later"
                 || text == "Remove from Saved"
                 || text == "Hide in Solmu"
+                || text == "Quick Replies"
+                || text == "Reactions"
         };
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("photo.jpg");
@@ -17695,7 +17875,7 @@ mod reaction_tests {
             .map(String::as_str)
             .filter(|label| !labels.iter().any(|drawn| drawn == label))
             .collect();
-        assert_eq!(undrawn, ["Reply privately"]);
+        assert_eq!(undrawn, ["Reactions", "Reply privately"]);
         // Hover texts are not in the accessibility tree.
         labels.extend(["React with any emoji".into(), "Remove your reaction".into()]);
         labels.sort();

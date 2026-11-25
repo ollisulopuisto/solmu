@@ -4,6 +4,10 @@ Owner asked Nov25 15:40 for cursor placement,15:45 for target highlight,15:48 fo
 
 # Work log
 
+## 2026-11-24: Quick Replies in the message context menu
+
+Approved Lokikirja sketch (item solmu-quick-replies-sketch-20261123: sketch seq272, owner "Looks good, build" seq287). The message menu gains a Quick Replies submenu (Yes / No / Later) between Reply privately and Star. A choice reuses the existing Action::PrefillComposer path: the text lands in the composer marked as an untouched prefill with the composer focused, an already written draft is never overwritten (the reader gets the existing keep-or-clear toast), and nothing is sent. From the starred list the chat opens at the message first, the same as Reply. The composer text follows the interface language, so the new gettext keys ("Quick Replies", "Yes", "No", "Later") await the maintainer's catalog extraction; the two menu-language tests exempt "Quick Replies" meanwhile (the submenu rows are not drawn closed, so they are outside those fixtures). Demo tests: hovering the row opens the submenu with Yes/No/Later (found as one column, so a Yes elsewhere on screen is never clicked); clicking Yes fills and focuses the composer, closes the menu and records no SendText; a written draft is never overwritten (keep-or-clear toast); a second choice while the first sits untouched is refused the same way, matching the share-link prefill rule; from the starred list the choice opens the message's chat first and lands in its composer. No version bump: Unreleased collects the bullet until the next release. Not compiled locally (no Rust toolchain in this checkout), CI is the check. A deterministic capture scene ships with it: the quick-replies-menu demo page opens the message menu while the shot harness holds a synthetic pointer on the Quick Replies row, whose rect the submenu records under its label (the same mechanism as the link menu's web-link-hits), so the shot shows the open Yes/No/Later column. No merge by the author.
+
 ## 2026-11-25: Keep earlier album files during small downloads
 
 Branch fix/album-cache-eviction. Manual downloads reserved the entire maximum transfer allowance before writing, making the default256MiB cache empty itself on each tiny image. Reserve each received chunk against the actual cache size instead, exclude the active partial and staged uploads, fail closed if protected bytes exhaust the budget. Per-file64/500MiB limits and the account budget remain. Added three-image HTTP regression and partial-budget test; existing unknown-length oversize test retained. Local extracted std-only reservation harness fails under the old eviction model and passes the new helper (2tests), but full HTTP/native regressions not run locally because no cached dependency build and209MiB free. Native CI must run those before merge. Traced cache_files, trim_cache callers (unchanged), temporary cleanup, media limits and download completion. No auto-download policy, workflow, DB, credentials or version change; PR only.
@@ -1605,6 +1609,46 @@ old short-info no-scroll contract changes because the approved metadata adds
 height, so viewport test now covers bounded scrolling instead. Exact-source
 metadata harness compiles/passes with minimal model stubs; no full native build
 or pixel claim locally. Workflow capture changes need separate approval.
+
+## Issue463 keyboard message menus
+
+Added two-stage latest-incoming reaction and Quick Replies menus. Reuses existing reaction/pre-fill actions and PR456 Quick Replies, no automatic text send. Snapshots exact target and options, invalidates stale ownership, consumes bare numeric selection before composer. Cmd-T and Cmd-Y in shared registry/native menus/help. Olli explicitly approved replacing the extra Cmd-Y Redo alias; Cmd-Shift-Z remains Redo. Interaction tests cover target stability, navigation cancellation, Escape and draft preservation. Local formatting passes; native compile/tests/screenshots are still pending CI. No merge.
+
+## Non-covering keyboard dock (2026-11-24)
+
+Owner488 approved reserved dock with discovery icons/context-menu shortcuts and
+no explanatory labels. Replaced centered Modal with space inside composer panel;
+added icon routes and exact-message context entries with registry CmdT/CmdY hints.
+Context action snapshots explicit target, keyboard/icon routes latest incoming.
+Normal timeline scroll anchor and linked-row exact-source scroll keep target in
+remaining transcript, including virtualized linked row. Linked no-destination
+case has its own reserved bottom dock. Native menu accelerators while context is
+open are rerouted to that menu. Invalidation frame consumes text/digits too.
+Own review traced downstream Action matches, linked routes, draft guards, context
+width and translation tests, keyboard/native routing and popup lifecycle. Added
+explicit older-context-target regression. Fmt/diff checks pass. Native compile,
+full tests and actual updated dock captures pending CI. No merge/release.
+
+Independent delta review follow-up: linked target reveal is now consumed once on
+open; its virtualization exemption stays until close without forcing scroll each
+frame. Discovery icon names and Close tooltip now pass through gettext. Added
+reveal one-shot and invalidation-frame digit/text-consumption regressions. Context
+older-target test remains. Full native icon/context click pixels still pending CI.
+
+464 CI follow-up: kept the plus/emoji/text spacing unchanged by moving the compact discovery pair after the text field, measured explicitly and vertically aligned through the existing last-line helper. Album menus now capture their exact member on secondary press as well as release and preserve that press target across a release frame with no tile hit. Existing album pointer regressions failed at cc7f619 and remain the native gate, alongside composer geometry tests. Collapsed the Quick Replies destination guard per Clippy. Local fmt/diff checks pass; native retest pending, no merge.
+
+FIND-solmu-464-4: extracted the album-target transition so two standalone Rust regressions could run without the full native dependency build. Both failed with the previous transition (floating-layer retarget and stale no-hit release), then passed after requiring row/layer ownership for press and release and clearing target on every owned no-hit transition. The live caller computes the same layer guard as right_clicked. Native full-frame album tests remain required and pending; isolated transition tests are not a native interaction pass. Approved trim-only workflow untouched.
+
+464 native evidence follow-up: b2d23cf passes composer geometry and private-source-strip tests but still fails the two exact album context-menu interactions. Do not claim the press-state change fixed those tests. Add explicit post-press/release member assertions to locate whether loss occurs before or after menu selection; keep the final reply assertion. Fix Linux demo capture's FnMut move error by computing the Copy menu option before the closure. Native diagnostic run pending.
+
+464 album diagnostics b22: both exact-target assertions pass on secondary
+release, final Reply still selects album0. Consumer trace found a second Reply
+control in the still-held hover grid, bound to the album row's first member;
+menu additions change geometry enough to expose it in the accessibility click
+path. Hide foreground hover actions while any context popup owns input. The
+existing failing two album tests are unchanged at their final target assertion;
+they now also require exactly one Reply control. Fresh native results needed,
+not claiming fixed from this trace alone. No workflow or capture changes.
 
 ## Reply tail matches the regular bubble (2026-11-24)
 

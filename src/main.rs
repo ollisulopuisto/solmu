@@ -79,9 +79,9 @@ struct Cli {
     #[arg(long, conflicts_with = "demo_macos")]
     demo_titlebar: bool,
 
-    /// Demo view: `chat`, `phone-menu`, `link-menu`, `empty`, `settings`, `login`,
-    /// `pair`, `shortcuts`, `about`, `info`, `mention`, `light`, or a comma-separated
-    /// mix such as `chat,light`.
+    /// Demo view: `chat`, `phone-menu`, `link-menu`, `quick-replies-menu`, `empty`,
+    /// `settings`, `login`, `pair`, `shortcuts`, `about`, `info`, `mention`, `light`,
+    /// or a comma-separated mix such as `chat,light`.
     #[cfg(feature = "demo")]
     #[arg(long)]
     demo_page: Option<String>,
@@ -428,6 +428,19 @@ fn run() -> eframe::Result<()> {
         page.split(',')
             .any(|part| matches!(part.trim(), "thread" | "tail-thread"))
     });
+    #[cfg(feature = "demo")]
+    let demo_quick_replies_menu = cli.demo_page.as_deref().is_some_and(|page| {
+        page.split(',')
+            .any(|part| part.trim() == "quick-replies-menu")
+    });
+    #[cfg(feature = "demo")]
+    let demo_message_keys = cli.demo_page.as_deref().and_then(|page| {
+        page.split(',').find_map(|part| match part {
+            "message-reaction-keys" => Some(false),
+            "message-template-keys" => Some(true),
+            _ => None,
+        })
+    });
     let mut update_receipt = launch.receipt;
     // The link, archive, and tray outlive windows. The shell recreates a
     // window when the tray, a notification, or another launch requests one;
@@ -511,7 +524,11 @@ fn run() -> eframe::Result<()> {
                         #[cfg(feature = "demo")]
                         link_menu_click: if demo_link_menu { 12 } else { 0 },
                         #[cfg(feature = "demo")]
+                        quick_replies_hover: demo_quick_replies_menu,
+                        #[cfg(feature = "demo")]
                         open_thread: demo_thread,
+                        #[cfg(feature = "demo")]
+                        open_message_keys: demo_message_keys,
                         #[cfg(feature = "demo")]
                         tour,
                     }))
@@ -679,7 +696,11 @@ struct Shell {
     #[cfg(feature = "demo")]
     open_thread: bool,
     #[cfg(feature = "demo")]
+    open_message_keys: Option<bool>,
+    #[cfg(feature = "demo")]
     link_menu_click: u8,
+    #[cfg(feature = "demo")]
+    quick_replies_hover: bool,
 }
 
 /// Pending screenshot request.
@@ -764,6 +785,17 @@ impl eframe::App for Shell {
                 self.link_menu_click -= 1;
                 ctx.request_repaint();
             }
+        }
+        // The Quick Replies capture holds the pointer on the submenu row,
+        // whose rect the menu records under its label, so the shot shows the
+        // open Yes/No/Later column, not just the menu.
+        if self.quick_replies_hover
+            && let Some(rect) = ctx.data(|data| {
+                data.get_temp::<egui::Rect>(egui::Id::new(("submenu-row", "Quick Replies")))
+            })
+        {
+            input.events.push(egui::Event::PointerMoved(rect.center()));
+            ctx.request_repaint();
         }
         // Moves the pointer only while it is elsewhere: each move restarts
         // egui's tooltip delay, so a fake pointer that kept moving in place
@@ -856,6 +888,10 @@ impl Shell {
         #[cfg(feature = "demo")]
         if std::mem::take(&mut self.open_thread) {
             solmu::demo::open_thread_shot(app, ui.ctx());
+        }
+        #[cfg(feature = "demo")]
+        if let Some(templates) = self.open_message_keys.take() {
+            solmu::ui::message_key_menu::open(app, ui.ctx(), templates);
         }
         app.frame_ui(ui);
         let startups: Vec<_> = app

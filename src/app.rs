@@ -13116,6 +13116,13 @@ impl App {
                 });
             }
             Action::ToggleFlatGroups => {}
+            Action::OpenMessageKeyMenu {
+                chat,
+                message,
+                templates,
+            } => {
+                crate::ui::message_key_menu::open_target(self, ctx, chat, message, templates);
+            }
             Action::MenuCommand(id) => {
                 // The scroll jumps' menu accelerators bypass the key handler
                 // (AppKit turns the chord into a menu event first), so the
@@ -13142,6 +13149,13 @@ impl App {
                             modifiers: egui::Modifiers::COMMAND,
                         });
                     });
+                    return;
+                }
+                if matches!(id.as_str(), "chat-react-menu" | "chat-template-menu") {
+                    crate::ui::message_key_menu::open(self, ctx, id == "chat-template-menu");
+                    return;
+                }
+                if crate::ui::message_key_menu::is_open(ctx) {
                     return;
                 }
                 let actions = crate::ui::keys::menu_actions(self, &id);
