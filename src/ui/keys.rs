@@ -177,21 +177,18 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     let menu_open = egui::Popup::is_any_open(ctx);
     let mut actions = Vec::new();
     ctx.input_mut(|input| {
-        // The message list's key counts only with its modifier alone:
-        // `consume_key` would also take Alt+Shift+2, and on macOS
-        // Command+Control+2, which is Command+2's favorite.
+        // Shifted digits report symbols on Finnish and other layouts;
+        // focus uses the physical digit, with exactly Command-Shift.
         #[cfg(target_os = "macos")]
-        let messages_key_free = input.events.iter().any(|event| {
-            matches!(
-                event,
-                egui::Event::Key {
-                    key: Key::Num2,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } if messages_modifier_alone(*modifiers)
-            )
-        });
+        if app.dialog.is_none()
+            && !app.show_update
+            && app.picker.is_none()
+            && app.reaction_target.is_none()
+            && app.recording.is_none()
+            && take_message_focus(input)
+        {
+            actions.push(Action::FocusMessages);
+        }
         // Cmd+Shift+G folds every group heading (unfolds when all are
         // folded). Consumed before plain Cmd+G below: consume_key also
         // matches an event carrying extra modifiers, so the layout toggle
@@ -306,25 +303,6 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             }
             let (modifiers, key_code) = SCROLL_TOP.keys[0];
             key(modifiers, key_code, Action::ScrollPage(Scroll::Top));
-        }
-        // The message list keeps Control+2 on macOS, where Command+1 to 9
-        // open favorites and Option with a digit types characters some
-        // keyboard layouts need, such as # and €. Elsewhere Alt+2 now
-        // picks the second network, so the list is reached by Tab.
-        #[cfg(target_os = "macos")]
-        if app.dialog.is_none()
-            && !app.show_update
-            && app.picker.is_none()
-            && app.reaction_target.is_none()
-            && app.recording.is_none()
-            // The call screen covers the chats.
-                && messages_key_free
-        {
-            #[cfg(target_os = "macos")]
-            {
-                let (modifiers, key_code) = FOCUS_MESSAGES.keys[0];
-                key(modifiers, key_code, Action::FocusMessages);
-            }
         }
         // The rail's Chats, by the digit's place on the keyboard: with
         // Shift held, layouts report the digit as its symbol.
@@ -1311,23 +1289,39 @@ fn account_switch_action(app: &App, forward: bool) -> Option<Action> {
     Some(Action::SwitchAccount(app.accounts[next].id.clone()))
 }
 
-/// Control held with no other modifier: on macOS, Command+Control is
-/// Command's, which `consume_key` would also match as Control.
+/// Exact Command-Shift on macOS, never physical Control (Spaces).
 #[cfg(any(target_os = "macos", test))]
-fn control_alone(modifiers: Modifiers) -> bool {
-    modifiers.ctrl && !modifiers.command && !modifiers.mac_cmd && !modifiers.alt && !modifiers.shift
-}
-
-/// The message list's modifier held alone: Control on macOS, Alt elsewhere.
-#[cfg(target_os = "macos")]
 fn messages_modifier_alone(modifiers: Modifiers) -> bool {
-    control_alone(modifiers)
+    modifiers.command && modifiers.shift && !modifiers.ctrl && !modifiers.alt
 }
 
-/// The message list's shortcut on macOS: Control+2, where Command with a
-/// digit opens a favorite. Elsewhere Alt+2 picks the second network.
-#[cfg(target_os = "macos")]
-const MESSAGES_KEYS: &str = "Control+2";
+#[cfg(any(target_os = "macos", test))]
+fn take_message_focus(input: &mut egui::InputState) -> bool {
+    let mut taken = false;
+    input.events.retain(|event| {
+        if !taken
+            && let egui::Event::Key {
+                key,
+                physical_key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            && physical_key.unwrap_or(*key) == FOCUS_MESSAGES.keys[0].1
+            && messages_modifier_alone(*modifiers)
+        {
+            taken = true;
+            return false;
+        }
+        true
+    });
+    taken
+}
+
+/// The message list uses Command-Shift-2 on macOS. Control-2 stays with
+/// Spaces; Command-2 opens a favorite, Option-2 picks a network.
+#[cfg(any(target_os = "macos", test))]
+const MESSAGES_KEYS: &str = "Ctrl+Shift+2";
 
 /// Command (Ctrl elsewhere) with Shift held, as a constant for the table:
 /// `Modifiers::COMMAND | Modifiers::SHIFT` is not a const expression.
@@ -1644,10 +1638,10 @@ const QUIT: Shortcut = Shortcut {
         accelerator: "Super+KeyQ",
     }),
 };
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const FOCUS_MESSAGES: Shortcut = Shortcut {
     id: "focus-messages",
-    keys: &[(Modifiers::CTRL, Key::Num2)],
+    keys: &[(COMMAND_SHIFT, Key::Num2)],
     label: Some(MESSAGES_KEYS),
     description: Some("Go to the message list"),
     menu: None,
@@ -3276,22 +3270,53 @@ mod tests {
     }
 
     #[test]
-    fn only_control_alone_counts_as_the_macos_messages_key() {
-        assert!(control_alone(Modifiers::CTRL));
-        // Command+Control+2 stays Command+2's chat.
-        assert!(!control_alone(Modifiers {
-            ctrl: true,
-            command: true,
-            ..Modifiers::NONE
-        }));
-        assert!(!control_alone(Modifiers {
-            ctrl: true,
+    fn message_focus_matches_physical_two_with_shifted_layout_symbols() {
+        let ctx = egui::Context::default();
+        for (key, physical, modifiers, expected) in [
+            (Key::Exclamationmark, Some(Key::Num2), COMMAND_SHIFT, true),
+            (Key::Num2, None, COMMAND_SHIFT, true),
+            (Key::Num2, Some(Key::Num2), Modifiers::CTRL, false),
+            (
+                Key::Exclamationmark,
+                Some(Key::Num2),
+                COMMAND_SHIFT | Modifiers::ALT,
+                false,
+            ),
+            (Key::Num1, Some(Key::Num1), COMMAND_SHIFT, false),
+        ] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: physical,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.input_mut(|input| {
+                        assert_eq!(take_message_focus(input), expected);
+                        assert_eq!(input.events.is_empty(), expected);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn message_focus_uses_command_shift_not_spaces_control_digit() {
+        assert!(messages_modifier_alone(COMMAND_SHIFT));
+        assert!(messages_modifier_alone(Modifiers {
             mac_cmd: true,
-            command: true,
-            ..Modifiers::NONE
+            ..COMMAND_SHIFT
         }));
-        assert!(!control_alone(Modifiers::CTRL | Modifiers::SHIFT));
-        assert!(!control_alone(Modifiers::NONE));
+        assert!(!messages_modifier_alone(Modifiers::CTRL));
+        assert!(!messages_modifier_alone(Modifiers::COMMAND));
+        assert!(!messages_modifier_alone(COMMAND_SHIFT | Modifiers::CTRL));
+        assert!(!messages_modifier_alone(COMMAND_SHIFT | Modifiers::ALT));
     }
 
     #[test]
@@ -3881,13 +3906,11 @@ mod tests {
         let (_root, mut app, ids) = app_with_chats(1);
         app.open_chat = Some(ids[0].clone());
         let ctx = egui::Context::default();
-        let modifiers = if cfg!(target_os = "macos") {
-            Modifiers::CTRL
-        } else {
-            Modifiers::ALT
-        };
-        assert!(!press(&mut app, &ctx, Key::Num2, modifiers));
+        assert!(!press(&mut app, &ctx, Key::Num2, COMMAND_SHIFT));
         assert_eq!(app.actions, [Action::FocusMessages]);
+        app.actions.clear();
+        assert!(press(&mut app, &ctx, Key::Num2, Modifiers::CTRL));
+        assert!(app.actions.is_empty());
     }
 
     /// Ctrl+Alt+2 picks the second sidebar filter, and keeps working with
@@ -3915,8 +3938,7 @@ mod tests {
         );
     }
 
-    /// The list's shortcut and the rail's Ctrl+Shift+1 (Cmd on macOS) never
-    /// take each other's keys, and Shift does not turn one into the other.
+    /// Message focus and rail destinations never take extra modifiers.
     #[cfg(target_os = "macos")]
     #[test]
     fn the_messages_shortcut_and_the_rail_keys_stay_apart() {
@@ -3924,15 +3946,11 @@ mod tests {
         app.link = crate::backend::LinkStatus::Connected;
         app.open_chat = Some(ids[0].clone());
         let ctx = egui::Context::default();
-        let messages = if cfg!(target_os = "macos") {
-            Modifiers::CTRL
-        } else {
-            Modifiers::ALT
-        };
+        let messages = COMMAND_SHIFT;
         press(&mut app, &ctx, Key::Num2, messages);
         assert_eq!(app.actions, [Action::FocusMessages]);
         app.actions.clear();
-        press(&mut app, &ctx, Key::Num2, messages | Modifiers::SHIFT);
+        press(&mut app, &ctx, Key::Num2, messages | Modifiers::ALT);
         assert!(
             !app.actions.contains(&Action::FocusMessages),
             "{:?}",
