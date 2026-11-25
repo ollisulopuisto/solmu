@@ -15,6 +15,10 @@ zero, and the number of the release in that month, starting at 1 (`26.11.1`).
 Cargo, the Mac bundle and the Windows installer need three numeric parts, so
 this is the whole scheme. Older releases (`v0.24.21` and before) keep their numbers.
 
+## 26.11.16
+
+- Declare Swift for Darwin Nix launcher typechecks instead of depending on host Xcode discovery.
+
 ## Unreleased
 
 ## 26.11.14

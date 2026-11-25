@@ -53,8 +53,18 @@ fn whatsapp_links_are_registered_and_forwarded_without_a_shell() {
 fn the_beeper_url_launcher_typechecks_on_macos() {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packaging/macos/BeeperLauncher.swift");
-    let output = std::process::Command::new("xcrun")
-        .args(["swiftc", "-typecheck"])
+    // Nix provides a pinned compiler explicitly; ordinary macOS builds keep
+    // using the active Xcode toolchain. Missing compilers remain a hard failure.
+    let mut command = match std::env::var_os("SOLMU_SWIFTC") {
+        Some(compiler) => std::process::Command::new(compiler),
+        None => {
+            let mut command = std::process::Command::new("xcrun");
+            command.arg("swiftc");
+            command
+        }
+    };
+    let output = command
+        .arg("-typecheck")
         .arg(path)
         .output()
         .expect("Xcode Swift compiler");
@@ -63,4 +73,12 @@ fn the_beeper_url_launcher_typechecks_on_macos() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn nix_darwin_declares_the_swift_compiler_for_launcher_checks() {
+    let flake =
+        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("flake.nix")).unwrap();
+    assert!(flake.contains("nativeCheckInputs = pkgs.lib.optionals isDarwin [ pkgs.swift ];"));
+    assert!(flake.contains(r#"SOLMU_SWIFTC = "${pkgs.swift}/bin/swiftc";"#));
 }

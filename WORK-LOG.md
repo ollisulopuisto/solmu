@@ -1676,3 +1676,16 @@ no local Rust toolchain, so fresh CI and native pixels remain pending.
 
 ### Mac message-focus exact modifier follow-up
 Native macOS CI caught egui matches_exact accepting physical Ctrl alongside its Command alias. Replaced that matcher with explicit Command+Shift/no-Control/no-Alt fields, preserving the failing regression. Shifted physical Digit2 routing unchanged. Own adversarial delta review RAN; no workflow/DB/credential changes. Native rerun required before merge.
+## Nix Darwin Swift launcher typecheck
+Diagnosed exact main255f9c4 job139071898914: packaging_macos test failed because
+xcrun cannot find swiftc in the Nix sandbox. Current main61ceed7 still lacked
+the compiler. Declare Darwin-only Swift check input and explicit SOLMU_SWIFTC,
+keep ordinary Xcode fallback and strict compile success requirement. No skip,
+workflow, DB, credentials or runtime app change. Pinned nixpkgs20b1ddd source
+confirms swift attribute and propagated SDK. Own adversarial review RAN: traced
+check env, platform guard, subprocess args and ordinary non-Nix fallback.
+Portable declaration guard added. Native Nix/Darwin build not run locally,
+requires explicit native CI validation; default PR CI may only build Linux Nix.
+Version26.11.16 reserved for this PR; serial Solmu merges may require rebasing and a fresh version before merge.
+
+Rebased after merged46735804e5, conflict resolution retains both work logs, version26.11.16. No implementation delta from reviewed97a8ffb. Darwin Nix validation remains unperformed.
