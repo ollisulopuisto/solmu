@@ -5704,6 +5704,7 @@ impl App {
                         refs: still_unresolved,
                     });
                 }
+                self.download_incoming_images(&chat);
                 // A message that arrives while the viewer is open joins its album.
                 if !older {
                     self.refresh_viewer_album(&chat);
@@ -5897,6 +5898,7 @@ impl App {
             }
             Event::MessageUpdated(message) => {
                 let mut message = *message;
+                let download_chat = message.chat.clone();
                 message.forwarded |= self.is_composed_forward(&message);
                 // The starred panel holds its own copy. An edit has to
                 // replace that row, or the open list keeps the old text.
@@ -5977,6 +5979,7 @@ impl App {
                 if let Some(chat) = restamped.filter(|_| !self.events_hidden) {
                     self.order_selection(&chat);
                 }
+                self.download_incoming_images(&download_chat);
             }
             Event::Contacts(contacts) => {
                 if live {
@@ -8150,6 +8153,39 @@ impl App {
         {
             self.store_draft(chat, &text);
             self.drafts.insert(chat.to_owned(), text);
+        }
+    }
+
+    /// Incoming images join the existing bounded media queue without waiting
+    /// for a visible bubble. The account's automatic-download opt-out still wins.
+    fn download_incoming_images(&mut self, chat: &str) {
+        if !self.account().settings.auto_download || self.chat(chat).is_some_and(|c| c.locked) {
+            return;
+        }
+        let Some(conversation) = self.conversations.get_mut(chat) else {
+            return;
+        };
+        let mut ids = Vec::new();
+        for message in &mut conversation.messages {
+            if message.from_me {
+                continue;
+            }
+            if let Content::Image { media, .. } = &mut message.content
+                && media.path.is_none()
+                && matches!(media.state, MediaState::Idle)
+                && media.is_within_download_limit()
+            {
+                media.state = MediaState::Downloading;
+                ids.push(message.id.clone());
+            }
+        }
+        for message in ids {
+            self.backend.send(Command::Download {
+                manual: false,
+                card: None,
+                chat: chat.to_owned(),
+                message,
+            });
         }
     }
 
@@ -34329,6 +34365,95 @@ mod conversation_palette_tests {
         assert!(app.show_saved && !app.show_starred);
         app.apply(Action::ToggleSaved, &ctx);
         assert!(!app.show_saved && !app.show_starred);
+    }
+
+    #[test]
+    fn incoming_album_images_download_before_becoming_visible_without_duplicates() {
+        let mut app = app();
+        app.backend.record_demo_commands();
+        app.account_mut().settings.auto_download = true;
+        app.open_chat = Some("other".into());
+        let messages: Vec<_> = (0..3)
+            .map(|i| {
+                let mut message =
+                    crate::archive::tests::message("album-chat", &format!("image-{i}"), i, false);
+                message.content = Content::Image {
+                    caption: None,
+                    media: crate::model::Media {
+                        album: None,
+                        mime: "image/jpeg".into(),
+                        size: 1000,
+                        width: Some(100),
+                        height: Some(100),
+                        path: None,
+                        state: MediaState::Idle,
+                    },
+                    motion: None,
+                };
+                message
+            })
+            .collect();
+        app.apply_backend_event(
+            Event::Messages {
+                chat: "album-chat".into(),
+                messages: messages.clone(),
+                older: false,
+                complete: true,
+            },
+            true,
+        );
+        let commands = app.backend.take_demo_commands();
+        assert_eq!(commands.iter().filter(|c| matches!(c, Command::Download { manual: false, chat, .. } if chat == "album-chat")).count(), 3);
+        app.apply_backend_event(
+            Event::Messages {
+                chat: "album-chat".into(),
+                messages,
+                older: false,
+                complete: true,
+            },
+            true,
+        );
+        assert!(
+            !app.backend
+                .take_demo_commands()
+                .iter()
+                .any(|c| matches!(c, Command::Download { .. }))
+        );
+    }
+    #[test]
+    fn automatic_image_download_respects_opt_out_and_existing_limits() {
+        let mut app = app();
+        app.backend.record_demo_commands();
+        let mut image = crate::archive::tests::message("images", "large", 0, false);
+        image.content = Content::Image {
+            caption: None,
+            media: crate::model::Media {
+                album: None,
+                mime: "image/jpeg".into(),
+                size: 65 << 20,
+                width: None,
+                height: None,
+                path: None,
+                state: MediaState::Idle,
+            },
+            motion: None,
+        };
+        app.conversations
+            .entry("images".into())
+            .or_default()
+            .messages
+            .push(image);
+        app.account_mut().settings.auto_download = true;
+        app.download_incoming_images("images");
+        assert!(app.backend.take_demo_commands().is_empty());
+        app.conversations.get_mut("images").unwrap().messages[0]
+            .content
+            .media_mut()
+            .unwrap()
+            .size = 1000;
+        app.account_mut().settings.auto_download = false;
+        app.download_incoming_images("images");
+        assert!(app.backend.take_demo_commands().is_empty());
     }
 
     #[test]
