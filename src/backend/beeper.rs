@@ -438,6 +438,12 @@ struct Api {
 }
 
 /// Account-scoped exact self identities only, never names/phone suffix matching.
+fn reaction_source_matches(wire: &BeeperMessage, chat: &BeeperChat, expected: &str) -> bool {
+    (wire.chat_id.is_empty() || wire.chat_id == expected)
+        && chat.id == expected
+        && (wire.account_id.is_empty() || wire.account_id == chat.account_id)
+}
+
 fn current_own_reaction_key(
     wire: &BeeperMessage,
     chat: &BeeperChat,
@@ -5388,10 +5394,7 @@ pub fn run(
                         let wire = api.get_message(&chat, &message);
                         let chat_wire = api.get_chat(&chat);
                         let key = wire.ok().zip(chat_wire.ok()).and_then(|(wire, chat_wire)| {
-                            if wire.chat_id != chat
-                                || chat_wire.id != chat
-                                || wire.account_id != chat_wire.account_id
-                            {
+                            if !reaction_source_matches(&wire, &chat_wire, &chat) {
                                 log::warn!(
                                     "reaction removal: source identity mismatch; no removal sent"
                                 );
@@ -11736,6 +11739,31 @@ mod tests {
         );
         assert!(requests.lock().unwrap().is_empty());
         stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn reaction_source_accepts_absent_ids_but_rejects_conflicting_ids() {
+        let chat: BeeperChat =
+            serde_json::from_value(serde_json::json!({"id":"chat","accountID":"work"})).unwrap();
+        for (wire_chat, wire_account, expected) in [
+            ("", "", true),
+            ("chat", "", true),
+            ("", "work", true),
+            ("chat", "work", true),
+            ("other", "work", false),
+            ("chat", "other", false),
+        ] {
+            let wire: BeeperMessage = serde_json::from_value(
+                serde_json::json!({"id":"message","chatID":wire_chat,"accountID":wire_account}),
+            )
+            .unwrap();
+            assert_eq!(
+                reaction_source_matches(&wire, &chat, "chat"),
+                expected,
+                "{wire_chat}/{wire_account}"
+            );
+            assert!(!reaction_source_matches(&wire, &chat, "other"));
+        }
     }
 
     #[test]
