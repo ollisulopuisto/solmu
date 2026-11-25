@@ -7,6 +7,7 @@ pub struct Parked {
 }
 #[derive(Default)]
 pub struct State {
+    pub recovery_min_chars: Option<usize>,
     pub resumed: Option<u64>,
     pub sent_removals: Vec<u64>,
     pub revision: u64,
@@ -75,7 +76,10 @@ impl State {
             }
             if after.is_empty() {
                 let original = self.deletion_start.take().unwrap_or_else(|| before.into());
-                if original.chars().count() >= 80 || original.contains('\n') {
+                if !original.trim().is_empty()
+                    && (original.chars().count() >= self.recovery_min_chars.unwrap_or(30)
+                        || original.contains('\n'))
+                {
                     self.recovery = Some(original);
                 }
             }
@@ -237,6 +241,42 @@ mod tests {
         s.edit("", "new message", false);
         assert_eq!(s.resumed, None);
         assert_eq!(s.shelf.len(), 2);
+    }
+    #[test]
+    fn recovery_uses_thirty_unicode_characters_by_default_and_keeps_newline_rule() {
+        for (text, recover) in [
+            ("x".repeat(29), false),
+            ("ä".repeat(30), true),
+            ("x".repeat(31), true),
+            ("a\nb".into(), true),
+            (" ".repeat(40), false),
+        ] {
+            let mut s = State::default();
+            s.edit(&text, "", true);
+            assert_eq!(s.recovery.is_some(), recover, "{text:?}");
+        }
+        let mut s = State {
+            recovery_min_chars: Some(50),
+            ..Default::default()
+        };
+        s.edit(&"x".repeat(30), "", true);
+        assert!(s.recovery.is_none());
+        s.edit("two\nlines", "", true);
+        assert!(
+            s.recovery.is_some(),
+            "newline rule is independent of preference"
+        );
+    }
+    #[test]
+    fn incremental_delete_uses_original_length_and_programmatic_clear_does_not_offer() {
+        let original = "x".repeat(30);
+        let mut s = State::default();
+        s.edit(&original, "x", true);
+        s.edit("x", "", true);
+        assert_eq!(s.recovery.as_deref(), Some(original.as_str()));
+        let mut s = State::default();
+        s.edit(&original, "", false);
+        assert!(s.recovery.is_none());
     }
     #[test]
     fn shelf_not_loaded_blocks_writes_and_success_commits_count() {

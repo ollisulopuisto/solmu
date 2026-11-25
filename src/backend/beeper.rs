@@ -580,6 +580,8 @@ fn iso_brand_extension(brand: &[u8]) -> Option<&'static str> {
 
 /// File extension for a downloaded attachment: the message type first, then
 /// the original file name, then the server's content type, then the bytes.
+/// A generic text/plain type defers to a recognized document filename. Never
+/// copy an arbitrary suffix from the bridge into a locally launchable filename.
 fn media_extension(
     mime: Option<&str>,
     file_name: Option<&str>,
@@ -605,10 +607,20 @@ fn media_extension(
             "audio/mpeg" => "mp3",
             "audio/mp4" | "audio/x-m4a" => "m4a",
             "application/pdf" => "pdf",
+            "text/csv" | "application/csv" => "csv",
+            "text/plain" => "txt",
+            "application/rtf" | "text/rtf" => "rtf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
+            "application/vnd.oasis.opendocument.text" => "odt",
+            "application/vnd.oasis.opendocument.spreadsheet" => "ods",
+            "application/vnd.oasis.opendocument.presentation" => "odp",
             _ => return None,
         })
     }
-    if let Some(ext) = mime.and_then(from_mime) {
+    let typed = mime.and_then(from_mime);
+    if let Some(ext) = typed.filter(|ext| *ext != "txt") {
         return ext;
     }
     if let Some(ext) = file_name
@@ -626,12 +638,22 @@ fn media_extension(
             "mp3" => Some("mp3"),
             "m4a" => Some("m4a"),
             "pdf" => Some("pdf"),
+            "txt" => Some("txt"),
+            "log" => Some("log"),
+            "csv" => Some("csv"),
+            "docx" => Some("docx"),
+            "xlsx" => Some("xlsx"),
+            "pptx" => Some("pptx"),
+            "odt" => Some("odt"),
+            "ods" => Some("ods"),
+            "odp" => Some("odp"),
+            "rtf" => Some("rtf"),
             _ => None,
         })
     {
         return ext;
     }
-    if let Some(ext) = content_type.and_then(from_mime) {
+    if let Some(ext) = typed.or_else(|| content_type.and_then(from_mime)) {
         return ext;
     }
     if head.len() >= 12 && &head[4..8] == b"ftyp" {
@@ -7378,6 +7400,49 @@ mod tests {
     }
 
     #[test]
+    fn csv_metadata_is_preserved() {
+        assert_eq!(
+            media_extension(
+                Some("text/csv; charset=utf-8"),
+                Some("report.csv"),
+                None,
+                b"a,b\n1,2"
+            ),
+            "csv"
+        );
+        assert_eq!(
+            media_extension(
+                Some("application/octet-stream"),
+                Some("REPORT.CSV"),
+                None,
+                b"a,b"
+            ),
+            "csv"
+        );
+        assert_eq!(media_extension(None, None, Some("text/csv"), b"a,b"), "csv");
+    }
+    #[test]
+    fn document_names_stay_allowlisted() {
+        for ext in [
+            "txt", "log", "csv", "docx", "xlsx", "pptx", "odt", "ods", "odp", "rtf",
+        ] {
+            assert_eq!(
+                media_extension(None, Some(&format!("file.{ext}")), None, b""),
+                ext
+            );
+        }
+        for name in [
+            "invoice.csv.exe",
+            "script.command",
+            "macro.docm",
+            "unknown.xyz",
+        ] {
+            assert_eq!(media_extension(None, Some(name), None, b"MZ"), "bin");
+        }
+        assert_eq!(media_extension(None, None, None, b"a,b\n1,2"), "bin");
+    }
+
+    #[test]
     fn downloads_without_a_message_type_get_an_extension_from_name_header_or_bytes() {
         let mp4 = *b"\0\0\0\x18ftypisom\0\0\0\0";
         assert_eq!(media_extension(Some("video/mp4"), None, None, &[]), "mp4");
@@ -12979,6 +13044,40 @@ mod tests {
         let accounts: Vec<BeeperAccount> = serde_json::from_str(r#"[{"accountID":"one","user":{"id":"u1","fullName":"Same"}},{"accountID":"two","user":{"id":"u2","fullName":"Same"}}]"#).unwrap();
         let label = network_labeller(&chats, &accounts);
         assert_ne!(label(&chats[0]), label(&chats[1]));
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn csv_document_download_keeps_extension_and_bytes_through_authenticated_asset_api() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            for index in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0u8; 4096];
+                let length = stream.read(&mut buffer).unwrap();
+                let request = String::from_utf8_lossy(&buffer[..length]);
+                let body = if index == 0 {
+                    assert!(request.contains("/v1/chats/chat/messages/document"));
+                    r#"{"id":"document","attachments":[{"type":"file","id":"mxc://example/document","fileName":"report.CSV","mimeType":"application/octet-stream","fileSize":8}]}"#
+                } else {
+                    assert!(request.contains("/v1/assets/serve?url=mxc"));
+                    "a,b\n1,2\n"
+                };
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            }
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url: base,
+            token: "test".into(),
+        })
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let dirs = AppDirs::under(directory.path()).as_account();
+        let path = api.download_media("chat", "document", &dirs, true).unwrap();
+        assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("csv"));
+        assert!(crate::safety::can_open_attachment(&path));
+        assert_eq!(std::fs::read(&path).unwrap(), b"a,b\n1,2\n");
         worker.join().unwrap();
     }
 

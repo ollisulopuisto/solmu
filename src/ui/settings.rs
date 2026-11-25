@@ -716,6 +716,21 @@ fn sections(app: &App) -> Vec<Section> {
     }
 
     let mut chats = Section::new(translated(locale, "Chats"));
+    chats.row(
+        "Draft recovery minimum characters",
+        "Default 30. Cleared multiline text also qualifies; whitespace-only text does not.",
+        |ui, app| {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut app.settings.draft_recovery_min_chars)
+                        .range(1..=100_000),
+                )
+                .changed()
+            {
+                app.actions.push(Action::SettingsChanged);
+            }
+        },
+    );
     chats.toggle(
         "Show queue counts",
         "Count chats in All, Unread, Reply later and Read later, within the current search and filters. Linked people count once.",

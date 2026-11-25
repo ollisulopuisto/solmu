@@ -21,6 +21,8 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+- The message menu offers Quick Replies (Yes, No, Later); choosing one puts its text in the composer for review and never sends it.
+
 ## 26.11.14
 
 - On Mac, Shift-Command-2 focuses the message list instead of Control-2, leaving Spaces shortcuts to macOS. Shifted digit layouts use the physical 2 key.
@@ -282,3 +284,5 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 - The chat list's edge can be dragged to resize it.
 - Attachment uploads to WhatsApp no longer send the request shape that was rejected; a failed send keeps the staged files.
 - The sidebar restores correctly in narrow windows and with the list hidden, and settings rows no longer cut their titles short.
+
+- Add two-stage keyboard menus for reactions and Quick Replies on the latest incoming message.

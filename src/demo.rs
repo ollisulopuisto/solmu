@@ -5148,6 +5148,10 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     row.read_at = Some(row.timestamp + 60 * 60 * 7);
                 }
             }
+            // The message menu with its Quick Replies submenu: the native
+            // shot holds a synthetic pointer on the row (see main.rs), so the
+            // capture shows the open Yes/No/Later column, not just the menu.
+            "quick-replies-menu" => app.open_message_menu = Some("ada-link".into()),
             "starred" => starred_sample(app, None),
             "star-menu" => starred_sample(app, Some("ada-link")),
             "react-picker" => {
@@ -5763,6 +5767,15 @@ mod tests {
         height: f32,
         events: Vec<egui::Event>,
     ) {
+        let modifiers = events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                egui::Event::PointerButton { modifiers, .. }
+                | egui::Event::ModifiersChanged(modifiers) => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_else(|| ctx.input(|input| input.modifiers));
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -5770,6 +5783,7 @@ mod tests {
                     egui::vec2(width, height),
                 )),
                 events,
+                modifiers,
                 ..Default::default()
             },
             |ui| {
@@ -13638,6 +13652,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn select_all_backspace_offers_recovery_at_the_configured_threshold() {
+        for (length, threshold, recover) in [
+            (29, 30, false),
+            (30, 30, true),
+            (31, 30, true),
+            (30, 40, false),
+        ] {
+            let mut app = app();
+            app.settings.draft_recovery_min_chars = threshold;
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            app.focus_composer = true;
+            render(&mut app, &ctx);
+            let text = "ä".repeat(length);
+            frame_with(&mut app, &ctx, vec![egui::Event::Text(text.clone())]);
+            assert_eq!(app.composer, text);
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![key(egui::Key::A, egui::Modifiers::COMMAND)],
+            );
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![key(egui::Key::Backspace, egui::Modifiers::NONE)],
+            );
+            assert!(app.composer.is_empty());
+            let state = &app.draft_states[app.open_chat.as_ref().unwrap()];
+            assert_eq!(state.recovery.is_some(), recover, "{length}/{threshold}");
+            if recover {
+                assert_eq!(state.recovery.as_deref(), Some(text.as_str()));
+            }
+        }
+    }
+
     /// Actual composer input leaves the list steady; parking or discarding
     /// that draft changes its priority only after leaving the conversation.
     #[test]
@@ -14539,17 +14589,38 @@ mod tests {
             &ctx,
             vec![egui::Event::PointerMoved(tile.center()), press(true)],
         );
+        let press_target = ctx.data(|data| {
+            data.get_temp::<String>(
+                crate::ui::conversation::bubble_id(&chat, "album-0").with("album-target"),
+            )
+        });
         frame_with(&mut app, &ctx, vec![press(false)]);
+        let released_target = ctx.data(|data| {
+            data.get_temp::<String>(
+                crate::ui::conversation::bubble_id(&chat, "album-0").with("album-target"),
+            )
+        });
+        assert_eq!(
+            released_target.as_deref(),
+            Some("album-2"),
+            "pointer at {tile:?}; captured on press {press_target:?}, release {released_target:?}"
+        );
         let popup = crate::ui::conversation::bubble_id(&chat, "album-0").with("popup");
         assert!(
             egui::Popup::is_id_open(&ctx, popup),
             "the album's menu opened"
         );
-        let reply = accessible_nodes(&mut app, &ctx, Vec::new())
+        let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
+        let replies: Vec<_> = nodes
             .into_iter()
-            .find(|(label, _, _)| label == "Reply")
-            .expect("the menu offers Reply")
-            .2;
+            .filter(|(label, _, _)| label == "Reply")
+            .collect();
+        assert_eq!(
+            replies.len(),
+            1,
+            "only the context menu owns Reply, not the album-row hover grid"
+        );
+        let reply = replies[0].2;
         for pressed in [true, false] {
             frame_with(
                 &mut app,
@@ -14597,17 +14668,38 @@ mod tests {
             &ctx,
             vec![egui::Event::PointerMoved(tile.center()), press(true)],
         );
+        let press_target = ctx.data(|data| {
+            data.get_temp::<String>(
+                crate::ui::conversation::bubble_id(&chat, "album-0").with("album-target"),
+            )
+        });
         frame_with(&mut app, &ctx, vec![press(false)]);
+        let released_target = ctx.data(|data| {
+            data.get_temp::<String>(
+                crate::ui::conversation::bubble_id(&chat, "album-0").with("album-target"),
+            )
+        });
+        assert_eq!(
+            released_target.as_deref(),
+            Some("album-2"),
+            "pointer at {tile:?}; captured on press {press_target:?}, release {released_target:?}"
+        );
         let popup = crate::ui::conversation::bubble_id(&chat, "album-0").with("popup");
         assert!(
             egui::Popup::is_id_open(&ctx, popup),
             "the album's menu opened"
         );
-        let reply = accessible_nodes(&mut app, &ctx, Vec::new())
+        let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
+        let replies: Vec<_> = nodes
             .into_iter()
-            .find(|(label, _, _)| label == "Reply")
-            .expect("the menu offers Reply")
-            .2;
+            .filter(|(label, _, _)| label == "Reply")
+            .collect();
+        assert_eq!(
+            replies.len(),
+            1,
+            "only the context menu owns Reply, not the album-row hover grid"
+        );
+        let reply = replies[0].2;
         for pressed in [true, false] {
             frame_with(
                 &mut app,
@@ -16952,7 +17044,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{message} is on screen"));
             // The stored body excludes the overhanging footer. Its padding
             // is a message target without invoking document/media controls.
-            let pos = rect.left_top() - egui::vec2(2.0, 2.0);
+            let pos = egui::pos2(rect.left() - 3.0, rect.center().y);
             let button = |pressed| egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
@@ -17987,6 +18079,257 @@ mod tests {
         };
         click(&mut app, copy);
         assert!(app.toasts.iter().any(|toast| toast.message == "Copied"));
+    }
+
+    /// Text shapes with their painted rects, for clicking menu rows in tests.
+    fn painted_texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(text) => out.push((
+                text.galley.text().to_owned(),
+                text.galley.rect.translate(text.pos.to_vec2()),
+            )),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| painted_texts(shape, out)),
+            _ => {}
+        }
+    }
+
+    /// The Quick Replies submenu's three rows, stacked in one column.
+    struct QuickReplyRows {
+        yes: egui::Rect,
+        no: egui::Rect,
+        later: egui::Rect,
+    }
+
+    /// The row of `label` in the same submenu column as `above`: sharing its
+    /// left edge and the next row down, however tall the menu's rows are.
+    fn column_row(
+        texts: &[(String, egui::Rect)],
+        label: &str,
+        above: egui::Rect,
+    ) -> Option<egui::Rect> {
+        texts
+            .iter()
+            .filter(|(text, rect)| {
+                text == label
+                    && (rect.left() - above.left()).abs() < 1.0
+                    && rect.top() > above.top() + 10.0
+                    && rect.top() < above.top() + 64.0
+            })
+            .min_by(|(_, a), (_, b)| a.top().total_cmp(&b.top()))
+            .map(|(_, rect)| *rect)
+    }
+
+    /// The Quick Replies submenu of the demo message menu. When no page
+    /// pinned a menu open, the menu is opened the production way: a
+    /// right-click on the ada-link bubble's preview card, which the link's
+    /// own menu does not claim. Hovering the row then opens the submenu.
+    /// The choice rows are found as one column: a Yes elsewhere on screen,
+    /// such as a bubble's text, is never clicked.
+    fn quick_replies_open(app: &mut App, ctx: &egui::Context) -> QuickReplyRows {
+        let mut shapes = Vec::new();
+        for _ in 0..3 {
+            shapes = frame_sized(app, ctx, 780.0, Vec::new());
+        }
+        let mut texts = Vec::new();
+        for clipped in &shapes {
+            painted_texts(&clipped.shape, &mut texts);
+        }
+        if !texts.iter().any(|(text, _)| text == "Quick Replies") {
+            app.apply(crate::model::Action::ScrollTo("ada-link".into()), ctx);
+            for _ in 0..4 {
+                frame_sized(app, ctx, 780.0, Vec::new());
+            }
+            let id = crate::ui::conversation::bubble_id(sample_ids()[0], "ada-link");
+            let rect = ctx
+                .read_response(id)
+                .expect("the link message is on screen")
+                .rect;
+            let on_card = rect.left_top() + egui::vec2(rect.width() / 2.0, 40.0);
+            let button = |pressed| egui::Event::PointerButton {
+                pos: on_card,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            frame_sized(
+                app,
+                ctx,
+                780.0,
+                vec![egui::Event::PointerMoved(on_card), button(true)],
+            );
+            frame_sized(app, ctx, 780.0, vec![button(false)]);
+            shapes = frame_sized(app, ctx, 780.0, Vec::new());
+            texts.clear();
+            for clipped in &shapes {
+                painted_texts(&clipped.shape, &mut texts);
+            }
+        }
+        let quick = texts
+            .iter()
+            .find(|(text, _)| text == "Quick Replies")
+            .map(|(_, rect)| *rect)
+            .expect("the menu has a Quick Replies row");
+        for _ in 0..4 {
+            shapes = frame_sized(
+                app,
+                ctx,
+                780.0,
+                vec![egui::Event::PointerMoved(quick.center())],
+            );
+        }
+        let mut texts = Vec::new();
+        for clipped in &shapes {
+            painted_texts(&clipped.shape, &mut texts);
+        }
+        for (_, yes) in texts.iter().filter(|(text, _)| text == "Yes") {
+            if let Some(no) = column_row(&texts, "No", *yes)
+                && let Some(later) = column_row(&texts, "Later", no)
+            {
+                // The native capture's synthetic pointer finds this row by
+                // label: the rect the submenu records must be there.
+                assert!(
+                    ctx.data(|data| data
+                        .get_temp::<egui::Rect>(egui::Id::new(("submenu-row", "Quick Replies"))))
+                        .is_some(),
+                    "the submenu records its row for captures"
+                );
+                return QuickReplyRows {
+                    yes: *yes,
+                    no,
+                    later,
+                };
+            }
+        }
+        let painted: Vec<&str> = texts
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .filter(|text| ["Yes", "No", "Later", "Quick Replies"].contains(text))
+            .collect();
+        panic!("the submenu offers Yes, No and Later in one column; painted {painted:?}");
+    }
+
+    /// A left click on a painted menu row, then frames that apply its action.
+    fn click_painted(app: &mut App, ctx: &egui::Context, pos: egui::Pos2) {
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame_sized(
+            app,
+            ctx,
+            780.0,
+            vec![egui::Event::PointerMoved(pos), press(true)],
+        );
+        frame_sized(app, ctx, 780.0, vec![press(false)]);
+        render(app, ctx);
+    }
+
+    /// True while no frame has asked the backend to send anything.
+    fn nothing_sent(app: &mut App) -> bool {
+        app.backend
+            .take_demo_commands()
+            .iter()
+            .all(|command| !matches!(command, crate::backend::Command::SendText { .. }))
+    }
+
+    /// Quick Replies are a submenu of the message menu whose choice is only
+    /// ever reviewed in the composer: picking Yes fills the draft, focuses
+    /// it, closes the menu and sends nothing.
+    #[test]
+    fn quick_replies_fill_the_composer_without_sending() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.backend.record_demo_commands();
+        assert!(app.composer.is_empty());
+        let rows = quick_replies_open(&mut app, &ctx);
+        click_painted(&mut app, &ctx, rows.yes.center());
+        assert_eq!(
+            app.composer, "Yes",
+            "the choice is reviewed in the composer"
+        );
+        assert!(
+            ctx.memory(|memory| memory.has_focus(egui::Id::new("composer-text"))),
+            "the composer takes focus"
+        );
+        assert!(
+            nothing_sent(&mut app),
+            "a quick reply never sends immediately"
+        );
+        let chat = sample_ids()[0].to_owned();
+        let popup = crate::ui::conversation::bubble_id(&chat, "ada-link").with("popup");
+        assert!(!egui::Popup::is_id_open(&ctx, popup), "the menu closed");
+    }
+
+    /// A quick reply never overwrites what the reader has written: with a
+    /// draft in the composer the choice is refused with the keep-or-clear
+    /// toast, the draft is intact, and nothing is sent.
+    #[test]
+    fn a_quick_reply_never_overwrites_a_written_draft() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.backend.record_demo_commands();
+        app.composer = "My own draft".into();
+        let rows = quick_replies_open(&mut app, &ctx);
+        click_painted(&mut app, &ctx, rows.yes.center());
+        assert_eq!(app.composer, "My own draft", "the written draft is kept");
+        assert!(
+            app.toasts
+                .iter()
+                .any(|toast| toast.message.contains("Keep or clear")),
+            "the refusal says why"
+        );
+        assert!(nothing_sent(&mut app), "and still nothing is sent");
+    }
+
+    /// A second quick reply while the first still sits untouched is refused
+    /// like a second share link: the keep-or-clear toast, the first text
+    /// stays, and nothing is sent.
+    #[test]
+    fn a_second_quick_reply_keeps_the_first_until_it_is_cleared() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.backend.record_demo_commands();
+        let rows = quick_replies_open(&mut app, &ctx);
+        click_painted(&mut app, &ctx, rows.yes.center());
+        assert_eq!(app.composer, "Yes");
+        let rows = quick_replies_open(&mut app, &ctx);
+        click_painted(&mut app, &ctx, rows.no.center());
+        assert_eq!(app.composer, "Yes", "the untouched first choice stays");
+        assert!(
+            app.toasts
+                .iter()
+                .any(|toast| toast.message.contains("Keep or clear")),
+            "the refusal says why"
+        );
+        assert!(nothing_sent(&mut app), "and nothing is sent");
+    }
+
+    /// From the starred list a quick reply opens the message's own chat and
+    /// puts the choice in its composer, the way Reply navigates there first.
+    #[test]
+    fn a_quick_reply_from_the_starred_list_opens_the_chat_first() {
+        let mut app = app();
+        apply_flags(&mut app, Some("star-menu"));
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        app.backend.record_demo_commands();
+        let other = sample_ids()[1].to_owned();
+        app.open_chat = Some(other);
+        let rows = quick_replies_open(&mut app, &ctx);
+        click_painted(&mut app, &ctx, rows.later.center());
+        let chat = sample_ids()[0].to_owned();
+        assert_eq!(
+            app.open_chat.as_deref(),
+            Some(chat.as_str()),
+            "the message's chat opened"
+        );
+        assert_eq!(app.composer, "Later", "the choice waits in its composer");
+        assert!(nothing_sent(&mut app), "and nothing is sent");
     }
 
     #[test]

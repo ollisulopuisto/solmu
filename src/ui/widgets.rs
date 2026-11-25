@@ -610,6 +610,10 @@ pub fn submenu<R>(
 ) -> Option<egui::InnerResponse<R>> {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
+    // Captures and tests find a submenu's row by its label, the way link
+    // hits are recorded for the link menu.
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(egui::Id::new(("submenu-row", label)), rect));
     theme::reveal_focus(&response);
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)

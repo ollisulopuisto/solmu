@@ -429,6 +429,9 @@ pub enum TranscriptionEngine {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Minimum characters for cleared-composer recovery; multiline text also qualifies.
+    #[serde(default = "default_draft_recovery_min_chars")]
+    pub draft_recovery_min_chars: usize,
     #[serde(default)]
     pub ffmpeg_path: Option<std::path::PathBuf>,
     #[serde(default)]
@@ -652,6 +655,16 @@ impl Settings {
 mod transcription_engine_migration_tests {
     use super::*;
     #[test]
+    fn draft_recovery_threshold_defaults_to_thirty_and_round_trips() {
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.draft_recovery_min_chars, 30);
+        assert_eq!(Settings::default().draft_recovery_min_chars, 30);
+        settings.draft_recovery_min_chars = 45;
+        let loaded: Settings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(loaded.draft_recovery_min_chars, 45);
+    }
+    #[test]
     fn existing_wyoming_users_are_preserved_but_explicit_choices_always_win() {
         let mut settings: Settings =
             serde_json::from_str(r#"{"transcription_wyoming":"127.0.0.1:10300"}"#).unwrap();
@@ -673,9 +686,14 @@ mod transcription_engine_migration_tests {
     }
 }
 
+fn default_draft_recovery_min_chars() -> usize {
+    30
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            draft_recovery_min_chars: default_draft_recovery_min_chars(),
             ffmpeg_path: None,
             media_tools_onboarding_done: false,
             local_avatars: Vec::new(),
