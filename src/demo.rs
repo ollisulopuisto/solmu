@@ -5958,6 +5958,11 @@ mod tests {
             "newer bubble must not steal seam clicks"
         );
         egui::Popup::close_all(&ctx);
+        for _ in 0..3 {
+            streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+        }
+        let older = rect(2);
+        let newer = rect(3);
         let point = egui::pos2(newer.left() + 20., older.bottom() + 2.);
         for pressed in [true, false] {
             streak_test_frame(
@@ -6806,8 +6811,12 @@ mod tests {
                             "reaction and clock collide: {reaction:?}/{footer:?}"
                         );
                         assert!(
-                            (reaction.center().y - footer.center().y).abs() < 5.0,
-                            "wide-enough footer should share one row"
+                            reaction.top() < rect(index).bottom(),
+                            "reaction overlaps bubble edge"
+                        );
+                        assert!(
+                            footer.top() >= reaction.bottom() - 1.0,
+                            "metadata stays below reaction overhang"
                         );
                     }
                 }
@@ -8898,7 +8907,7 @@ mod tests {
             "Transcribe on this device",
         );
         let at = at.expect("the configured service offers Transcribe");
-        frame_with(&mut app, &ctx, click(at));
+        streak_test_frame(&mut app, &ctx, 1180.0, 2400.0, click(at));
         // frame_ui applies queued actions at the end of the frame, so the
         // click's TranscribeVoice no longer sits in app.actions; the stub's
         // recorded queue is the observable effect.
@@ -16702,6 +16711,8 @@ mod tests {
         let ctx = egui::Context::default();
         app.attach(&ctx);
         render(&mut app, &ctx);
+        app.apply(crate::model::Action::ScrollTo("ada-link".into()), &ctx);
+        render(&mut app, &ctx);
         let chat = sample_ids()[0].to_owned();
         let id = crate::ui::conversation::bubble_id(&chat, "ada-link");
         let rect = ctx.read_response(id).expect("older message is drawn").rect;
@@ -16840,12 +16851,13 @@ mod tests {
         let click = |app: &mut App, message: &str, modifiers: egui::Modifiers| {
             // Selection changes bubble widths/heights. Settle that layout
             // before reading the next click target, never reuse its old rect.
+            app.apply(crate::model::Action::ScrollTo(message.into()), &ctx);
             render(app, &ctx);
             let id = crate::ui::conversation::bubble_id(&chat, message);
             let rect = ctx
                 .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
                 .unwrap_or_else(|| panic!("{message} is on screen"));
-            let pos = rect.right_bottom() - egui::vec2(5.0, 2.0);
+            let pos = rect.left_bottom() + egui::vec2(2.0, -2.0);
             let button = |pressed| egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
@@ -17253,6 +17265,8 @@ mod tests {
             frame_with(app, &ctx, vec![button(false)]);
             render(app, &ctx);
         };
+        app.apply(crate::model::Action::ScrollTo("ada-voice".into()), &ctx);
+        render(&mut app, &ctx);
         click(&mut app, check("ada-voice").unwrap().center());
         assert_eq!(selected_ids(&app), ["ada-voice"], "the check box picks");
         // The view's margin, left of the check box.
