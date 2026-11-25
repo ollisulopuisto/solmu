@@ -2837,10 +2837,7 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
                                 .into_owned()
                             });
                             if response.clicked() && app.composer.is_empty() {
-                                // Resume a copy. Neither the retained text nor another working draft is overwritten.
-                                app.composer = draft.text.clone();
-                                state.text = draft.text.clone();
-                                state.touch();
+                                app.composer = state.resume(draft.id).unwrap_or_default();
                                 app.focus_composer = true;
                             }
                             if state.staged_shelf.is_none()

@@ -4485,6 +4485,7 @@ pub fn run(
         .flatten();
     let mut feed_refresh_pending = false;
     let mut last_receipt_refresh = Instant::now();
+    let mut draft_sends: HashMap<(ChatId, String), (ChatId, u64)> = HashMap::new();
     let mut pending_sends: Vec<(ChatId, String, Instant)> = Vec::new();
     let mut tracked_media: HashMap<(String, String), (String, crate::merged::Member)> =
         HashMap::new();
@@ -4914,6 +4915,7 @@ pub fn run(
                     }
                 }
                 Command::SendText {
+                    draft,
                     chat,
                     text,
                     quoting,
@@ -4944,6 +4946,10 @@ pub fn run(
                             } else {
                                 accepted.chat
                             };
+                            if let Some(draft) = draft {
+                                draft_sends
+                                    .insert((target.clone(), accepted.pending_id.clone()), draft);
+                            }
                             pending_sends.push((target, accepted.pending_id, Instant::now()));
                         }
                         Err(e) => {
@@ -5866,7 +5872,18 @@ pub fn run(
                     }
                     keep
                 } else {
-                    poll_pending_send(&api, chat, pending_id, started.elapsed(), &emit)
+                    let keep = poll_draft_send(
+                        &api,
+                        chat,
+                        pending_id,
+                        started.elapsed(),
+                        draft_sends.get(&key),
+                        &emit,
+                    );
+                    if !keep {
+                        draft_sends.remove(&key);
+                    }
+                    keep
                 }
             });
         }
@@ -6470,6 +6487,27 @@ fn poll_forward_mark(
     } else {
         true
     }
+}
+
+fn poll_draft_send(
+    api: &Api,
+    chat: &ChatId,
+    pending_id: &str,
+    elapsed: Duration,
+    draft: Option<&(ChatId, u64)>,
+    emit: &dyn Fn(Event),
+) -> bool {
+    poll_pending_send(api, chat, pending_id, elapsed, &|event| {
+        if matches!(&event, Event::BeeperSendConfirmed { .. })
+            && let Some((owner, id)) = draft
+        {
+            emit(Event::DraftSendConfirmed {
+                owner: owner.clone(),
+                id: *id,
+            });
+        }
+        emit(event);
+    })
 }
 
 fn poll_pending_send(
@@ -8119,6 +8157,33 @@ mod tests {
                 ),
                 "{kind}"
             );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn draft_identity_is_only_confirmed_for_explicit_success() {
+        for (status, sender, expected) in [
+            ("SUCCESS", true, true),
+            ("FAIL_SEND", true, false),
+            ("PENDING", true, false),
+            ("SUCCESS", false, false),
+        ] {
+            let body = serde_json::json!({"id":"final", "chatID":"target", "accountID":"signal", "isSender":sender, "sendStatus":{"status":status}}).to_string();
+            let (api, server) =
+                forward_fixture(vec![("GET /v1/chats/target/messages/pending ", 200, body)]);
+            let events = Mutex::new(Vec::new());
+            let draft = ("composer-owner".to_owned(), 42);
+            poll_draft_send(
+                &api,
+                &"target".into(),
+                "pending",
+                Duration::from_secs(1),
+                Some(&draft),
+                &|e| events.lock().unwrap().push(e),
+            );
+            let events = events.lock().unwrap();
+            assert_eq!(events.iter().filter(|e| matches!(e, Event::DraftSendConfirmed { owner, id: 42 } if owner == "composer-owner")).count(), usize::from(expected), "{status}/{sender}");
             server.join().unwrap();
         }
     }
@@ -10665,6 +10730,7 @@ mod tests {
             matches!(e, Event::Link(LinkStatus::Disconnected { .. }))
         });
         tx.send(Command::SendText {
+            draft: None,
             chat: "exact-work".into(),
             text: "retain this".into(),
             quoting: None,
@@ -10703,6 +10769,7 @@ mod tests {
         });
         healthy.store(false, Ordering::Relaxed);
         tx.send(Command::SendText {
+            draft: None,
             chat: "exact-work".into(),
             text: "do not replay after drop".into(),
             quoting: None,
@@ -13020,6 +13087,7 @@ mod tests {
         // Deliberate actions POST - and only they do.
         cmd_tx
             .send(Command::SendText {
+                draft: None,
                 chat: "!fam:beeper.local".to_string(),
                 text: "on my way".to_string(),
                 quoting: None,

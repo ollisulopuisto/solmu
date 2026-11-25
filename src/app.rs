@@ -6909,6 +6909,11 @@ impl App {
                     self.beeper_history_errors.remove(&chat);
                 }
             }
+            Event::DraftSendConfirmed { owner, id } => {
+                if let Some(state) = self.draft_states.get_mut(&owner) {
+                    state.sent(id);
+                }
+            }
             Event::BeeperSendConfirmed {
                 origin,
                 account,
@@ -9216,6 +9221,23 @@ impl App {
             });
             return;
         }
+        let owner = self
+            .open_chat
+            .as_deref()
+            .filter(|open| {
+                *open == chat
+                    || self.settings.beeper.people.iter().any(|p| {
+                        p.members.iter().any(|m| m.chat == *open)
+                            && p.members.iter().any(|m| m.chat == chat)
+                    })
+            })
+            .unwrap_or(&chat)
+            .to_owned();
+        let draft = self
+            .draft_states
+            .get_mut(&owner)
+            .and_then(|s| s.resumed.take())
+            .map(|id| (owner, id));
         // The text is on its way, so there is nothing left to restore.
         self.store_draft(&chat, "");
         if let Some(anchor) = self
@@ -9233,6 +9255,7 @@ impl App {
             self.store_draft(&anchor, "");
         }
         self.backend.send(Command::SendText {
+            draft,
             chat,
             text,
             quoting,
@@ -34329,6 +34352,66 @@ mod conversation_palette_tests {
         assert!(app.show_saved && !app.show_starred);
         app.apply(Action::ToggleSaved, &ctx);
         assert!(!app.show_saved && !app.show_starred);
+    }
+
+    #[test]
+    fn text_send_captures_resumed_identity_before_composer_clear() {
+        let mut app = app();
+        app.backend.record_demo_commands();
+        app.open_chat = Some("owner".into());
+        let state = app.draft_states.entry("owner".into()).or_default();
+        state.loaded = true;
+        state.shelf = vec![crate::draft_state::Parked {
+            id: 7,
+            text: "send this".into(),
+        }];
+        state.resume(7);
+        app.send_text("owner".into(), "send this".into(), None);
+        let commands = app.backend.take_demo_commands();
+        assert!(commands.iter().any(
+            |c| matches!(c, Command::SendText { draft: Some((owner, 7)), .. } if owner == "owner")
+        ));
+        assert_eq!(app.draft_states["owner"].shelf.len(), 1);
+        assert!(app.draft_states["owner"].staged_shelf.is_none());
+        assert_eq!(app.draft_states["owner"].resumed, None);
+    }
+
+    #[test]
+    fn send_confirmation_only_consumes_the_captured_shelf_identity() {
+        let mut app = app();
+        let state = app.draft_states.entry("owner".into()).or_default();
+        state.loaded = true;
+        state.shelf = vec![
+            crate::draft_state::Parked {
+                id: 1,
+                text: "same".into(),
+            },
+            crate::draft_state::Parked {
+                id: 2,
+                text: "same".into(),
+            },
+        ];
+        state.resume(2);
+        app.apply_backend_event(
+            Event::DraftSendConfirmed {
+                owner: "owner".into(),
+                id: 1,
+            },
+            true,
+        );
+        let state = &app.draft_states["owner"];
+        assert_eq!(state.resumed, Some(2));
+        assert_eq!(
+            state
+                .staged_shelf
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|d| d.id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+        assert_eq!(state.shelf.len(), 2, "write acknowledgment still required");
     }
 
     #[test]
