@@ -18,9 +18,9 @@ pub const SLOT_HEIGHT: f32 = 36.0;
 /// The chain is separate from the filled tail and never covers its message.
 pub fn chain_geometry(body: Rect, own: bool) -> Rect {
     let x = if own {
-        body.right()
+        body.right() - 30.0
     } else {
-        body.left() - 30.0
+        body.left()
     };
     Rect::from_min_size(pos2(x, body.top() - SLOT_HEIGHT), vec2(30.0, 30.0))
 }
