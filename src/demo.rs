@@ -8943,6 +8943,14 @@ mod tests {
         };
         let mut app = app();
         apply_flags(&mut app, Some("voice"));
+        // Only voice rows are relevant. Loading unrelated thumbnail images
+        // races the synthetic context teardown under egui's debug lock timer.
+        let chat = sample_ids()[0].to_owned();
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .messages
+            .retain(|row| ["ada-voice", "you-voice"].contains(&row.id.as_str()));
         let ctx = egui::Context::default();
         app.attach(&ctx);
         let mut at = None;
@@ -16907,6 +16915,17 @@ mod tests {
             twelve_hour: false,
         });
         let mut app = app();
+        // Keep only the four rows this range-selection scenario exercises.
+        // Unrelated image/link fixtures asynchronously change measured row
+        // heights, invalidating hit targets between press and release.
+        let chat = sample_ids()[0].to_owned();
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .messages
+            .retain(|row| {
+                ["ada-doc", "ada-voice", "you-voice", "ada-reply"].contains(&row.id.as_str())
+            });
         let ctx = egui::Context::default();
         app.attach(&ctx);
         for _ in 0..3 {
@@ -16926,7 +16945,15 @@ mod tests {
             let rect = ctx
                 .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
                 .unwrap_or_else(|| panic!("{message} is on screen"));
-            let pos = rect.left_bottom() + egui::vec2(2.0, -2.0);
+            // The empty strip beside the body is inside the message row,
+            // but outside text/media and the overhanging reaction footer.
+            let own = app.conversations[&chat].message(message).unwrap().from_me;
+            let x = if own {
+                rect.left() - 30.0
+            } else {
+                rect.right() + 30.0
+            };
+            let pos = egui::pos2(x, rect.center().y);
             let button = |pressed| egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
