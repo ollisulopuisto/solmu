@@ -62,6 +62,7 @@ pub fn respond(app: &mut App) {
                 app.poll_voting.remove(&(chat, message));
             }
             Command::SendText {
+                draft: _,
                 chat,
                 text,
                 quoting,

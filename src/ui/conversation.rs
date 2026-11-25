@@ -2256,6 +2256,7 @@ pub(crate) fn composer_with_capabilities(
                         quoting: app.reply_to.clone(),
                     });
                 } else {
+                    if let Some(state) = app.draft_states.get_mut(&chat.id) { state.resumed = None; }
                     app.actions.push(Action::SendPending {
                         account: app.account().id.clone(),
                         mentions: app.composer_mentions(),
@@ -2701,6 +2702,7 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
                 .button(crate::i18n::gettext(app.locale, "Keep as draft"))
                 .clicked()
         {
+            state.resumed = None;
             let mut shelf = state.shelf.clone();
             shelf.push(crate::draft_state::Parked {
                 id: crate::util::now() as u64 * 1000 + state.revision,
@@ -2837,10 +2839,7 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
                                 .into_owned()
                             });
                             if response.clicked() && app.composer.is_empty() {
-                                // Resume a copy. Neither the retained text nor another working draft is overwritten.
-                                app.composer = draft.text.clone();
-                                state.text = draft.text.clone();
-                                state.touch();
+                                app.composer = state.resume(draft.id).unwrap_or_default();
                                 app.focus_composer = true;
                             }
                             if state.staged_shelf.is_none()
