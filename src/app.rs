@@ -1967,6 +1967,10 @@ impl App {
     /// Parks the current account's text, mentions and attachments before switching accounts.
     fn park_composer(&mut self) {
         if let Some(previous) = self.open_chat.clone() {
+            if let Some(state) = self.draft_states.get_mut(&previous) {
+                state.recovery = None;
+                state.deletion_start = None;
+            }
             self.save_attachment_draft(&previous);
             let draft = std::mem::take(&mut self.composer);
             if self.is_untouched_prefill(&previous, &draft) {
@@ -1983,8 +1987,8 @@ impl App {
                 self.draft_mentions.insert(previous.clone(), mentions);
             }
             self.stop_composing(&previous);
-            let text = self.drafts.get(&previous).map_or("", String::as_str);
-            self.store_draft(&previous, text);
+            let text = self.drafts.get(&previous).cloned().unwrap_or_default();
+            self.store_draft(&previous, &text);
         }
         self.picker = None;
         self.pending.clear();
@@ -5172,6 +5176,53 @@ impl App {
                 self.labels = labels;
                 self.prune_labels();
             }
+            Event::DraftShelfUnavailable => {
+                self.draft_shelves_loaded = false;
+                for state in self.draft_states.values_mut() {
+                    state.failed = true;
+                    state.loaded = false;
+                }
+            }
+            Event::DraftShelf(shelves) => {
+                for (chat, shelf) in shelves {
+                    let state = self.draft_states.entry(chat).or_default();
+                    if !state.loaded && state.staged_shelf.is_none() {
+                        state.shelf = shelf;
+                    }
+                }
+                self.draft_shelves_loaded = true;
+                for state in self.draft_states.values_mut() {
+                    if !state.loaded
+                        && state.confirmed != Some(state.revision)
+                        && !state.text.is_empty()
+                    {
+                        state.touch();
+                    }
+                    state.loaded = true;
+                }
+            }
+            Event::DraftWritten { chat, revision, ok } => {
+                let current = self.composer.clone();
+                let active = live && self.open_chat.as_deref() == Some(chat.as_str());
+                let state = self.draft_states.entry(chat.clone()).or_default();
+                let clear = ok
+                    && state.pending == Some(revision)
+                    && state.revision == revision
+                    && state.clear_after_save.is_some();
+                let clear_composer =
+                    clear && state.clear_after_save.as_deref() == Some(current.as_str()) && active;
+                state.ack(revision, ok);
+                if clear {
+                    state.clear_after_save = None;
+                    state.text.clear();
+                    state.confirmed = None;
+                    self.drafts.remove(&chat);
+                    if clear_composer {
+                        self.composer.clear();
+                        self.composer_mentions.clear();
+                    }
+                }
+            }
             Event::Drafts(drafts) => {
                 // Unsent text stored by an earlier session. Text typed in
                 // this session wins over the stored copy.
@@ -7806,10 +7857,8 @@ impl App {
             let mentions = std::mem::take(&mut self.composer_mentions);
             self.drafts.insert(id.to_owned(), draft);
             self.draft_mentions.insert(id.to_owned(), mentions);
-            self.store_draft(
-                id,
-                self.drafts.get(id).map(String::as_str).unwrap_or_default(),
-            );
+            let saved = self.drafts.get(id).cloned().unwrap_or_default();
+            self.store_draft(id, &saved);
         }
         self.prefilled = None;
         self.leave_chat(id);
@@ -8074,7 +8123,7 @@ impl App {
                 self.emoji_start = None;
                 self.mention_start = None;
                 self.focus_composer = true;
-                self.store_draft(chat, &self.composer);
+                self.store_draft(chat, &self.composer.clone());
             }
         } else if self
             .drafts
@@ -8088,7 +8137,15 @@ impl App {
 
     /// Mirrors a chat's draft into the encrypted archive, so unsent text
     /// survives a restart. An empty text clears the stored row.
-    fn store_draft(&self, chat: &str, text: &str) {
+    fn store_draft(&mut self, chat: &str, text: &str) {
+        if let Some(state) = self.draft_states.get_mut(chat) {
+            state.text = text.to_owned();
+            state.clear_after_save = None;
+            state.deletion_start = None;
+            state.recovery = None;
+            state.confirmed = None;
+            state.touch();
+        }
         self.backend.send(Command::SaveDraft {
             chat: chat.to_owned(),
             text: text.to_owned(),
@@ -9143,14 +9200,19 @@ impl App {
         }
         // The text is on its way, so there is nothing left to restore.
         self.store_draft(&chat, "");
-        if let Some(anchor) = self.open_chat.as_deref().filter(|open| {
-            *open != chat
-                && self.settings.beeper.people.iter().any(|p| {
-                    p.members.iter().any(|m| m.chat == *open)
-                        && p.members.iter().any(|m| m.chat == chat)
-                })
-        }) {
-            self.store_draft(anchor, "");
+        if let Some(anchor) = self
+            .open_chat
+            .as_deref()
+            .filter(|open| {
+                *open != chat
+                    && self.settings.beeper.people.iter().any(|p| {
+                        p.members.iter().any(|m| m.chat == *open)
+                            && p.members.iter().any(|m| m.chat == chat)
+                    })
+            })
+            .map(str::to_owned)
+        {
+            self.store_draft(&anchor, "");
         }
         self.backend.send(Command::SendText {
             chat,
@@ -9438,6 +9500,13 @@ impl App {
                     .get(&owner)
                     .is_none_or(|text| text.trim().is_empty())
             {
+                if let Some(state) = target.draft_states.get_mut(&owner) {
+                    state.text = caption.clone();
+                    state.clear_after_save = None;
+                    state.recovery = None;
+                    state.confirmed = None;
+                    state.touch();
+                }
                 target.backend.send(Command::SaveDraft {
                     chat: owner.clone(),
                     text: caption.clone(),
@@ -9688,6 +9757,60 @@ impl App {
     }
 
     fn tick(&mut self, ctx: &egui::Context) {
+        if self.editing.is_none()
+            && self.composer_holds_draft()
+            && let Some(chat) = self.open_chat.clone()
+        {
+            let text = self.composer.clone();
+            let loaded = self.draft_shelves_loaded;
+            let state = self.draft_states.entry(chat).or_default();
+            state.loaded |= loaded;
+            if state.text != text {
+                // Programmatic send/switch/resume is not a deletion offer.
+                state.text = text;
+                state.recovery = None;
+                state.deletion_start = None;
+                state.clear_after_save = None;
+                state.touch();
+            }
+        }
+        for account in &mut self.accounts {
+            for (chat, state) in &mut account.draft_states {
+                if state.changed.is_some() {
+                    ctx.request_repaint_after(Duration::from_millis(200));
+                }
+                if !state.loaded
+                    && state
+                        .changed
+                        .is_some_and(|at| at.elapsed() >= Duration::from_millis(650))
+                {
+                    account.backend.send(Command::SaveDraft {
+                        chat: chat.clone(),
+                        text: state.text.clone(),
+                    });
+                    state.changed = None; // Legacy path has no durable ack. Status remains unavailable.
+                }
+                if state.ready() {
+                    state.pending = Some(state.revision);
+                    state.pending_shelf = state.staged_shelf.clone();
+                    state.pending_recovery = state.staged_recovery.clone();
+                    account.backend.send(Command::WriteDraftState {
+                        chat: chat.clone(),
+                        revision: state.revision,
+                        text: if state.clear_after_save.as_deref() == Some(state.text.as_str()) {
+                            String::new()
+                        } else {
+                            state.text.clone()
+                        },
+                        shelf: state
+                            .staged_shelf
+                            .clone()
+                            .unwrap_or_else(|| state.shelf.clone()),
+                    });
+                }
+            }
+        }
+
         for account in &mut self.accounts {
             let Some(queue) = account.audience_queue.as_mut() else {
                 continue;
@@ -10591,7 +10714,8 @@ impl App {
                     } else {
                         self.composer_mentions.clear();
                     }
-                    self.store_draft(&chat, self.drafts.get(&chat).map_or("", String::as_str));
+                    let saved = self.drafts.get(&chat).cloned().unwrap_or_default();
+                    self.store_draft(&chat, &saved);
                 }
                 self.reply_to = None;
                 // A pending quote belongs to the chat being left, like the
@@ -15704,12 +15828,12 @@ impl App {
 
     /// Stores the open chat's unsent text, which otherwise only moves into
     /// the archive when another chat opens.
-    fn flush_open_draft(&self) {
-        if let Some(chat) = self.open_chat.as_deref()
+    fn flush_open_draft(&mut self) {
+        if let Some(chat) = self.open_chat.clone()
             && self.editing.is_none()
-            && !self.is_untouched_prefill(chat, &self.composer)
+            && !self.is_untouched_prefill(&chat, &self.composer)
         {
-            self.store_draft(chat, &self.composer);
+            self.store_draft(&chat, &self.composer.clone());
         }
     }
 

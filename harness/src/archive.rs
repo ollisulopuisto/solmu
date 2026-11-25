@@ -27,6 +27,8 @@ pub struct Favorite {
 }
 
 impl Archive {
+    pub fn write_draft_state(&self,_:&str,_:&str,_:&str,_:&str,_:i64)->Result<(),String>{Err("archive stub".into())}
+
     pub fn open(_: &std::path::Path) -> Result<Self, String> { Err("OS-keyring archive unavailable in adapter-only harness".into()) }
     pub fn drafts(&self) -> Result<Vec<(String,String)>, String> { Err("archive stub".into()) }
     pub fn set_draft(&self, _: &str, _: &str, _: i64) -> Result<(),String> { Err("archive stub".into()) }

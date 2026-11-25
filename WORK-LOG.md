@@ -1598,3 +1598,33 @@ and include the reply-chain change. No dependency resolution, workflow or UI
 code change. Own review traces package version to existing bundle generators
 and changelog parser. CI still required before merge; no release tag or DMG
 created by this commit.
+
+## 2026-11-24 - numbered draft tab redesign
+
+Owner-selected draft icon beside Send opens a numbered one-line draft list
+above the composer. Each row resumes a copy only into an empty composer;
+nonempty working text is never replaced. Long and multiline text is ellipsized
+within a fixed-height row, with full retained text unchanged. Close and delete
+are icons. Existing confirmed-save status, keep and clear-recovery actions stay.
+Reuses the current shelf and revision acknowledgements, no new persistence or
+workflow change. Main, branch and all open PRs checked for overlap: #456 is
+Quick Replies and #464 is its keyboard menu, neither is a draft picker.
+Native interaction regression adds actual pointer toggles, occupied/empty
+resume behavior, retained count and list/composer geometry at two widths.
+Local native compile/test and actual current-head captures still pending.
+No merge; existing workflow trims and DB-layer scope still await owner word.
+
+
+## 2026-11-25 - draft shelf integration
+
+Rebased462 onto cec6f020. Conflict resolution limited to capture-list and
+append-only work log. Preserved main chain-above-outgoing,dark and
+regular-tail-outgoing,light scenes while applying the reviewed draft capture
+list trims; no smoke timeout increase. Existing draft shelf source applies
+without manual source resolution. Version26.11.11 skips26.11.10 reserved
+by open466, with matching Cargo.lock and What's New entry. Own delta review
+traces account draft-state transitions, backend write command and archive
+transaction, composer geometry, recall/recovery and current-main integration.
+No fresh native result claimed before CI and real pixels.
+
+Independent FIND-462-6: corrected26.11.11changelog placement after a section-boundary regression reproduced the malformed intro insertion. Retest verifies real heading/body and intact intro. No executable change.

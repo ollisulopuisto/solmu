@@ -17,6 +17,10 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
+## 26.11.11
+
+- Keep confirmed local draft rows beside Send, with numbered recall and cleared-text recovery.
+
 ## 26.11.9
 
 - Place each reply chain above its separate tail and match connector lines to the bubble border.

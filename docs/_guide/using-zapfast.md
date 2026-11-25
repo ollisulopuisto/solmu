@@ -1002,3 +1002,13 @@ so each hidden item can be restored independently.
 Local message masks are limited to 4096 entries. At the limit, Solmu asks you
 to unhide a message before adding another; it never silently restores an old
 hidden message to make room. This also bounds settings growth and lookup work.
+
+### Retained local drafts
+
+Use the stacked-page Drafts icon beside Send to open the numbered list above
+the composer. Each draft has a one-line preview; its complete text stays saved.
+Click a row to copy it into an empty composer for review. Keep or clear current
+text first so opening a saved draft never replaces it. Closing the list does
+not delete drafts. The row's trash icon deletes that retained draft after its
+local write is confirmed. Existing save status and cleared-text recovery stay
+above the composer. These drafts are local, not synced to another device.

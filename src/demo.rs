@@ -2837,6 +2837,38 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.open_chat = Some(chat.into());
                 app.scroll_to_bottom = false;
             }
+            "draft-shelf-confirmed" | "draft-clear-recovery" => {
+                let chat = SAMPLES[0].id.to_owned();
+                app.open_chat = Some(chat.clone());
+                app.draft_shelves_loaded = true;
+                let text = if part == "draft-clear-recovery" {
+                    ""
+                } else {
+                    "A fresh message while two drafts wait safely."
+                };
+                app.composer = text.into();
+                let state = app.draft_states.entry(chat).or_default();
+                state.loaded = true;
+                state.text = text.into();
+                state.confirmed = Some(state.revision);
+                state.shelf_open = true;
+                state.shelf = vec![
+                    crate::draft_state::Parked {
+                        id: 1,
+                        text: "First retained draft: send the revised agenda after checking the dates.".into(),
+                    },
+                    crate::draft_state::Parked {
+                        id: 2,
+                        text: "Second retained draft: ask Alex about the slides before Friday.".into(),
+                    },
+                ];
+                if part == "draft-clear-recovery" {
+                    state.recovery = Some(concat!(
+                        "The longer message that was just cleared remains available here.\n",
+                        "Keep it for later, undo into an empty composer, or dismiss it and carry on."
+                    ).into());
+                }
+            }
             "hover-actions" => {
                 SHOT_HOVER_ACTIONS.store(true, std::sync::atomic::Ordering::Relaxed);
                 let chat = SAMPLES[0].id;
@@ -13350,90 +13382,67 @@ mod tests {
         assert_eq!(app.settings.voice_speed, 2.0);
     }
 
-    /// The Draft label sits above the composer only for text the reader wrote
-    /// and did not send: typed text and a restored draft show it with the
-    /// first line as preview, an untouched link prefill and a message edit do
-    /// not, and a chat without text never has it.
+    /// Native composer renders confirmed shelf state, and excludes edits/prefill.
     #[test]
-    fn the_draft_label_follows_the_readers_unsent_text() {
+    fn draft_controls_render_saved_shelf_and_recovery_but_not_edits_or_prefill() {
         let mut app = app();
         let ctx = egui::Context::default();
         app.attach(&ctx);
-        let own = SAMPLES[0].id.to_owned();
-        let other = SAMPLES[2].id.to_owned();
-        let label = |ctx: &egui::Context| {
-            ctx.data(|data| data.get_temp::<(egui::Rect, String)>(egui::Id::new("draft-label")))
-        };
-        // Each check starts from a frame that did not draw the label, so a
-        // stale rectangle from an earlier frame cannot pass for a new one.
-        let drawn = |app: &mut App, ctx: &egui::Context| {
-            ctx.data_mut(|data| {
-                data.remove::<(egui::Rect, String)>(egui::Id::new("draft-label"));
+        apply_flags(&mut app, Some("draft-shelf-confirmed"));
+        let marker = egui::Id::new("draft-controls-rendered");
+        let drawn = |app: &mut App| {
+            ctx.data_mut(|d| {
+                d.remove::<(String, String, usize, bool)>(marker);
             });
-            render(app, ctx);
-            label(ctx).map(|(_, preview)| preview)
+            render(app, &ctx);
+            ctx.data(|d| d.get_temp::<(String, String, usize, bool)>(marker))
         };
-        app.actions
-            .push(crate::model::Action::OpenChat(own.clone()));
-        render(&mut app, &ctx);
-        assert_eq!(
-            drawn(&mut app, &ctx),
-            None,
-            "an empty composer has no label"
+        let saved = drawn(&mut app).expect("production draft_controls rendered");
+        assert_eq!(saved.1, "Saved locally");
+        assert_eq!(saved.2, 2);
+        assert!(!saved.3);
+        apply_flags(&mut app, Some("draft-clear-recovery"));
+        assert!(
+            drawn(&mut app).unwrap().3,
+            "actual recovery controls rendered"
         );
-
-        app.composer = "  Yes,   after the chart fix.\nsecond line".to_owned();
-        assert_eq!(
-            drawn(&mut app, &ctx).as_deref(),
-            Some("Yes, after the chart fix."),
-            "typed text shows the label with its first line"
-        );
-
-        app.editing = Some("not-a-real-message".to_owned());
-        assert_eq!(
-            drawn(&mut app, &ctx),
-            None,
-            "editing a message is not a draft"
-        );
-        app.editing = None;
-        assert!(drawn(&mut app, &ctx).is_some());
-
-        // Leaving parks the text. The other chat has none, and coming back
-        // restores it together with the label.
-        app.actions
-            .push(crate::model::Action::OpenChat(other.clone()));
-        render(&mut app, &ctx);
-        assert_eq!(drawn(&mut app, &ctx), None, "another chat has no draft");
-        app.actions.push(crate::model::Action::OpenChat(own));
-        render(&mut app, &ctx);
-        assert_eq!(
-            drawn(&mut app, &ctx).as_deref(),
-            Some("Yes, after the chart fix."),
-            "a restored draft shows the label"
-        );
-
-        // A link's prefill is not the reader's text until they change it.
-        app.actions
-            .push(crate::model::Action::OpenChat(other.clone()));
-        render(&mut app, &ctx);
-        app.actions.push(crate::model::Action::PrefillComposer {
-            chat: other,
-            text: "Hello from a link".to_owned(),
-            mentions: Vec::new(),
+        app.reply_to = Some(crate::model::ReplyTarget {
+            chat: Some(SAMPLES[2].id.into()),
+            id: "unavailable".into(),
         });
+        assert!(
+            drawn(&mut app).is_some(),
+            "recovery and shelf remain while replying with empty composer"
+        );
+        app.reply_to = None;
+        app.editing = Some("not-real".into());
+        assert!(drawn(&mut app).is_none());
+        app.editing = None;
+        let chat = app.open_chat.clone().unwrap();
+        app.apply(
+            crate::model::Action::PrefillComposer {
+                chat: chat.clone(),
+                text: "Hello from link".into(),
+                mentions: Vec::new(),
+            },
+            &ctx,
+        );
+        assert!(
+            drawn(&mut app).is_none(),
+            "untouched prefill is not a draft"
+        );
+        app.composer.push_str(" edited");
+        assert!(drawn(&mut app).is_some());
+        app.actions
+            .push(crate::model::Action::OpenChat(SAMPLES[2].id.into()));
         render(&mut app, &ctx);
-        assert_eq!(app.composer, "Hello from a link");
+        app.actions.push(crate::model::Action::OpenChat(chat));
+        render(&mut app, &ctx);
         assert_eq!(
-            drawn(&mut app, &ctx),
-            None,
-            "an untouched prefill is not a draft"
+            app.composer, "Hello from link edited",
+            "reopen restores text"
         );
-        app.composer.push_str(" and more");
-        assert_eq!(
-            drawn(&mut app, &ctx).as_deref(),
-            Some("Hello from a link and more"),
-            "changing the prefill makes it the reader's draft"
-        );
+        assert!(drawn(&mut app).is_some());
     }
 
     /// A refused voice message waits above its own chat's composer, where
@@ -26301,6 +26310,68 @@ mod rail_tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         }
+    }
+
+    #[test]
+    fn numbered_drafts_open_beside_send_and_never_replace_working_text() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("draft-shelf-confirmed"));
+        let chat = app.open_chat.clone().unwrap();
+        let original = app.composer.clone();
+        let retained = app.draft_states[&chat].shelf[0].text.clone();
+        app.draft_states.get_mut(&chat).unwrap().shelf[0]
+            .text
+            .push_str("\nSecond line must stay in a single preview row.");
+        for width in [1180.0, 760.0] {
+            for _ in 0..3 {
+                frame(&mut app, &ctx, width, Vec::new());
+            }
+            let button = ctx
+                .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_button_id(&chat)))
+                .expect("draft icon beside Send");
+            let pill = ctx
+                .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::composer_pill_id()))
+                .unwrap();
+            assert!(
+                pill.contains_rect(button),
+                "icon remains in composer at {width}"
+            );
+            assert!(button.center().x > pill.center().x, "icon is at Send end");
+            let row = ctx
+                .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_row_id(&chat, 1)))
+                .expect("numbered row");
+            assert_eq!(row.height(), 30.0, "multiline content stays one line");
+            assert!(row.bottom() < pill.top(), "list is above composer");
+            click(&mut app, &ctx, width, row.center());
+            assert_eq!(app.composer, original, "a row cannot replace unsent text");
+            click(&mut app, &ctx, width, button.center());
+            assert!(!app.draft_states[&chat].shelf_open);
+            let button = ctx
+                .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_button_id(&chat)))
+                .unwrap();
+            click(&mut app, &ctx, width, button.center());
+            assert!(app.draft_states[&chat].shelf_open);
+        }
+        app.composer.clear();
+        for _ in 0..3 {
+            frame(&mut app, &ctx, 1180.0, Vec::new());
+        }
+        let row = ctx
+            .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_row_id(&chat, 1)))
+            .unwrap();
+        click(&mut app, &ctx, 1180.0, row.center());
+        assert!(app.composer.starts_with(&retained));
+        assert!(
+            app.composer.contains("Second line"),
+            "resume keeps complete text, not preview"
+        );
+        assert_eq!(
+            app.draft_states[&chat].shelf.len(),
+            2,
+            "resume copies without deleting retained drafts"
+        );
     }
 
     /// The rail stands at the window's left edge beside the list, with Chats

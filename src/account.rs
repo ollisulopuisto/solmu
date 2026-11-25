@@ -64,6 +64,8 @@ pub struct Account {
     pub(crate) prefetch_sent: Option<(bool, Option<ChatId>)>,
     pub scroll_chat_into_view: Option<ChatId>,
     pub drafts: HashMap<ChatId, String>,
+    pub draft_shelves_loaded: bool,
+    pub draft_states: HashMap<ChatId, crate::draft_state::State>,
     /// Whether the open chat had a draft when opened. Keep its list priority
     /// stable while the reader types, clears, or sends that draft.
     pub(crate) open_draft_priority: bool,
@@ -248,6 +250,8 @@ impl Account {
             prefetch_sent: None,
             scroll_chat_into_view: None,
             drafts: HashMap::new(),
+            draft_shelves_loaded: false,
+            draft_states: HashMap::new(),
             open_draft_priority: false,
             storage_stats: None,
             storage_token: 0,
