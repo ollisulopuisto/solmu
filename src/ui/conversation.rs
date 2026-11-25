@@ -5023,19 +5023,6 @@ fn reaction_button_label(from_me: bool, sender: &str) -> String {
 
 /// All toolbar actions stay bound to this one hovered message, even when
 /// the foreground bar crosses the visual space of a neighbouring bubble.
-fn register_action_obstacle(ui: &egui::Ui, chat: &str, id: egui::Id, rect: Rect) {
-    let key = egui::Id::new(("message-action-obstacles", chat));
-    let frame = ui.ctx().cumulative_frame_nr();
-    ui.ctx().data_mut(|d| {
-        let mut rows = d
-            .get_temp::<HashMap<egui::Id, (u64, Rect)>>(key)
-            .unwrap_or_default();
-        rows.retain(|_, (seen, _)| seen.saturating_add(1) >= frame);
-        rows.insert(id, (frame, rect));
-        d.insert_temp(key, rows);
-    });
-}
-
 fn grouped_hover_actions(
     ui: &mut egui::Ui,
     view: &View<'_>,
@@ -5065,27 +5052,6 @@ fn grouped_hover_actions(
     } else {
         pointer
     };
-    // Keep recent visible bubble geometry, including rows painted after this
-    // one in the previous frame. On a fresh viewport wait for a complete pass.
-    let column_id = egui::Id::new(("message-action-obstacles", view.chat.id.as_str()));
-    let frame_now = ui.ctx().cumulative_frame_nr();
-    let (obstacles, ready) = ui.ctx().data_mut(|d| {
-        let mut rows = d
-            .get_temp::<HashMap<egui::Id, (u64, Rect)>>(column_id)
-            .unwrap_or_default();
-        rows.retain(|_, (frame, rect)| {
-            frame.saturating_add(1) >= frame_now && rect.intersects(bounds)
-        });
-        let first_frame = d
-            .get_temp::<u64>(column_id.with("first-frame"))
-            .unwrap_or(frame_now);
-        d.insert_temp(column_id.with("first-frame"), first_frame);
-        let ready = first_frame < frame_now;
-        rows.entry(bubble.id).or_insert((frame_now, bubble.rect));
-        let obstacles = rows.values().map(|(_, rect)| *rect).collect::<Vec<_>>();
-        d.insert_temp(column_id, rows);
-        (obstacles, ready)
-    });
     let keyboard_open = ui
         .ctx()
         .data(|d| d.get_temp::<bool>(egui::Id::new("message-actions-keyboard-mode")))
@@ -5103,21 +5069,12 @@ fn grouped_hover_actions(
         .data(|d| d.get_temp::<Geometry>(area_id.with("geometry")));
     let g = if held {
         frozen.filter(|g| {
-            bounds.contains_rect(g.bounds())
-                && !obstacles
-                    .iter()
-                    .any(|rect| g.bounds().shrink(0.01).intersects(*rect))
+            bounds.contains_rect(g.bounds()) && !g.bounds().shrink(0.01).intersects(bubble.rect)
         })
     } else {
         None
     }
-    .or_else(|| {
-        ready
-            .then(|| {
-                Geometry::beside_pointer(bubble.rect, bounds, quick.len() + 1, anchor, &obstacles)
-            })
-            .flatten()
-    });
+    .or_else(|| Geometry::beside_pointer(bubble.rect, bounds, quick.len() + 1, anchor));
     let Some(g) = g else {
         return false;
     };
@@ -7020,9 +6977,6 @@ fn bubble_frame(
         .data_mut(|d| d.insert_temp(bubble_id.with("painted-rect"), painted_with_replies));
     let bubble =
         early.unwrap_or_else(|| ui.interact(exposed(inner.response.rect), bubble_id, Sense::CLICK));
-    // Register every painted body, including call rows and pending media,
-    // before affordance-specific early returns.
-    register_action_obstacle(ui, &view.chat.id, bubble.id, painted_with_replies);
     if view.selecting
         || view.pending_media.is_some_and(|records| {
             records
@@ -14933,40 +14887,6 @@ mod tests {
     }
 
     #[test]
-    fn passive_call_neighbor_is_registered_before_affordance_returns() {
-        with_still_view(|view| {
-            let ctx = egui::Context::default();
-            theme::install(&ctx);
-            let id = egui::Id::new("passive-call-neighbor");
-            let rect = Rect::from_min_size(pos2(300., 80.), vec2(180., 100.));
-            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                register_action_obstacle(ui, &view.chat.id, id, rect);
-                let rows = ui
-                    .ctx()
-                    .data(|d| {
-                        d.get_temp::<HashMap<egui::Id, (u64, Rect)>>(egui::Id::new((
-                            "message-action-obstacles",
-                            view.chat.id.as_str(),
-                        )))
-                    })
-                    .unwrap();
-                assert_eq!(rows[&id].1, rect);
-                assert!(
-                    super::super::hover_actions::Geometry::beside_pointer(
-                        Rect::from_min_max(pos2(10., 80.), pos2(290., 180.)),
-                        Rect::from_min_max(pos2(0., 0.), pos2(500., 400.)),
-                        7,
-                        pos2(280., 90.),
-                        &[rect]
-                    )
-                    .is_none()
-                );
-            });
-            output.textures_delta.clear();
-        });
-    }
-
-    #[test]
     fn tab_traverses_visible_grid_and_labelled_fallback() {
         with_still_view(|view| {
             let ctx = egui::Context::default();
@@ -15165,6 +15085,13 @@ mod tests {
                             ..Default::default()
                         },
                         |ui| {
+                            // Another message may sit behind the foreground grid.
+                            // Clicking it must still route to toolbar-owner.
+                            ui.interact(
+                                Rect::from_min_size(pos2(276.0, 70.0), vec2(130.0, 210.0)),
+                                egui::Id::new("covered-neighbor"),
+                                Sense::click(),
+                            );
                             let rect = Rect::from_min_size(pos2(18.0, 48.0), vec2(250.0, 55.0));
                             let bubble =
                                 ui.interact(rect, egui::Id::new("toolbar-message"), Sense::hover());
@@ -15183,7 +15110,6 @@ mod tests {
                     Rect::from_min_max(pos2(2.0, 2.0), pos2(418.0, 338.0)),
                     7,
                     pos2(100.0, 70.0),
-                    &[Rect::from_min_size(pos2(18.0, 48.0), vec2(250.0, 55.0))],
                 )
                 .unwrap();
                 let rect = match control {

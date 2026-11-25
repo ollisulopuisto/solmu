@@ -87,14 +87,12 @@ impl Geometry {
         }
         None
     }
-    /// Side-only pointer placement. No above/below fallback can cover another
-    /// row. The caller supplies the visible column's bubble obstacles.
+    /// Side-only placement protects the target bubble. Other rows may be covered.
     pub fn beside_pointer(
         bubble: Rect,
         bounds: Rect,
         count: usize,
         pointer: egui::Pos2,
-        obstacles: &[Rect],
     ) -> Option<Self> {
         if count != 7 {
             return None;
@@ -111,11 +109,7 @@ impl Geometry {
         }
         for x in sides {
             let whole = Rect::from_min_size(pos2(x, y), vec2(width, height));
-            if !bounds.contains_rect(whole)
-                || obstacles
-                    .iter()
-                    .any(|rect| whole.shrink(0.01).intersects(*rect))
-            {
+            if !bounds.contains_rect(whole) || whole.shrink(0.01).intersects(bubble) {
                 continue;
             }
             let reactions = Rect::from_min_size(whole.min, vec2(width, 2.0 * CELL + GAP));
@@ -210,36 +204,27 @@ mod tests {
         );
     }
     #[test]
-    fn pointer_grid_is_side_only_near_pointer_and_never_covers_neighbors() {
+    fn pointer_grid_can_cover_another_row_but_never_its_target() {
         let bounds = Rect::from_min_max(pos2(0., 0.), pos2(700., 700.));
         let bubble = Rect::from_min_max(pos2(20., 20.), pos2(360., 500.));
-        let neighbor = Rect::from_min_max(pos2(20., 510.), pos2(350., 620.));
+        let neighbor = Rect::from_min_max(pos2(370., 380.), pos2(650., 620.));
         let pointer = pos2(350., 380.);
-        let g = Geometry::beside_pointer(bubble, bounds, 7, pointer, &[bubble, neighbor]).unwrap();
+        let g = Geometry::beside_pointer(bubble, bounds, 7, pointer).unwrap();
         assert!(g.bounds().left() >= bubble.right());
         assert!((g.bounds().top() - pointer.y).abs() < 16.);
         assert!(bounds.contains_rect(g.bounds()));
-        assert!(!g.bounds().intersects(neighbor));
-        assert!(
-            Geometry::beside_pointer(
-                bubble,
-                bounds,
-                7,
-                pointer,
-                &[Rect::from_min_max(pos2(0., 0.), pos2(700., 700.))]
-            )
-            .is_none()
-        );
+        assert!(g.bounds().intersects(neighbor));
+        assert!(!g.bounds().intersects(bubble));
     }
     #[test]
     fn pointer_grid_flips_left_clamps_and_refuses_top_bottom_fallback() {
         let bounds = Rect::from_min_max(pos2(0., 0.), pos2(700., 700.));
         let bubble = Rect::from_min_max(pos2(340., 20.), pos2(680., 400.));
-        let g = Geometry::beside_pointer(bubble, bounds, 7, pos2(670., 690.), &[bubble]).unwrap();
+        let g = Geometry::beside_pointer(bubble, bounds, 7, pos2(670., 690.)).unwrap();
         assert!(g.bounds().right() <= bubble.left());
         assert_eq!(g.bounds().bottom(), bounds.bottom());
         let full = Rect::from_min_max(pos2(10., 200.), pos2(690., 300.));
-        assert!(Geometry::beside_pointer(full, bounds, 7, full.center(), &[full]).is_none());
+        assert!(Geometry::beside_pointer(full, bounds, 7, full.center()).is_none());
     }
 
     #[test]
