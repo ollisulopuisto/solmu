@@ -8907,7 +8907,10 @@ mod tests {
             "Transcribe on this device",
         );
         let at = at.expect("the configured service offers Transcribe");
-        streak_test_frame(&mut app, &ctx, 1180.0, 2400.0, click(at));
+        let mut events = click(at);
+        let released = events.pop().expect("pointer release");
+        streak_test_frame(&mut app, &ctx, 1180.0, 2400.0, events);
+        streak_test_frame(&mut app, &ctx, 1180.0, 2400.0, vec![released]);
         // frame_ui applies queued actions at the end of the frame, so the
         // click's TranscribeVoice no longer sits in app.actions; the stub's
         // recorded queue is the observable effect.
@@ -16852,7 +16855,9 @@ mod tests {
             // Selection changes bubble widths/heights. Settle that layout
             // before reading the next click target, never reuse its old rect.
             app.apply(crate::model::Action::ScrollTo(message.into()), &ctx);
-            render(app, &ctx);
+            for _ in 0..4 {
+                render(app, &ctx);
+            }
             let id = crate::ui::conversation::bubble_id(&chat, message);
             let rect = ctx
                 .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))

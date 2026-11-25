@@ -5682,17 +5682,18 @@ fn bubble(
                         pos2(body.rect.right() - width, body.rect.bottom() - 21.0),
                         pos2(body.rect.right(), area.bottom()),
                     );
-                    ui.scope_builder(
+                    // This is an overlay, not another layout row. scope_builder
+                    // advances the parent cursor and can move neighbouring rows
+                    // between pointer down/up when its reactions wrap.
+                    let mut reaction_ui = ui.new_child(
                         egui::UiBuilder::new()
                             .max_rect(overlay)
                             .layout(Layout::left_to_right(Align::Min).with_main_wrap(true)),
-                        |ui| {
-                            ui.spacing_mut().item_spacing.x = GIVEN_REACTION_GAP;
-                            for member in members.iter().filter(|row| !row.reactions.is_empty()) {
-                                reactions(ui, view, member, actions);
-                            }
-                        },
                     );
+                    reaction_ui.spacing_mut().item_spacing.x = GIVEN_REACTION_GAP;
+                    for member in members.iter().filter(|row| !row.reactions.is_empty()) {
+                        reactions(&mut reaction_ui, view, member, actions);
+                    }
                 }
                 if metadata {
                     ui.add_space(3.0);
