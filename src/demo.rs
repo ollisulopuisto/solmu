@@ -8909,7 +8909,32 @@ mod tests {
                         let ctx = ui.ctx().clone();
                         app.background_frame(&ctx);
                         app.frame_ui(ui);
-                        *found = painted_label_center(&ctx, needle);
+                        *found = None;
+                        for layer in ctx.memory(|memory| memory.layer_ids().collect::<Vec<_>>()) {
+                            let transform =
+                                ctx.layer_transform_to_global(layer).unwrap_or_default();
+                            ctx.graphics(|graphics| {
+                                if let Some(list) = graphics.get(layer) {
+                                    for clipped in list.all_entries() {
+                                        if let egui::Shape::Text(text) = &clipped.shape
+                                            && text.galley.text() == needle
+                                        {
+                                            let local = egui::Rect::from_min_size(
+                                                text.pos,
+                                                text.galley.size(),
+                                            )
+                                            .center();
+                                            let global = transform * local;
+                                            if clipped.clip_rect.contains(local)
+                                                && ctx.content_rect().contains(global)
+                                            {
+                                                *found = Some(global);
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        }
                         *drawn_out = drawn(&ctx);
                     },
                 );
@@ -16885,7 +16910,7 @@ mod tests {
         let ctx = egui::Context::default();
         app.attach(&ctx);
         for _ in 0..3 {
-            render(&mut app, &ctx);
+            streak_test_frame(&mut app, &ctx, 1180.0, 2400.0, vec![]);
         }
         let chat = sample_ids()[0].to_owned();
         // A click in the bubble's margin, beside its time: the text and
@@ -16895,7 +16920,7 @@ mod tests {
             // before reading the next click target, never reuse its old rect.
             app.apply(crate::model::Action::ScrollTo(message.into()), &ctx);
             for _ in 0..4 {
-                render(app, &ctx);
+                streak_test_frame(app, &ctx, 1180.0, 2400.0, vec![]);
             }
             let id = crate::ui::conversation::bubble_id(&chat, message);
             let rect = ctx
@@ -16908,19 +16933,23 @@ mod tests {
                 pressed,
                 modifiers,
             };
-            frame_with(
+            streak_test_frame(
                 app,
                 &ctx,
+                1180.0,
+                2400.0,
                 vec![
                     egui::Event::ModifiersChanged(modifiers),
                     egui::Event::PointerMoved(pos),
                     button(true),
                 ],
             );
-            frame_with(app, &ctx, vec![button(false)]);
-            frame_with(
+            streak_test_frame(app, &ctx, 1180.0, 2400.0, vec![button(false)]);
+            streak_test_frame(
                 app,
                 &ctx,
+                1180.0,
+                2400.0,
                 vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)],
             );
         };
@@ -16949,12 +16978,14 @@ mod tests {
             ),
             "a click while selecting leaves one out"
         );
-        frame_with(
+        streak_test_frame(
             &mut app,
             &ctx,
+            1180.0,
+            2400.0,
             vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
         );
-        frame_with(&mut app, &ctx, Vec::new());
+        streak_test_frame(&mut app, &ctx, 1180.0, 2400.0, Vec::new());
         assert_eq!(selected(&app), None, "Escape ends the selection");
         assert_eq!(app.open_chat, Some(chat), "and leaves the chat open");
     }
@@ -18190,6 +18221,17 @@ mod tests {
     #[test]
     fn clicking_the_hover_reaction_control_opens_the_picker_for_that_message() {
         let mut app = app();
+        // This interaction needs room beside its target. A full-width link
+        // preview deliberately uses the keyboard/context-menu fallback now.
+        let chat = sample_ids()[0].to_owned();
+        let row = app
+            .conversations
+            .get_mut(&chat)
+            .unwrap()
+            .message_mut("ada-link")
+            .unwrap();
+        row.content = Content::text("See https://example.invalid");
+        row.thumbnail = None;
         let ctx = egui::Context::default();
         app.attach(&ctx);
         for _ in 0..3 {

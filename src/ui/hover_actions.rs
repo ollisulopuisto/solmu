@@ -26,6 +26,14 @@ pub fn next_focus(
     let next = if reverse { at.checked_sub(1)? } else { at + 1 };
     order.get(next).copied()
 }
+pub fn opening_anchor(bubble: Rect, pointer: Option<egui::Pos2>, keyboard: bool) -> egui::Pos2 {
+    if keyboard {
+        return bubble.center();
+    }
+    pointer
+        .filter(|p| bubble.contains(*p))
+        .unwrap_or(bubble.center())
+}
 pub fn show_grid(scrolling: bool, pointer_active: bool, keyboard_active: bool) -> bool {
     !scrolling && (pointer_active || keyboard_active)
 }
@@ -37,6 +45,7 @@ pub struct Geometry {
     pub star: Rect,
 }
 impl Geometry {
+    #[cfg(test)]
     pub fn place(bubble: Rect, bounds: Rect, count: usize) -> Option<Self> {
         if count != 7 {
             return None;
@@ -78,6 +87,46 @@ impl Geometry {
         }
         None
     }
+    /// Side-only placement protects the target bubble. Other rows may be covered.
+    pub fn beside_pointer(
+        bubble: Rect,
+        bounds: Rect,
+        count: usize,
+        pointer: egui::Pos2,
+    ) -> Option<Self> {
+        if count != 7 {
+            return None;
+        }
+        let width = 3.0 * CELL + 2.0 * GAP;
+        let height = 3.0 * CELL + 2.0 * GAP + SECTION_GAP;
+        if bounds.width() < width || bounds.height() < height {
+            return None;
+        }
+        let y = pointer.y.clamp(bounds.top(), bounds.bottom() - height);
+        let sides = [bubble.right() + 8.0, bubble.left() - width - 8.0];
+        for x in sides {
+            let whole = Rect::from_min_size(pos2(x, y), vec2(width, height));
+            if !bounds.contains_rect(whole) || whole.shrink(0.01).intersects(bubble) {
+                continue;
+            }
+            let reactions = Rect::from_min_size(whole.min, vec2(width, 2.0 * CELL + GAP));
+            let vertical = Rect::from_min_size(
+                pos2(x, reactions.bottom() + GAP + SECTION_GAP),
+                vec2(width, CELL),
+            );
+            return Some(Self {
+                reactions,
+                vertical,
+                reply: Rect::from_min_size(vertical.min + vec2(CELL + GAP, 0.0), vec2(CELL, CELL)),
+                star: Rect::from_min_size(
+                    vertical.min + vec2(2.0 * (CELL + GAP), 0.0),
+                    vec2(CELL, CELL),
+                ),
+            });
+        }
+        None
+    }
+
     /// Only the corridor directly between the facing edges, never the full
     /// bounding box that also contains unrelated neighbouring message rows.
     pub fn bridge(self, bubble: Rect) -> Rect {
@@ -141,6 +190,49 @@ pub fn paint(p: &egui::Painter, g: Geometry, rear: Color32, front: Color32, outl
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn keyboard_and_outside_pointer_anchor_to_target() {
+        let b = Rect::from_min_max(pos2(20., 20.), pos2(200., 80.));
+        assert_eq!(opening_anchor(b, Some(pos2(100., 600.)), true), b.center());
+        assert_eq!(opening_anchor(b, Some(pos2(100., 600.)), false), b.center());
+        assert_eq!(
+            opening_anchor(b, Some(pos2(100., 30.)), false),
+            pos2(100., 30.)
+        );
+    }
+    #[test]
+    fn pointer_grid_can_cover_another_row_but_never_its_target() {
+        let bounds = Rect::from_min_max(pos2(0., 0.), pos2(700., 700.));
+        let bubble = Rect::from_min_max(pos2(20., 20.), pos2(360., 500.));
+        let neighbor = Rect::from_min_max(pos2(370., 380.), pos2(650., 620.));
+        let pointer = pos2(350., 380.);
+        let g = Geometry::beside_pointer(bubble, bounds, 7, pointer).unwrap();
+        assert!(g.bounds().left() >= bubble.right());
+        assert!((g.bounds().top() - pointer.y).abs() < 16.);
+        assert!(bounds.contains_rect(g.bounds()));
+        assert!(g.bounds().intersects(neighbor));
+        assert!(!g.bounds().intersects(bubble));
+    }
+    #[test]
+    fn pointer_on_left_half_still_prefers_right_side() {
+        let bounds = Rect::from_min_max(pos2(0., 0.), pos2(700., 700.));
+        let bubble = Rect::from_min_max(pos2(250., 80.), pos2(450., 200.));
+        let g = Geometry::beside_pointer(bubble, bounds, 7, pos2(260., 100.)).unwrap();
+        assert_eq!(g.bounds().left(), bubble.right() + 8.);
+        assert_eq!(g.bounds().top(), 100.);
+        assert!(!g.bounds().intersects(bubble));
+    }
+    #[test]
+    fn pointer_grid_flips_left_clamps_and_refuses_top_bottom_fallback() {
+        let bounds = Rect::from_min_max(pos2(0., 0.), pos2(700., 700.));
+        let bubble = Rect::from_min_max(pos2(340., 20.), pos2(680., 400.));
+        let g = Geometry::beside_pointer(bubble, bounds, 7, pos2(670., 690.)).unwrap();
+        assert!(g.bounds().right() <= bubble.left());
+        assert_eq!(g.bounds().bottom(), bounds.bottom());
+        let full = Rect::from_min_max(pos2(10., 200.), pos2(690., 300.));
+        assert!(Geometry::beside_pointer(full, bounds, 7, full.center()).is_none());
+    }
+
     #[test]
     fn focus_order_skips_disabled_controls_and_scroll_yields() {
         let b = egui::Id::new("owner");

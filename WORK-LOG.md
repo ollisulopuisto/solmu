@@ -1,6 +1,9 @@
 ## 2026-11-25: Given reactions overlay the bottom-right bubble edge
 
 Follow-up on PR460: owner clarified the reaction row, not message indentation. Move given reactions out of the incoming-left footer into an independently wrapped bottom-right edge overlay in both directions; retain 36px background-free glyphs, exact message/emoji targets and album member identity. Reserve only the overlay overhang before separate metadata so clocks cannot collide. Added actual bubble render regression for both directions before edit. Native execution blocked locally: offline cargo cannot fetch the pinned egui fork, no precompiled GUI tree; regression added but not claimed red/green. Rustfmt and diff check pass. No workflow/schema/credential/crypto edits; merge held. Screenshot not yet verified locally, existing native screenshot evidence does not exercise this changed row.
+## 2026-11-25: Side-only hover grid at pointer height
+
+Owner asked Nov25 15:40 for cursor placement,15:45 for target highlight,15:48 for side instead of above/below, repeated21:09-11. Existing461 anchored to bubble center and preferred below/above. New pointer-Y side-only placement tests visible neighboring bubble rectangles from current/previous frame, freezes while active, marks target with accent outline, clamps vertically and falls back to context menu/keyboard when no safe gutter fits. No permanent gutter or bubble-width change. Startup waits one frame for obstacle geometry. Keyboard fixture now gives a genuine side gap; exact-control test uses new geometry. Native tests added first but offline pinned egui unavailable, so not claimed executed; extracted arithmetic4cases pass, rustfmt/diffcheck pass. Native rendering, changing-row obstacles and screenshot remain unverified, needs CI/own review. No workflow/schema/credentials/crypto changes. Separate PR from460given reactions. Protected439untouched.
 
 # Work log
 
