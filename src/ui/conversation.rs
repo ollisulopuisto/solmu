@@ -2080,7 +2080,10 @@ pub(crate) fn composer_with_capabilities(
                                 if response.changed() {
                                     if app.editing.is_none() && app.composer_holds_draft() {
                                         let text = app.composer.clone();
-                                        app.draft_states.entry(chat.id.clone()).or_default().edit(&before_edit, &text, deleting);
+                                        let threshold = app.settings.draft_recovery_min_chars;
+                                        let state = app.draft_states.entry(chat.id.clone()).or_default();
+                                        state.recovery_min_chars = Some(threshold);
+                                        state.edit(&before_edit, &text, deleting);
                                     }
                                     app.actions.push(Action::Composing {
                                         chat: chat.id.clone(),
