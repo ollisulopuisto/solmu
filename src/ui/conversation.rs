@@ -5675,7 +5675,7 @@ fn bubble(
                         .iter()
                         .filter(|row| !row.reactions.is_empty())
                         .map(|row| reaction_row_width(ui, view, row))
-                        .reduce(|total, width| total + 2.0 + width)
+                        .reduce(|total, width| total + GIVEN_REACTION_GAP + width)
                         .unwrap_or(0.0);
                     let width = total.min((body.rect.right() - area.left()).max(1.0));
                     let overlay = Rect::from_min_max(
@@ -5687,7 +5687,7 @@ fn bubble(
                             .max_rect(overlay)
                             .layout(Layout::left_to_right(Align::Min).with_main_wrap(true)),
                         |ui| {
-                            ui.spacing_mut().item_spacing.x = 2.0;
+                            ui.spacing_mut().item_spacing.x = GIVEN_REACTION_GAP;
                             for member in members.iter().filter(|row| !row.reactions.is_empty()) {
                                 reactions(ui, view, member, actions);
                             }
@@ -8325,6 +8325,9 @@ fn footer(
     }
 }
 
+const GIVEN_REACTION_PADDING_X: f32 = 4.0;
+const GIVEN_REACTION_GAP: f32 = 2.0;
+
 fn reaction_row_width(ui: &egui::Ui, view: &View<'_>, message: &Message) -> f32 {
     let mut counts = std::collections::BTreeMap::new();
     for reaction in &message.reactions {
@@ -8336,9 +8339,9 @@ fn reaction_row_width(ui: &egui::Ui, view: &View<'_>, message: &Message) -> f32 
             widgets::reaction_line(ui, emoji, count, view.palette.text)
                 .size()
                 .x
-                + 4.0
+                + GIVEN_REACTION_PADDING_X
         })
-        .reduce(|total, width| total + 2.0 + width)
+        .reduce(|total, width| total + GIVEN_REACTION_GAP + width)
         .unwrap_or(0.0)
 }
 
@@ -8363,10 +8366,10 @@ fn reactions(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: &mu
             None => counts.push((reaction.emoji.clone(), 1, reaction.from_me, vec![who])),
         }
     }
-    ui.spacing_mut().item_spacing.x = 3.0;
+    ui.spacing_mut().item_spacing.x = GIVEN_REACTION_GAP;
     for (emoji, count, mine, names) in counts {
         let line = widgets::reaction_line(ui, &emoji, count as usize, palette.text);
-        let size = line.size() + vec2(12.0, 6.0);
+        let size = line.size() + vec2(GIVEN_REACTION_PADDING_X, 6.0);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         ui.ctx().data_mut(|data| {
             data.insert_temp(
@@ -8380,8 +8383,14 @@ fn reactions(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: &mu
                 // painting a background or a pill border around the emoji.
                 ui.painter().line_segment(
                     [
-                        pos2(rect.left() + 6.0, rect.bottom() - 1.0),
-                        pos2(rect.right() - 6.0, rect.bottom() - 1.0),
+                        pos2(
+                            rect.left() + GIVEN_REACTION_PADDING_X / 2.0,
+                            rect.bottom() - 1.0,
+                        ),
+                        pos2(
+                            rect.right() - GIVEN_REACTION_PADDING_X / 2.0,
+                            rect.bottom() - 1.0,
+                        ),
                     ],
                     Stroke::new(2.0, palette.accent),
                 );
@@ -16774,6 +16783,56 @@ mod tests {
 
     /// Runs `check` with a still view of one plain chat, as a footer test
     /// needs one to paint into.
+    #[test]
+    fn measured_reaction_row_matches_real_chip_rects() {
+        with_still_view(|view| {
+            for count in [1, 2, 6] {
+                let ctx = egui::Context::default();
+                theme::install(&ctx);
+                let mut message =
+                    crate::archive::tests::message(&view.chat.id, "chip-widths", 0, false);
+                for emoji in ["👍", "❤️", "😂", "😮", "🙏", "👀"].into_iter().take(count)
+                {
+                    message.reactions.push(crate::model::Reaction {
+                        sender: "fixture".into(),
+                        from_me: false,
+                        emoji: emoji.into(),
+                    });
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1000., 400.))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let expected = reaction_row_width(ui, view, &message);
+                        ui.horizontal(|ui| reactions(ui, view, &message, &mut Vec::new()));
+                        let rects: Vec<_> = message
+                            .reactions
+                            .iter()
+                            .map(|reaction| {
+                                ui.ctx()
+                                    .data(|d| {
+                                        d.get_temp::<Rect>(
+                                            bubble_id(&message.chat, &message.id)
+                                                .with(("reaction", &reaction.emoji)),
+                                        )
+                                    })
+                                    .unwrap()
+                            })
+                            .collect();
+                        let actual = rects.last().unwrap().right() - rects.first().unwrap().left();
+                        assert!(
+                            (actual - expected).abs() < 0.1,
+                            "{count} chips: {actual} != {expected}"
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+            }
+        });
+    }
+
     #[test]
     fn given_reaction_overlays_bottom_right_in_both_directions() {
         with_still_view(|view| {
