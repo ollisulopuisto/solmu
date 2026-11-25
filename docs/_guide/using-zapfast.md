@@ -946,7 +946,7 @@ Unread.
 
 The messages form one list, named for the chat, such as "Messages with Ada" or
 "Messages in Rust Berlin", and each message, or album, reports its position in
-it. The list is a single Tab stop. Control+2 on macOS also moves there; elsewhere use Tab. Alt+digit selects a network when outside a text field, not message focus.
+it. The list is a single Tab stop. Shift-Command-2 on macOS also moves there; elsewhere use Tab. Alt+digit selects a network when outside a text field, not message focus.
 In the list, Up and Down move one item, Home and End go to the oldest loaded
 and the newest message, and PgUp and PgDn move about a screen; Home on the
 oldest loaded message loads older history. The current message stays put when
