@@ -13543,6 +13543,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn select_all_backspace_offers_recovery_at_the_configured_threshold() {
+        for (length, threshold, recover) in [
+            (29, 30, false),
+            (30, 30, true),
+            (31, 30, true),
+            (30, 40, false),
+        ] {
+            let mut app = app();
+            app.settings.draft_recovery_min_chars = threshold;
+            let ctx = egui::Context::default();
+            app.attach(&ctx);
+            app.focus_composer = true;
+            render(&mut app, &ctx);
+            let text = "ä".repeat(length);
+            frame_with(&mut app, &ctx, vec![egui::Event::Text(text.clone())]);
+            assert_eq!(app.composer, text);
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![key(egui::Key::A, egui::Modifiers::COMMAND)],
+            );
+            frame_with(
+                &mut app,
+                &ctx,
+                vec![key(egui::Key::Backspace, egui::Modifiers::NONE)],
+            );
+            assert!(app.composer.is_empty());
+            let state = &app.draft_states[app.open_chat.as_ref().unwrap()];
+            assert_eq!(state.recovery.is_some(), recover, "{length}/{threshold}");
+            if recover {
+                assert_eq!(state.recovery.as_deref(), Some(text.as_str()));
+            }
+        }
+    }
+
     /// Actual composer input leaves the list steady; parking or discarding
     /// that draft changes its priority only after leaving the conversation.
     #[test]
