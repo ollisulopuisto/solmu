@@ -7656,25 +7656,28 @@ fn quote_chip(
     #[cfg(feature = "demo")]
     let focused = focused || crate::demo::chain_hover_shot(&message.id);
     if response.hovered() || focused {
-        let tail = if album_tail {
-            egui::Rect::from_min_size(egui::pos2(rect.center().x, body.top()), egui::Vec2::ZERO)
+        if album_tail {
+            ui.painter().line_segment(
+                super::reply_tail::album_connector(body, message.from_me),
+                egui::Stroke::new(1.8, connector),
+            );
         } else {
-            super::reply_tail::geometry(body, message.from_me)
-        };
-        let x = rect.center().x;
-        ui.painter().line_segment(
-            [egui::pos2(x, rect.bottom()), egui::pos2(x, tail.top())],
-            egui::Stroke::new(1.8, connector),
-        );
-        let tip = if message.from_me {
-            tail.right()
-        } else {
-            tail.left()
-        };
-        ui.painter().line_segment(
-            [egui::pos2(x, tail.top()), egui::pos2(tip, tail.top())],
-            egui::Stroke::new(1.8, connector),
-        );
+            let tail = super::reply_tail::geometry(body, message.from_me);
+            let x = rect.center().x;
+            ui.painter().line_segment(
+                [egui::pos2(x, rect.bottom()), egui::pos2(x, tail.top())],
+                egui::Stroke::new(1.8, connector),
+            );
+            let tip = if message.from_me {
+                tail.right()
+            } else {
+                tail.left()
+            };
+            ui.painter().line_segment(
+                [egui::pos2(x, tail.top()), egui::pos2(tip, tail.top())],
+                egui::Stroke::new(1.8, connector),
+            );
+        }
     }
     ui.ctx().data_mut(|data| {
         let id = bubble_id(&message.chat, &message.id);

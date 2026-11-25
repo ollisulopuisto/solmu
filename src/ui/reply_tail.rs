@@ -25,6 +25,15 @@ pub fn chain_geometry(body: Rect, own: bool) -> Rect {
     Rect::from_min_size(pos2(x, body.top() - SLOT_HEIGHT), vec2(30.0, 30.0))
 }
 
+/// Albums connect straight to their own tile top, with no filled side tail.
+pub fn album_connector(body: Rect, own: bool) -> [egui::Pos2; 2] {
+    let chain = chain_geometry(body, own);
+    [
+        pos2(chain.center().x, chain.bottom()),
+        pos2(chain.center().x, body.top()),
+    ]
+}
+
 pub fn paint(painter: &Painter, body: Rect, own: bool, ink: Color32) {
     // The bubble renderer owns the regular filled tail. Do not paint a
     // second, differently shaped extension here.
@@ -79,6 +88,20 @@ mod tests {
                 assert!(!chain.intersects(second));
             }
             assert!(!chain_geometry(first, own).intersects(chain_geometry(second, own)));
+        }
+    }
+    #[test]
+    fn album_connector_never_enters_neighbour_media_or_side_gap() {
+        let first = Rect::from_min_size(pos2(80., 80.), vec2(180., 132.));
+        let second = first.translate(vec2(first.width() + 3., 0.));
+        for own in [false, true] {
+            for (body, neighbour) in [(first, second), (second, first)] {
+                let [start, end] = album_connector(body, own);
+                assert_eq!(start.x, end.x);
+                assert_eq!(end.y, body.top());
+                assert!(start.x >= body.left() && start.x <= body.right());
+                assert!(!Rect::from_two_pos(start, end).intersects(neighbour));
+            }
         }
     }
     #[test]
