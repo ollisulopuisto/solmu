@@ -17,9 +17,12 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 - Keep reply-chain bubbles on the same left edge, with one attached chain-tail per reply.
 - Open the reaction grid beside its highlighted target near the pointer, without a reserved gutter.
-- Clear sent drafts, preserve multi-selection on link clicks, and fix gallery download flow.
+- Delete a resumed shelf draft only after its text send is confirmed.
+- Keep earlier album files in the media cache during small downloads.
+- Download incoming images automatically before they enter view.
+- Draft recovery threshold is a Chats setting, 30 characters by default.
 - Save document downloads with safe filename extensions instead of `.bin`.
-- Open Quick Replies from the message menu or Cmd/Ctrl-Y, inserting text for review without sending.
+- Open two-stage keyboard menus for reactions and Quick Replies on the latest incoming message, from the message menu or Cmd/Ctrl-Y; Quick Replies insert text for review without sending.
 - Send Later: composer clock expands into four upward presets (8am nearest, parsed message time, custom calendar, recurring); Cmd/Ctrl+Shift+Enter opens it, arrows and 1–4 choose, Esc returns to the draft.
 
 ## 26.11.16
