@@ -17,7 +17,7 @@ this is the whole scheme. Older releases (`v0.24.21` and before) keep their numb
 
 ## Unreleased
 
-## 26.11.13
+## 26.11.14
 
 - On Mac, Shift-Command-2 focuses the message list instead of Control-2, leaving Spaces shortcuts to macOS. Shifted digit layouts use the physical 2 key.
 
