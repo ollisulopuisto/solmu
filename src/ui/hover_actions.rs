@@ -103,10 +103,7 @@ impl Geometry {
             return None;
         }
         let y = pointer.y.clamp(bounds.top(), bounds.bottom() - height);
-        let mut sides = [bubble.right() + 8.0, bubble.left() - width - 8.0];
-        if pointer.x < bubble.center().x {
-            sides.swap(0, 1);
-        }
+        let sides = [bubble.right() + 8.0, bubble.left() - width - 8.0];
         for x in sides {
             let whole = Rect::from_min_size(pos2(x, y), vec2(width, height));
             if !bounds.contains_rect(whole) || whole.shrink(0.01).intersects(bubble) {
@@ -214,6 +211,15 @@ mod tests {
         assert!((g.bounds().top() - pointer.y).abs() < 16.);
         assert!(bounds.contains_rect(g.bounds()));
         assert!(g.bounds().intersects(neighbor));
+        assert!(!g.bounds().intersects(bubble));
+    }
+    #[test]
+    fn pointer_on_left_half_still_prefers_right_side() {
+        let bounds = Rect::from_min_max(pos2(0., 0.), pos2(700., 700.));
+        let bubble = Rect::from_min_max(pos2(250., 80.), pos2(450., 200.));
+        let g = Geometry::beside_pointer(bubble, bounds, 7, pos2(260., 100.)).unwrap();
+        assert_eq!(g.bounds().left(), bubble.right() + 8.);
+        assert_eq!(g.bounds().top(), 100.);
         assert!(!g.bounds().intersects(bubble));
     }
     #[test]
