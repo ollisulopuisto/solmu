@@ -1343,7 +1343,7 @@ pub enum Side {
 pub const BUBBLE_RADIUS: u8 = 10;
 /// How far a bubble's tail reaches out from its side, and down from its top.
 pub const TAIL_WIDTH: f32 = 8.0;
-const TAIL_HEIGHT: f32 = 11.0;
+pub const TAIL_HEIGHT: f32 = 11.0;
 
 /// The corners of a message bubble: the one its tail leaves is square.
 pub fn bubble_corners(tail: Option<Side>) -> CornerRadius {
@@ -1430,24 +1430,7 @@ pub fn bubble_shape_with_shadow(
     let mut shapes = vec![egui::Shape::Rect(shadow.as_shape(rect, corners))];
     // The tail overlaps the bubble by a few points so no seam shows where
     // the two anti-aliased edges meet.
-    let tail_points = tail.map(|side| {
-        let (edge, out, into): (f32, f32, f32) = match side {
-            Side::Left => (rect.left(), -TAIL_WIDTH, 3.0),
-            Side::Right => (rect.right(), TAIL_WIDTH, -3.0),
-        };
-        let top = effects.tail_tip_y.unwrap_or(rect.top());
-        let reach = TAIL_HEIGHT * (TAIL_WIDTH + into.abs()) / TAIL_WIDTH;
-        let mut points = vec![
-            pos2(edge + into, top),
-            pos2(edge + into, top + reach),
-            pos2(edge + out, top),
-        ];
-        // Clockwise winding either way.
-        if side == Side::Right {
-            points.reverse();
-        }
-        points
-    });
+    let tail_points = tail.map(|side| bubble_tail_points(rect, side, effects.tail_tip_y));
     if let Some(points) = &tail_points {
         let offset = vec2(shadow.offset[0].into(), shadow.offset[1].into());
         let points: Vec<_> = points.iter().map(|point| *point + offset).collect();
@@ -1476,6 +1459,26 @@ pub fn bubble_shape_with_shadow(
         shapes.push(egui::Shape::convex_polygon(points, fill, Stroke::NONE));
     }
     egui::Shape::Vec(shapes)
+}
+
+/// Shared regular tail, used by ordinary bubbles and each quoted album member.
+pub fn bubble_tail_points(rect: Rect, side: Side, tip_y: Option<f32>) -> Vec<egui::Pos2> {
+    let (edge, out, into): (f32, f32, f32) = match side {
+        Side::Left => (rect.left(), -TAIL_WIDTH, 3.0),
+        Side::Right => (rect.right(), TAIL_WIDTH, -3.0),
+    };
+    let top = tip_y.unwrap_or(rect.top());
+    let reach = TAIL_HEIGHT * (TAIL_WIDTH + into.abs()) / TAIL_WIDTH;
+    let mut points = vec![
+        pos2(edge + into, top),
+        pos2(edge + into, top + reach),
+        pos2(edge + out, top),
+    ];
+    // Clockwise winding either way.
+    if side == Side::Right {
+        points.reverse();
+    }
+    points
 }
 
 /// The text size Messages lays its balloons out for on the Mac: ChatKit's

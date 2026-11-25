@@ -20,6 +20,7 @@ struct Frame {
     parents: HashMap<Key, Key>,
     rects: HashMap<Key, egui::Rect>,
     hover: Option<Key>,
+    chains: HashMap<Key, egui::Rect>,
     active: bool,
     included: HashSet<Key>,
 }
@@ -33,6 +34,7 @@ impl Default for Frame {
             parents: HashMap::new(),
             rects: HashMap::new(),
             hover: None,
+            chains: HashMap::new(),
             active: false,
             included: HashSet::new(),
         }
@@ -574,8 +576,14 @@ pub fn row(
         return;
     };
     let mut f = shared.lock().unwrap_or_else(|e| e.into_inner());
-    f.rects.insert(key.clone(), response.rect);
     let pass = ui.ctx().cumulative_pass_nr();
+    let body = ui
+        .ctx()
+        .data(|d| {
+            d.get_temp::<egui::Rect>(super::conversation::bubble_id(&m.chat, &m.id).with("rect"))
+        })
+        .unwrap_or(response.rect);
+    f.rects.insert(key.clone(), body);
     let pointer = ui.input(|i| i.pointer.hover_pos());
     let marker_active = ui.ctx().data(|d| {
         let id = super::conversation::bubble_id(&m.chat, &m.id);
@@ -584,6 +592,14 @@ pub fn row(
                 || d.get_temp::<egui::Rect>(id.with("quote"))
                     .is_some_and(|rect| pointer.is_some_and(|p| rect.contains(p))))
     });
+    if let Some(chain) = ui.ctx().data(|d| {
+        let id = super::conversation::bubble_id(&m.chat, &m.id);
+        (d.get_temp::<u64>(id.with("quote-pass")) == Some(pass))
+            .then(|| d.get_temp::<egui::Rect>(id.with("quote")))
+            .flatten()
+    }) {
+        f.chains.insert(key.clone(), chain);
+    }
     if marker_active {
         f.hover = Some(key.clone());
     }
@@ -675,12 +691,27 @@ pub fn finish(ui: &egui::Ui, color: egui::Color32) {
         .filter(|(key, _)| *key != parent && *key != child)
         .map(|(_, r)| rect(r))
         .collect();
-    let Some(points) =
-        crate::reply_router::route(rect(a), rect(b), &obstacles, rect(&ui.clip_rect()))
-    else {
+    let Some(chain) = f.chains.get(child) else {
+        return;
+    };
+    let Some(points) = crate::reply_router::route_to_chain(
+        rect(a),
+        rect(b),
+        rect(chain),
+        &obstacles,
+        rect(&ui.clip_rect()),
+    ) else {
         return;
     };
     let points: Vec<_> = points.iter().map(|p| egui::pos2(p.x, p.y)).collect();
+    let color = ui
+        .ctx()
+        .data(|data| {
+            data.get_temp::<egui::Color32>(
+                super::conversation::bubble_id(&child.chat, &child.id).with("connector-color"),
+            )
+        })
+        .unwrap_or(color);
     let stroke = egui::Stroke::new(1.8, color);
     let mut previous = points[0];
     for i in 1..points.len() - 1 {

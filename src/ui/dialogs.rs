@@ -1701,6 +1701,12 @@ fn confirm_delete_messages(
             .results
             .iter()
             .any(|item| item.result.is_none());
+        if pending {
+            ui.label(crate::i18n::gettext(
+                app.locale,
+                "An earlier batch still has pending results.",
+            ));
+        }
         let prompt = if for_everyone {
             crate::i18n::ngettext(
                 app.locale,

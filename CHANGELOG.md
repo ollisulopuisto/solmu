@@ -15,9 +15,29 @@ zero, and the number of the release in that month, starting at 1 (`26.11.1`).
 Cargo, the Mac bundle and the Windows installer need three numeric parts, so
 this is the whole scheme. Older releases (`v0.24.21` and before) keep their numbers.
 
+## 26.11.16
+
+- Declare Swift for Darwin Nix launcher typechecks instead of depending on host Xcode discovery.
+
 ## Unreleased
 
 - The message menu offers Quick Replies (Yes, No, Later); choosing one puts its text in the composer for review and never sends it.
+
+## 26.11.14
+
+- On Mac, Shift-Command-2 focuses the message list instead of Control-2, leaving Spaces shortcuts to macOS. Shifted digit layouts use the physical 2 key.
+
+## 26.11.12
+
+- Action results no longer appear above the chat list by default. The new Debug mode preference shows them, including failures; every failure is written to the log either way.
+
+## 26.11.11
+
+- Keep confirmed local draft rows beside Send, with numbered recall and cleared-text recovery.
+
+## 26.11.9
+
+- Place each reply chain above its separate tail and match connector lines to the bubble border.
 
 - WhatsApp links accept Finnish domestic numbers beginning with0, and short bare numbers default to+358. Explicit international formats and existing international link targets stay unchanged.
 

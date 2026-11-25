@@ -679,12 +679,72 @@ fn trim_cache(dirs: &AccountDirs, budget: u64) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Make room for the next bytes without deleting the active partial or uploads.
+fn reserve_media_chunk(
+    dirs: &AccountDirs,
+    budget: u64,
+    incoming: u64,
+    partial: &std::path::Path,
+) -> std::io::Result<()> {
+    let target = budget
+        .checked_sub(incoming)
+        .ok_or_else(|| std::io::Error::other("Cache budget exhausted"))?;
+    let files = cache_files(dirs)?;
+    let mut size: u64 = files.iter().map(|(_, _, bytes)| bytes).sum();
+    for (_, path, bytes) in files {
+        if size <= target {
+            break;
+        }
+        if path == partial || keeps_temp_upload(&path) {
+            continue;
+        }
+        std::fs::remove_file(path)?;
+        size = size.saturating_sub(bytes);
+    }
+    if size > target {
+        return Err(std::io::Error::other("Cache budget exhausted"));
+    }
+    Ok(())
+}
+
 fn measure_cache(dirs: &AccountDirs) -> std::io::Result<crate::model::StorageStats> {
     let mut stats = crate::model::StorageStats::default();
     for (_, path, bytes) in cache_files(dirs)? {
         stats.add(&path, bytes);
     }
     Ok(stats)
+}
+
+pub(crate) fn write_local_draft_state(
+    loaded: bool,
+    store: &mut Option<crate::archive::Archive>,
+    path: &std::path::Path,
+    origin: &str,
+    chat: &str,
+    text: &str,
+    shelf: &[crate::draft_state::Parked],
+) -> bool {
+    if !crate::draft_state::can_write_shelf(loaded, store.is_some() || !path.exists()) {
+        return false;
+    }
+    if store.is_none() {
+        *store = crate::archive::Archive::open(path).ok();
+    }
+    store.as_ref().is_some_and(|store| {
+        let key = serde_json::to_string(&(origin, chat, "parked-v1")).expect("strings serialize");
+        let Ok(shelf) = serde_json::to_string(shelf) else {
+            return false;
+        };
+        store
+            .write_draft_state(
+                &draft_namespace(origin, chat),
+                text,
+                &key,
+                &shelf,
+                jiff::Timestamp::now().as_second(),
+            )
+            .is_ok()
+    })
 }
 
 pub(crate) fn draft_namespace(origin: &str, chat: &str) -> String {
@@ -1672,10 +1732,6 @@ impl Api {
         if path.is_file() {
             return Ok(path);
         }
-        // Reserve the maximum transfer before writing. Complete files plus the
-        // in-flight file stay within the budget even without Content-Length.
-        trim_cache(dirs, budget.saturating_sub(limit))
-            .map_err(|_| "Could not enforce cache budget")?;
         let temporary = path.with_extension("part");
         if std::fs::symlink_metadata(&temporary).is_ok_and(|m| m.file_type().is_symlink()) {
             return Err("Temporary cache entry must not be a symlink".into());
@@ -1696,21 +1752,33 @@ impl Api {
             let mut output = options
                 .open(&temporary)
                 .map_err(|_| "Could not create media file")?;
-            output.write_all(&head).map_err(|_| "Media write failed")?;
-            let copied = head.len() as u64
-                + std::io::copy(
-                    &mut (&mut response).take(limit.saturating_sub(head.len() as u64)),
-                    &mut output,
-                )
-                .map_err(|_| "Media transfer failed")?;
-            let mut excess = [0u8; 1];
-            if copied == limit
-                && response
-                    .read(&mut excess)
-                    .map_err(|_| "Media transfer failed")?
-                    != 0
-            {
-                return Err("Attachment exceeds download size limit");
+            // The partial already counts toward the cache. Reserve only the next
+            // chunk, not the maximum allowed transfer, and never evict ourselves.
+            let mut copied = 0u64;
+            let mut chunk = [0u8; 64 * 1024];
+            let mut pending = head;
+            loop {
+                if pending.is_empty() {
+                    let count = response
+                        .read(&mut chunk)
+                        .map_err(|_| "Media transfer failed")?;
+                    if count == 0 {
+                        break;
+                    }
+                    pending.extend_from_slice(&chunk[..count]);
+                }
+                copied = copied
+                    .checked_add(pending.len() as u64)
+                    .ok_or("Attachment exceeds download size limit")?;
+                if copied > limit {
+                    return Err("Attachment exceeds download size limit");
+                }
+                reserve_media_chunk(dirs, budget, pending.len() as u64, &temporary)
+                    .map_err(|_| "Could not enforce cache budget")?;
+                output
+                    .write_all(&pending)
+                    .map_err(|_| "Media write failed")?;
+                pending.clear();
             }
             output.flush().map_err(|_| "Media write failed")?;
             std::fs::rename(&temporary, &path).map_err(|_| "Could not finish media file")?;
@@ -4334,6 +4402,7 @@ pub fn run(
     // Separate encrypted draft-only archive. Never store duplicate message history.
     // OS keyring failure is explicit; never fall back to plaintext.
     let draft_path = dirs.state.join("beeper-drafts").join("drafts.db");
+    let mut draft_warning_shown = false;
     let mut draft_store = if draft_path.exists() {
         match crate::archive::Archive::open(&draft_path) {
             Ok(store) => Some(store),
@@ -4352,6 +4421,33 @@ pub fn run(
         }
     } else {
         emit(Event::Drafts(Vec::new()));
+    }
+
+    let shelves: Result<Vec<(String, Vec<crate::draft_state::Parked>)>, ()> = (|| {
+        let rows = if let Some(store) = &draft_store {
+            store.drafts().map_err(|_| ())?
+        } else if draft_path.exists() {
+            return Err(());
+        } else {
+            Vec::new()
+        };
+        let mut shelves = Vec::new();
+        for (key, value) in rows {
+            let Ok((origin, chat, kind)) = serde_json::from_str::<(String, String, String)>(&key)
+            else {
+                continue;
+            };
+            if origin == api.base_url && kind == "parked-v1" {
+                let shelf = serde_json::from_str(&value).map_err(|_| ())?;
+                shelves.push((chat, shelf));
+            }
+        }
+        Ok(shelves)
+    })();
+    let shelves_loaded = shelves.is_ok();
+    match shelves {
+        Ok(shelves) => emit(Event::DraftShelf(shelves)),
+        Err(()) => emit(Event::DraftShelfUnavailable),
     }
 
     // The favorites bar's order persists beside the drafts: Beeper has no
@@ -4454,12 +4550,32 @@ pub fn run(
                     }
                 }
                 Command::Shutdown => return,
+                Command::WriteDraftState {
+                    chat,
+                    revision,
+                    text,
+                    shelf,
+                } => {
+                    let ok = write_local_draft_state(
+                        shelves_loaded,
+                        &mut draft_store,
+                        &draft_path,
+                        &api.base_url,
+                        &chat,
+                        &text,
+                        &shelf,
+                    );
+                    emit(Event::DraftWritten { chat, revision, ok });
+                }
                 Command::SaveDraft { chat, text } => {
                     if draft_store.is_none() && !text.trim().is_empty() {
                         match crate::archive::Archive::open(&draft_path) {
                             Ok(store) => draft_store = Some(store),
                             Err(_) => {
-                                emit(Event::Error("Draft not saved: OS keyring unavailable. Keep the app open or copy the draft before closing; no plaintext fallback was used.".into()));
+                                if !draft_warning_shown {
+                                    draft_warning_shown = true;
+                                    emit(Event::Error("Draft not saved: OS keyring unavailable. Keep the app open or copy the draft before closing; no plaintext fallback was used.".into()));
+                                }
                                 continue;
                             }
                         }
@@ -5010,8 +5126,10 @@ pub fn run(
                         everyone: false,
                         result: result.clone(),
                     });
-                    if let Err(error) = result {
-                        emit(Event::Info(error));
+                    if let Err(error) = &result {
+                        // The mutation result carries this failure to the app,
+                        // which logs it and shows it only in Debug mode.
+                        log::warn!("archive request failed or uncertain for chat {chat}: {error}");
                     }
                     api.refresh_chat(&chat, &accounts, &emit);
                     last_chat_refresh = Instant::now() - CHAT_REFRESH;
@@ -5197,9 +5315,11 @@ pub fn run(
                     });
                     match result {
                         Ok(()) => emit(Event::MessageDeleted { chat, id: wire_id }),
-                        Err(error) => emit(Event::Info(format!(
-                            "Delete failed or uncertain: {error}. Check state before retrying."
-                        ))),
+                        Err(error) => {
+                            // The mutation result carries this failure to the
+                            // app, which logs it and shows it only in Debug mode.
+                            log::warn!("delete failed or uncertain for chat {chat}: {error}");
+                        }
                     }
                 }
                 Command::React {
@@ -6557,6 +6677,27 @@ mod tests {
     //! distinguishable, background startup/polling causes NO mutating HTTP
     //! calls, and only deliberate commands (send, mark-read, typing) POST.
 
+    #[test]
+    fn loaded_state_with_missing_store_and_existing_db_refuses_write() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("drafts.db");
+        std::fs::write(&path, b"untouched existing database").unwrap();
+        let mut store = None;
+        assert!(!super::write_local_draft_state(
+            true,
+            &mut store,
+            &path,
+            "origin",
+            "chat",
+            "replace",
+            &[]
+        ));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"untouched existing database"
+        );
+        assert!(store.is_none());
+    }
     #[test]
     fn edited_picture_copy_is_counted_and_disposable_not_the_original() {
         let root = tempfile::tempdir().unwrap();
@@ -11197,6 +11338,67 @@ mod tests {
                 .all(|(method, _, _)| method == "GET")
         );
         stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn growing_media_reserves_actual_bytes_and_never_evicts_its_partial() {
+        let root = tempfile::tempdir().unwrap();
+        let dirs = AppDirs::under(root.path()).as_account();
+        std::fs::create_dir_all(dirs.media_cache_dir()).unwrap();
+        let partial = dirs.media_cache_dir().join("beeper-active.part");
+        std::fs::write(&partial, [1u8; 9]).unwrap();
+        assert!(reserve_media_chunk(&dirs, 10, 2, &partial).is_err());
+        assert_eq!(std::fs::metadata(&partial).unwrap().len(), 9);
+        assert!(reserve_media_chunk(&dirs, 10, 1, &partial).is_ok());
+    }
+
+    #[test]
+    fn downloading_three_small_album_images_keeps_all_three_files() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for index in 0..3 {
+                for metadata in [true, false] {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut buffer = [0u8; 4096];
+                    let _ = stream.read(&mut buffer);
+                    let body = if metadata {
+                        format!(
+                            r#"{{"id":"media{index}","attachments":[{{"type":"img","id":"mxc://x/{index}","mimeType":"image/png"}}]}}"#
+                        )
+                    } else {
+                        format!("tiny image {index}")
+                    };
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .unwrap();
+                }
+            }
+        });
+        let api = Api::new(&BeeperConfig {
+            base_url: base,
+            token: "test".into(),
+        })
+        .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let dirs = AppDirs::under(root.path()).as_account();
+        let paths: Vec<_> = (0..3)
+            .map(|index| {
+                api.download_media("chat", &format!("media{index}"), &dirs, true)
+                    .unwrap()
+            })
+            .collect();
+        server.join().unwrap();
+        for (index, path) in paths.iter().enumerate() {
+            assert_eq!(
+                std::fs::read_to_string(path).unwrap(),
+                format!("tiny image {index}")
+            );
+        }
     }
 
     #[test]

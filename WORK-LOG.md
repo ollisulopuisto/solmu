@@ -4,6 +4,34 @@
 
 Approved Lokikirja sketch (item solmu-quick-replies-sketch-20261123: sketch seq272, owner "Looks good, build" seq287). The message menu gains a Quick Replies submenu (Yes / No / Later) between Reply privately and Star. A choice reuses the existing Action::PrefillComposer path: the text lands in the composer marked as an untouched prefill with the composer focused, an already written draft is never overwritten (the reader gets the existing keep-or-clear toast), and nothing is sent. From the starred list the chat opens at the message first, the same as Reply. The composer text follows the interface language, so the new gettext keys ("Quick Replies", "Yes", "No", "Later") await the maintainer's catalog extraction; the two menu-language tests exempt "Quick Replies" meanwhile (the submenu rows are not drawn closed, so they are outside those fixtures). Demo tests: hovering the row opens the submenu with Yes/No/Later (found as one column, so a Yes elsewhere on screen is never clicked); clicking Yes fills and focuses the composer, closes the menu and records no SendText; a written draft is never overwritten (keep-or-clear toast); a second choice while the first sits untouched is refused the same way, matching the share-link prefill rule; from the starred list the choice opens the message's chat first and lands in its composer. No version bump: Unreleased collects the bullet until the next release. Not compiled locally (no Rust toolchain in this checkout), CI is the check. A deterministic capture scene ships with it: the quick-replies-menu demo page opens the message menu while the shot harness holds a synthetic pointer on the Quick Replies row, whose rect the submenu records under its label (the same mechanism as the link menu's web-link-hits), so the shot shows the open Yes/No/Later column. No merge by the author.
 
+## 2026-11-25: Keep earlier album files during small downloads
+
+Branch fix/album-cache-eviction. Manual downloads reserved the entire maximum transfer allowance before writing, making the default256MiB cache empty itself on each tiny image. Reserve each received chunk against the actual cache size instead, exclude the active partial and staged uploads, fail closed if protected bytes exhaust the budget. Per-file64/500MiB limits and the account budget remain. Added three-image HTTP regression and partial-budget test; existing unknown-length oversize test retained. Local extracted std-only reservation harness fails under the old eviction model and passes the new helper (2tests), but full HTTP/native regressions not run locally because no cached dependency build and209MiB free. Native CI must run those before merge. Traced cache_files, trim_cache callers (unchanged), temporary cleanup, media limits and download completion. No auto-download policy, workflow, DB, credentials or version change; PR only.
+
+## 2026-11-25: Mac message focus without Spaces collision
+
+Branch fix/mac-message-focus-shortcut rebased onto merged main61ceed71 after466. Version26.11.13. Message focus uses registry Command-Shift-2 instead of physicalControl-2; exact modifiers and physical digit fallback preserve Finnish shifted symbols. Favorites/network/filter chords unchanged. Traced keyboard routing, help registry and native message-focus action. Rustfmt check passes locally. Rust unit and native routing tests added, not executed locally: no prebuilt GUI dependency tree and limited disk; CI must compile/run. No workflow, DB or credentials changed. Protected439 and held464 untouched. PR only, no merge approval forA3.
+
+## 2026-11-24: Hide action results behind Debug mode
+
+Owner direction (2026-11-24): no action-result or failure UI by default; a
+Debug mode preference (off by default) shows failures; failures stay logged.
+The batch archive/delete results bar above the chat list (including the
+"Dismiss action results" and previous-connection blocks) now renders only with
+the preference on; selection and review flows are unchanged. Backend archive/
+delete failures no longer raise a separate toast: the app logs every mutation
+failure and, for results no batch entry tracks (single deletes), toasts them in
+Debug mode only. Demo scene `batch-results` gains a synthetic failure item and
+a `debug` flag, feeding four new macOS smoke captures (dark/light × off/on).
+Version 26.11.10; 26.11.9 is left to the pending bump PR #465. Duplicate check:
+open PRs 456/460/462/464/465 unrelated; merged #422 (plain states, chat names)
+and #444 (receipt auto-clear) are the related prior work and keep their
+behavior behind the preference; branch fix/delete-result-banner is merged #444
+work, fix/preview-fail-quiet is empty. Unit tests cover hidden-by-default,
+Debug-mode visibility, receipt expiry while hidden, untracked/tracked failure
+toasts and the settings round-trip. Native tests and captures run in CI, not
+claimed locally.
+
 ## 2026-11-23: Passive linked-network overflow badge
 
 Approved two overlapping service marks then a plain plus on the right. Reused exact existing badge geometry and timer slot offset. Distinct-network collection remains unchanged; third and later distinct networks cause the passive mark. No click/focus/tooltip/list. Own adversarial review traced all three chat-row callers, timer-slot preservation, source-index ordering and unlimited linked member counts. Local exact-source harness covers slots0..9 with timer/no timer and passive paint allocating no widget; native CI pending. Separate from floating action bar and older threading controls.
@@ -1533,6 +1561,12 @@ nothing is being edited. Checked first: no open or merged PR adds a draft
 label; restore-on-open drafts already exist. Native compile and capture not
 run by this agent, CI is the first compile.
 
+## Reply chain above tail (2026-11-24)
+
+- Moves the exact-source chain target and glyph into a reserved slot above the filled reply tail. Hover/focus alone reveals the local drop and the loaded-parent connector.
+- Router receives the exact chain port rather than deriving a child body midpoint. Source identity, jump-back and per-album-member destinations remain separate.
+- Quoted albums reserve vertical tile height for two distinct chain/tail pairs without increasing narrow tile width.
+- Review: traced body/painted/quote rect consumers, current-pass hover state, linked keys, album anchors and clipping. No workflow changes, no release. Native feature capture and full-app CI remain required before merge; local pure-router tests and formatting do not substitute for that proof.
 ## One message action grid (2026-11-24)
 
 Approved 3x3 action grid: six quick reactions, section gap, picker/Reply/Star.
@@ -1611,3 +1645,95 @@ path. Hide foreground hover actions while any context popup owns input. The
 existing failing two album tests are unchanged at their final target assertion;
 they now also require exactly one Reply control. Fresh native results needed,
 not claiming fixed from this trace alone. No workflow or capture changes.
+
+## Reply tail matches the regular bubble (2026-11-24)
+
+Owner rejected the oversized six-vertex reply neck in native captures. Removed
+that separate shape: ordinary quoted messages use the normal bubble renderer,
+and quoted album members use its extracted exact same triangular tail helper.
+Chain target remains 30px above, independent from the smaller 8x11 tail bounds.
+Hover elbow now reaches the actual tail tip. Traced album per-member anchors,
+painted bounds, router chain ports and pointer/keyboard target consumers.
+Added regression forbidding a filled Path in the chain painter, which the old
+polygon violates. Existing mirrored geometry and exact-target interaction tests
+retained. Fmt/diff checks pass. Isolated real-egui test build could not complete
+because local disk filled compiling dependencies; own temporary build removed.
+No local native pass or pixel claim. CI/native captures remain required.
+
+Owner visual follow-up: the reply connector now uses the exact raised-edge color of its reply bubble, rather than accent, including both short chain-to-tail segments and the routed original-to-chain line. The chain icon's sender ink is unchanged. Color is taken from the actual on-bubble palette/fill in each theme. fmt/diff pass; fresh native CI/captures required before readiness, no merge.
+
+## 2026-11-24 - version after reply-chain merge
+
+Bump Solmu26.11.8 to26.11.9 following owner-approved459 merge7e0e465.
+Cargo package/lock agree; move accumulated unreleased notes under26.11.9
+and include the reply-chain change. No dependency resolution, workflow or UI
+code change. Own review traces package version to existing bundle generators
+and changelog parser. CI still required before merge; no release tag or DMG
+created by this commit.
+
+## 2026-11-24 - numbered draft tab redesign
+
+Owner-selected draft icon beside Send opens a numbered one-line draft list
+above the composer. Each row resumes a copy only into an empty composer;
+nonempty working text is never replaced. Long and multiline text is ellipsized
+within a fixed-height row, with full retained text unchanged. Close and delete
+are icons. Existing confirmed-save status, keep and clear-recovery actions stay.
+Reuses the current shelf and revision acknowledgements, no new persistence or
+workflow change. Main, branch and all open PRs checked for overlap: #456 is
+Quick Replies and #464 is its keyboard menu, neither is a draft picker.
+Native interaction regression adds actual pointer toggles, occupied/empty
+resume behavior, retained count and list/composer geometry at two widths.
+Local native compile/test and actual current-head captures still pending.
+No merge; existing workflow trims and DB-layer scope still await owner word.
+
+
+## 2026-11-25 - draft shelf integration
+
+Rebased462 onto cec6f020. Conflict resolution limited to capture-list and
+append-only work log. Preserved main chain-above-outgoing,dark and
+regular-tail-outgoing,light scenes while applying the reviewed draft capture
+list trims; no smoke timeout increase. Existing draft shelf source applies
+without manual source resolution. Version26.11.11 skips26.11.10 reserved
+by open466, with matching Cargo.lock and What's New entry. Own delta review
+traces account draft-state transitions, backend write command and archive
+transaction, composer geometry, recall/recovery and current-main integration.
+No fresh native result claimed before CI and real pixels.
+
+Independent FIND-462-6: corrected26.11.11changelog placement after a section-boundary regression reproduced the malformed intro insertion. Retest verifies real heading/body and intact intro. No executable change.
+
+## 2026-11-25 - explain disabled delete confirm while a batch is pending
+
+Reviewer note on 466: with Debug mode off the pending batch lines are hidden,
+so the message-delete confirm button could sit disabled with no visible reason
+(the archive review dialog already explains this state). The delete dialog now
+shows the same "An earlier batch still has pending results." line while an
+earlier batch awaits results. No new i18n string; the label already exists.
+
+## 2026-11-25 - action-result integration
+
+Rebased466 on main255f9c4 after owner merge approval. Kept main's entire
+current smoke list, adding only the four approved batch-results scenes and
+retaining the approved 8-to-10-minute smoke timeout. Both Cargo version fields
+and the correctly ordered changelog now take26.11.12, after main26.11.11.
+No manual executable-code conflict resolution. Own adversarial review reran:
+traced result emission, request/account matching, pending confirm gates, hidden
+receipt expiry, session replacement and debug preference persistence. Silent
+single-operation failure remains the owner's chosen behavior. No new finding.
+Integration assertions pass for capture preservation/version/changelog order;
+no local Rust toolchain, so fresh CI and native pixels remain pending.
+
+### Mac message-focus exact modifier follow-up
+Native macOS CI caught egui matches_exact accepting physical Ctrl alongside its Command alias. Replaced that matcher with explicit Command+Shift/no-Control/no-Alt fields, preserving the failing regression. Shifted physical Digit2 routing unchanged. Own adversarial delta review RAN; no workflow/DB/credential changes. Native rerun required before merge.
+## Nix Darwin Swift launcher typecheck
+Diagnosed exact main255f9c4 job139071898914: packaging_macos test failed because
+xcrun cannot find swiftc in the Nix sandbox. Current main61ceed7 still lacked
+the compiler. Declare Darwin-only Swift check input and explicit SOLMU_SWIFTC,
+keep ordinary Xcode fallback and strict compile success requirement. No skip,
+workflow, DB, credentials or runtime app change. Pinned nixpkgs20b1ddd source
+confirms swift attribute and propagated SDK. Own adversarial review RAN: traced
+check env, platform guard, subprocess args and ordinary non-Nix fallback.
+Portable declaration guard added. Native Nix/Darwin build not run locally,
+requires explicit native CI validation; default PR CI may only build Linux Nix.
+Version26.11.16 reserved for this PR; serial Solmu merges may require rebasing and a fresh version before merge.
+
+Rebased after merged46735804e5, conflict resolution retains both work logs, version26.11.16. No implementation delta from reviewed97a8ffb. Darwin Nix validation remains unperformed.

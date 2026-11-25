@@ -142,6 +142,9 @@
                 icnsify
                 rcodesign
               ];
+            # The launcher integration check typechecks Swift inside the sandbox.
+            # Do not discover a host Xcode compiler through xcrun there.
+            nativeCheckInputs = pkgs.lib.optionals isDarwin [ pkgs.swift ];
             # On macOS the app links the system frameworks instead.
             buildInputs = pkgs.lib.optionals isLinux (
               with pkgs;
@@ -152,6 +155,9 @@
                 libx11
               ]
             );
+            env = pkgs.lib.optionalAttrs isDarwin {
+              SOLMU_SWIFTC = "${pkgs.swift}/bin/swiftc";
+            };
             # Pin the extractor in the package itself, not only the dev shell.
             # Its store reference retains GNU tar in the runtime closure.
             SOLMU_TAR = "${pkgs.gnutar}/bin/tar";
