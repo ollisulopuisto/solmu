@@ -5682,9 +5682,9 @@ fn bubble(
                         pos2(body.rect.right() - width, body.rect.bottom() - 21.0),
                         pos2(body.rect.right(), area.bottom()),
                     );
-                    // This is an overlay, not another layout row. scope_builder
-                    // advances the parent cursor and can move neighbouring rows
-                    // between pointer down/up when its reactions wrap.
+                    // Start over the body edge, then reserve only its measured
+                    // overhang. A scope would also advance its unrelated cursor
+                    // origin; a detached child lets us account for exact height.
                     let mut reaction_ui = ui.new_child(
                         egui::UiBuilder::new()
                             .max_rect(overlay)
@@ -5693,6 +5693,12 @@ fn bubble(
                     reaction_ui.spacing_mut().item_spacing.x = GIVEN_REACTION_GAP;
                     for member in members.iter().filter(|row| !row.reactions.is_empty()) {
                         reactions(&mut reaction_ui, view, member, actions);
+                    }
+                    // Wrapped rows still occupy space below the body. Both the
+                    // footer and next bubble must follow the whole reaction block.
+                    let overhang = (reaction_ui.min_rect().bottom() - ui.cursor().top()).max(0.0);
+                    if overhang > 0.0 {
+                        ui.add_space(overhang);
                     }
                 }
                 if metadata {

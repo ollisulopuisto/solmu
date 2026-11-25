@@ -6302,6 +6302,45 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_given_reactions_never_cover_the_message_footer() {
+        // The reaction overlay is a detached child, so the parent cursor (where
+        // the footer starts) does not move down with wrapped reaction rows.
+        let mut app = app();
+        group_stacks_sample(&mut app);
+        let emojis = ["❤️", "👍", "👀", "🎉", "😊", "🔥"];
+        app.conversations.get_mut(SAMPLES[0].id).unwrap().messages[7].reactions = (0..12)
+            .map(|index| Reaction {
+                sender: format!("reactor-{index}"),
+                from_me: false,
+                emoji: emojis[index % 6].into(),
+            })
+            .collect();
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..6 {
+            streak_test_frame(&mut app, &ctx, 620.0, 800.0, vec![]);
+        }
+        let id = crate::ui::conversation::bubble_id(SAMPLES[0].id, "group-stack-7");
+        let footer = ctx
+            .data(|data| {
+                data.get_temp::<egui::Rect>(crate::ui::conversation::footer_id(
+                    SAMPLES[0].id,
+                    "group-stack-7",
+                ))
+            })
+            .expect("footer is drawn");
+        for emoji in emojis {
+            let reaction = ctx
+                .data(|data| data.get_temp::<egui::Rect>(id.with(("reaction", emoji))))
+                .expect("reaction is drawn");
+            assert!(
+                !reaction.intersects(footer),
+                "wrapped reaction covers footer: {reaction:?}/{footer:?}"
+            );
+        }
+    }
+
+    #[test]
     fn adjacent_sender_streaks_have_separated_hues_even_when_ids_hash_the_same() {
         let mut app = app();
         group_stacks_sample(&mut app);
