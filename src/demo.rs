@@ -6686,8 +6686,8 @@ mod tests {
                     .data(|d| d.get_temp::<egui::Rect>(id(name).with("quote")))
                     .unwrap();
                 assert!(
-                    tail.left() >= body.right(),
-                    "the reply control is the external tail, not an internal chip"
+                    tail.left() >= body.left() && tail.right() <= body.right(),
+                    "the chain is above its own body, without requiring a side gutter"
                 );
                 assert_eq!(tail.bottom() + 6.0, body.top());
                 assert!(

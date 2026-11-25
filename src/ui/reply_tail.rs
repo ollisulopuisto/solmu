@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn album_row_slot_keeps_later_chain_out_of_previous_media() {
         let body = Rect::from_min_size(pos2(80., 80.), vec2(180., 132.));
-        let next = body.translate(vec2(0., body.height() + SLOT_HEIGHT));
+        let next = body.translate(vec2(0., body.height() + SLOT_HEIGHT + 3.));
         for own in [false, true] {
             assert!(!chain_geometry(next, own).intersects(body));
             assert!(!chain_geometry(body, own).intersects(next));
@@ -159,7 +159,7 @@ mod tests {
                 |ui| {
                     for (i, id) in ids.iter().enumerate() {
                         let body = Rect::from_min_size(
-                            pos2(50.0, 50.0 + i as f32 * 70.0),
+                            pos2(50.0, 50.0 + i as f32 * 110.0),
                             vec2(200.0, 60.0),
                         );
                         // Register an earlier broad body hit area, as the app does.
@@ -174,7 +174,9 @@ mod tests {
         };
         frame(vec![]);
         for index in 0..3 {
-            let pos = pos2(265.0, 29.0 + index as f32 * 70.0);
+            let body =
+                Rect::from_min_size(pos2(50.0, 50.0 + index as f32 * 110.0), vec2(200.0, 60.0));
+            let pos = chain_geometry(body, true).center();
             for pressed in [true, false] {
                 frame(vec![
                     egui::Event::PointerMoved(pos),
