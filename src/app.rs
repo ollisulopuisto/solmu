@@ -34491,6 +34491,80 @@ mod conversation_palette_tests {
         assert!(started <= 64, "{started} automatic downloads in one event");
     }
     #[test]
+    fn automatic_image_batches_refill_and_retry_queue_busy_only() {
+        let mut app = app();
+        app.backend.record_demo_commands();
+        app.account_mut().settings.auto_download = true;
+        for i in 0..70 {
+            let mut m = crate::archive::tests::message("batch", &format!("img-{i}"), i, false);
+            m.content = Content::Image {
+                caption: None,
+                motion: None,
+                media: crate::model::Media {
+                    mime: "image/jpeg".into(),
+                    size: 1000,
+                    width: None,
+                    height: None,
+                    album: None,
+                    path: None,
+                    state: MediaState::Idle,
+                },
+            };
+            app.conversations
+                .entry("batch".into())
+                .or_default()
+                .messages
+                .push(m);
+        }
+        app.download_incoming_images("batch");
+        assert_eq!(app.backend.take_demo_commands().len(), 64);
+        // A busy rejection leaves capacity but must not immediately retry.
+        app.apply_backend_event(
+            Event::Media {
+                card: None,
+                chat: "batch".into(),
+                message: "img-0".into(),
+                result: Err("Media queue is busy; retry after current downloads finish".into()),
+            },
+            true,
+        );
+        assert!(app.backend.take_demo_commands().is_empty());
+        // Another real completion replenishes the batch and retries only busy.
+        app.apply_backend_event(
+            Event::Media {
+                card: None,
+                chat: "batch".into(),
+                message: "img-1".into(),
+                result: Err("File not found".into()),
+            },
+            true,
+        );
+        let commands = app.backend.take_demo_commands();
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|c| matches!(c, Command::Download { .. }))
+                .count(),
+            2
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, Command::Download { message, .. } if message == "img-0"))
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|c| matches!(c, Command::Download { message, .. } if message == "img-1"))
+        );
+        app.download_incoming_images("batch");
+        assert!(
+            app.backend.take_demo_commands().is_empty(),
+            "global cap persists across events"
+        );
+    }
+
+    #[test]
     fn automatic_image_download_respects_opt_out_and_existing_limits() {
         let mut app = app();
         app.backend.record_demo_commands();
