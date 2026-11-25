@@ -70,6 +70,18 @@ mod tests {
         }
     }
     #[test]
+    fn same_row_album_chains_use_separate_tile_columns_not_vertical_offsets() {
+        let first = Rect::from_min_size(pos2(80., 80.), vec2(180., 132.));
+        let second = first.translate(vec2(first.width() + 3., 0.));
+        for own in [false, true] {
+            for chain in [chain_geometry(first, own), chain_geometry(second, own)] {
+                assert!(!chain.intersects(first));
+                assert!(!chain.intersects(second));
+            }
+            assert!(!chain_geometry(first, own).intersects(chain_geometry(second, own)));
+        }
+    }
+    #[test]
     fn each_tail_is_outside_its_own_body_and_mirrors_without_reflow() {
         let body = Rect::from_min_size(pos2(80.0, 50.0), vec2(180.0, 80.0));
         for own in [false, true] {

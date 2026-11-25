@@ -5502,9 +5502,7 @@ fn bubble(
     }
     // Reserve the chain slot before layout, not on hover, so neighbouring
     // messages and their media cannot be covered and hover never reflows.
-    if message.quoted.is_some()
-        || album.is_some_and(|items| items.iter().any(|m| m.quoted.is_some()))
-    {
+    if album.is_none() && message.quoted.is_some() {
         ui.add_space(super::reply_tail::SLOT_HEIGHT);
     }
     let mut response = None;
@@ -6918,21 +6916,13 @@ fn bubble_frame(
         })
     {
         if let Some(items) = album {
-            for (index, item) in items.iter().enumerate() {
-                if let Some(quoted) = &item.quoted {
-                    // Each two-column media row reserves at least 132 points. Stack
-                    // its two independent chain/tail pairs beside that row, never
-                    // beside a later message or on top of another member.
-                    let top = tiles
-                        .iter()
-                        .find(|(_, id)| id == &item.id)
-                        .map_or(inner.response.rect.top(), |(tile, _)| tile.top())
-                        + (index % 2) as f32 * 66.0;
-                    let anchor = inner
-                        .response
-                        .rect
-                        .translate(vec2(0.0, top - inner.response.rect.top()));
-                    quote_chip(ui, view, item, quoted, anchor, true, actions);
+            for item in items {
+                if let Some(quoted) = &item.quoted
+                    && let Some((tile, _)) = tiles.iter().find(|(_, id)| id == &item.id)
+                {
+                    // Each tile owns its chain directly above its own column.
+                    // album_content reserves one slot per quoted row.
+                    quote_chip(ui, view, item, quoted, *tile, true, actions);
                 }
             }
         } else if let Some(quoted) = &message.quoted {
