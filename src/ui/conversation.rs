@@ -5670,7 +5670,31 @@ fn bubble(
                     || saved
                     || last.edited;
                 let reacted = members.iter().any(|row| !row.reactions.is_empty());
-                if metadata || reacted {
+                if reacted {
+                    let total = members
+                        .iter()
+                        .filter(|row| !row.reactions.is_empty())
+                        .map(|row| reaction_row_width(ui, view, row))
+                        .reduce(|total, width| total + 2.0 + width)
+                        .unwrap_or(0.0);
+                    let width = total.min((body.rect.right() - area.left()).max(1.0));
+                    let overlay = Rect::from_min_max(
+                        pos2(body.rect.right() - width, body.rect.bottom() - 21.0),
+                        pos2(body.rect.right(), area.bottom()),
+                    );
+                    ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(overlay)
+                            .layout(Layout::left_to_right(Align::Min).with_main_wrap(true)),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            for member in members.iter().filter(|row| !row.reactions.is_empty()) {
+                                reactions(ui, view, member, actions);
+                            }
+                        },
+                    );
+                }
+                if metadata {
                     ui.add_space(3.0);
                     let left = if with_avatar {
                         area.left() + SENDER_AVATAR + 8.0
@@ -5685,15 +5709,7 @@ fn bubble(
                     if last.from_me && !visible_status {
                         metadata_width -= 19.0;
                     }
-                    let total = members
-                        .iter()
-                        .map(|row| reaction_row_width(ui, view, row))
-                        .sum::<f32>()
-                        + if metadata {
-                            metadata_width.max(1.0) + thread_width + 5.0
-                        } else {
-                            0.0
-                        };
+                    let total = metadata_width.max(1.0) + thread_width + 5.0;
                     let start = if own {
                         (body.rect.right() - total).max(area.left())
                     } else {
@@ -5703,9 +5719,6 @@ fn bubble(
                     ui.scope_builder(egui::UiBuilder::new().max_rect(footer_area), |ui| {
                         let mut draw = |ui: &mut egui::Ui| {
                             ui.spacing_mut().item_spacing.x = 5.0;
-                            for member in members.iter().filter(|row| !row.reactions.is_empty()) {
-                                reactions(ui, view, member, actions);
-                            }
                             if metadata {
                                 let mut width =
                                     footer_width(ui, view.locale, last, starred, pinned, saved);
@@ -5719,10 +5732,8 @@ fn bubble(
                                 let hovered = pointer.is_some_and(|p| body.rect.contains(p));
                                 let each = thread_width / thread_members.len().max(1) as f32;
                                 for member in &thread_members {
-                                    let (target, _) = ui.allocate_exact_size(
-                                        vec2(each, if reacted { 26.0 } else { 15.0 }),
-                                        Sense::hover(),
-                                    );
+                                    let (target, _) =
+                                        ui.allocate_exact_size(vec2(each, 15.0), Sense::hover());
                                     super::reply_threads::footer_entry(
                                         ui,
                                         member,
@@ -5733,7 +5744,7 @@ fn bubble(
                                     );
                                 }
                                 let (time_slot, _) = ui.allocate_exact_size(
-                                    vec2(width.max(1.0), if reacted { 26.0 } else { 15.0 }),
+                                    vec2(width.max(1.0), 15.0),
                                     Sense::hover(),
                                 );
                                 footer(
@@ -8325,9 +8336,10 @@ fn reaction_row_width(ui: &egui::Ui, view: &View<'_>, message: &Message) -> f32 
             widgets::reaction_line(ui, emoji, count, view.palette.text)
                 .size()
                 .x
-                + 17.0
+                + 4.0
         })
-        .sum()
+        .reduce(|total, width| total + 2.0 + width)
+        .unwrap_or(0.0)
 }
 
 fn reactions(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: &mut Vec<Action>) {
@@ -16762,6 +16774,71 @@ mod tests {
 
     /// Runs `check` with a still view of one plain chat, as a footer test
     /// needs one to paint into.
+    #[test]
+    fn given_reaction_overlays_bottom_right_in_both_directions() {
+        with_still_view(|view| {
+            for own in [false, true] {
+                let ctx = egui::Context::default();
+                theme::install(&ctx);
+                let mut message = crate::archive::tests::message(&view.chat.id, "overlay", 0, own);
+                message.content = Content::text("A synthetic message for reaction placement");
+                message.reactions.push(crate::model::Reaction {
+                    sender: "someone".into(),
+                    from_me: false,
+                    emoji: "❤️".into(),
+                });
+                for _ in 0..2 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                vec2(600.0, 400.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let body = bubble(
+                                ui,
+                                view,
+                                &message,
+                                None,
+                                RunPlace {
+                                    sender_hue: None,
+                                    show_timestamp: true,
+                                    show_sender: false,
+                                    show_avatar: false,
+                                    tailed: true,
+                                    overlap_previous: None,
+                                },
+                                &mut Vec::new(),
+                            )
+                            .unwrap();
+                            let reaction = ui
+                                .ctx()
+                                .data(|d| {
+                                    d.get_temp::<Rect>(
+                                        bubble_id(&message.chat, &message.id)
+                                            .with(("reaction", "❤️")),
+                                    )
+                                })
+                                .unwrap();
+                            assert!(
+                                reaction.top() < body.rect.bottom(),
+                                "reaction must overlay the edge"
+                            );
+                            assert!(reaction.bottom() > body.rect.bottom());
+                            assert!(
+                                (reaction.right() - body.rect.right()).abs() < 2.0,
+                                "right edge, independent of direction: {reaction:?} {body:?}"
+                            );
+                        },
+                    );
+                    output.textures_delta.clear();
+                }
+            }
+        });
+    }
+
     #[test]
     fn large_given_reactions_wrap_and_keep_exact_targets() {
         with_still_view(|view| {
