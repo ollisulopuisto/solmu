@@ -1968,6 +1968,7 @@ impl App {
     fn park_composer(&mut self) {
         if let Some(previous) = self.open_chat.clone() {
             if let Some(state) = self.draft_states.get_mut(&previous) {
+                state.resumed = None;
                 state.recovery = None;
                 state.deletion_start = None;
             }
@@ -5231,6 +5232,7 @@ impl App {
                     clear && state.clear_after_save.as_deref() == Some(current.as_str()) && active;
                 state.ack(revision, ok);
                 if clear {
+                    state.resumed = None;
                     state.clear_after_save = None;
                     state.text.clear();
                     state.confirmed = None;
@@ -8162,6 +8164,7 @@ impl App {
     /// survives a restart. An empty text clears the stored row.
     fn store_draft(&mut self, chat: &str, text: &str) {
         if let Some(state) = self.draft_states.get_mut(chat) {
+            state.resumed = None;
             state.text = text.to_owned();
             state.clear_after_save = None;
             state.deletion_start = None;
@@ -9233,9 +9236,11 @@ impl App {
             })
             .unwrap_or(&chat)
             .to_owned();
+        let owns_composer = self.open_chat.as_deref() == Some(owner.as_str());
         let draft = self
             .draft_states
             .get_mut(&owner)
+            .filter(|_| owns_composer)
             .and_then(|s| s.resumed.take())
             .map(|id| (owner, id));
         // The text is on its way, so there is nothing left to restore.
@@ -9525,6 +9530,12 @@ impl App {
         selected: Vec<ComposerMention>,
         owner: ChatId,
     ) {
+        if let Some(target) = self.accounts.iter_mut().find(|known| known.id == account)
+            && target.open_chat.as_deref() == Some(owner.as_str())
+            && let Some(state) = target.draft_states.get_mut(&owner)
+        {
+            state.resumed = None;
+        }
         // A queued action cannot consume another chat's or account's draft.
         let active = self.account().id.clone();
         let Some(target) = self.accounts.iter_mut().find(|known| known.id == account) else {
@@ -34352,6 +34363,37 @@ mod conversation_palette_tests {
         assert!(app.show_saved && !app.show_starred);
         app.apply(Action::ToggleSaved, &ctx);
         assert!(!app.show_saved && !app.show_starred);
+    }
+
+    #[test]
+    fn unlinked_text_send_does_not_consume_a_background_resumed_identity() {
+        let mut app = app();
+        app.backend.record_demo_commands();
+        app.open_chat = Some("open".into());
+        app.draft_states.entry("other".into()).or_default().resumed = Some(9);
+        app.send_text("other".into(), "unrelated".into(), None);
+        assert!(
+            app.backend
+                .take_demo_commands()
+                .iter()
+                .any(|c| matches!(c, Command::SendText { draft: None, .. }))
+        );
+        // store_draft detaches, but no identity was attached for deletion.
+        assert!(app.draft_states["other"].sent_removals.is_empty());
+    }
+    #[test]
+    fn pending_send_and_park_detach_before_unrelated_text_send() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.open_chat = Some("owner".into());
+        app.draft_states.entry("owner".into()).or_default().resumed = Some(7);
+        let account = app.account().id.clone();
+        app.send_pending(account, "owner".into(), "caption".into(), vec![]);
+        assert_eq!(app.draft_states["owner"].resumed, None);
+        app.draft_states.get_mut("owner").unwrap().resumed = Some(7);
+        app.park_composer();
+        assert_eq!(app.draft_states["owner"].resumed, None);
+        app.apply(Action::CloseChat, &ctx);
     }
 
     #[test]
