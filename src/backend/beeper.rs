@@ -417,6 +417,8 @@ fn account_inventory(accounts: &[BeeperAccount]) -> Vec<super::BeeperAccountInfo
 
 // ---------- HTTP ----------
 
+type ChatSelfIds = std::sync::Arc<std::sync::Mutex<HashMap<(String, String), Vec<String>>>>;
+
 #[derive(Clone)]
 struct Api {
     base_url: String,
@@ -424,6 +426,7 @@ struct Api {
     read_only: bool,
     cache_lock: std::sync::Arc<std::sync::Mutex<()>>,
     own_ids: std::sync::Arc<std::sync::Mutex<HashMap<String, String>>>,
+    chat_self_ids: ChatSelfIds,
     /// Real last message for chats whose Beeper preview carries no content
     /// (a reaction event, say), keyed by chat and the placeholder preview id.
     preview_fallbacks: PreviewFallbacks,
@@ -432,6 +435,38 @@ struct Api {
     /// direct chat, not the chat's own. Only these may be dropped when the
     /// participant's picture goes away.
     borrowed_avatar_chats: std::sync::Arc<std::sync::Mutex<HashSet<String>>>,
+}
+
+/// Account-scoped exact self identities only, never names/phone suffix matching.
+fn current_own_reaction_key(
+    wire: &BeeperMessage,
+    chat: &BeeperChat,
+    account_own: Option<&str>,
+) -> Option<String> {
+    let self_ids: Vec<_> = chat
+        .participants
+        .as_ref()
+        .into_iter()
+        .flat_map(|p| &p.items)
+        .filter(|p| p.is_self == Some(true))
+        .map(|p| p.id.as_str())
+        .collect();
+    let mismatch = account_own.is_some_and(|own| !self_ids.is_empty() && !self_ids.contains(&own));
+    // Do not log message content, participant ids, phone numbers or access tokens.
+    log::debug!(
+        "reaction removal identity: account_self_present={}, chat_self_count={}, account_chat_self_mismatch={}, reaction_count={}",
+        account_own.is_some(),
+        self_ids.len(),
+        mismatch,
+        wire.reactions.len()
+    );
+    wire.reactions
+        .iter()
+        .find(|r| {
+            account_own == Some(r.participant_id.as_str())
+                || self_ids.contains(&r.participant_id.as_str())
+        })
+        .map(|r| r.reaction_key.clone())
 }
 
 fn encode_segment(s: &str) -> String {
@@ -1115,6 +1150,7 @@ impl Api {
             http,
             cache_lock: Default::default(),
             own_ids: Default::default(),
+            chat_self_ids: Default::default(),
             preview_fallbacks: Default::default(),
             avatar_sources: Default::default(),
             borrowed_avatar_chats: Default::default(),
@@ -1345,6 +1381,20 @@ impl Api {
     }
 
     fn map_chat(&self, wire: &BeeperChat, label: &dyn Fn(&BeeperChat) -> String) -> Chat {
+        if let Some(participants) = &wire.participants
+            && let Ok(mut cache) = self.chat_self_ids.lock()
+        {
+            cache.insert(
+                (wire.account_id.clone(), wire.id.clone()),
+                participants
+                    .items
+                    .iter()
+                    .filter(|p| p.is_self == Some(true))
+                    .map(|p| p.id.clone())
+                    .collect(),
+            );
+        }
+
         if let Ok(mut sources) = self.avatar_sources.lock() {
             if let Some(url) = &wire.image_url {
                 remember_avatar(&mut sources, &wire.id, url);
@@ -1429,30 +1479,34 @@ impl Api {
         chat_preview_of(chat, items, own.as_deref())
     }
 
+    fn reaction_is_ours(&self, account: &str, chat: &str, participant: &str) -> bool {
+        self.own_ids
+            .lock()
+            .ok()
+            .and_then(|ids| ids.get(account).cloned())
+            .is_some_and(|own| own == participant)
+            || self
+                .chat_self_ids
+                .lock()
+                .ok()
+                .and_then(|ids| ids.get(&(account.to_owned(), chat.to_owned())).cloned())
+                .is_some_and(|ids| ids.iter().any(|id| id == participant))
+    }
     fn map_message(&self, wire: &BeeperMessage, chat: &str) -> Message {
         let mut message = map_message(wire, chat);
-        if let Ok(ids) = self.own_ids.lock()
-            && let Some(own) = ids.get(&wire.account_id)
-        {
-            for reaction in &mut message.reactions {
-                reaction.from_me = reaction.sender == *own;
-            }
+        for reaction in &mut message.reactions {
+            reaction.from_me =
+                self.reaction_is_ours(&wire.account_id, &message.chat, &reaction.sender);
         }
         message
     }
-
-    /// Every row a wire message shows as: one per attachment when the
-    /// bridge packs several into a single event.
     fn map_messages(&self, wire: &BeeperMessage, chat: &str) -> Vec<Message> {
         map_messages(wire, chat)
             .into_iter()
             .map(|mut message| {
-                if let Ok(ids) = self.own_ids.lock()
-                    && let Some(own) = ids.get(&wire.account_id)
-                {
-                    for reaction in &mut message.reactions {
-                        reaction.from_me = reaction.sender == *own;
-                    }
+                for reaction in &mut message.reactions {
+                    reaction.from_me =
+                        self.reaction_is_ours(&wire.account_id, &message.chat, &reaction.sender);
                 }
                 message
             })
@@ -5332,22 +5386,23 @@ pub fn run(
                     let message = crate::model::attachment_part(&message).0.to_owned();
                     if emoji.is_empty() {
                         let wire = api.get_message(&chat, &message);
-                        let chat_wire = api.get::<BeeperChat>(
-                            &format!("/v1/chats/{}", encode_segment(&chat)),
-                            &[],
-                        );
-                        let own_id = chat_wire.ok().and_then(|c| {
-                            accounts
+                        let chat_wire = api.get_chat(&chat);
+                        let key = wire.ok().zip(chat_wire.ok()).and_then(|(wire, chat_wire)| {
+                            if wire.chat_id != chat
+                                || chat_wire.id != chat
+                                || wire.account_id != chat_wire.account_id
+                            {
+                                log::warn!(
+                                    "reaction removal: source identity mismatch; no removal sent"
+                                );
+                                return None;
+                            }
+                            let account_own = accounts
                                 .iter()
-                                .find(|a| a.account_id == c.account_id)
+                                .find(|a| a.account_id == chat_wire.account_id)
                                 .and_then(|a| a.user.as_ref())
-                                .map(|u| u.id.clone())
-                        });
-                        let key = wire.ok().and_then(|m| {
-                            m.reactions
-                                .into_iter()
-                                .find(|r| own_id.as_deref() == Some(r.participant_id.as_str()))
-                                .map(|r| r.reaction_key)
+                                .map(|u| u.id.as_str());
+                            current_own_reaction_key(&wire, &chat_wire, account_own)
                         });
                         if let Some(key) = key {
                             match api.mutate(
@@ -11680,6 +11735,38 @@ mod tests {
             .is_err()
         );
         assert!(requests.lock().unwrap().is_empty());
+        stop.store(true, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn chat_self_identity_marks_and_removes_bridged_own_reaction() {
+        let (base, _, stop) = start_stub();
+        let api = Api::new(&BeeperConfig {
+            base_url: base,
+            token: "test".into(),
+        })
+        .unwrap();
+        api.own_ids
+            .lock()
+            .unwrap()
+            .insert("work".into(), "account-self".into());
+        let chat: BeeperChat = serde_json::from_value(serde_json::json!({"id":"chat", "accountID":"work", "participants":{"items":[{"id":"bridge-self", "isSelf":true},{"id":"other", "isSelf":false}]}})).unwrap();
+        api.map_chat(&chat, &|_| "network".into());
+        let wire: BeeperMessage = serde_json::from_value(serde_json::json!({"id":"message", "chatID":"chat", "accountID":"work", "reactions":[{"participantID":"bridge-self","reactionKey":"❤️","emoji":true},{"participantID":"other","reactionKey":"👍","emoji":true}]})).unwrap();
+        let mapped = api.map_message(&wire, "chat");
+        assert!(mapped.reactions[0].from_me);
+        assert!(!mapped.reactions[1].from_me);
+        assert_eq!(
+            current_own_reaction_key(&wire, &chat, Some("account-self")).as_deref(),
+            Some("❤️")
+        );
+        assert!(!api.reaction_is_ours("other-account", "chat", "bridge-self"));
+        assert!(!api.reaction_is_ours("work", "other-chat", "bridge-self"));
+        let no_self: BeeperChat = serde_json::from_value(serde_json::json!({"id":"chat", "accountID":"work", "participants":{"items":[{"id":"other","isSelf":false}]}})).unwrap();
+        assert_eq!(
+            current_own_reaction_key(&wire, &no_self, Some("unknown-self")),
+            None
+        );
         stop.store(true, Ordering::Relaxed);
     }
 
