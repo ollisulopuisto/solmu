@@ -1626,3 +1626,5 @@ by open466, with matching Cargo.lock and What's New entry. Own delta review
 traces account draft-state transitions, backend write command and archive
 transaction, composer geometry, recall/recovery and current-main integration.
 No fresh native result claimed before CI and real pixels.
+
+Independent FIND-462-6: corrected26.11.11changelog placement after a section-boundary regression reproduced the malformed intro insertion. Retest verifies real heading/body and intact intro. No executable change.
