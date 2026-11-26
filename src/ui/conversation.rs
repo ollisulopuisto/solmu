@@ -5703,13 +5703,21 @@ fn grouped_hover_actions(
     if !ui.is_enabled() || egui::Popup::is_any_open(ui.ctx()) {
         return false;
     }
-    if ui.input(|i| i.pointer.any_down()) {
-        dismiss_hover_grid(ui.ctx());
-        return false;
-    }
     let existing = ui
         .ctx()
         .data(|d| d.get_temp::<HoverSnapshot>(hover_snapshot_id()));
+    if ui.input(|i| i.pointer.any_down())
+        && !existing.as_ref().is_some_and(|snapshot| {
+            ui.input(|i| {
+                i.pointer
+                    .interact_pos()
+                    .is_some_and(|pos| snapshot.geometry.bounds().contains(pos))
+            })
+        })
+    {
+        dismiss_hover_grid(ui.ctx());
+        return false;
+    }
     if let Some(mut snapshot) = existing {
         if snapshot.bubble_id == bubble.id && snapshot.from_thread == in_thread_pass() {
             let entry_id = snapshot.area_id.with("pointer-entry");
