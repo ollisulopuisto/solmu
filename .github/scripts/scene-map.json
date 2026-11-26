@@ -43,7 +43,9 @@
     "batch-results,dark",
     "batch-results,light",
     "batch-results,debug,dark",
-    "batch-results,debug,light"
+    "batch-results,debug,light",
+    "reaction-clearance,dark",
+    "reaction-clearance,light"
   ],
   "modules": {
     "src/a11y.rs": {
@@ -1163,6 +1165,14 @@
     "batch-results,debug,light": {
       "fixture": "batch-results",
       "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "reaction-clearance,dark": {
+      "fixture": "reaction-clearance",
+      "review": "Long text on incoming/outgoing bubbles with own+other heart count2 and another reaction; all bubble/shared layout changes retain this scene."
+    },
+    "reaction-clearance,light": {
+      "fixture": "reaction-clearance",
+      "review": "Long text on incoming/outgoing bubbles with own+other heart count2 and another reaction; all bubble/shared layout changes retain this scene."
     }
   }
 }

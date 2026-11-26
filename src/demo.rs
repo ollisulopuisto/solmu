@@ -2895,6 +2895,40 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     ).into());
                 }
             }
+            "reaction-clearance" => {
+                let chat = SAMPLES[0].id;
+                let mut rows = Vec::new();
+                for (index, own) in [false, true].into_iter().enumerate() {
+                    let mut row = message(
+                        chat,
+                        &format!("reaction-clearance-{index}"),
+                        own,
+                        crate::util::now() + index as i64 * 60,
+                        Content::text("Mutta jääkiekkoässä Late Lauri Latukka on veteraani."),
+                    );
+                    row.reactions = vec![
+                        crate::model::Reaction {
+                            sender: ME.into(),
+                            from_me: true,
+                            emoji: "❤️".into(),
+                        },
+                        crate::model::Reaction {
+                            sender: JONAS.into(),
+                            from_me: false,
+                            emoji: "❤️".into(),
+                        },
+                        crate::model::Reaction {
+                            sender: DOROTHY.into(),
+                            from_me: false,
+                            emoji: "👍".into(),
+                        },
+                    ];
+                    rows.push(row);
+                }
+                app.conversations.get_mut(chat).unwrap().messages = rows;
+                app.open_chat = Some(chat.into());
+                app.scroll_to_bottom = true;
+            }
             "hover-actions" => {
                 SHOT_HOVER_ACTIONS.store(true, std::sync::atomic::Ordering::Relaxed);
                 let chat = SAMPLES[0].id;
