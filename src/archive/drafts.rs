@@ -75,6 +75,7 @@ mod tests {
         let origin = "http://127.0.0.1:1";
         let events = Mutex::new(Vec::new());
         let emit = |event| events.lock().unwrap().push(event);
+        let mut warning_shown = false;
         assert!(local_draft_command(
             Command::SaveDraft {
                 chat: "one".into(),
@@ -84,7 +85,8 @@ mod tests {
             &mut store,
             &path,
             origin,
-            &emit
+            &emit,
+            &mut warning_shown
         ));
         assert!(
             stored_drafts(store.as_ref().unwrap(), origin)
@@ -103,7 +105,8 @@ mod tests {
             &mut store,
             &path,
             origin,
-            &emit
+            &emit,
+            &mut warning_shown
         ));
         assert!(events.lock().unwrap().iter().any(|event| matches!(
             event,
@@ -130,7 +133,8 @@ mod tests {
             &mut store,
             &path,
             origin,
-            &emit
+            &emit,
+            &mut warning_shown
         ));
         assert!(events.lock().unwrap().iter().any(|event| matches!(
             event,
@@ -146,7 +150,8 @@ mod tests {
             &mut store,
             &path,
             origin,
-            &emit
+            &emit,
+            &mut warning_shown
         ));
     }
 

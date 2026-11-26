@@ -778,6 +778,13 @@ fn measure_cache(dirs: &AccountDirs) -> std::io::Result<crate::model::StorageSta
     Ok(stats)
 }
 
+fn draft_keyring_warning(shown: &mut bool, emit: &dyn Fn(Event)) {
+    if !*shown {
+        *shown = true;
+        emit(Event::Error("Draft not saved: OS keyring unavailable. Keep the app open or copy the draft before closing; no plaintext fallback was used.".into()));
+    }
+}
+
 fn save_local_draft(
     store: &mut Option<crate::archive::Archive>,
     path: &std::path::Path,
@@ -785,12 +792,13 @@ fn save_local_draft(
     chat: &str,
     text: &str,
     emit: &dyn Fn(Event),
+    warning_shown: &mut bool,
 ) {
     if store.is_none() && !text.trim().is_empty() {
         match crate::archive::Archive::open_drafts(path) {
             Ok(archive) => *store = Some(archive),
             Err(_) => {
-                emit(Event::Error("Draft not saved: OS keyring unavailable. Keep the app open or copy the draft before closing; no plaintext fallback was used.".into()));
+                draft_keyring_warning(warning_shown, emit);
                 return;
             }
         }
@@ -810,6 +818,7 @@ fn save_local_draft(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Existing command context plus once-per-worker warning state.
 pub(crate) fn local_draft_command(
     command: Command,
     loaded: bool,
@@ -817,10 +826,11 @@ pub(crate) fn local_draft_command(
     path: &std::path::Path,
     origin: &str,
     emit: &dyn Fn(Event),
+    warning_shown: &mut bool,
 ) -> bool {
     match command {
         Command::SaveDraft { chat, text } => {
-            save_local_draft(store, path, origin, &chat, &text, emit);
+            save_local_draft(store, path, origin, &chat, &text, emit, warning_shown);
         }
         Command::WriteDraftState {
             chat,
@@ -4477,6 +4487,7 @@ pub fn run(
     // Separate encrypted draft-only archive. Never store duplicate message history.
     // OS keyring failure is explicit; never fall back to plaintext.
     let draft_path = dirs.state.join("beeper-drafts").join("drafts.db");
+    let mut draft_warning_shown = false;
     let mut draft_store = if draft_path.exists() {
         match crate::archive::Archive::open_drafts(&draft_path) {
             Ok(store) => Some(store),
@@ -4535,7 +4546,7 @@ pub fn run(
                     match commands.try_recv() {
                     Ok(command) if matches!(command, Command::SaveDraft { .. } | Command::WriteDraftState { .. }) => {
                         let _ = local_draft_command(command, shelves_loaded, &mut draft_store,
-                            &draft_path, &api.base_url, &emit);
+                            &draft_path, &api.base_url, &emit, &mut draft_warning_shown);
                     },
                     Ok(Command::Shutdown) => return,
                     Ok(Command::SendText { chat, text, .. }) => emit(Event::BeeperSendUncertain {
@@ -4702,6 +4713,7 @@ pub fn run(
                         &draft_path,
                         &api.base_url,
                         &emit,
+                        &mut draft_warning_shown,
                     );
                 }
                 Command::SetFavorite(chat, favorite) => {
@@ -8311,6 +8323,17 @@ mod tests {
             );
             server.join().unwrap();
         }
+    }
+
+    #[test]
+    fn draft_keyring_warning_is_once_per_worker_session() {
+        let events = Mutex::new(Vec::new());
+        let mut shown = false;
+        for _ in 0..4 {
+            draft_keyring_warning(&mut shown, &|event| events.lock().unwrap().push(event));
+        }
+        assert!(shown);
+        assert_eq!(events.lock().unwrap().len(), 1);
     }
 
     #[test]
