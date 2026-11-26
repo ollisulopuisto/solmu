@@ -50,19 +50,24 @@ impl State {
         self.touch();
         true
     }
-    pub fn undo_delete(&mut self, draft: Parked) {
-        if self.pending.is_some()
-            || self.staged_shelf.is_some()
-            || self.sent_removals.contains(&draft.id)
-        {
-            return;
+    pub fn undo_delete(&mut self) -> bool {
+        if self.pending.is_some() || self.staged_shelf.is_some() {
+            return false;
         }
+        let Some(draft) = self.deleted_draft.as_ref() else {
+            return false;
+        };
+        if self.sent_removals.contains(&draft.id) {
+            return false;
+        }
+        let draft = self.deleted_draft.take().unwrap();
         let mut shelf = self.shelf.clone();
         if !shelf.iter().any(|d| d.id == draft.id) {
             shelf.push(draft);
         }
         self.staged_shelf = Some(shelf);
         self.touch();
+        true
     }
 
     pub fn resume(&mut self, id: u64) -> Option<String> {
@@ -592,13 +597,14 @@ mod shelf_tests {
         assert_eq!(state.shelf.len(), 2, "unsaved delete is not confirmed");
         assert_eq!(state.staged_shelf.as_ref().unwrap()[0].id, 2);
         assert!(!state.delete_draft(2), "cannot overwrite staged deletion");
+        assert!(!state.undo_delete(), "a staged write cannot be replaced");
+        assert_eq!(state.deleted_draft.as_ref().unwrap().id, 1);
         let revision = state.revision;
         state.pending = Some(revision);
         state.pending_shelf = state.staged_shelf.clone();
         state.ack(revision, true);
         assert_eq!(state.shelf.len(), 1);
-        let draft = state.deleted_draft.take().unwrap();
-        state.undo_delete(draft);
+        assert!(state.undo_delete());
         let restored = state.staged_shelf.as_ref().unwrap();
         assert_eq!(restored.len(), 2);
         assert_eq!(restored.iter().filter(|d| d.id == 1).count(), 1);

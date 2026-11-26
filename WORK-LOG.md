@@ -1872,3 +1872,8 @@ shelf when open, otherwise above composer.18local state tests pass, including
 identity-specific delete/ack/undo; native full-frame geometry, no-preview,
 no-overwrite, Escape, cap and resume coverage added. Formatting/diff pass. Full
 native tests and light/dark captures still pending. Separate PR, no merge.
+
+Pre-merge review: bound the shade to the message viewport so it does not dim
+chat header controls, and make Undo own its retained identity so a blocked
+undo attempt cannot discard the retry copy.18state tests still pass, including
+blocked undo retaining the identity. Native CI remains the integration check.

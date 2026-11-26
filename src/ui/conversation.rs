@@ -2773,8 +2773,12 @@ fn draft_shelf_overlay(app: &mut App, ui: &mut egui::Ui, chat: &str, composer: R
     {
         return;
     }
+    let thread_top = ui
+        .ctx()
+        .data(|d| d.get_temp::<Rect>(egui::Id::new("message-actions-viewport")))
+        .map_or(ui.ctx().content_rect().top(), |rect| rect.top());
     let bounds = Rect::from_min_max(
-        pos2(composer.left(), ui.ctx().content_rect().top()),
+        pos2(composer.left(), thread_top),
         pos2(composer.right(), composer.top()),
     );
     if bounds.height() < 40.0 {
@@ -2951,9 +2955,8 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
                         egui::Button::new(crate::i18n::gettext(app.locale, "Undo")),
                     )
                     .clicked()
-                    && let Some(draft) = state.deleted_draft.take()
                 {
-                    state.undo_delete(draft);
+                    state.undo_delete();
                 }
             }
             egui::ScrollArea::vertical()
