@@ -1,9 +1,7 @@
 # Changelog
 
-- Replace duplicate reply-jump controls with one attached chain-tail per reply.
 
 Newest first. One `## <version>` section per release, bullets under it;
-- Send Later: composer clock expands into four upward presets (8am nearest, parsed message time, custom calendar, recurring); Cmd/Ctrl+Shift+Enter opens it, arrows and 1–4 choose, Esc returns to the draft.
 the app shows the sections newer than the version the user last
 acknowledged, and the latest sections when opened from Help. The
 `## Unreleased` section collects notes for the next release and is never
@@ -15,13 +13,21 @@ zero, and the number of the release in that month, starting at 1 (`26.11.1`).
 Cargo, the Mac bundle and the Windows installer need three numeric parts, so
 this is the whole scheme. Older releases (`v0.24.21` and before) keep their numbers.
 
+## 26.11.17
+
+- Keep reply-chain bubbles on the same left edge, with one attached chain-tail per reply.
+- Open the reaction grid beside its highlighted target near the pointer, without a reserved gutter.
+- Delete a resumed shelf draft only after its text send is confirmed.
+- Keep earlier album files in the media cache during small downloads.
+- Download incoming images automatically before they enter view.
+- Draft recovery threshold is a Chats setting, 30 characters by default.
+- Save document downloads with safe filename extensions instead of `.bin`.
+- Open two-stage keyboard menus for reactions and Quick Replies on the latest incoming message, from the message menu or Cmd/Ctrl-Y; Quick Replies insert text for review without sending.
+- Send Later: composer clock expands into four upward presets (8am nearest, parsed message time, custom calendar, recurring); Cmd/Ctrl+Shift+Enter opens it, arrows and 1–4 choose, Esc returns to the draft.
+
 ## 26.11.16
 
 - Declare Swift for Darwin Nix launcher typechecks instead of depending on host Xcode discovery.
-
-## Unreleased
-
-- The message menu offers Quick Replies (Yes, No, Later); choosing one puts its text in the composer for review and never sends it.
 
 ## 26.11.14
 

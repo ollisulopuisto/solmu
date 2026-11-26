@@ -18,11 +18,20 @@ pub const SLOT_HEIGHT: f32 = 36.0;
 /// The chain is separate from the filled tail and never covers its message.
 pub fn chain_geometry(body: Rect, own: bool) -> Rect {
     let x = if own {
-        body.right()
+        body.right() - 30.0
     } else {
-        body.left() - 30.0
+        body.left()
     };
     Rect::from_min_size(pos2(x, body.top() - SLOT_HEIGHT), vec2(30.0, 30.0))
+}
+
+/// Albums connect straight to their own tile top, with no filled side tail.
+pub fn album_connector(body: Rect, own: bool) -> [egui::Pos2; 2] {
+    let chain = chain_geometry(body, own);
+    [
+        pos2(chain.center().x, chain.bottom()),
+        pos2(chain.center().x, body.top()),
+    ]
 }
 
 pub fn paint(painter: &Painter, body: Rect, own: bool, ink: Color32) {
@@ -58,6 +67,41 @@ mod tests {
             let sibling = body.translate(vec2(0.0, 66.0));
             assert!(!chain_geometry(sibling, own).shrink(0.01).intersects(tail));
             assert!(!geometry(sibling, own).intersects(chain));
+        }
+    }
+    #[test]
+    fn album_row_slot_keeps_later_chain_out_of_previous_media() {
+        let body = Rect::from_min_size(pos2(80., 80.), vec2(180., 132.));
+        let next = body.translate(vec2(0., body.height() + SLOT_HEIGHT + 3.));
+        for own in [false, true] {
+            assert!(!chain_geometry(next, own).intersects(body));
+            assert!(!chain_geometry(body, own).intersects(next));
+        }
+    }
+    #[test]
+    fn same_row_album_chains_use_separate_tile_columns_not_vertical_offsets() {
+        let first = Rect::from_min_size(pos2(80., 80.), vec2(180., 132.));
+        let second = first.translate(vec2(first.width() + 3., 0.));
+        for own in [false, true] {
+            for chain in [chain_geometry(first, own), chain_geometry(second, own)] {
+                assert!(!chain.intersects(first));
+                assert!(!chain.intersects(second));
+            }
+            assert!(!chain_geometry(first, own).intersects(chain_geometry(second, own)));
+        }
+    }
+    #[test]
+    fn album_connector_never_enters_neighbour_media_or_side_gap() {
+        let first = Rect::from_min_size(pos2(80., 80.), vec2(180., 132.));
+        let second = first.translate(vec2(first.width() + 3., 0.));
+        for own in [false, true] {
+            for (body, neighbour) in [(first, second), (second, first)] {
+                let [start, end] = album_connector(body, own);
+                assert_eq!(start.x, end.x);
+                assert_eq!(end.y, body.top());
+                assert!(start.x >= body.left() && start.x <= body.right());
+                assert!(!Rect::from_two_pos(start, end).intersects(neighbour));
+            }
         }
     }
     #[test]
@@ -115,7 +159,7 @@ mod tests {
                 |ui| {
                     for (i, id) in ids.iter().enumerate() {
                         let body = Rect::from_min_size(
-                            pos2(50.0, 50.0 + i as f32 * 70.0),
+                            pos2(50.0, 50.0 + i as f32 * 110.0),
                             vec2(200.0, 60.0),
                         );
                         // Register an earlier broad body hit area, as the app does.
@@ -130,7 +174,9 @@ mod tests {
         };
         frame(vec![]);
         for index in 0..3 {
-            let pos = pos2(265.0, 29.0 + index as f32 * 70.0);
+            let body =
+                Rect::from_min_size(pos2(50.0, 50.0 + index as f32 * 110.0), vec2(200.0, 60.0));
+            let pos = chain_geometry(body, true).center();
             for pressed in [true, false] {
                 frame(vec![
                     egui::Event::PointerMoved(pos),

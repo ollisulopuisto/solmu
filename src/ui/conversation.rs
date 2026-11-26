@@ -16985,6 +16985,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sender_bubbles_share_left_edge_with_and_without_reply_chain() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let mut ordinary =
+                crate::archive::tests::message(&view.chat.id, "plain-edge", 0, false);
+            ordinary.content = Content::text("Same body");
+            let mut reply = ordinary.clone();
+            reply.id = "reply-edge".into();
+            reply.quoted = Some(crate::model::Quoted {
+                chat: None,
+                id: "source".into(),
+                sender: "source-sender".into(),
+                sender_name: None,
+                summary: "source".into(),
+                labelled: None,
+                mentions: vec![],
+            });
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(600., 500.))),
+                    ..Default::default()
+                },
+                |ui| {
+                    let place = RunPlace {
+                        sender_hue: None,
+                        show_timestamp: false,
+                        show_sender: false,
+                        show_avatar: false,
+                        tailed: true,
+                        overlap_previous: None,
+                    };
+                    let plain = bubble(ui, view, &ordinary, None, place, &mut Vec::new()).unwrap();
+                    let quoted = bubble(ui, view, &reply, None, place, &mut Vec::new()).unwrap();
+                    assert!((plain.rect.left() - quoted.rect.left()).abs() < 0.5);
+                    let chain = super::super::reply_tail::chain_geometry(quoted.rect, false);
+                    assert!(chain.left() >= ui.clip_rect().left());
+                    assert!(chain.bottom() <= quoted.rect.top());
+                },
+            );
+            output.textures_delta.clear();
+        });
+    }
+
     /// Runs `check` with a still view of one plain chat, as a footer test
     /// needs one to paint into.
     #[test]
