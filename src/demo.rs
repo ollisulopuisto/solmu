@@ -6888,8 +6888,8 @@ mod tests {
                             "reaction and clock collide: {reaction:?}/{footer:?}"
                         );
                         assert!(
-                            reaction.top() < rect(index).bottom(),
-                            "reaction overlaps bubble edge"
+                            reaction.top() >= rect(index).bottom() + 1.0,
+                            "reaction clears bubble content"
                         );
                         assert!(
                             footer.top() >= reaction.bottom() - 1.0,
