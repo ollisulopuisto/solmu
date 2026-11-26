@@ -3657,6 +3657,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     if app.sweep.is_some() && (sweep.is_none() || !ui.input(|input| input.pointer.primary_down())) {
         actions.push(Action::EndSweep);
     }
+    // A sweep has already selected its endpoint. Its release must not also
+    // toggle that same row back off when egui reports a click after relayout.
+    let finishing_sweep = sweep.is_some() && !ui.input(|input| input.pointer.primary_down());
     let sweep = sweep.filter(|_| ui.input(|input| input.pointer.primary_down()));
     let sweep_pointer = ui.input(|input| input.pointer.latest_pos());
     // The row under the pointer: the last laid-out row whose top it is
@@ -4404,6 +4407,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                         );
                                     });
                                     if selectable
+                                        && !finishing_sweep
                                         && !keyboard_clicked
                                         && (response.clicked() || pick.clicked())
                                     {
