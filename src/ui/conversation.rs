@@ -4395,6 +4395,10 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                             &mut actions,
                                         );
                                     });
+                                    #[cfg(test)]
+                                    if ui.input(|input| input.pointer.any_pressed() || input.pointer.any_released()) {
+                                        eprintln!("selection-hit {} row={:?} body={:?} pointer={:?} outer_click={} pick_click={} outer_hover={} pick_hover={}", message.id, row, drawn, ui.input(|input| input.pointer.latest_pos()), response.clicked(), pick.clicked(), response.hovered(), pick.hovered());
+                                    }
                                     if selectable
                                         && !keyboard_clicked
                                         && (response.clicked() || pick.clicked())
@@ -12041,6 +12045,21 @@ fn rich_body_full(
     // The expanded target owns pointer input in the padding. Preserve the
     // bubble gestures that lived there before, while double-clicks on actual
     // text still select a word.
+    #[cfg(test)]
+    if view.selecting
+        && ui.input(|input| input.pointer.any_pressed() || input.pointer.any_released())
+    {
+        eprintln!(
+            "body-hit {} actual={:?} target={:?} pointer={:?} click={} hover={} down={}",
+            message.id,
+            rect,
+            selection_rect,
+            ui.input(|input| input.pointer.latest_pos()),
+            response.clicked(),
+            response.hovered(),
+            response.is_pointer_button_down_on()
+        );
+    }
     let padding = response
         .interact_pointer_pos()
         .is_some_and(|pointer| !rect.contains(pointer));
