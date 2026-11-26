@@ -2031,8 +2031,11 @@ mod tests {
             output.textures_delta.clear();
             assert!(
                 !tour.failed,
-                "missing target at {at:.2}s, cue {}",
-                tour.next
+                "missing target at {at:.2}s, cue {}, selection={:?}, pointer={:?}, grid={}",
+                tour.next,
+                app.selection,
+                tour.pointer,
+                crate::ui::conversation::hover_grid_open(&ctx),
             );
         }
         let missing: Vec<_> = features

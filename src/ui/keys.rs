@@ -68,6 +68,9 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         sticker_view_keys(app, ctx);
         return;
     }
+    if super::conversation::hover_grid_keyboard(app, ctx) {
+        return;
+    }
     if super::message_key_menu::keyboard(app, ctx) {
         return;
     }
