@@ -5264,6 +5264,10 @@ fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
         dismiss_hover_grid(ctx);
         return;
     }
+    if input.2 {
+        // Motion-only transit must be checked again even when input stops.
+        ctx.request_repaint_after(Duration::from_millis(16));
+    }
     if snapshot.exit.since.is_some() {
         ctx.request_repaint_after(Duration::from_secs_f64(hover_actions::CLOSE_DELAY));
     }
