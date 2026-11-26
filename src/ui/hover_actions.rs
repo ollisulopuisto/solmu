@@ -31,6 +31,7 @@ pub const OPEN_DELAY: f64 = 0.15;
 pub const CLOSE_DELAY: f64 = 0.25;
 pub const HIT_PADDING: f32 = 12.0;
 pub const ARRIVAL_PADDING: f32 = 24.0;
+const _: () = assert!(CLOSE_DELAY > OPEN_DELAY);
 
 /// One pointer-entry attempt. Keyboard opening bypasses this delay.
 #[derive(Clone, Copy, Debug, Default)]
@@ -368,7 +369,6 @@ mod tests {
             !intent.update(false, true, 11.0),
             "layout-only re-entry is not intent"
         );
-        assert!(CLOSE_DELAY > OPEN_DELAY);
     }
     #[test]
     fn padded_arrival_and_safe_diagonal_are_symmetric_and_cancel_exit() {
