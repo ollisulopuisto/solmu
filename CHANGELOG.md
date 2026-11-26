@@ -13,6 +13,11 @@ zero, and the number of the release in that month, starting at 1 (`26.11.1`).
 Cargo, the Mac bundle and the Windows installer need three numeric parts, so
 this is the whole scheme. Older releases (`v0.24.21` and before) keep their numbers.
 
+## Unreleased
+
+- Show given reactions as larger emoji without pill backgrounds, with a thin underline for your own reaction.
+- Place given reactions over the lower-right bubble edge, wrapping long rows without covering the next message.
+
 ## 26.11.17
 
 - Keep reply-chain bubbles on the same left edge, with one attached chain-tail per reply.
