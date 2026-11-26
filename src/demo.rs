@@ -27493,5 +27493,7 @@ mod card_width_tests {
 /// Synthetic thread review fixture.
 #[cfg(feature = "demo")]
 pub(crate) fn reply_thread() -> bool {
-    std::env::args().any(|arg| arg.contains("reply-thread"))
+    // Existing CI refined-thread captures exercise the actual open modal,
+    // while chain-above-outgoing keeps the ordinary timeline evidence.
+    std::env::args().any(|arg| arg.contains("reply-thread") || arg.contains("refined-thread"))
 }
