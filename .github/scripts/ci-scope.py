@@ -80,7 +80,7 @@ def classify(paths, full=False):
 
 # Only pure connector geometry has a reviewed scene subset. Shared app,
 # input, message layout, theme and unknown changes deliberately fail open.
-CONNECTOR_PATHS = {'src/ui/reply_tail.rs', 'src/reply_router.rs'}
+CONNECTOR_PATHS = {'src/reply_router.rs'}
 CONNECTOR_SCENES = ('tail-run,messages tail-run,messages-light '
     'chain-above-outgoing,dark regular-tail-outgoing,light '
     'refined-thread,dark refined-thread,light linked linked,rail linked,rail,light')
