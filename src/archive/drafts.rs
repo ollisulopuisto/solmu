@@ -65,6 +65,92 @@ mod tests {
     use super::*;
 
     #[test]
+    fn local_draft_commands_save_and_ack_without_a_network_request() {
+        use crate::backend::beeper::{local_draft_command, stored_drafts};
+        use crate::backend::{Command, Event};
+        use std::sync::Mutex;
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Some(crate::archive::Archive::in_memory().unwrap());
+        let path = root.path().join("unused.db");
+        let origin = "http://127.0.0.1:1";
+        let events = Mutex::new(Vec::new());
+        let emit = |event| events.lock().unwrap().push(event);
+        assert!(local_draft_command(
+            Command::SaveDraft {
+                chat: "one".into(),
+                text: "offline text".into()
+            },
+            true,
+            &mut store,
+            &path,
+            origin,
+            &emit
+        ));
+        assert!(
+            stored_drafts(store.as_ref().unwrap(), origin)
+                .unwrap()
+                .iter()
+                .any(|(chat, text)| chat == "one" && text == "offline text")
+        );
+        assert!(local_draft_command(
+            Command::WriteDraftState {
+                chat: "one".into(),
+                revision: 7,
+                text: "new offline text".into(),
+                shelf: Vec::new()
+            },
+            true,
+            &mut store,
+            &path,
+            origin,
+            &emit
+        ));
+        assert!(events.lock().unwrap().iter().any(|event| matches!(
+            event,
+            Event::DraftWritten {
+                revision: 7,
+                ok: true,
+                ..
+            }
+        )));
+        assert!(
+            stored_drafts(store.as_ref().unwrap(), origin)
+                .unwrap()
+                .iter()
+                .any(|(chat, text)| chat == "one" && text == "new offline text")
+        );
+        assert!(local_draft_command(
+            Command::WriteDraftState {
+                chat: "one".into(),
+                revision: 8,
+                text: "unread shelf".into(),
+                shelf: Vec::new()
+            },
+            false,
+            &mut store,
+            &path,
+            origin,
+            &emit
+        ));
+        assert!(events.lock().unwrap().iter().any(|event| matches!(
+            event,
+            Event::DraftWritten {
+                revision: 8,
+                ok: false,
+                ..
+            }
+        )));
+        assert!(!local_draft_command(
+            Command::Shutdown,
+            true,
+            &mut store,
+            &path,
+            origin,
+            &emit
+        ));
+    }
+
+    #[test]
     fn composer_database_uses_full_sync_and_survives_reopen() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("durable-drafts.db");
