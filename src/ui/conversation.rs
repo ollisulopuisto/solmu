@@ -5197,7 +5197,12 @@ fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
                     snapshot.bubble_rect.contains(p)
                         || snapshot.geometry.bridge(snapshot.bubble_rect).contains(p)
                 }));
-        let dismiss = i.key_pressed(egui::Key::Escape)
+        let dismiss = (i.pointer.any_pressed()
+            && !snapshot
+                .geometry
+                .bounds()
+                .contains(pointer.unwrap_or(pos2(f32::INFINITY, f32::INFINITY))))
+            || i.key_pressed(egui::Key::Escape)
             || i.raw
                 .events
                 .iter()
@@ -5337,6 +5342,19 @@ pub(crate) fn hover_grid_keyboard(app: &mut App, ctx: &egui::Context) -> bool {
         || app.app_lock.is_locked()
         || app.dialog.is_some()
     {
+        dismiss_hover_grid(ctx);
+        return false;
+    }
+    // Selection/copy and modified application commands retain their native
+    // meaning. A pointer-open grid must never eat the reader's clipboard.
+    let native_command = ctx.input(|i| {
+        i.modifiers.command
+            || i.modifiers.ctrl
+            || i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Copy | egui::Event::Cut))
+    });
+    if native_command {
         dismiss_hover_grid(ctx);
         return false;
     }
@@ -5685,6 +5703,10 @@ fn grouped_hover_actions(
     if !ui.is_enabled() || egui::Popup::is_any_open(ui.ctx()) {
         return false;
     }
+    if ui.input(|i| i.pointer.any_down()) {
+        dismiss_hover_grid(ui.ctx());
+        return false;
+    }
     let existing = ui
         .ctx()
         .data(|d| d.get_temp::<HoverSnapshot>(hover_snapshot_id()));
@@ -5748,6 +5770,12 @@ fn grouped_hover_actions(
         d.insert_temp(entry_id, entry);
         entry
     });
+    if let Some(g) =
+        Geometry::beside_pointer(bubble.rect, bounds, quick.len() + 1, bubble.rect.center())
+    {
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(bubble.id.with("react-rect"), g.cell(quick.len())));
+    }
     let anchor = if keyboard_open {
         hover_actions::opening_anchor(bubble.rect, None, true)
     } else if let Some(anchor) = entry.anchor() {
@@ -14370,7 +14398,6 @@ mod tests {
             draw(reply, None, None);
             draw(reply, None, Some(true));
             draw(reply, None, Some(false));
-            drop(draw);
             assert!(
                 matches!(actions.last(), Some(Action::Reply(id)) if id == "original-grid-target")
             );
@@ -15613,6 +15640,7 @@ mod tests {
                             Sense::click(),
                         );
                         reaction_affordance(ui, view, &message, &bubble, &mut Vec::new());
+                        finish_hover_grid(ui.ctx(), &mut Vec::new());
                         ui.interact(
                             Rect::from_min_size(pos2(80., 500.), vec2(90., 30.)),
                             id.with("out"),
