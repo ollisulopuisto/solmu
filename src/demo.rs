@@ -6668,13 +6668,6 @@ mod tests {
                     .as_mut()
                     .unwrap()
                     .id = "second-original".into();
-                let quoted = rows
-                    .iter()
-                    .find(|m| m.id == reply)
-                    .unwrap()
-                    .quoted
-                    .clone()
-                    .unwrap();
                 let ctx = egui::Context::default();
                 crate::theme::install(&ctx);
                 for _ in 0..4 {
@@ -6682,15 +6675,13 @@ mod tests {
                 }
                 let id = crate::ui::conversation::bubble_id(chat, reply);
                 if keyboard {
-                    ctx.memory_mut(|m| {
-                        m.request_focus(id.with(("quote", &quoted.chat, &quoted.id)))
-                    });
+                    ctx.memory_mut(|m| m.request_focus(id.with("chain-open-thread")));
                     streak_test_frame(
                         &mut app,
                         &ctx,
                         1180.0,
                         1000.0,
-                        vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+                        vec![key(egui::Key::Enter, egui::Modifiers::COMMAND)],
                     );
                 } else {
                     let pos = ctx
@@ -6704,12 +6695,13 @@ mod tests {
                             1180.0,
                             1000.0,
                             vec![
+                                egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
                                 egui::Event::PointerMoved(pos),
                                 egui::Event::PointerButton {
                                     pos,
                                     button: egui::PointerButton::Primary,
                                     pressed,
-                                    modifiers: egui::Modifiers::NONE,
+                                    modifiers: egui::Modifiers::COMMAND,
                                 },
                             ],
                         );
