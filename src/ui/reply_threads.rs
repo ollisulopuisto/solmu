@@ -1014,6 +1014,13 @@ mod tests {
         (dir, app, ctx)
     }
     #[test]
+    fn chain_entry_on_reply_opens_exact_ancestor_not_only_its_descendants() {
+        let (_dir, app, ctx) = seeded();
+        let reply = app.conversations["a"].message("2").unwrap();
+        open_for_message(&ctx, reply);
+        assert_eq!(current(&ctx).unwrap().id, "1");
+    }
+    #[test]
     fn thread_routes_are_permanent_and_background_geometry_is_not_reused() {
         let ctx = egui::Context::default();
         let mut f = Frame::default();

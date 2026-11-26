@@ -6569,7 +6569,7 @@ mod tests {
     }
 
     #[test]
-    fn quiet_thread_entry_keeps_geometry_and_opens_exact_thread_by_pointer_or_keyboard() {
+    fn chain_entry_keeps_geometry_and_opens_exact_thread_by_pointer_or_keyboard() {
         use crate::ui::conversation::{bubble_id, footer_id};
         for keyboard in [false, true] {
             let mut app = app();
@@ -6582,7 +6582,7 @@ mod tests {
             }
             let id = bubble_id(chat, "refined-original");
             let rect = ctx
-                .data(|d| d.get_temp::<egui::Rect>(id.with("open-thread-rect")))
+                .data(|d| d.get_temp::<egui::Rect>(id.with("quote")))
                 .expect("parent retains thread navigation");
             let before = ctx
                 .data(|d| d.get_temp::<egui::Rect>(footer_id(chat, "refined-original")))
@@ -6599,18 +6599,18 @@ mod tests {
                 .unwrap();
             assert_eq!(before, after, "hover must not shift the timestamp");
             assert!(
-                rect.right() <= after.left(),
-                "thread entry stays beside clock"
+                rect.bottom() <= before.top(),
+                "chain entry stays above its bubble clock"
             );
             assert!(
-                ctx.data(|d| d.get_temp::<egui::Rect>(
-                    bubble_id(chat, "refined-normal").with("open-thread-rect")
-                ))
+                ctx.data(
+                    |d| d.get_temp::<egui::Rect>(bubble_id(chat, "refined-normal").with("quote"))
+                )
                 .is_none(),
                 "unrelated messages get no thread entry"
             );
             if keyboard {
-                ctx.memory_mut(|m| m.request_focus(id.with("open-thread")));
+                ctx.memory_mut(|m| m.request_focus(id.with("chain-open-thread")));
                 streak_test_frame(
                     &mut app,
                     &ctx,

@@ -7691,16 +7691,21 @@ fn quote_chip(
     ui.ctx().data_mut(|data| {
         data.insert_temp(bubble_id(&view.chat.id, &message.id).with("quote"), rect);
     });
+    let hint = crate::i18n::gettext(
+        view.locale,
+        if quoted.is_some() {
+            "Open thread (Cmd/Ctrl-click to jump to the original message)"
+        } else {
+            "Open thread"
+        },
+    );
     let response = super::reply_tail::interact(
         ui,
         rect,
         bubble_id(&message.chat, &message.id).with("chain-open-thread"),
     )
     .on_hover_cursor(egui::CursorIcon::PointingHand)
-    .on_hover_text(crate::i18n::gettext(
-        view.locale,
-        "Open thread (Cmd/Ctrl-click to jump to the original message)",
-    ));
+    .on_hover_text(hint.as_ref());
     let paint_pass = ui.ctx().cumulative_pass_nr();
     let focused = response.has_focus();
     #[cfg(feature = "demo")]
@@ -7736,22 +7741,8 @@ fn quote_chip(
     });
     theme::reveal_focus(&response);
     theme::focus_outline(ui, response.id, rect, 6.0);
-    let who = quoted
-        .map(|q| quoted_sender_name(view, q, &crate::i18n::gettext(view.locale, "You")))
-        .unwrap_or_default();
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
-            ui.is_enabled(),
-            format!(
-                "{}, {}",
-                crate::i18n::gettext(
-                    view.locale,
-                    "Open thread (Cmd/Ctrl-click to jump to the original message)"
-                ),
-                who
-            ),
-        )
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), hint.as_ref())
     });
     if response.clicked() {
         let source_jump = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
