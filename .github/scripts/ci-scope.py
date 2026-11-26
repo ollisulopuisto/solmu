@@ -78,6 +78,21 @@ def classify(paths, full=False):
     return flags
 
 
+# Only pure connector geometry has a reviewed scene subset. Shared app,
+# input, message layout, theme and unknown changes deliberately fail open.
+CONNECTOR_PATHS = {'src/ui/reply_tail.rs', 'src/reply_router.rs'}
+CONNECTOR_SCENES = ('tail-run,messages tail-run,messages-light '
+    'chain-above-outgoing,dark regular-tail-outgoing,light '
+    'refined-thread,dark refined-thread,light linked linked,rail linked,rail,light')
+
+
+def scene_scope(paths, full=False):
+    heavy = [p for p in paths if not ignored(p)]
+    if not full and heavy and all(p in CONNECTOR_PATHS for p in heavy):
+        return CONNECTOR_SCENES
+    return 'full'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base')
@@ -85,6 +100,7 @@ def main():
     parser.add_argument('--full', action='store_true')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
+    paths = []
     if args.full:
         result = classify([], full=True)
     elif not args.base or set(args.base) == {'0'}:
@@ -106,6 +122,7 @@ def main():
         with args.output.open('a') as out:
             for name, value in result.items():
                 out.write(f'{name}={str(value).lower()}\n')
+            out.write('scenes=' + scene_scope(paths, full=args.full or not args.base) + '\n')
 
 
 if __name__ == '__main__':

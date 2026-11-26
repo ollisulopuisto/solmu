@@ -1,10 +1,8 @@
 name: CI
 
 # Fast portable feedback first; expensive checks selected by changed inputs.
-# Policy always reports separately. On pull requests and routine main source
-# merges the macOS test leg is the merge gate: it starts right after the
-# portable checks, and quality, Ubuntu tests and the Nix package wait for it
-# and report later. Full platform matrices (macOS/Windows tests, Debian 12,
+# Policy always reports separately. Native jobs start together after portable
+# checks, retaining every selected check without serializing Linux behind macOS. Full platform matrices (macOS/Windows tests, Debian 12,
 # Windows ARM, all three Nix systems) belong to version tags, merge queues
 # and manual full runs, and are unchanged.
 on:
@@ -45,6 +43,7 @@ jobs:
       native: ${{ steps.scope.outputs.native }}
       audit: ${{ steps.scope.outputs.audit }}
       nix: ${{ steps.scope.outputs.nix }}
+      scenes: ${{ steps.scope.outputs.scenes }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -117,11 +116,9 @@ jobs:
         run: python .github/scripts/security-pilot-report.py --checks rust
 
   quality:
-    needs: [changes, portable, mac-test]
-    # Runs after the macOS gate on pull requests and routine main pushes. On
-    # tags, merge queues and manual runs mac-test is skipped and quality
-    # starts immediately. A failed macOS leg does not hide Linux feedback.
-    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && needs.portable.result == 'success' && needs.mac-test.result != 'cancelled' && needs.changes.outputs.native == 'true' }}
+    needs: [changes, portable]
+    # Independent native jobs run in parallel after portable validation.
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && needs.portable.result == 'success' && needs.changes.outputs.native == 'true' }}
     name: quality
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -134,11 +131,12 @@ jobs:
         run: |
           sudo python3 .github/scripts/install-ubuntu-build-deps.py             libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev             libpipewire-0.3-dev clang libclang-dev cmake perl
       # After the toolchain, so the cache key follows the pinned rustc. The
-      # key carries no job name, so each job sets its own generation. Saves
-      # only on pushes to main; pull requests restore.
+      # key carries no job name, so each job sets its own generation. Same-repo
+      # PRs save in their isolated PR scope; forks never save.
       - uses: jdx/mr-boxington-action@v1
         with:
           cache-generation: quality-v1
+          save-on-pull-request: true
       - name: Formatting
         run: cargo fmt --all --check
       - name: Clippy (default features)
@@ -151,10 +149,9 @@ jobs:
         run: mbx doc --locked --all-features --no-deps
 
   test:
-    needs: [changes, portable, mac-test]
-    # Same stagger as quality: after the macOS gate on pull requests and
-    # routine main pushes, immediately on tags, merge queues and manual runs.
-    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && needs.portable.result == 'success' && needs.mac-test.result != 'cancelled' && needs.changes.outputs.native == 'true' }}
+    needs: [changes, portable]
+    # Same independent scheduling as quality; no coverage removed.
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && needs.portable.result == 'success' && needs.changes.outputs.native == 'true' }}
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # A cold Windows build passed both suites in 59 minutes, then timed out
@@ -174,6 +171,7 @@ jobs:
       - uses: jdx/mr-boxington-action@v1
         with:
           cache-generation: test-v1
+          save-on-pull-request: true
       # The demo feature carries the headless layout test of every screen.
       - name: Tests (default features)
         run: mbx test --locked --all-targets
@@ -183,6 +181,8 @@ jobs:
         if: runner.os == 'macOS'
         run: mbx build --locked --features demo
       - name: macOS window smoke test
+        env:
+          SELECTED_SCENES: ${{ needs.changes.outputs.scenes }}
         if: runner.os == 'macOS'
         timeout-minutes: 10
         run: |
@@ -193,7 +193,12 @@ jobs:
           wait "$demo_pid"
           test -s "$RUNNER_TEMP/solmu-content.png"
           # Synthetic evidence: stamps, receipts, linked loading and shortcuts.
-          for page in translation-review,dark translation-review,light draft-shelf-confirmed,dark draft-clear-recovery,dark info-source-sent,dark info-source-received,dark info-source-group,dark tail-run,messages tail-run,messages-light chain-above-outgoing,dark regular-tail-outgoing,light hover-actions,dark hover-actions,light refined-thread,dark refined-thread,light avatar-overflow,dark image-burst,dark image-burst,light hidden-message hidden-message,light edit edit,light group-stacks history-date message-info-direct linked linked-loading shortcuts linked,rail linked,rail,light flat-groups,dark info-media info-videos info-voice voice-transcripts voice-transcripts-search chat-transcript-search settings-search=voice whisper-setup batch-results,dark batch-results,light batch-results,debug,dark batch-results,debug,light; do
+          all_scenes='translation-review,dark translation-review,light draft-shelf-confirmed,dark draft-clear-recovery,dark info-source-sent,dark info-source-received,dark info-source-group,dark tail-run,messages tail-run,messages-light chain-above-outgoing,dark regular-tail-outgoing,light hover-actions,dark hover-actions,light refined-thread,dark refined-thread,light avatar-overflow,dark image-burst,dark image-burst,light hidden-message hidden-message,light edit edit,light group-stacks history-date message-info-direct linked linked-loading shortcuts linked,rail linked,rail,light flat-groups,dark info-media info-videos info-voice voice-transcripts voice-transcripts-search chat-transcript-search settings-search=voice whisper-setup batch-results,dark batch-results,light batch-results,debug,dark batch-results,debug,light'
+          scenes="$all_scenes"
+          if [ -n "$SELECTED_SCENES" ] && [ "$SELECTED_SCENES" != full ]; then
+            scenes="$SELECTED_SCENES"
+          fi
+          for page in $scenes; do
             hover=()
             case "$page" in refined-thread,*) hover=(--demo-hover 480,367) ;; esac
             target/debug/solmu --demo --demo-page "$page" "${hover[@]}" \
@@ -237,10 +242,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # Own cache generation: the key carries no job name, so each job sets
       # its own generation. Saves only on pushes to main; pull requests
-      # restore.
+      # restore and save within their own PR scope; forks never save.
       - uses: jdx/mr-boxington-action@v1
         with:
           cache-generation: mac-test-v1
+          save-on-pull-request: true
       - name: Tests (default features)
         run: mbx test --locked --all-targets
       - name: Tests (all features)
@@ -248,6 +254,8 @@ jobs:
       - name: Build macOS demo
         run: mbx build --locked --features demo
       - name: macOS window smoke test
+        env:
+          SELECTED_SCENES: ${{ needs.changes.outputs.scenes }}
         timeout-minutes: 10
         run: |
           target/debug/solmu --demo --demo-shot "$RUNNER_TEMP/solmu-content.png" --demo-shot-delay 8000 &
@@ -257,7 +265,12 @@ jobs:
           wait "$demo_pid"
           test -s "$RUNNER_TEMP/solmu-content.png"
           # Synthetic evidence: stamps, receipts, linked loading and shortcuts.
-          for page in translation-review,dark translation-review,light draft-shelf-confirmed,dark draft-clear-recovery,dark info-source-sent,dark info-source-received,dark info-source-group,dark tail-run,messages tail-run,messages-light chain-above-outgoing,dark regular-tail-outgoing,light hover-actions,dark hover-actions,light refined-thread,dark refined-thread,light avatar-overflow,dark image-burst,dark image-burst,light hidden-message hidden-message,light edit edit,light group-stacks history-date message-info-direct linked linked-loading shortcuts linked,rail linked,rail,light flat-groups,dark info-media info-videos info-voice voice-transcripts voice-transcripts-search chat-transcript-search settings-search=voice whisper-setup batch-results,dark batch-results,light batch-results,debug,dark batch-results,debug,light; do
+          all_scenes='translation-review,dark translation-review,light draft-shelf-confirmed,dark draft-clear-recovery,dark info-source-sent,dark info-source-received,dark info-source-group,dark tail-run,messages tail-run,messages-light chain-above-outgoing,dark regular-tail-outgoing,light hover-actions,dark hover-actions,light refined-thread,dark refined-thread,light avatar-overflow,dark image-burst,dark image-burst,light hidden-message hidden-message,light edit edit,light group-stacks history-date message-info-direct linked linked-loading shortcuts linked,rail linked,rail,light flat-groups,dark info-media info-videos info-voice voice-transcripts voice-transcripts-search chat-transcript-search settings-search=voice whisper-setup batch-results,dark batch-results,light batch-results,debug,dark batch-results,debug,light'
+          scenes="$all_scenes"
+          if [ -n "$SELECTED_SCENES" ] && [ "$SELECTED_SCENES" != full ]; then
+            scenes="$SELECTED_SCENES"
+          fi
+          for page in $scenes; do
             hover=()
             case "$page" in refined-thread,*) hover=(--demo-hover 480,367) ;; esac
             target/debug/solmu --demo --demo-page "$page" "${hover[@]}" \
@@ -325,9 +338,9 @@ jobs:
       - run: mbx check --locked --all-targets --all-features --target aarch64-pc-windows-msvc
 
   nix:
-    needs: [changes, portable, mac-test]
-    # Same stagger as quality and test.
-    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && needs.portable.result == 'success' && needs.mac-test.result != 'cancelled' && needs.changes.outputs.nix == 'true' }}
+    needs: [changes, portable]
+    # Nix inputs keep their existing selection, without a macOS dependency.
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && needs.portable.result == 'success' && needs.changes.outputs.nix == 'true' }}
     name: Nix package (${{ matrix.system }})
     runs-on: ${{ matrix.os }}
     # Uncached, aarch64-darwin takes about 53 minutes, Linux about 22.

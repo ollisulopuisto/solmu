@@ -12,6 +12,17 @@ spec.loader.exec_module(scope)
 
 
 class ScopeTests(unittest.TestCase):
+    def test_only_reviewed_connector_changes_reduce_scenes_not_test_families(self):
+        paths = ['src/ui/reply_tail.rs', 'src/reply_router.rs']
+        self.assertEqual(scope.scene_scope(paths), scope.CONNECTOR_SCENES)
+        self.assertEqual(scope.scene_scope(paths, full=True), 'full')
+        self.assertTrue(scope.classify(paths)['native'])
+        for extra in ['src/app.rs', 'src/ui/keys.rs', 'src/ui/conversation.rs',
+                      'src/ui/merged.rs', 'src/theme.rs', 'src/unknown.rs',
+                      '.github/workflows/ci.yml']:
+            self.assertEqual(scope.scene_scope(paths + [extra]), 'full', extra)
+        self.assertEqual(scope.scene_scope([]), 'full')
+
     def test_nested_crate_manifests_and_locks_select_audit(self):
         for folder in ('harness', 'contrib/signin-check'):
             for name in ('Cargo.toml', 'Cargo.lock'):

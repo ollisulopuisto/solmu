@@ -199,7 +199,8 @@ class WorkflowTests(unittest.TestCase):
                 result = subprocess.run(['bash', '-eu', '-c', block], cwd=ROOT, env=env, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 actual = dict(line.split('=') for line in Path(out.name).read_text().splitlines())
-                self.assertEqual(actual, {k: str(v).lower() for k, v in expected.items()})
+                self.assertEqual({k:v for k,v in actual.items() if k != 'scenes'},
+                                 {k: str(v).lower() for k, v in expected.items()})
 
     def test_full_matrices_belong_to_tags_and_manual_runs(self):
         text = workflow('ci.yml')
@@ -211,8 +212,13 @@ class WorkflowTests(unittest.TestCase):
 
     def test_expensive_checks_follow_selection_and_portable_failure(self):
         text = workflow('ci.yml')
-        self.assertEqual(text.count('needs: [changes, portable]'), 4)
-        self.assertEqual(text.count('needs: [changes, portable, mac-test]'), 3)
+        self.assertEqual(text.count('needs: [changes, portable]'), 7)
+        self.assertNotIn('needs: [changes, portable, mac-test]', text)
+        self.assertNotIn('needs.mac-test.result', text)
+        self.assertEqual(text.count('save-on-pull-request: true'), 3)
+        self.assertEqual(text.count('SELECTED_SCENES: ${{ needs.changes.outputs.scenes }}'), 2)
+        self.assertEqual(text.count('for page in $scenes; do'), 2)
+        self.assertIn('"$SELECTED_SCENES" != full', text)
         self.assertIn('!cancelled() && !failure()', text)
 
     def test_macos_leg_gates_pull_requests_and_keeps_tag_coverage(self):
