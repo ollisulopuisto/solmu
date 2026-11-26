@@ -17081,6 +17081,68 @@ mod tests {
     }
 
     #[test]
+    fn own_reaction_tint_does_not_change_chip_size_and_only_marks_our_choice() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let mut message = crate::archive::tests::message(&view.chat.id, "own-marker", 0, false);
+            message.reactions = vec![
+                crate::model::Reaction {
+                    sender: "me".into(),
+                    from_me: true,
+                    emoji: "❤️".into(),
+                },
+                crate::model::Reaction {
+                    sender: "them".into(),
+                    from_me: false,
+                    emoji: "❤️".into(),
+                },
+                crate::model::Reaction {
+                    sender: "another".into(),
+                    from_me: false,
+                    emoji: "👍".into(),
+                },
+            ];
+            let mut sizes = Vec::new();
+            for ours in [true, false] {
+                message.reactions[0].from_me = ours;
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    ui.horizontal_wrapped(|ui| reactions(ui, view, &message, &mut Vec::new()));
+                    sizes.push(
+                        ui.ctx()
+                            .data(|d| {
+                                d.get_temp::<Rect>(
+                                    bubble_id(&message.chat, &message.id).with(("reaction", "❤️")),
+                                )
+                            })
+                            .unwrap()
+                            .size(),
+                    );
+                });
+                let tint = view.palette.accent.gamma_multiply(0.18);
+                let marked = output
+                    .shapes
+                    .iter()
+                    .filter(|shape| {
+                        matches!(
+                    &shape.shape, egui::Shape::Rect(rect) if rect.fill == tint)
+                    })
+                    .count();
+                assert_eq!(
+                    marked,
+                    usize::from(ours),
+                    "only our counted heart gets a tinted chip"
+                );
+                output.textures_delta.clear();
+            }
+            assert_eq!(
+                sizes[0], sizes[1],
+                "marker never moves or resizes its hit target"
+            );
+        });
+    }
+
+    #[test]
     fn large_given_reactions_wrap_and_keep_exact_targets() {
         with_still_view(|view| {
             let ctx = egui::Context::default();
