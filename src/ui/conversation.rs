@@ -5386,6 +5386,12 @@ pub(crate) fn hover_grid_keyboard(app: &mut App, ctx: &egui::Context) -> bool {
         dismiss_hover_grid(ctx);
         return false;
     }
+    // Hovering is not keyboard activation. Keep composer/search typing and
+    // digits intact when a text editor still owns focus.
+    if ctx.text_edit_focused() {
+        dismiss_hover_grid(ctx);
+        return false;
+    }
     // Selection/copy and modified application commands retain their native
     // meaning. A pointer-open grid must never eat the reader's clipboard.
     let native_command = ctx.input(|i| {
@@ -14393,6 +14399,74 @@ fn chat_of(chat: &ChatId) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pointer_grid_yields_composer_text_and_digit_events() {
+        with_still_view(|view| {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut app, _events) =
+                App::headless(crate::paths::AppDirs::under(dir.path()), Default::default());
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let id = egui::Id::new("typing-grid");
+            let editor = egui::Id::new("composer-text");
+            let mut text = String::new();
+            let message = crate::archive::tests::message(&view.chat.id, "typing-grid", 0, false);
+            for step in 0..4 {
+                let events = if step == 3 {
+                    vec![
+                        egui::Event::Key {
+                            key: Key::Num1,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                        egui::Event::Text("1hello".into()),
+                    ]
+                } else {
+                    vec![egui::Event::PointerMoved(pos2(120., 110.))]
+                };
+                let mut out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(640., 640.))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if step == 3 {
+                            assert!(hover_grid_open(&ctx));
+                            let before = ctx.input(|i| i.events.clone());
+                            assert!(!hover_grid_keyboard(&mut app, &ctx));
+                            assert_eq!(ctx.input(|i| i.events.clone()), before);
+                            assert!(!hover_grid_open(&ctx));
+                        } else {
+                            let bubble = ui.interact(
+                                Rect::from_min_size(pos2(80., 80.), vec2(160., 70.)),
+                                id,
+                                Sense::click(),
+                            );
+                            grouped_hover_actions(ui, view, &message, &bubble, &mut Vec::new());
+                            finish_hover_grid(&ctx, &mut Vec::new());
+                            ctx.data_mut(|d| {
+                                if let Some(mut snap) =
+                                    d.get_temp::<HoverSnapshot>(hover_snapshot_id())
+                                {
+                                    snap.open_chat = app.open_chat.clone();
+                                    snap.account = app.account().id.0.clone();
+                                    d.insert_temp(hover_snapshot_id(), snap);
+                                }
+                            });
+                        }
+                        let response = ui.add(egui::TextEdit::singleline(&mut text).id(editor));
+                        response.request_focus();
+                    },
+                );
+                out.textures_delta.clear();
+            }
+            assert_eq!(text, "1hello");
+            assert!(app.actions.is_empty());
+        });
+    }
     #[test]
     fn modified_grid_press_uses_actual_bubble_not_grid_owner() {
         let ctx = egui::Context::default();

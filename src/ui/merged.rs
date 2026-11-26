@@ -1349,7 +1349,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             egui::vec2(180.0, 34.0),
         );
         if ui
-            .put(rect, egui::Button::new("↓ Jump to latest"))
+            .put(
+                rect,
+                egui::Button::new(crate::i18n::gettext(app.locale, "\u{2193} Jump to latest")),
+            )
             .clicked()
         {
             app.actions.push(Action::ScrollToBottom);
@@ -2953,6 +2956,18 @@ mod tests {
             let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
             assert_eq!(state.destination, person.primary);
             assert!(state.reply.is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod hover_grid_localization_regression {
+    #[test]
+    fn jump_to_latest_uses_the_same_translated_label_as_plain_chat() {
+        let source = include_str!("merged.rs");
+        assert!(!source.contains(concat!("Button::new(\"", "↓ Jump to latest", "\")")));
+        for locale in crate::i18n::Locale::ALL {
+            assert!(!crate::i18n::gettext(locale, "\u{2193} Jump to latest").is_empty());
         }
     }
 }
