@@ -214,6 +214,7 @@ mod tests {
         };
         assert!(s.keep_text("draft", true));
         assert_eq!(s.clear_after_save.as_deref(), Some("draft"));
+        assert_eq!(s.text, "draft", "WriteDraftState reads the current text");
         assert_ne!(s.status(), "Saved locally");
         assert!(s.shelf.is_empty());
         assert!(!s.keep_text("duplicate", true));

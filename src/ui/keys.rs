@@ -96,7 +96,7 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
             if let Some(recovery) = state.recovery.clone() {
                 state.keep_text(&recovery, false);
             }
-        } else if app.pending.is_empty() {
+        } else {
             state.keep_text(&current, true);
         }
         return;
