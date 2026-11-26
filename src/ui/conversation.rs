@@ -10475,7 +10475,10 @@ fn album_content(
     let gap = 3.0;
     let columns = 2;
     let tile = ((width - gap * (columns - 1) as f32) / columns as f32).max(80.0);
-    let tile_height = if messages.iter().any(|m| m.quoted.is_some()) {
+    let tile_height = if messages
+        .iter()
+        .any(|m| m.quoted.is_some() || super::reply_threads::has_replies(ui.ctx(), m))
+    {
         tile.max(132.0)
     } else {
         tile
