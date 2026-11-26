@@ -10472,7 +10472,13 @@ impl App {
             {
                 *quoting = crate::ui::reply_threads::default_reply(self, ctx, chat);
             }
-            Action::SendPending { chat, .. } if self.reply_to.is_none() => {
+            Action::SendPending { chat, .. }
+                if self.reply_to.is_none()
+                    && !self
+                        .pending
+                        .iter()
+                        .any(|item| self.attachment_retry_quotes.contains_key(&item.id)) =>
+            {
                 self.reply_to = crate::ui::reply_threads::default_reply(self, ctx, chat);
             }
             Action::SendGif(_) | Action::SendSticker(_) | Action::MakeSticker { send: true }
