@@ -1,3 +1,7 @@
+## 2026-11-25: Given reactions overlay the bottom-right bubble edge
+
+Follow-up on PR460: owner clarified the reaction row, not message indentation. Move given reactions out of the incoming-left footer into an independently wrapped bottom-right edge overlay in both directions; retain 36px background-free glyphs, exact message/emoji targets and album member identity. Reserve only the overlay overhang before separate metadata so clocks cannot collide. Added actual bubble render regression for both directions before edit. Native execution blocked locally: offline cargo cannot fetch the pinned egui fork, no precompiled GUI tree; regression added but not claimed red/green. Rustfmt and diff check pass. No workflow/schema/credential/crypto edits; merge held. Screenshot not yet verified locally, existing native screenshot evidence does not exercise this changed row.
+
 ## 2026-11-25: Preserve document extensions in media cache
 
 Branch fix/document-cache-extensions from mainfb217d1. The shared attachment
@@ -1756,3 +1760,13 @@ requires explicit native CI validation; default PR CI may only build Linux Nix.
 Version26.11.16 reserved for this PR; serial Solmu merges may require rebasing and a fresh version before merge.
 
 Rebased after merged46735804e5, conflict resolution retains both work logs, version26.11.16. No implementation delta from reviewed97a8ffb. Darwin Nix validation remains unperformed.
+## Larger background-free given reactions (2026-11-24)
+
+Owner approved 36px emoji, unchanged counts, wrapping rows and no backgrounds.
+Use 36px reaction emoji with 13px counts. Remove pill fills, shadows and outlines;
+our chosen reaction has only a thin accent underline. Preserve per-source message
+React targets and native wrapped footer layout. Added size/count and narrow-wrap
+regressions plus a synthetic given-reactions-large scene. Pre-push adversarial
+pass traced row-width consumers, footer wrapping, own toggle, album member IDs and
+color-emoji line height. Full native checks and actual feature capture await CI;
+local formatting/diff checks alone are not visual proof. No workflow edit/release.

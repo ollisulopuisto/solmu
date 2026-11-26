@@ -2775,7 +2775,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             }
             "card-widths" => card_widths_sample(app),
             "minute-gutter" => minute_gutter_sample(app),
-            "group-footer-reactions" => {
+            "group-footer-reactions" | "given-reactions-large" => {
                 minute_gutter_sample(app);
                 let chat = SAMPLES[0].id;
                 let mut row = message(
@@ -2790,6 +2790,16 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     from_me: true,
                     emoji: "👍".into(),
                 });
+                if part == "given-reactions-large" {
+                    for (index, emoji) in ["🫡", "❤️", "😂", "😮", "🙏", "😢"].iter().enumerate()
+                    {
+                        row.reactions.push(Reaction {
+                            sender: format!("synthetic-{index}"),
+                            from_me: false,
+                            emoji: (*emoji).into(),
+                        });
+                    }
+                }
                 app.conversations.get_mut(chat).unwrap().messages = vec![row];
             }
             "group-footer-status" => {
@@ -5952,6 +5962,11 @@ mod tests {
             "newer bubble must not steal seam clicks"
         );
         egui::Popup::close_all(&ctx);
+        for _ in 0..3 {
+            streak_test_frame(&mut app, &ctx, 1180.0, 2000.0, vec![]);
+        }
+        let older = rect(2);
+        let newer = rect(3);
         let point = egui::pos2(newer.left() + 20., older.bottom() + 2.);
         for pressed in [true, false] {
             streak_test_frame(
@@ -6287,6 +6302,45 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn wrapped_given_reactions_never_cover_the_message_footer() {
+        // The reaction overlay is a detached child, so the parent cursor (where
+        // the footer starts) does not move down with wrapped reaction rows.
+        let mut app = app();
+        group_stacks_sample(&mut app);
+        let emojis = ["❤️", "👍", "👀", "🎉", "😊", "🔥"];
+        app.conversations.get_mut(SAMPLES[0].id).unwrap().messages[7].reactions = (0..12)
+            .map(|index| Reaction {
+                sender: format!("reactor-{index}"),
+                from_me: false,
+                emoji: emojis[index % 6].into(),
+            })
+            .collect();
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..6 {
+            streak_test_frame(&mut app, &ctx, 620.0, 800.0, vec![]);
+        }
+        let id = crate::ui::conversation::bubble_id(SAMPLES[0].id, "group-stack-7");
+        let footer = ctx
+            .data(|data| {
+                data.get_temp::<egui::Rect>(crate::ui::conversation::footer_id(
+                    SAMPLES[0].id,
+                    "group-stack-7",
+                ))
+            })
+            .expect("footer is drawn");
+        for emoji in emojis {
+            let reaction = ctx
+                .data(|data| data.get_temp::<egui::Rect>(id.with(("reaction", emoji))))
+                .expect("reaction is drawn");
+            assert!(
+                !reaction.intersects(footer),
+                "wrapped reaction covers footer: {reaction:?}/{footer:?}"
+            );
         }
     }
 
@@ -6800,8 +6854,12 @@ mod tests {
                             "reaction and clock collide: {reaction:?}/{footer:?}"
                         );
                         assert!(
-                            (reaction.center().y - footer.center().y).abs() < 5.0,
-                            "wide-enough footer should share one row"
+                            reaction.top() < rect(index).bottom(),
+                            "reaction overlaps bubble edge"
+                        );
+                        assert!(
+                            footer.top() >= reaction.bottom() - 1.0,
+                            "metadata stays below reaction overhang"
                         );
                     }
                 }
@@ -8855,7 +8913,33 @@ mod tests {
                         let ctx = ui.ctx().clone();
                         app.background_frame(&ctx);
                         app.frame_ui(ui);
-                        *found = painted_label_center(&ctx, needle);
+                        *found = None;
+                        let content_rect = ctx.content_rect();
+                        for layer in ctx.memory(|memory| memory.layer_ids().collect::<Vec<_>>()) {
+                            let transform =
+                                ctx.layer_transform_to_global(layer).unwrap_or_default();
+                            ctx.graphics(|graphics| {
+                                if let Some(list) = graphics.get(layer) {
+                                    for clipped in list.all_entries() {
+                                        if let egui::Shape::Text(text) = &clipped.shape
+                                            && text.galley.text() == needle
+                                        {
+                                            let local = egui::Rect::from_min_size(
+                                                text.pos,
+                                                text.galley.size(),
+                                            )
+                                            .center();
+                                            let global = transform * local;
+                                            if clipped.clip_rect.contains(local)
+                                                && content_rect.contains(global)
+                                            {
+                                                *found = Some(global);
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        }
                         *drawn_out = drawn(&ctx);
                     },
                 );
@@ -8864,6 +8948,14 @@ mod tests {
         };
         let mut app = app();
         apply_flags(&mut app, Some("voice"));
+        // Only voice rows are relevant. Loading unrelated thumbnail images
+        // races the synthetic context teardown under egui's debug lock timer.
+        let chat = sample_ids()[0].to_owned();
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .messages
+            .retain(|row| ["ada-voice", "you-voice"].contains(&row.id.as_str()));
         let ctx = egui::Context::default();
         app.attach(&ctx);
         let mut at = None;
@@ -8892,7 +8984,10 @@ mod tests {
             "Transcribe on this device",
         );
         let at = at.expect("the configured service offers Transcribe");
-        frame_with(&mut app, &ctx, click(at));
+        let mut events = click(at);
+        let released = events.pop().expect("pointer release");
+        streak_test_frame(&mut app, &ctx, 1180.0, 2400.0, events);
+        streak_test_frame(&mut app, &ctx, 1180.0, 2400.0, vec![released]);
         // frame_ui applies queued actions at the end of the frame, so the
         // click's TranscribeVoice no longer sits in app.actions; the stub's
         // recorded queue is the observable effect.
@@ -16774,6 +16869,8 @@ mod tests {
         let ctx = egui::Context::default();
         app.attach(&ctx);
         render(&mut app, &ctx);
+        app.apply(crate::model::Action::ScrollTo("ada-link".into()), &ctx);
+        render(&mut app, &ctx);
         let chat = sample_ids()[0].to_owned();
         let id = crate::ui::conversation::bubble_id(&chat, "ada-link");
         let rect = ctx.read_response(id).expect("older message is drawn").rect;
@@ -16901,10 +16998,25 @@ mod tests {
             twelve_hour: false,
         });
         let mut app = app();
+        // Keep only the four rows this range-selection scenario exercises.
+        // Unrelated image/link fixtures asynchronously change measured row
+        // heights, invalidating hit targets between press and release.
+        let chat = sample_ids()[0].to_owned();
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .messages
+            .retain(|row| {
+                ["ada-doc", "ada-voice", "you-voice", "ada-reply"].contains(&row.id.as_str())
+            });
+        for row in &mut app.conversations.get_mut(&chat).unwrap().messages {
+            row.content = Content::text(format!("selection fixture {}", row.id));
+            row.reactions.clear();
+        }
         let ctx = egui::Context::default();
         app.attach(&ctx);
         for _ in 0..3 {
-            render(&mut app, &ctx);
+            streak_test_frame(&mut app, &ctx, 1180.0, 2400.0, vec![]);
         }
         let chat = sample_ids()[0].to_owned();
         // A click in the bubble's margin, beside its time: the text and
@@ -16912,31 +17024,41 @@ mod tests {
         let click = |app: &mut App, message: &str, modifiers: egui::Modifiers| {
             // Selection changes bubble widths/heights. Settle that layout
             // before reading the next click target, never reuse its old rect.
-            render(app, &ctx);
+            app.apply(crate::model::Action::ScrollTo(message.into()), &ctx);
+            // Do not turn the next distinct gesture into a double-click.
+            for _ in 0..30 {
+                streak_test_frame(app, &ctx, 1180.0, 2400.0, vec![]);
+            }
             let id = crate::ui::conversation::bubble_id(&chat, message);
             let rect = ctx
-                .data(|data| data.get_temp::<egui::Rect>(id.with("rect")))
+                .data(|data| data.get_temp::<egui::Rect>(id.with("body")))
                 .unwrap_or_else(|| panic!("{message} is on screen"));
-            let pos = rect.right_bottom() - egui::vec2(5.0, 2.0);
+            // The stored body excludes the overhanging footer. Its padding
+            // is a message target without invoking document/media controls.
+            let pos = egui::pos2(rect.left() - 3.0, rect.center().y);
             let button = |pressed| egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed,
                 modifiers,
             };
-            frame_with(
+            streak_test_frame(
                 app,
                 &ctx,
+                1180.0,
+                2400.0,
                 vec![
                     egui::Event::ModifiersChanged(modifiers),
                     egui::Event::PointerMoved(pos),
                     button(true),
                 ],
             );
-            frame_with(app, &ctx, vec![button(false)]);
-            frame_with(
+            streak_test_frame(app, &ctx, 1180.0, 2400.0, vec![button(false)]);
+            streak_test_frame(
                 app,
                 &ctx,
+                1180.0,
+                2400.0,
                 vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)],
             );
         };
@@ -16965,12 +17087,14 @@ mod tests {
             ),
             "a click while selecting leaves one out"
         );
-        frame_with(
+        streak_test_frame(
             &mut app,
             &ctx,
+            1180.0,
+            2400.0,
             vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
         );
-        frame_with(&mut app, &ctx, Vec::new());
+        streak_test_frame(&mut app, &ctx, 1180.0, 2400.0, Vec::new());
         assert_eq!(selected(&app), None, "Escape ends the selection");
         assert_eq!(app.open_chat, Some(chat), "and leaves the chat open");
     }
@@ -17325,6 +17449,8 @@ mod tests {
             frame_with(app, &ctx, vec![button(false)]);
             render(app, &ctx);
         };
+        app.apply(crate::model::Action::ScrollTo("ada-voice".into()), &ctx);
+        render(&mut app, &ctx);
         click(&mut app, check("ada-voice").unwrap().center());
         assert_eq!(selected_ids(&app), ["ada-voice"], "the check box picks");
         // The view's margin, left of the check box.
@@ -18000,6 +18126,10 @@ mod tests {
             painted_texts(&clipped.shape, &mut texts);
         }
         if !texts.iter().any(|(text, _)| text == "Quick Replies") {
+            app.apply(crate::model::Action::ScrollTo("ada-link".into()), ctx);
+            for _ in 0..4 {
+                frame_sized(app, ctx, 780.0, Vec::new());
+            }
             let id = crate::ui::conversation::bubble_id(sample_ids()[0], "ada-link");
             let rect = ctx
                 .read_response(id)

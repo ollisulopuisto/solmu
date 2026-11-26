@@ -47,7 +47,8 @@ impl Line {
     }
 }
 
-/// Reaction pills give the emoji more room without inflating the count.
+/// Given reactions are large, unframed emoji; counts stay small.
+pub const REACTION_EMOJI_SIZE: f32 = 36.0;
 pub fn reaction_line(ui: &Ui, emoji_text: &str, count: usize, color: Color32) -> Line {
     let mut job = egui::text::LayoutJob::default();
     let mut placements = Vec::new();
@@ -56,7 +57,7 @@ pub fn reaction_line(ui: &Ui, emoji_text: &str, count: usize, color: Color32) ->
         &mut job,
         &mut placements,
         emoji_text,
-        &egui::TextFormat::simple(crate::theme::regular(17.0), color),
+        &egui::TextFormat::simple(crate::theme::regular(REACTION_EMOJI_SIZE), color),
     );
     let accessible_text = if count > 1 {
         format!("{emoji_text} {count}")
