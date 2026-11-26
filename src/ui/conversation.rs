@@ -5191,7 +5191,7 @@ fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
         let reach = snapshot
             .geometry
             .bounds()
-            .contains(pointer.unwrap_or(egui::Pos2::INFINITY))
+            .contains(pointer.unwrap_or(pos2(f32::INFINITY, f32::INFINITY)))
             || (rendered
                 && pointer.is_some_and(|p| {
                     snapshot.bubble_rect.contains(p)
