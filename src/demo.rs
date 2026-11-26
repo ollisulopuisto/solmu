@@ -18679,14 +18679,19 @@ mod tests {
             "the control {affordance:?} covers the message body"
         );
 
-        // Hover the message, then click the published control.
-        frame_with(
+        // A real entry starts the intent delay. Use input time, not a frame
+        // count, then retain every exact-message picker assertion below.
+        let entered = ctx.input(|i| i.time) + 0.01;
+        frame_at(
             &mut app,
             &ctx,
             vec![egui::Event::PointerMoved(bubble.center())],
+            entered,
         );
-        // Hover changes the small keyboard fallback into the grouped bar.
-        // Read the actual full-picker hit rectangle after that transition.
+        assert!(!crate::ui::conversation::hover_grid_open(&ctx));
+        frame_at(&mut app, &ctx, Vec::new(), entered + 0.2);
+        assert!(crate::ui::conversation::hover_grid_open(&ctx));
+        // Settle the foreground hit registration without changing intent.
         for _ in 0..3 {
             frame_with(
                 &mut app,

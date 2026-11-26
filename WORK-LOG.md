@@ -1849,3 +1849,9 @@ Own review follow-up: motion-only safe-triangle protection now starts the
 Layout-only movement still cannot start an exit. Added a regression that
 fails with the old motion-only exit update, plus re-entry coverage. Transit
 starts at the latest in-bubble pointer rather than the frozen placement anchor.
+
+Native CI exposed the full-app hover-picker fixture's implicit frame timing:
+it clicked before150ms elapsed. The fixture now advances explicit input time,
+asserts no immediate opening then opening after200ms, and retains all picker,
+message-binding, no-context-menu and no-reply assertions. Other2791default
+Linux tests passed. New full native runs are required after this fixture fix.
