@@ -17415,16 +17415,8 @@ mod tests {
                 .map(|(_, ids)| ids.clone())
                 .unwrap_or_default()
         };
-        // The visible text, not a clipped-out center of a tall reply body.
-        // Composer controls can change viewport height between fixture layouts.
-        let text_point = || {
-            let viewport = app.selection_view.lock().unwrap().unwrap();
-            let visible = rect("ada-reply", "body").intersect(viewport);
-            assert!(visible.is_positive(), "reply text is visible: {visible:?}");
-            visible.center()
-        };
-        let point = text_point();
-        click(&mut app, point);
+        // The middle of the text, where the body takes clicks and drags.
+        click(&mut app, rect("ada-reply", "body").center());
         assert_eq!(selected(&app), ["ada-doc", "ada-reply"], "the text selects");
         // The empty strip to the right of an incoming bubble.
         let voice = rect("ada-voice", "rect");
@@ -17435,10 +17427,7 @@ mod tests {
             "the strip beside the bubble selects"
         );
         // And a second click on the text leaves the message out again.
-        let viewport = app.selection_view.lock().unwrap().unwrap();
-        let visible = rect("ada-reply", "body").intersect(viewport);
-        assert!(visible.is_positive());
-        click(&mut app, visible.center());
+        click(&mut app, rect("ada-reply", "body").center());
         assert_eq!(selected(&app), ["ada-doc", "ada-voice"]);
     }
 

@@ -3649,6 +3649,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     if app.sweep.is_some() && (sweep.is_none() || !ui.input(|input| input.pointer.primary_down())) {
         actions.push(Action::EndSweep);
     }
+    // A sweep has already selected its endpoint. Its release must not also
+    // toggle that same row back off when egui reports a click after relayout.
+    let finishing_sweep = sweep.is_some() && !ui.input(|input| input.pointer.primary_down());
     let sweep = sweep.filter(|_| ui.input(|input| input.pointer.primary_down()));
     let sweep_pointer = ui.input(|input| input.pointer.latest_pos());
     // The row under the pointer: the last laid-out row whose top it is
@@ -4395,11 +4398,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                             &mut actions,
                                         );
                                     });
-                                    #[cfg(test)]
-                                    if ui.input(|input| input.pointer.any_pressed() || input.pointer.any_released()) {
-                                        eprintln!("selection-hit {} row={:?} body={:?} pointer={:?} outer_click={} pick_click={} outer_hover={} pick_hover={}", message.id, row, drawn, ui.input(|input| input.pointer.latest_pos()), response.clicked(), pick.clicked(), response.hovered(), pick.hovered());
-                                    }
                                     if selectable
+                                        && !finishing_sweep
                                         && !keyboard_clicked
                                         && (response.clicked() || pick.clicked())
                                     {
@@ -4897,16 +4897,6 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             chat: chat.id.clone(),
             explicit,
         });
-    }
-    #[cfg(test)]
-    if !actions.is_empty()
-        && ui.input(|input| input.pointer.any_pressed() || input.pointer.any_released())
-    {
-        eprintln!(
-            "selection-actions pass={} {:?}",
-            ui.ctx().cumulative_pass_nr(),
-            actions
-        );
     }
     app.actions.extend(actions);
     if edge_scrolled_up {
@@ -12055,21 +12045,6 @@ fn rich_body_full(
     // The expanded target owns pointer input in the padding. Preserve the
     // bubble gestures that lived there before, while double-clicks on actual
     // text still select a word.
-    #[cfg(test)]
-    if view.selecting
-        && ui.input(|input| input.pointer.any_pressed() || input.pointer.any_released())
-    {
-        eprintln!(
-            "body-hit {} actual={:?} target={:?} pointer={:?} click={} hover={} down={}",
-            message.id,
-            rect,
-            selection_rect,
-            ui.input(|input| input.pointer.latest_pos()),
-            response.clicked(),
-            response.hovered(),
-            response.is_pointer_button_down_on()
-        );
-    }
     let padding = response
         .interact_pointer_pos()
         .is_some_and(|pointer| !rect.contains(pointer));
