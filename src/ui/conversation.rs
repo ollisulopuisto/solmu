@@ -18112,7 +18112,9 @@ mod reaction_tests {
             .map(String::as_str)
             .filter(|label| !labels.iter().any(|drawn| drawn == label))
             .collect();
-        assert_eq!(undrawn, ["Reactions", "Reply privately"]);
+        // Single-message fixture has no album export. Dedicated album menu
+        // tests below exercise Save all and its exact displayed-member paths.
+        assert_eq!(undrawn, ["Reactions", "Reply privately", "Save all…"]);
         // Hover texts are not in the accessibility tree.
         labels.extend(["React with any emoji".into(), "Remove your reaction".into()]);
         labels.sort();
