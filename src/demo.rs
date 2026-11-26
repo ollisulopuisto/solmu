@@ -14559,7 +14559,7 @@ mod tests {
         let mut app = app();
         media_album_sample(&mut app, false);
         let chat = app.open_chat.clone().unwrap();
-        let (saved, _) = sample_files(&mut app);
+        let (saved, _) = sample_files(&app);
         app.conversations.get_mut(&chat).unwrap().messages[3]
             .content
             .media_at_mut(None)
