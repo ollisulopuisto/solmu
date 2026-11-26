@@ -14954,7 +14954,8 @@ mod tests {
         // The quote-free chip replaced the quoted text: the member keeps a
         // jump button naming its quoted sender alongside the actions.
         assert!(nodes.iter().any(|(label, role, _)| {
-            label.starts_with("Open thread (Cmd/Ctrl-click")
+            label.starts_with("Open thread replying to ")
+                && label.contains("click to jump to the original message)")
                 && *role == egui::accesskit::Role::Button
         }));
     }
@@ -27493,7 +27494,14 @@ mod card_width_tests {
 /// Synthetic thread review fixture.
 #[cfg(feature = "demo")]
 pub(crate) fn reply_thread() -> bool {
-    // Existing CI refined-thread captures exercise the actual open modal,
-    // while chain-above-outgoing keeps the ordinary timeline evidence.
-    std::env::args().any(|arg| arg.contains("reply-thread") || arg.contains("refined-thread"))
+    // These two explicit demo pages intentionally exercise the modal. Match
+    // only the demo-page value, never an arbitrary path or unrelated argument.
+    let args: Vec<_> = std::env::args().collect();
+    args.windows(2).any(|pair| {
+        pair[0] == "--demo-page"
+            && matches!(
+                pair[1].split(',').next(),
+                Some("reply-thread" | "refined-thread")
+            )
+    })
 }

@@ -6573,7 +6573,7 @@ fn bubble_frame(
         }
         line.paint_decorative(ui, centre - line.size() / 2.0, ink);
         if active {
-            unhide.clone().on_hover_text(hint.as_ref());
+            unhide.clone().on_hover_text(hint.as_str());
         }
         if unhide.has_focus() {
             view.keyboard_navigation.set(true);
@@ -7690,21 +7690,27 @@ fn quote_chip(
     ui.ctx().data_mut(|data| {
         data.insert_temp(bubble_id(&view.chat.id, &message.id).with("quote"), rect);
     });
-    let hint = crate::i18n::gettext(
-        view.locale,
-        if quoted.is_some() {
-            "Open thread (Cmd/Ctrl-click to jump to the original message)"
-        } else {
-            "Open thread"
-        },
-    );
+    let hint = if let Some(quoted) = quoted {
+        let sender = quoted_sender_name(view, quoted, &crate::i18n::gettext(view.locale, "You"));
+        crate::i18n::gettext(
+            view.locale,
+            if cfg!(target_os = "macos") {
+                "Open thread replying to {sender} (Cmd-click to jump to the original message)"
+            } else {
+                "Open thread replying to {sender} (Ctrl-click to jump to the original message)"
+            },
+        )
+        .replace("{sender}", &sender)
+    } else {
+        crate::i18n::gettext(view.locale, "Open thread").into_owned()
+    };
     let response = super::reply_tail::interact(
         ui,
         rect,
         bubble_id(&message.chat, &message.id).with("chain-open-thread"),
     )
     .on_hover_cursor(egui::CursorIcon::PointingHand)
-    .on_hover_text(hint.as_ref());
+    .on_hover_text(hint.as_str());
     let paint_pass = ui.ctx().cumulative_pass_nr();
     let focused = response.has_focus();
     #[cfg(feature = "demo")]
@@ -7741,16 +7747,18 @@ fn quote_chip(
     theme::reveal_focus(&response);
     theme::focus_outline(ui, response.id, rect, 6.0);
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), hint.as_ref())
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), hint.as_str())
     });
     let modified_keyboard_jump = response.has_focus()
         && ui.input_mut(|i| {
             i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)
-                || i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)
+                || (!cfg!(target_os = "macos")
+                    && i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter))
         });
     if response.clicked() || modified_keyboard_jump {
-        let source_jump =
-            modified_keyboard_jump || ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+        let source_jump = modified_keyboard_jump
+            || ui
+                .input(|i| i.modifiers.command || (!cfg!(target_os = "macos") && i.modifiers.ctrl));
         if !source_jump || quoted.is_none() {
             super::reply_threads::open_for_message(ui.ctx(), message);
             return;
