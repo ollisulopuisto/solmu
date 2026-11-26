@@ -14381,6 +14381,44 @@ fn chat_of(chat: &ChatId) -> &str {
 mod tests {
     use super::*;
     #[test]
+    fn modified_grid_press_uses_actual_bubble_not_grid_owner() {
+        let ctx = egui::Context::default();
+        let rect = Rect::from_min_size(pos2(80., 80.), vec2(160., 70.));
+        let other = Rect::from_min_size(pos2(80., 200.), vec2(160., 70.));
+        let pos = rect.center();
+        let mut selected = false;
+        for step in 0..4 {
+            let events = match step {
+                1 | 2 => vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: step == 1,
+                    modifiers: egui::Modifiers::COMMAND,
+                }],
+                _ => Vec::new(),
+            };
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(420., 640.))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    if step == 1 {
+                        ui.ctx()
+                            .data_mut(|d| d.insert_temp(egui::Id::new("grid-modified-press"), pos));
+                    }
+                    let target = ui.interact(rect, egui::Id::new("target"), Sense::click());
+                    let owner = ui.interact(other, egui::Id::new("grid-owner"), Sense::click());
+                    assert!(!grid_modified_click(ui, &owner));
+                    selected |= grid_modified_click(ui, &target);
+                },
+            );
+            out.textures_delta.clear();
+        }
+        assert!(selected);
+    }
+    #[test]
     fn retained_focus_routes_tab_across_frames() {
         let ctx = egui::Context::default();
         let id = egui::Id::new("bubble");
