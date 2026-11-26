@@ -3225,11 +3225,11 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
             "media-album-partial" | "media-album-menu" => {
                 media_album_sample(app, true);
                 let (saved, _) = sample_files(app);
-                let messages = &mut app.conversations.get_mut(SAMPLES[0].id).unwrap().messages;
-                messages[3].content.media_at_mut(None).unwrap().path = Some(saved);
                 if part == "media-album-menu" {
                     app.open_message_menu = Some("album-0".into());
                 }
+                let messages = &mut app.conversations.get_mut(SAMPLES[0].id).unwrap().messages;
+                messages[3].content.media_at_mut(None).unwrap().path = Some(saved);
                 messages[2].quoted = Some(crate::model::Quoted {
                     labelled: None,
                     id: "synthetic-quoted-message".into(),
