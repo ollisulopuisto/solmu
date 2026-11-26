@@ -5332,6 +5332,14 @@ pub(crate) fn hover_grid_keyboard(app: &mut App, ctx: &egui::Context) -> bool {
         dismiss_hover_grid(ctx);
         return false;
     }
+    let focused = ctx.memory(|memory| memory.focused());
+    let owns_focus = super::hover_actions::focus_order(
+        snapshot.bubble_id,
+        snapshot.can_reply,
+        snapshot.can_star,
+    )
+    .iter()
+    .any(|id| Some(*id) == focused);
     let mut selected = None;
     let mut escape = false;
     ctx.input_mut(|input| {
@@ -5342,8 +5350,11 @@ pub(crate) fn hover_grid_keyboard(app: &mut App, ctx: &egui::Context) -> bool {
                 modifiers,
                 ..
             } => {
-                if matches!(key, Key::Tab | Key::Enter | Key::Space) {
+                if *key == Key::Tab {
                     return true;
+                }
+                if matches!(key, Key::Enter | Key::Space) {
+                    return owns_focus;
                 }
                 if *key == Key::Escape {
                     escape = true;
@@ -5375,6 +5386,97 @@ pub(crate) fn hover_grid_keyboard(app: &mut App, ctx: &egui::Context) -> bool {
         dismiss_hover_grid(ctx);
     }
     true
+}
+fn hover_grid_focus(
+    ctx: &egui::Context,
+    bubble_id: egui::Id,
+    lost_focus: bool,
+    can_reply: bool,
+    can_star: bool,
+) -> (bool, bool) {
+    use super::hover_actions;
+    let area_id = bubble_id.with("hover-actions");
+    // Foreground Areas form separate native focus scopes. Explicitly join
+    // this message's controls into one sequential order across those Areas.
+    let order = hover_actions::focus_order(bubble_id, can_reply, can_star);
+    // Key-event modifiers are authoritative for this Tab. Synthetic input and
+    // some integrations need not emit a separate ModifiersChanged event.
+    let shift = ctx.input(|i| {
+        i.events
+            .iter()
+            .find_map(|event| match event {
+                egui::Event::Key {
+                    key: egui::Key::Tab,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => Some(modifiers.shift),
+                _ => None,
+            })
+            .unwrap_or(i.modifiers.shift)
+    });
+    // Release the native focus lock at either exit boundary, including
+    // reverse navigation out of the bubble. Always reset a previous lock.
+    ctx.memory_mut(|m| {
+        if let Some(id) = m.focused()
+            && order.contains(&id)
+        {
+            m.set_focus_lock_filter(
+                id,
+                egui::EventFilter {
+                    // Keep the bubble native so Shift+Tab can resolve its
+                    // preceding widget before this affordance is rendered.
+                    tab: id != bubble_id
+                        && hover_actions::next_focus(&order, Some(id), shift).is_some(),
+                    ..Default::default()
+                },
+            );
+        }
+    });
+    let tab_frame = ctx.cumulative_frame_nr();
+    let handled_id = egui::Id::new("message-actions-tab-handled");
+    let already_handled = ctx.data(|d| d.get_temp::<u64>(handled_id)) == Some(tab_frame);
+    let route_from = if !shift && lost_focus {
+        Some(bubble_id)
+    } else {
+        ctx.memory(|m| m.focused())
+    };
+    if let Some(next) = hover_actions::next_focus(&order, route_from, shift)
+        && !already_handled
+        && ctx.input_mut(|i| {
+            i.consume_key(
+                if shift {
+                    egui::Modifiers::SHIFT
+                } else {
+                    egui::Modifiers::NONE
+                },
+                egui::Key::Tab,
+            )
+        })
+    {
+        ctx.memory_mut(|m| {
+            m.move_focus(egui::FocusDirection::None);
+            m.request_focus(next);
+        });
+        ctx.data_mut(|d| {
+            d.insert_temp(handled_id, tab_frame);
+            d.insert_temp(egui::Id::new("message-actions-keyboard-mode"), true);
+        });
+    }
+    let keyboard = ctx.memory(|memory| {
+        memory.has_focus(bubble_id.with("react-keyboard"))
+            || (0_usize..6).any(|i| memory.has_focus(area_id.with(("emoji", i))))
+            || (0_usize..3).any(|i| memory.has_focus(area_id.with(("action", i))))
+    });
+    let nav_id = egui::Id::new("message-actions-keyboard-mode");
+    if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
+        ctx.data_mut(|d| d.insert_temp(nav_id, true));
+    }
+    if ctx.input(|i| i.pointer.any_pressed()) {
+        ctx.data_mut(|d| d.insert_temp(nav_id, false));
+    }
+    let keyboard_mode = ctx.data(|d| d.get_temp::<bool>(nav_id)).unwrap_or(false);
+    (keyboard_mode, keyboard)
 }
 fn grid_hint(bar: &egui::Ui, rect: Rect, cell: usize, palette: Palette) {
     bar.painter().text(
@@ -5563,6 +5665,13 @@ fn grouped_hover_actions(
                 entry.update(bubble.rect, current_pointer);
                 d.insert_temp(entry_id, entry);
             });
+            hover_grid_focus(
+                ui.ctx(),
+                bubble.id,
+                bubble.lost_focus(),
+                snapshot.can_reply,
+                snapshot.can_star,
+            );
             snapshot.bubble_rect = bubble.rect;
             if bubble.rect.intersects(ui.clip_rect()) {
                 snapshot.frame = ui.ctx().cumulative_frame_nr();
@@ -5635,95 +5744,19 @@ fn grouped_hover_actions(
     // Keep only the facing-edge corridor alive. It owns no
     // hit targets, so links/media in the bubble remain usable.
 
-    // Foreground Areas form separate native focus scopes. Explicitly join
-    // this message's controls into one sequential order across those Areas.
     let can_reply = view.chat.can_send()
         && !matches!(
             message.content,
             Content::Revoked | Content::PhoneOnly { .. }
         );
     let can_star = !matches!(message.content, Content::Revoked);
-    let order = hover_actions::focus_order(bubble.id, can_reply, can_star);
-    // Key-event modifiers are authoritative for this Tab. Synthetic input and
-    // some integrations need not emit a separate ModifiersChanged event.
-    let shift = ui.input(|i| {
-        i.events
-            .iter()
-            .find_map(|event| match event {
-                egui::Event::Key {
-                    key: egui::Key::Tab,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } => Some(modifiers.shift),
-                _ => None,
-            })
-            .unwrap_or(i.modifiers.shift)
-    });
-    // Release the native focus lock at either exit boundary, including
-    // reverse navigation out of the bubble. Always reset a previous lock.
-    ui.ctx().memory_mut(|m| {
-        if let Some(id) = m.focused()
-            && order.contains(&id)
-        {
-            m.set_focus_lock_filter(
-                id,
-                egui::EventFilter {
-                    // Keep the bubble native so Shift+Tab can resolve its
-                    // preceding widget before this affordance is rendered.
-                    tab: id != bubble.id
-                        && hover_actions::next_focus(&order, Some(id), shift).is_some(),
-                    ..Default::default()
-                },
-            );
-        }
-    });
-    let tab_frame = ui.ctx().cumulative_frame_nr();
-    let handled_id = egui::Id::new("message-actions-tab-handled");
-    let already_handled = ui.ctx().data(|d| d.get_temp::<u64>(handled_id)) == Some(tab_frame);
-    let route_from = if !shift && bubble.lost_focus() {
-        Some(bubble.id)
-    } else {
-        ui.ctx().memory(|m| m.focused())
-    };
-    if let Some(next) = hover_actions::next_focus(&order, route_from, shift)
-        && !already_handled
-        && ui.input_mut(|i| {
-            i.consume_key(
-                if shift {
-                    egui::Modifiers::SHIFT
-                } else {
-                    egui::Modifiers::NONE
-                },
-                egui::Key::Tab,
-            )
-        })
-    {
-        ui.ctx().memory_mut(|m| {
-            m.move_focus(egui::FocusDirection::None);
-            m.request_focus(next);
-        });
-        ui.ctx().data_mut(|d| {
-            d.insert_temp(handled_id, tab_frame);
-            d.insert_temp(egui::Id::new("message-actions-keyboard-mode"), true);
-        });
-    }
-    let keyboard = ui.ctx().memory(|memory| {
-        memory.has_focus(bubble.id.with("react-keyboard"))
-            || (0_usize..6).any(|i| memory.has_focus(area_id.with(("emoji", i))))
-            || (0_usize..3).any(|i| memory.has_focus(area_id.with(("action", i))))
-    });
-    let nav_id = egui::Id::new("message-actions-keyboard-mode");
-    if ui.input(|i| i.key_pressed(egui::Key::Tab)) {
-        ui.ctx().data_mut(|d| d.insert_temp(nav_id, true));
-    }
-    if ui.input(|i| i.pointer.any_pressed()) {
-        ui.ctx().data_mut(|d| d.insert_temp(nav_id, false));
-    }
-    let keyboard_mode = ui
-        .ctx()
-        .data(|d| d.get_temp::<bool>(nav_id))
-        .unwrap_or(false);
+    let (keyboard_mode, keyboard) = hover_grid_focus(
+        ui.ctx(),
+        bubble.id,
+        bubble.lost_focus(),
+        can_reply,
+        can_star,
+    );
     let scrolling = ui.input(|i| {
         i.smooth_scroll_delta.length_sq() > 0.0
             || i.raw
@@ -14220,6 +14253,31 @@ fn chat_of(chat: &ChatId) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retained_focus_routes_tab_across_frames() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("bubble");
+        ctx.memory_mut(|m| m.request_focus(id.with("hover-actions").with(("emoji", 0_usize))));
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: Key::Tab,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |_ui| {
+                hover_grid_focus(&ctx, id, false, true, true);
+            },
+        );
+        assert_eq!(
+            ctx.memory(|m| m.focused()),
+            Some(id.with("hover-actions").with(("emoji", 1_usize)))
+        );
+    }
     #[test]
     fn retained_grid_keeps_target_after_shift_and_missing_row() {
         with_still_view(|view| {
