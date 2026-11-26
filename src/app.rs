@@ -10485,14 +10485,18 @@ impl App {
             Action::SendGif(_) | Action::SendSticker(_) | Action::MakeSticker { send: true }
                 if self.reply_to.is_none() =>
             {
-                if let Some(chat) = media_destination.as_deref().or(self.open_chat.as_deref()) {
-                    self.reply_to = crate::ui::reply_threads::default_reply(self, ctx, chat);
-                }
+                let target = media_destination
+                    .as_deref()
+                    .or(self.open_chat.as_deref())
+                    .and_then(|chat| crate::ui::reply_threads::default_reply(self, ctx, chat));
+                self.reply_to = target;
             }
             Action::SendRecording if self.reply_to.is_none() && self.unsent_voice.is_none() => {
-                if let Some(chat) = media_destination.as_deref().or(self.open_chat.as_deref()) {
-                    self.reply_to = crate::ui::reply_threads::default_reply(self, ctx, chat);
-                }
+                let target = media_destination
+                    .as_deref()
+                    .or(self.open_chat.as_deref())
+                    .and_then(|chat| crate::ui::reply_threads::default_reply(self, ctx, chat));
+                self.reply_to = target;
             }
             _ => {}
         }

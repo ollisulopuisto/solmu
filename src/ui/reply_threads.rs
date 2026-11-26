@@ -1059,6 +1059,76 @@ mod tests {
         (dir, app, ctx)
     }
     #[test]
+    fn thread_media_send_defaults_and_retry_quotes_are_preserved() {
+        use crate::backend::{Backend, Command};
+        use crate::model::{Action, Gif};
+        use std::path::PathBuf;
+        for kind in 0..6 {
+            let (_dir, mut app, ctx) = seeded();
+            let (backend, mut commands) = Backend::recording();
+            app.backend = backend;
+            let action = match kind {
+                0 => Action::SendGif(Gif {
+                    id: "fixture".into(),
+                    still: None,
+                    mp4: "https://example.invalid/fixture.mp4".into(),
+                    width: 2,
+                    height: 2,
+                }),
+                1 => Action::SendSticker(PathBuf::from("synthetic.webp")),
+                2 => {
+                    app.recording = Some(crate::audio::Recorder::recorded_fixture(vec![
+                            0.0;
+                            crate::voice::RATE
+                                as usize
+                        ]));
+                    Action::SendRecording
+                }
+                3 => Action::SendLocation {
+                    chat: "a".into(),
+                    latitude: 60.0,
+                    longitude: 25.0,
+                    quoting: None,
+                },
+                4 => {
+                    app.stage(crate::app::Pending::File(PathBuf::from("synthetic.png")));
+                    Action::SendPending {
+                        account: app.account().id.clone(),
+                        chat: "a".into(),
+                        caption: "".into(),
+                        mentions: vec![],
+                    }
+                }
+                _ => {
+                    app.stage(crate::app::Pending::File(PathBuf::from("retry.png")));
+                    let id = app.pending[0].id;
+                    app.attachment_retry_quotes.insert(id, "1".into());
+                    app.reply_to = Some("1".into());
+                    Action::SendPending {
+                        account: app.account().id.clone(),
+                        chat: "a".into(),
+                        caption: "".into(),
+                        mentions: vec![],
+                    }
+                }
+            };
+            app.apply(action, &ctx);
+            let expected = if kind == 5 { "1" } else { "2" };
+            let sent: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok()).collect();
+            assert!(
+                sent.iter().any(|c| matches!(c,
+                    Command::SendGif { quoting: Some(q), .. } |
+                    Command::SendSticker { quoting: Some(q), .. } |
+                    Command::SendVoice { quoting: Some(q), .. } |
+                    Command::SendLocation { quoting: Some(q), .. } |
+                    Command::SendFiles { quoting: Some(q), .. } if q.id == expected
+                )),
+                "media kind {kind}"
+            );
+        }
+    }
+
+    #[test]
     fn stale_attachment_account_cannot_set_current_thread_reply() {
         let (_dir, mut app, ctx) = seeded();
         let chat = app.open_chat.clone().unwrap();
