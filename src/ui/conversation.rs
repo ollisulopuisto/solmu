@@ -5742,6 +5742,15 @@ fn grouped_hover_actions(
                 entry.update(bubble.rect, current_pointer);
                 d.insert_temp(entry_id, entry);
             });
+            // The fallback precedes the foreground Areas in native widget
+            // registration. Do not register the grid again on its exit Tab,
+            // or native focus loops into the first emoji instead of leaving.
+            if ui.memory(|m| m.has_focus(bubble.id.with("react-keyboard")))
+                && ui.input(|i| i.key_pressed(Key::Tab) && !i.modifiers.shift)
+            {
+                dismiss_hover_grid(ui.ctx());
+                return false;
+            }
             hover_grid_focus(
                 ui.ctx(),
                 bubble.id,
