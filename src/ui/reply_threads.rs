@@ -1215,7 +1215,9 @@ mod tests {
     #[test]
     fn thread_has_no_routes_even_for_non_root_replies_and_hover() {
         let ctx = egui::Context::default();
+        let scope = egui::Id::new("thread-route-test-scope");
         let mut f = Frame {
+            scope,
             active: true,
             ..Default::default()
         };
@@ -1249,6 +1251,16 @@ mod tests {
             egui::Rect::from_min_size(egui::pos2(65., 220.), egui::Vec2::ZERO),
         );
         ctx.data_mut(|d| d.insert_temp(frame_id(), std::sync::Arc::new(std::sync::Mutex::new(f))));
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                scope,
+                Key {
+                    chat: "chat".into(),
+                    id: "root".into(),
+                },
+            )
+        });
+        assert!(active(&ctx), "the fixture opens an actual scoped thread");
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -1265,7 +1277,9 @@ mod tests {
             )),
             "thread routes must not paint, including non-root replies and hover"
         );
+        ctx.data_mut(|data| data.remove::<Key>(scope));
         frame(&ctx).unwrap().lock().unwrap().active = false;
+        assert!(!active(&ctx), "normal chat has no scoped thread");
         let mut normal = ctx.run_ui(input, |ui| {
             finish(ui, egui::Color32::WHITE);
         });

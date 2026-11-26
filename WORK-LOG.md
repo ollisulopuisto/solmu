@@ -1825,3 +1825,9 @@ collection and painted-bounds union; the body already supplies those bounds.
 Parent graph, order, send target and scroll behavior stay unchanged.36selector/
 workflow tests and formatting pass; fresh native CI and demo before/after
 light/dark captures required. No merge approval inferred from review comments.
+
+Native follow-up: the new painter fixture initially set Frame.active but did
+not insert the scoped current-thread Key used by active(ctx). Native Linux/
+Mac therefore correctly exposed it as a normal-chat fixture. Insert/remove
+the actual scoped Key around both unchanged shape assertions; explicitly
+assert active/inactive state. All other default tests passed. Fresh CI owed.
