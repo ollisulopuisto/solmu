@@ -5526,7 +5526,9 @@ fn bubble(
     }
     // Reserve the chain slot before layout, not on hover, so neighbouring
     // messages and their media cannot be covered and hover never reflows.
-    if album.is_none() && message.quoted.is_some() {
+    if album.is_none()
+        && (message.quoted.is_some() || super::reply_threads::has_replies(ui.ctx(), message))
+    {
         ui.add_space(if in_thread_pass() {
             12.0
         } else {
@@ -5665,26 +5667,8 @@ fn bubble(
                 let visible_status = last.from_me
                     && !matches!(status, Delivery::None | Delivery::Unknown)
                     && (!view.hide_grouped_status || not_sent(last));
-                let thread_members: Vec<_> = members
-                    .iter()
-                    .filter(|m| super::reply_threads::has_replies(ui.ctx(), m))
-                    .collect();
-                let thread_width = thread_members
-                    .iter()
-                    .map(|_| {
-                        ui.painter()
-                            .layout_no_wrap(
-                                crate::i18n::gettext(view.locale, "Open thread").into_owned(),
-                                theme::regular(11.0),
-                                Color32::WHITE,
-                            )
-                            .size()
-                            .x
-                            + 10.0
-                    })
-                    .sum::<f32>();
-                let metadata = !thread_members.is_empty()
-                    || view.show_timestamp
+                let thread_width = 0.0;
+                let metadata = view.show_timestamp
                     || visible_status
                     || starred
                     || pinned
@@ -5755,21 +5739,6 @@ fn bubble(
                                 }
                                 if last.from_me && !visible_status {
                                     width -= 19.0;
-                                }
-                                let pointer = ui.input(|i| i.pointer.hover_pos());
-                                let hovered = pointer.is_some_and(|p| body.rect.contains(p));
-                                let each = thread_width / thread_members.len().max(1) as f32;
-                                for member in &thread_members {
-                                    let (target, _) =
-                                        ui.allocate_exact_size(vec2(each, 15.0), Sense::hover());
-                                    super::reply_threads::footer_entry(
-                                        ui,
-                                        member,
-                                        target,
-                                        hovered,
-                                        view.palette.accent,
-                                        view.locale,
-                                    );
                                 }
                                 let (time_slot, _) = ui.allocate_exact_size(
                                     vec2(width.max(1.0), 15.0),
@@ -6963,20 +6932,20 @@ fn bubble_frame(
     {
         if let Some(items) = album {
             for item in items {
-                if let Some(quoted) = &item.quoted
+                if (item.quoted.is_some() || super::reply_threads::has_replies(ui.ctx(), item))
                     && let Some((tile, _)) = tiles.iter().find(|(_, id)| id == &item.id)
                 {
                     // Each tile owns its chain directly above its own column.
                     // album_content reserves one slot per quoted row.
-                    quote_chip(ui, view, item, quoted, *tile, true, actions);
+                    quote_chip(ui, view, item, item.quoted.as_ref(), *tile, true, actions);
                 }
             }
-        } else if let Some(quoted) = &message.quoted {
+        } else if message.quoted.is_some() || super::reply_threads::has_replies(ui.ctx(), message) {
             quote_chip(
                 ui,
                 view,
                 message,
-                quoted,
+                message.quoted.as_ref(),
                 inner.response.rect,
                 false,
                 actions,
@@ -7668,7 +7637,7 @@ fn quote_chip(
     ui: &mut egui::Ui,
     view: &View<'_>,
     message: &Message,
-    quoted: &crate::model::Quoted,
+    quoted: Option<&crate::model::Quoted>,
     body: Rect,
     album_tail: bool,
     actions: &mut Vec<Action>,
@@ -7690,11 +7659,13 @@ fn quote_chip(
             connector,
         )
     });
-    let quoted_own = quotes_me(view, quoted);
+    let quoted_own = quoted.is_some_and(|q| quotes_me(view, q));
     let ink = if quoted_own {
         palette.text
     } else {
-        palette.sender(crate::util::hue(&quoted.sender))
+        quoted.map_or(palette.accent, |q| {
+            palette.sender(crate::util::hue(&q.sender))
+        })
     };
     let ink = theme::readable_on(fill, ink, palette.text, 3.0);
     let in_thread = super::reply_threads::active(ui.ctx()) && in_thread_pass();
@@ -7713,7 +7684,9 @@ fn quote_chip(
         });
         return;
     }
-    super::reply_tail::paint_resting_stub(ui.painter(), body, message.from_me, connector);
+    if quoted.is_some() {
+        super::reply_tail::paint_resting_stub(ui.painter(), body, message.from_me, connector);
+    }
     super::reply_tail::paint(ui.painter(), body, message.from_me, ink);
     ui.ctx().data_mut(|data| {
         data.insert_temp(bubble_id(&view.chat.id, &message.id).with("quote"), rect);
@@ -7721,18 +7694,18 @@ fn quote_chip(
     let response = super::reply_tail::interact(
         ui,
         rect,
-        bubble_id(&message.chat, &message.id).with(("quote", &quoted.chat, &quoted.id)),
+        bubble_id(&message.chat, &message.id).with("chain-open-thread"),
     )
     .on_hover_cursor(egui::CursorIcon::PointingHand)
     .on_hover_text(crate::i18n::gettext(
         view.locale,
-        "Jump to the original message",
+        "Open thread (Cmd/Ctrl-click to jump to the original message)",
     ));
     let paint_pass = ui.ctx().cumulative_pass_nr();
     let focused = response.has_focus();
     #[cfg(feature = "demo")]
     let focused = focused || crate::demo::chain_hover_shot(&message.id);
-    if response.hovered() || focused {
+    if quoted.is_some() && (response.hovered() || focused) {
         if album_tail {
             ui.painter().line_segment(
                 super::reply_tail::album_connector(body, message.from_me),
@@ -7763,19 +7736,30 @@ fn quote_chip(
     });
     theme::reveal_focus(&response);
     theme::focus_outline(ui, response.id, rect, 6.0);
-    let who = quoted_sender_name(view, quoted, &crate::i18n::gettext(view.locale, "You"));
+    let who = quoted
+        .map(|q| quoted_sender_name(view, q, &crate::i18n::gettext(view.locale, "You")))
+        .unwrap_or_default();
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
             egui::WidgetType::Button,
             ui.is_enabled(),
             format!(
                 "{}, {}",
-                crate::i18n::gettext(view.locale, "Jump to the original message"),
+                crate::i18n::gettext(
+                    view.locale,
+                    "Open thread (Cmd/Ctrl-click to jump to the original message)"
+                ),
                 who
             ),
         )
     });
     if response.clicked() {
+        let source_jump = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+        if !source_jump || quoted.is_none() {
+            super::reply_threads::open_for_message(ui.ctx(), message);
+            return;
+        }
+        let quoted = quoted.unwrap();
         let target = crate::reply_graph::Key {
             chat: quoted.chat.clone().unwrap_or_else(|| message.chat.clone()),
             id: quoted.id.clone(),
@@ -10509,7 +10493,9 @@ fn album_content(
     for (row, chunk) in messages.chunks(columns).enumerate() {
         // A chain sits above its own tile. Reserve that space for each
         // media row, so a later row cannot place it over earlier media.
-        if chunk.iter().any(|message| message.quoted.is_some()) {
+        if chunk.iter().any(|message| {
+            message.quoted.is_some() || super::reply_threads::has_replies(ui.ctx(), message)
+        }) {
             ui.add_space(if in_thread_pass() {
                 12.0
             } else {
