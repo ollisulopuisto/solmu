@@ -222,6 +222,31 @@ impl State {
 mod tests {
     use super::*;
     #[test]
+    fn explicit_recovery_save_keeps_failure_retry_without_a_new_expiry() {
+        let mut state = State {
+            loaded: true,
+            text: "new composer".into(),
+            recovery: Some("deleted original".into()),
+            recovery_left: Some(Duration::from_secs(4)),
+            recovery_started: Some(Instant::now()),
+            ..Default::default()
+        };
+        assert!(state.keep_text("deleted original", false));
+        state.pending = Some(state.revision);
+        state.ack(state.revision, false);
+        state.edit("new composer", "new composer continues", false);
+        assert!(state.recovery_left.is_none());
+        assert!(
+            state
+                .recovery_fraction(Instant::now() + Duration::from_secs(30))
+                .is_none()
+        );
+        assert_eq!(state.recovery.as_deref(), Some("deleted original"));
+        assert_eq!(state.staged_recovery.as_deref(), Some("deleted original"));
+        assert_eq!(state.staged_shelf.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
     fn new_text_starts_one_countdown_and_navigation_pauses_it() {
         let mut s = State {
             loaded: true,
