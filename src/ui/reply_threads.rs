@@ -1062,7 +1062,7 @@ mod tests {
             egui::Rect::from_min_size(egui::pos2(65., 220.), egui::Vec2::ZERO),
         );
         ctx.data_mut(|d| d.insert_temp(frame_id(), std::sync::Arc::new(std::sync::Mutex::new(f))));
-        let output = ctx.run_ui(
+        let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -1072,6 +1072,7 @@ mod tests {
             },
             |ui| finish_routes(ui, egui::Color32::WHITE, true),
         );
+        output.textures_delta.clear();
         assert!(
             output
                 .shapes
