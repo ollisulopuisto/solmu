@@ -5667,7 +5667,6 @@ fn bubble(
                 let visible_status = last.from_me
                     && !matches!(status, Delivery::None | Delivery::Unknown)
                     && (!view.hide_grouped_status || not_sent(last));
-                let thread_width = 0.0;
                 let metadata = view.show_timestamp
                     || visible_status
                     || starred
@@ -5721,7 +5720,7 @@ fn bubble(
                     if last.from_me && !visible_status {
                         metadata_width -= 19.0;
                     }
-                    let total = metadata_width.max(1.0) + thread_width + 5.0;
+                    let total = metadata_width.max(1.0) + 5.0;
                     let start = if own {
                         (body.rect.right() - total).max(area.left())
                     } else {
@@ -5760,7 +5759,7 @@ fn bubble(
                                 });
                             }
                         };
-                        if reacted || !thread_members.is_empty() {
+                        if reacted {
                             ui.horizontal_wrapped(draw);
                         } else {
                             draw(ui);
