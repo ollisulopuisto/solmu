@@ -680,19 +680,17 @@ pub fn finish(ui: &egui::Ui, color: egui::Color32) {
     if active(ui.ctx()) {
         return;
     }
-    finish_routes(ui, color, false);
+    finish_routes(ui, color);
 }
-fn finish_routes(ui: &egui::Ui, color: egui::Color32, thread: bool) {
+fn finish_routes(ui: &egui::Ui, color: egui::Color32) {
+    if active(ui.ctx()) {
+        return;
+    }
     let Some(shared) = frame(ui.ctx()) else {
         return;
     };
     let f = shared.lock().unwrap_or_else(|e| e.into_inner());
-    let pairs: Vec<_> = if thread {
-        f.parents
-            .iter()
-            .map(|(child, parent)| (parent, child))
-            .collect()
-    } else if let Some(hover) = f.hover.as_ref() {
+    let pairs: Vec<_> = if let Some(hover) = f.hover.as_ref() {
         if let Some(parent) = f.parents.get(hover) {
             vec![(parent, hover)]
         } else if let Some(child) = f.replies.get(hover).and_then(|r| r.first()) {
@@ -735,20 +733,14 @@ fn finish_routes(ui: &egui::Ui, color: egui::Color32, thread: bool) {
             continue;
         };
         let points: Vec<_> = points.iter().map(|p| egui::pos2(p.x, p.y)).collect();
-        let color = if thread {
-            // Raised bubble edges can be nearly white in light themes. The
-            // permanent route lies on the modal surface, not on that bubble.
-            color
-        } else {
-            ui.ctx()
-                .data(|data| {
-                    data.get_temp::<egui::Color32>(
-                        super::conversation::bubble_id(&child.chat, &child.id)
-                            .with("connector-color"),
-                    )
-                })
-                .unwrap_or(color)
-        };
+        let color = ui
+            .ctx()
+            .data(|data| {
+                data.get_temp::<egui::Color32>(
+                    super::conversation::bubble_id(&child.chat, &child.id).with("connector-color"),
+                )
+            })
+            .unwrap_or(color);
         let stroke = egui::Stroke::new(1.8, color);
         let mut previous = points[0];
         for i in 1..points.len() - 1 {
@@ -867,7 +859,10 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
                 if let Some(rect) = landing {
                     ui.scroll_to_rect(rect, Some(egui::Align::Center));
                 }
-                finish_routes(ui, app.conversation_palette().secondary, true);
+                // The thread is already grouped. No connecting lines, even
+                // for replies to a non-root member. Normal chat hover routes
+                // are still drawn by finish outside this thread pass.
+                finish(ui, app.conversation_palette().secondary);
             })
         });
     if let Some(scroll) = app.scroll_page.take() {
@@ -1228,7 +1223,7 @@ mod tests {
         assert_eq!(current(&ctx).unwrap().id, "1");
     }
     #[test]
-    fn thread_routes_are_permanent_and_background_geometry_is_not_reused() {
+    fn thread_has_no_routes_even_for_non_root_replies_and_hover() {
         let ctx = egui::Context::default();
         let mut f = Frame {
             active: true,
@@ -1243,6 +1238,14 @@ mod tests {
             id: "child".into(),
         };
         f.parents.insert(child.clone(), parent.clone());
+        f.parents.insert(
+            parent.clone(),
+            Key {
+                chat: "chat".into(),
+                id: "root".into(),
+            },
+        );
+        f.hover = Some(child.clone());
         f.rects.insert(
             parent.clone(),
             egui::Rect::from_min_size(egui::pos2(50., 50.), egui::vec2(150., 50.)),
@@ -1264,15 +1267,27 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ui| finish_routes(ui, egui::Color32::WHITE, true),
+            |ui| finish_routes(ui, egui::Color32::WHITE),
         );
         output.textures_delta.clear();
         assert!(
-            output
+            !output.shapes.iter().any(|shape| matches!(
+                shape.shape,
+                egui::Shape::LineSegment { .. } | egui::Shape::CubicBezier(_)
+            )),
+            "thread routes must not paint, including non-root replies and hover"
+        );
+        frame(&ctx).unwrap().lock().unwrap().active = false;
+        let mut normal = ctx.run_ui(egui::RawInput::default(), |ui| {
+            finish_routes(ui, egui::Color32::WHITE);
+        });
+        normal.textures_delta.clear();
+        assert!(
+            normal
                 .shapes
                 .iter()
                 .any(|shape| matches!(shape.shape, egui::Shape::LineSegment { .. })),
-            "thread route must paint without hover"
+            "normal chat hover route remains"
         );
     }
     #[test]

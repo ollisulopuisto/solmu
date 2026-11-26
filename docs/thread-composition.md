@@ -11,3 +11,7 @@ There is intentionally no unquoted-send mode inside the thread. Clearing an
 explicit reply restores the thread default; it does not opt out. To send without
 a quote, close the thread first. No old message links are changed. The default
 is resolved when sending from currently loaded messages, not unseen history.
+
+The thread view has no connecting lines, including replies to non-root members.
+Normal chat chain glyphs, resting stubs and hover/focus routes are unchanged.
+Thread membership, order, default reply targeting and scrolling are unchanged.

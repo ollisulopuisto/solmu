@@ -8300,8 +8300,8 @@ fn quote_chip(
     let ink = theme::readable_on(fill, ink, palette.text, 3.0);
     let in_thread = super::reply_threads::active(ui.ctx()) && in_thread_pass();
     if in_thread {
-        // Keep exact geometry for permanent thread routing, without a redundant
-        // chain glyph or invisible click target.
+        // Keep the shared row metadata without a chain glyph, connector,
+        // or invisible click target in the thread view.
         let id = bubble_id(&message.chat, &message.id);
         let pass = ui.ctx().cumulative_pass_nr();
         ui.ctx().data_mut(|data| {
