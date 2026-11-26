@@ -5527,7 +5527,11 @@ fn bubble(
     // Reserve the chain slot before layout, not on hover, so neighbouring
     // messages and their media cannot be covered and hover never reflows.
     if album.is_none() && message.quoted.is_some() {
-        ui.add_space(super::reply_tail::SLOT_HEIGHT);
+        ui.add_space(if in_thread_pass() {
+            12.0
+        } else {
+            super::reply_tail::SLOT_HEIGHT
+        });
     }
     let mut response = None;
     let mut area = ui.available_rect_before_wrap();
@@ -7693,6 +7697,23 @@ fn quote_chip(
         palette.sender(crate::util::hue(&quoted.sender))
     };
     let ink = theme::readable_on(fill, ink, palette.text, 3.0);
+    let in_thread = super::reply_threads::active(ui.ctx()) && in_thread_pass();
+    if in_thread {
+        // Keep exact geometry for permanent thread routing, without a redundant
+        // chain glyph or invisible click target.
+        let id = bubble_id(&message.chat, &message.id);
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(
+                id.with("quote"),
+                Rect::from_min_size(pos2(rect.center().x, body.top()), vec2(0.0, 0.0)),
+            );
+            data.insert_temp(id.with("quote-pass"), pass);
+            data.insert_temp(id.with("quote-focus"), false);
+        });
+        return;
+    }
+    super::reply_tail::paint_resting_stub(ui.painter(), body, message.from_me, connector);
     super::reply_tail::paint(ui.painter(), body, message.from_me, ink);
     ui.ctx().data_mut(|data| {
         data.insert_temp(bubble_id(&view.chat.id, &message.id).with("quote"), rect);
@@ -10489,7 +10510,11 @@ fn album_content(
         // A chain sits above its own tile. Reserve that space for each
         // media row, so a later row cannot place it over earlier media.
         if chunk.iter().any(|message| message.quoted.is_some()) {
-            ui.add_space(super::reply_tail::SLOT_HEIGHT);
+            ui.add_space(if in_thread_pass() {
+                12.0
+            } else {
+                super::reply_tail::SLOT_HEIGHT
+            });
         }
         // An own bubble lays out right to left; the grid keeps reading order.
         ui.allocate_ui_with_layout(
