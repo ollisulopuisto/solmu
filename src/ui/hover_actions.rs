@@ -121,8 +121,23 @@ impl EntryAnchor {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExitGrace {
     pub since: Option<f64>,
+    transit: bool,
 }
 impl ExitGrace {
+    /// Losing motion-only triangle protection starts grace even if the pointer
+    /// stops, without turning layout-only movement into a generic exit.
+    pub fn update_transit(
+        &mut self,
+        moved: bool,
+        in_reach: bool,
+        transit: bool,
+        dismiss: bool,
+        now: f64,
+    ) -> bool {
+        let left_transit = self.transit && !transit;
+        self.transit = transit;
+        self.update(moved || left_transit, in_reach || transit, dismiss, now)
+    }
     pub fn update(&mut self, moved: bool, in_reach: bool, dismiss: bool, now: f64) -> bool {
         if dismiss {
             return true;
@@ -353,6 +368,21 @@ pub fn paint(p: &egui::Painter, g: Geometry, rear: Color32, front: Color32, outl
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stopping_in_transit_starts_grace_but_layout_only_exit_does_not() {
+        let mut exit = ExitGrace::default();
+        assert!(!exit.update_transit(true, false, true, false, 1.0));
+        assert!(!exit.update_transit(false, false, false, false, 1.1));
+        assert!(!exit.update_transit(false, false, false, false, 1.34));
+        assert!(exit.update_transit(false, false, false, false, 1.36));
+        let mut layout = ExitGrace::default();
+        assert!(!layout.update_transit(false, false, false, false, 9.0));
+        assert!(layout.since.is_none());
+        let mut reentry = ExitGrace::default();
+        assert!(!reentry.update_transit(true, false, true, false, 1.0));
+        assert!(!reentry.update_transit(false, true, false, false, 1.1));
+        assert!(reentry.since.is_none());
+    }
     #[test]
     fn intent_opens_once_after_delay_and_fast_passes_cancel() {
         let mut intent = OpenIntent::default();

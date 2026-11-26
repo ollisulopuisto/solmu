@@ -1843,3 +1843,9 @@ not insert the scoped current-thread Key used by active(ctx). Native Linux/
 Mac therefore correctly exposed it as a normal-chat fixture. Insert/remove
 the actual scoped Key around both unchanged shape assertions; explicitly
 assert active/inactive state. All other default tests passed. Fresh CI owed.
+
+Own review follow-up: motion-only safe-triangle protection now starts the
+250ms exit grace if the pointer stops outside the normal reach regions.
+Layout-only movement still cannot start an exit. Added a regression that
+fails with the old motion-only exit update, plus re-entry coverage. Transit
+starts at the latest in-bubble pointer rather than the frozen placement anchor.

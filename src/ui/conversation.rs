@@ -5224,13 +5224,15 @@ fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
                 || (rendered
                     && (snapshot.bubble_rect.contains(p)
                         || snapshot.geometry.bridge(snapshot.bubble_rect).contains(p)))
-                || moved.is_some_and(|_| {
-                    snapshot.pointer.is_some_and(|previous| {
-                        snapshot
-                            .geometry
-                            .safe_triangle(snapshot.transit_origin, previous, p)
-                    })
+        });
+        let transit = pointer.is_some_and(|p| {
+            moved.is_some_and(|_| {
+                snapshot.pointer.is_some_and(|previous| {
+                    snapshot
+                        .geometry
+                        .safe_triangle(snapshot.transit_origin, previous, p)
                 })
+            })
         });
         let dismiss = (i.pointer.any_pressed()
             && !snapshot
@@ -5247,7 +5249,7 @@ fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
                 .iter()
                 .any(|event| matches!(event, egui::Event::MouseWheel { .. }))
             || (i.pointer.any_pressed() && !reach);
-        (moved, reach, dismiss, i.time)
+        (moved, reach, transit, dismiss, i.time)
     });
     if let Some(pos) = input.0 {
         if rendered && snapshot.bubble_rect.contains(pos) {
@@ -5257,7 +5259,7 @@ fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
     }
     if snapshot
         .exit
-        .update(input.0.is_some(), input.1, input.2, input.3)
+        .update_transit(input.0.is_some(), input.1, input.2, input.3, input.4)
     {
         dismiss_hover_grid(ctx);
         return;
@@ -5980,7 +5982,9 @@ fn grouped_hover_actions(
         from_thread: in_thread_pass(),
         frame,
         pointer,
-        transit_origin: anchor,
+        transit_origin: pointer
+            .filter(|p| bubble.rect.contains(*p))
+            .unwrap_or(anchor),
         exit: super::hover_actions::ExitGrace::default(),
         last_focus: ui.memory(|m| m.focused()),
         visited_grid: false,
