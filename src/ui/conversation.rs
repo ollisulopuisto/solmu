@@ -142,6 +142,66 @@ pub(crate) fn connection_status(app: &App, ui: &mut egui::Ui, chats: &[&str]) {
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            egui::Id::new("hover-grid-scope"),
+            (app.open_chat.clone(), app.account().id.0.clone()),
+        )
+    });
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            egui::Id::new("hover-grid-reduce-motion"),
+            app.settings.reduce_motion,
+        )
+    });
+    show_inner(app, ui);
+    let mut actions = Vec::new();
+    let snapshot = ui
+        .ctx()
+        .data(|d| d.get_temp::<HoverSnapshot>(hover_snapshot_id()));
+    if let Some(mut snapshot) = snapshot {
+        if snapshot.counts.is_empty() {
+            snapshot.counts = std::sync::Arc::new(
+                app.conversations
+                    .iter()
+                    .map(|(id, c)| {
+                        (
+                            id.clone(),
+                            c.messages.iter().map(|m| m.id.clone()).collect(),
+                        )
+                    })
+                    .collect(),
+            );
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(hover_snapshot_id(), snapshot.clone()));
+        }
+        // Navigation/account changes are explicit user actions. Never let an
+        // old overlay route a click into a different chat or account.
+        let valid = app.open_chat == snapshot.open_chat
+            && app.account().id.0 == snapshot.account
+            && app.chat(&snapshot.chat.id).is_some_and(|chat| {
+                !chat.locked
+                    && chat.backend_origin == snapshot.chat.backend_origin
+                    && chat.backend_account == snapshot.chat.backend_account
+            });
+        if valid && !egui::Popup::is_any_open(ui.ctx()) {
+            finish_hover_grid(ui.ctx(), &mut actions);
+            for action in actions {
+                if let Action::Reply(id) = action {
+                    if !super::merged::reply_to_hover_target(app, ui.ctx(), &snapshot.chat, &id) {
+                        app.actions.push(Action::Reply(id));
+                    }
+                } else {
+                    app.actions.push(action);
+                }
+            }
+        } else {
+            dismiss_hover_grid(ui.ctx());
+        }
+    }
+    paint_grid_feedback(ui.ctx());
+}
+fn show_inner(app: &mut App, ui: &mut egui::Ui) {
     let Some(chat) = app.current_chat().cloned() else {
         if theme::chrome_in_headers(ui.ctx()) {
             super::banner(app, ui);
@@ -3381,6 +3441,29 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     let mut reveal = std::mem::take(&mut app.reveal_cursor);
     // Check out the conversation while drawing rows and collecting actions.
     let mut conversation = app.conversations.remove(&chat.id).unwrap_or_default();
+    let hover_hold = hover_grid_open(ui.ctx());
+    let mut appended_messages = Vec::new();
+    let message_order: HashMap<String, usize> = if hover_hold {
+        conversation
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(index, message)| (message.id.clone(), index))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    if hover_hold {
+        conversation.messages.retain(|message| {
+            if hover_keeps_message(ui.ctx(), &chat.id, &message.id) {
+                true
+            } else {
+                appended_messages.push(message.clone());
+                false
+            }
+        });
+    }
+    let hover_new_messages = !appended_messages.is_empty();
     // The list's items are its rows: an album is one.
     let streak_hues = chat
         .is_group()
@@ -3469,7 +3552,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             .selection
             .as_ref()
             .is_some_and(|(selected_chat, _)| *selected_chat == chat.id),
-        anchor: if conversation.loading_older || conversation.fetching_phone {
+        anchor: if hover_hold || conversation.loading_older || conversation.fetching_phone {
             None
         } else {
             app.scroll_anchor.as_deref()
@@ -3552,7 +3635,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     let mut swept_to: Option<&str> = None;
     let mut first_row: Option<&str> = None;
     let scroll_to_bottom =
-        app.scroll_to_bottom && divider.as_ref().is_none_or(|(.., placed)| *placed);
+        !hover_hold && app.scroll_to_bottom && divider.as_ref().is_none_or(|(.., placed)| *placed);
     // The message a quote or search result jumped to flashes once in view.
     let jump = app
         .jump_highlight
@@ -3691,7 +3774,12 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     } else {
         carried
     };
-    if view.anchor.is_some() || view.reaction.is_some() || wheel_over_list || carried != 0.0 {
+    if view.anchor.is_some()
+        || view.reaction.is_some()
+        || hover_hold
+        || wheel_over_list
+        || carried != 0.0
+    {
         key_scroll = None;
     }
     let key_duration = ui.style().scroll_animation.duration.max;
@@ -3704,7 +3792,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     let output = egui::ScrollArea::vertical()
         .id_salt(("messages", &chat.id))
         .auto_shrink([false, false])
-        .stick_to_bottom(view.reaction.is_none())
+        .stick_to_bottom(view.reaction.is_none() && !hover_hold)
         .scroll_source(if view.reaction.is_some() {
             egui::scroll_area::ScrollSource::NONE
         } else {
@@ -4645,7 +4733,8 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     // scrolls, rather than pushing the offset away from the top; PgUp/PgDn
     // steps are relative and still get it. The pass is redone at the new
     // offset, so the shift never shows.
-    if !restored_thread_scroll
+    if !hover_hold
+        && !restored_thread_scroll
         && grew_above.abs() >= 0.5
         && !lay_out_all
         && !scroll_to_bottom
@@ -4684,6 +4773,15 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         }
     }
     conversation.key_scroll = key_scroll;
+    conversation.messages.extend(appended_messages);
+    if hover_hold {
+        conversation.messages.sort_by_key(|message| {
+            message_order
+                .get(&message.id)
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
+    }
     app.conversations
         .insert(chat.id.clone(), std::mem::take(&mut conversation));
     app.at_bottom = at_bottom;
@@ -4781,7 +4879,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
         app.scroll_to_bottom = false;
     }
     // Show a jump-to-latest pill while reading older messages.
-    if !at_bottom {
+    if !at_bottom || hover_new_messages {
         let rect = output.inner_rect;
         let unread = app.chat(&chat.id).map_or(0, |chat| chat.unread);
         let label = crate::i18n::gettext(app.locale, "\u{2193} Jump to latest").to_string();
@@ -5031,6 +5129,411 @@ fn reaction_button_label(from_me: bool, sender: &str) -> String {
     }
 }
 
+#[derive(Clone)]
+struct HoverSnapshot {
+    area_id: egui::Id,
+    open_chat: Option<String>,
+    account: String,
+    counts: std::sync::Arc<HashMap<String, HashSet<String>>>,
+    bubble_id: egui::Id,
+    chat: Chat,
+    message: Message,
+    geometry: super::hover_actions::Geometry,
+    bounds: Rect,
+    bubble_rect: Rect,
+    palette: Palette,
+    locale: crate::i18n::Locale,
+    quick: Vec<String>,
+    mine: Option<String>,
+    starred: bool,
+    can_reply: bool,
+    can_star: bool,
+    label: String,
+    from_thread: bool,
+    frame: u64,
+    pointer: Option<egui::Pos2>,
+    exit: super::hover_actions::ExitGrace,
+}
+fn hover_snapshot_id() -> egui::Id {
+    egui::Id::new("message-actions-snapshot")
+}
+fn dismiss_hover_grid(ctx: &egui::Context) {
+    ctx.data_mut(|d| {
+        if let Some(snapshot) = d.get_temp::<HoverSnapshot>(hover_snapshot_id()) {
+            d.remove::<u64>(snapshot.area_id);
+        }
+        d.remove::<HoverSnapshot>(hover_snapshot_id());
+    });
+}
+/// Independent of virtualized rows: a missing target removes only its outline.
+fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
+    use super::hover_actions;
+    let Some(mut snapshot) = ctx.data(|d| d.get_temp::<HoverSnapshot>(hover_snapshot_id())) else {
+        return;
+    };
+    let frame = ctx.cumulative_frame_nr();
+    let rendered = snapshot.frame == frame;
+    let input = ctx.input(|i| {
+        let moved = i
+            .raw
+            .events
+            .iter()
+            .rev()
+            .find_map(|event| {
+                if let egui::Event::PointerMoved(pos) = event {
+                    Some(*pos)
+                } else {
+                    None
+                }
+            })
+            .filter(|pos| Some(*pos) != snapshot.pointer);
+        let pointer = i.pointer.interact_pos();
+        let reach = snapshot
+            .geometry
+            .bounds()
+            .contains(pointer.unwrap_or(egui::Pos2::INFINITY))
+            || (rendered
+                && pointer.is_some_and(|p| {
+                    snapshot.bubble_rect.contains(p)
+                        || snapshot.geometry.bridge(snapshot.bubble_rect).contains(p)
+                }));
+        let dismiss = i.key_pressed(egui::Key::Escape)
+            || i.raw
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::PointerGone))
+            || i.raw
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::MouseWheel { .. }))
+            || (i.pointer.any_pressed() && !reach);
+        (moved, reach, dismiss, i.time)
+    });
+    if let Some(pos) = input.0 {
+        snapshot.pointer = Some(pos);
+    }
+    if snapshot
+        .exit
+        .update(input.0.is_some(), input.1, input.2, input.3)
+    {
+        dismiss_hover_grid(ctx);
+        return;
+    }
+    if snapshot.exit.since.is_some() {
+        ctx.request_repaint_after(Duration::from_millis(150));
+    }
+    if rendered {
+        ctx.layer_painter(hover_actions::target_outline_layer(snapshot.bubble_id))
+            .with_clip_rect(snapshot.bounds)
+            .rect_stroke(
+                snapshot.bubble_rect.expand(2.0),
+                10.0,
+                Stroke::new(2.0, snapshot.palette.accent),
+                egui::StrokeKind::Inside,
+            );
+    }
+    let before = actions.len();
+    paint_hover_grid(ctx, &snapshot, actions);
+    if actions.len() > before {
+        dismiss_hover_grid(ctx);
+    } else {
+        ctx.data_mut(|d| d.insert_temp(hover_snapshot_id(), snapshot));
+    }
+}
+pub(crate) fn hover_keeps_message(ctx: &egui::Context, chat: &str, message: &str) -> bool {
+    ctx.data(|d| d.get_temp::<HoverSnapshot>(hover_snapshot_id()))
+        .is_none_or(|snapshot| {
+            snapshot
+                .counts
+                .get(chat)
+                .is_some_and(|ids| ids.contains(message))
+        })
+}
+pub(crate) fn hover_grid_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<HoverSnapshot>(hover_snapshot_id()).is_some())
+}
+#[derive(Clone)]
+struct GridFeedback {
+    rect: Rect,
+    palette: Palette,
+    started: f64,
+    reduced: bool,
+}
+fn start_grid_feedback(ctx: &egui::Context, snapshot: &HoverSnapshot, cell: usize) {
+    if cell > 5 {
+        return;
+    }
+    let feedback = GridFeedback {
+        rect: snapshot.geometry.cell(cell),
+        palette: snapshot.palette,
+        started: ctx.input(|i| i.time),
+        reduced: ctx
+            .data(|d| d.get_temp::<bool>(egui::Id::new("hover-grid-reduce-motion")))
+            .unwrap_or(true),
+    };
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new("hover-grid-feedback"), feedback));
+}
+fn paint_grid_feedback(ctx: &egui::Context) {
+    let key = egui::Id::new("hover-grid-feedback");
+    let Some(feedback) = ctx.data(|d| d.get_temp::<GridFeedback>(key)) else {
+        return;
+    };
+    let age = ctx.input(|i| i.time) - feedback.started;
+    if age >= 0.16 {
+        ctx.data_mut(|d| d.remove::<GridFeedback>(key));
+        return;
+    }
+    let strength = super::hover_actions::click_feedback(age, feedback.reduced);
+    ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, key))
+        .rect(
+            feedback.rect.shrink(3.0 + 2.0 * strength),
+            8.0,
+            feedback.palette.accent.gamma_multiply(0.16),
+            Stroke::new(2.0, feedback.palette.accent),
+            egui::StrokeKind::Inside,
+        );
+    crate::motion::request_frame_after(
+        ctx,
+        Duration::from_millis(if feedback.reduced { 160 } else { 16 }),
+    );
+}
+fn hover_action(snapshot: &HoverSnapshot, cell: usize) -> Option<Action> {
+    match cell {
+        0..=5 => snapshot.quick.get(cell).map(|emoji| Action::React {
+            chat: snapshot.chat.id.clone(),
+            message: snapshot.message.id.clone(),
+            emoji: reaction_choice(snapshot.mine.as_deref(), emoji),
+        }),
+        6 => Some(Action::OpenReactionPicker {
+            chat: snapshot.chat.id.clone(),
+            message: snapshot.message.id.clone(),
+            beside_menu: false,
+            from_thread: snapshot.from_thread,
+        }),
+        7 if snapshot.can_reply => Some(Action::Reply(snapshot.message.id.clone())),
+        8 if snapshot.can_star => Some(Action::SetStar {
+            chat: snapshot.chat.id.clone(),
+            message: snapshot.message.id.clone(),
+            starred: !snapshot.starred,
+        }),
+        _ => None,
+    }
+}
+/// Own keyboard input before the composer/global shortcuts see it.
+pub(crate) fn hover_grid_keyboard(app: &mut App, ctx: &egui::Context) -> bool {
+    let Some(snapshot) = ctx.data(|d| d.get_temp::<HoverSnapshot>(hover_snapshot_id())) else {
+        return false;
+    };
+    if app.open_chat != snapshot.open_chat
+        || app.account().id.0 != snapshot.account
+        || app.app_lock.is_locked()
+        || app.dialog.is_some()
+    {
+        dismiss_hover_grid(ctx);
+        return false;
+    }
+    let mut selected = None;
+    let mut escape = false;
+    ctx.input_mut(|input| {
+        input.events.retain(|event| match event {
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                if matches!(key, Key::Tab | Key::Enter | Key::Space) {
+                    return true;
+                }
+                if *key == Key::Escape {
+                    escape = true;
+                }
+                selected = super::hover_actions::grid_key(*key, *modifiers).or(selected);
+                false
+            }
+            egui::Event::Key { .. }
+            | egui::Event::Text(_)
+            | egui::Event::Paste(_)
+            | egui::Event::Cut
+            | egui::Event::Copy => false,
+            _ => true,
+        })
+    });
+    if let Some(cell) = selected {
+        start_grid_feedback(ctx, &snapshot, cell);
+        if let Some(action) = hover_action(&snapshot, cell) {
+            if let Action::Reply(id) = action {
+                if !super::merged::reply_to_hover_target(app, ctx, &snapshot.chat, &id) {
+                    app.actions.push(Action::Reply(id));
+                }
+            } else {
+                app.actions.push(action);
+            }
+        }
+    }
+    if escape || selected.is_some() {
+        dismiss_hover_grid(ctx);
+    }
+    true
+}
+fn grid_hint(bar: &egui::Ui, rect: Rect, cell: usize, palette: Palette) {
+    bar.painter().text(
+        rect.left_top() + vec2(4., 3.),
+        Align2::LEFT_TOP,
+        super::hover_actions::GRID_KEYS[cell].1,
+        theme::semibold(10.),
+        palette.text,
+    );
+}
+fn paint_hover_grid(ctx: &egui::Context, snapshot: &HoverSnapshot, actions: &mut Vec<Action>) {
+    use super::hover_actions;
+    let area_id = snapshot.area_id;
+    let g = snapshot.geometry;
+    let bounds = snapshot.bounds;
+    let quick = &snapshot.quick;
+    let can_reply = snapshot.can_reply;
+    egui::Area::new(area_id)
+        .order(egui::Order::Foreground)
+        .movable(false)
+        .sense(Sense::hover())
+        .fixed_pos(g.reactions.min)
+        .show(ctx, |bar| {
+            bar.set_clip_rect(bounds);
+            bar.set_min_size(g.reactions.size());
+            hover_actions::paint(
+                bar.painter(),
+                g,
+                snapshot.palette.overlay,
+                snapshot.palette.surface_active,
+                snapshot.palette.outline,
+            );
+            for (index, emoji) in quick.iter().enumerate() {
+                let rect = g.cell(index);
+                let r = bar.interact(rect, area_id.with(("emoji", index)), Sense::click());
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(
+                        egui::WidgetType::Button,
+                        true,
+                        format!("{} {emoji}", snapshot.label.clone()),
+                    )
+                });
+                theme::focus_outline(bar, r.id, rect, 8.0);
+                if r.hovered() {
+                    hover_actions::paint_hover(
+                        bar.painter(),
+                        rect,
+                        snapshot.palette.surface_hover,
+                        snapshot.palette.accent,
+                    );
+                } else if snapshot.mine.as_deref() == Some(emoji.as_str()) {
+                    bar.painter().circle_filled(
+                        rect.center(),
+                        16.0,
+                        snapshot.palette.surface_hover,
+                    );
+                }
+                let line = widgets::line(
+                    bar,
+                    emoji,
+                    theme::regular(32.0),
+                    snapshot.palette.text,
+                    40.0,
+                    1,
+                );
+                line.paint(
+                    bar,
+                    rect.center() - line.size() / 2.0,
+                    snapshot.palette.text,
+                );
+                grid_hint(bar, rect, index, snapshot.palette);
+                if r.clicked()
+                    && let Some(action) = hover_action(snapshot, index)
+                {
+                    start_grid_feedback(ctx, snapshot, index);
+                    actions.push(action);
+                }
+            }
+        });
+    let controls = [
+        (g.reply, Icon::Reply, "Reply", can_reply),
+        (
+            g.star,
+            Icon::Star,
+            if snapshot.starred { "Unstar" } else { "Star" },
+            snapshot.can_star,
+        ),
+        (g.cell(quick.len()), Icon::Smile, "React", true),
+    ];
+    for (index, (rect, icon, label, enabled)) in controls.into_iter().enumerate() {
+        let label = crate::i18n::gettext(snapshot.locale, label);
+        let control_id = match index {
+            0 => area_id.with("reply"),
+            1 => area_id.with("star"),
+            _ => area_id.with("picker"),
+        };
+        egui::Area::new(control_id)
+            .order(egui::Order::Foreground)
+            .movable(false)
+            .sense(Sense::hover())
+            .fixed_pos(rect.min)
+            .show(ctx, |bar| {
+                bar.set_clip_rect(bounds);
+                bar.set_min_size(rect.size());
+                let r = bar.interact(
+                    rect,
+                    area_id.with(("action", index)),
+                    if enabled {
+                        Sense::click()
+                    } else {
+                        Sense::hover()
+                    },
+                );
+                r.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &label)
+                });
+                theme::focus_outline(bar, r.id, rect, 8.0);
+                if r.hovered() && enabled {
+                    hover_actions::paint_hover(
+                        bar.painter(),
+                        rect,
+                        snapshot.palette.surface_hover,
+                        snapshot.palette.accent,
+                    );
+                }
+                theme::paint_icon(
+                    bar,
+                    icon,
+                    rect.shrink(7.0),
+                    23.0,
+                    if enabled {
+                        snapshot.palette.text
+                    } else {
+                        snapshot.palette.dim
+                    },
+                );
+                grid_hint(
+                    bar,
+                    rect,
+                    match index {
+                        0 => 7,
+                        1 => 8,
+                        _ => 6,
+                    },
+                    snapshot.palette,
+                );
+                if r.on_hover_text(label).clicked() && enabled {
+                    let cell = match index {
+                        0 => 7,
+                        1 => 8,
+                        _ => 6,
+                    };
+                    if let Some(action) = hover_action(snapshot, cell) {
+                        actions.push(action);
+                    }
+                }
+            });
+    }
+}
 /// All toolbar actions stay bound to this one hovered message, even when
 /// the foreground bar crosses the visual space of a neighbouring bubble.
 fn grouped_hover_actions(
@@ -5038,13 +5541,36 @@ fn grouped_hover_actions(
     view: &View<'_>,
     message: &Message,
     bubble: &egui::Response,
-    actions: &mut Vec<Action>,
+    _actions: &mut Vec<Action>,
 ) -> bool {
     use super::hover_actions::{self, Geometry};
     // A context menu owns foreground input. Its Reply must not compete with
     // a still-held hover grid bound to the album row's first member.
     if !ui.is_enabled() || egui::Popup::is_any_open(ui.ctx()) {
         return false;
+    }
+    let existing = ui
+        .ctx()
+        .data(|d| d.get_temp::<HoverSnapshot>(hover_snapshot_id()));
+    if let Some(mut snapshot) = existing {
+        if snapshot.bubble_id == bubble.id && snapshot.from_thread == in_thread_pass() {
+            let entry_id = snapshot.area_id.with("pointer-entry");
+            let current_pointer = ui.input(|i| i.pointer.interact_pos());
+            ui.ctx().data_mut(|d| {
+                let mut entry = d
+                    .get_temp::<hover_actions::EntryAnchor>(entry_id)
+                    .unwrap_or_default();
+                entry.update(bubble.rect, current_pointer);
+                d.insert_temp(entry_id, entry);
+            });
+            snapshot.bubble_rect = bubble.rect;
+            if bubble.rect.intersects(ui.clip_rect()) {
+                snapshot.frame = ui.ctx().cumulative_frame_nr();
+            }
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(hover_snapshot_id(), snapshot));
+        }
+        return true;
     }
     let quick = quick_reactions(message, view.reaction_emoji);
     // The approved bar has six quick choices plus the full picker. A custom
@@ -5069,24 +5595,25 @@ fn grouped_hover_actions(
         .data(|d| d.get_temp::<bool>(egui::Id::new("message-actions-keyboard-mode")))
         .unwrap_or(false)
         || ui.input(|i| i.key_pressed(egui::Key::Tab));
-    let anchor = hover_actions::opening_anchor(bubble.rect, pointer, keyboard_open);
     let area_id = bubble.id.with("hover-actions");
-    let frame = ui.ctx().cumulative_frame_nr();
-    let held = ui
-        .ctx()
-        .data(|d| d.get_temp::<u64>(area_id))
-        .is_some_and(|last| last == frame || last.saturating_add(1) == frame);
-    let frozen = ui
-        .ctx()
-        .data(|d| d.get_temp::<Geometry>(area_id.with("geometry")));
-    let g = if held {
-        frozen.filter(|g| {
-            bounds.contains_rect(g.bounds()) && !g.bounds().shrink(0.01).intersects(bubble.rect)
-        })
+    let entry_id = area_id.with("pointer-entry");
+    let entry = ui.ctx().data_mut(|d| {
+        let mut entry = d
+            .get_temp::<hover_actions::EntryAnchor>(entry_id)
+            .unwrap_or_default();
+        entry.update(bubble.rect, pointer);
+        d.insert_temp(entry_id, entry);
+        entry
+    });
+    let anchor = if keyboard_open {
+        hover_actions::opening_anchor(bubble.rect, None, true)
+    } else if let Some(anchor) = entry.anchor() {
+        anchor
     } else {
-        None
-    }
-    .or_else(|| Geometry::beside_pointer(bubble.rect, bounds, quick.len() + 1, anchor));
+        return false;
+    };
+    let frame = ui.ctx().cumulative_frame_nr();
+    let g = Geometry::beside_pointer(bubble.rect, bounds, quick.len() + 1, anchor);
     let Some(g) = g else {
         return false;
     };
@@ -5107,9 +5634,7 @@ fn grouped_hover_actions(
     });
     // Keep only the facing-edge corridor alive. It owns no
     // hit targets, so links/media in the bubble remain usable.
-    let shown = bubble.rect.intersect(bounds);
-    let bridge = g.bridge(shown);
-    let in_reach = pointer.is_some_and(|p| g.bounds().contains(p) || bridge.contains(p));
+
     // Foreground Areas form separate native focus scopes. Explicitly join
     // this message's controls into one sequential order across those Areas.
     let can_reply = view.chat.can_send()
@@ -5208,147 +5733,46 @@ fn grouped_hover_actions(
     });
     let active = hover_actions::show_grid(
         scrolling,
-        (over && uncovered) || (held && in_reach && uncovered),
+        over && uncovered && entry.fresh(),
         keyboard_mode && (bubble.has_focus() || keyboard),
     );
-    ui.ctx().data_mut(|d| {
-        if active {
-            d.insert_temp(area_id, frame);
-            d.insert_temp(area_id.with("geometry"), g);
-        } else {
-            d.remove::<u64>(area_id);
-        }
-    });
     if !active {
         return true;
     }
-    ui.painter().rect_stroke(
-        bubble.rect.expand(2.0),
-        10.0,
-        Stroke::new(2.0, view.palette.accent),
-        egui::StrokeKind::Inside,
-    );
-    let mine = own_reaction(message);
-    let starred = view.starred.is_some_and(|ids| ids.contains(&message.id));
-    let can_reply = view.chat.can_send()
-        && !matches!(
-            message.content,
-            Content::Revoked | Content::PhoneOnly { .. }
-        );
-    egui::Area::new(area_id)
-        .order(egui::Order::Foreground)
-        .movable(false)
-        .sense(Sense::hover())
-        .fixed_pos(g.reactions.min)
-        .show(ui.ctx(), |bar| {
-            bar.set_clip_rect(bounds);
-            bar.set_min_size(g.reactions.size());
-            hover_actions::paint(
-                bar.painter(),
-                g,
-                view.palette.overlay,
-                view.palette.surface_active,
-                view.palette.outline,
-            );
-            for (index, emoji) in quick.iter().enumerate() {
-                let rect = g.cell(index);
-                let r = bar.interact(rect, area_id.with(("emoji", index)), Sense::click());
-                r.widget_info(|| {
-                    egui::WidgetInfo::labeled(
-                        egui::WidgetType::Button,
-                        true,
-                        format!(
-                            "{} {emoji}",
-                            reaction_button_label(
-                                message.from_me,
-                                &(view.names_or)(&message.sender, message.sender_name.as_deref())
-                            )
-                        ),
-                    )
-                });
-                theme::focus_outline(bar, r.id, rect, 8.0);
-                if r.hovered() || mine == Some(*emoji) {
-                    bar.painter()
-                        .circle_filled(rect.center(), 16.0, view.palette.surface_hover);
-                }
-                let line =
-                    widgets::line(bar, emoji, theme::regular(32.0), view.palette.text, 40.0, 1);
-                line.paint(bar, rect.center() - line.size() / 2.0, view.palette.text);
-                if r.clicked() {
-                    actions.push(Action::React {
-                        chat: view.chat.id.clone(),
-                        message: message.id.clone(),
-                        emoji: reaction_choice(mine, emoji),
-                    });
-                }
-            }
-        });
-    let controls = [
-        (g.reply, Icon::Reply, "Reply", can_reply),
-        (
-            g.star,
-            Icon::Star,
-            if starred { "Unstar" } else { "Star" },
-            !matches!(message.content, Content::Revoked),
+    let (open_chat, account) = ui.ctx().data(|d| {
+        d.get_temp::<(Option<String>, String)>(egui::Id::new("hover-grid-scope"))
+            .unwrap_or_default()
+    });
+    let snapshot = HoverSnapshot {
+        area_id,
+        open_chat,
+        account,
+        counts: Default::default(),
+        bubble_id: bubble.id,
+        chat: view.chat.clone(),
+        message: message.clone(),
+        geometry: g,
+        bounds,
+        bubble_rect: bubble.rect,
+        palette: view.palette,
+        locale: view.locale,
+        quick: quick.iter().map(|emoji| (*emoji).to_owned()).collect(),
+        mine: own_reaction(message).map(str::to_owned),
+        starred: view.starred.is_some_and(|ids| ids.contains(&message.id)),
+        can_reply,
+        can_star,
+        label: reaction_button_label(
+            message.from_me,
+            &(view.names_or)(&message.sender, message.sender_name.as_deref()),
         ),
-        (g.cell(quick.len()), Icon::Smile, "React", true),
-    ];
-    for (index, (rect, icon, label, enabled)) in controls.into_iter().enumerate() {
-        let label = crate::i18n::gettext(view.locale, label);
-        let control_id = match index {
-            0 => area_id.with("reply"),
-            1 => area_id.with("star"),
-            _ => area_id.with("picker"),
-        };
-        egui::Area::new(control_id)
-            .order(egui::Order::Foreground)
-            .movable(false)
-            .sense(Sense::hover())
-            .fixed_pos(rect.min)
-            .show(ui.ctx(), |bar| {
-                bar.set_clip_rect(bounds);
-                bar.set_min_size(rect.size());
-                let r = bar.interact(
-                    rect,
-                    area_id.with(("action", index)),
-                    if enabled {
-                        Sense::click()
-                    } else {
-                        Sense::hover()
-                    },
-                );
-                r.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &label)
-                });
-                theme::focus_outline(bar, r.id, rect, 8.0);
-                if r.hovered() && enabled {
-                    bar.painter()
-                        .rect_filled(rect.shrink(4.0), 8.0, view.palette.surface_hover);
-                }
-                theme::paint_icon(
-                    bar,
-                    icon,
-                    rect.shrink(7.0),
-                    23.0,
-                    if enabled {
-                        view.palette.text
-                    } else {
-                        view.palette.dim
-                    },
-                );
-                if r.on_hover_text(label).clicked() && enabled {
-                    match index {
-                        0 => actions.push(Action::Reply(message.id.clone())),
-                        1 => actions.push(Action::SetStar {
-                            chat: view.chat.id.clone(),
-                            message: message.id.clone(),
-                            starred: !starred,
-                        }),
-                        _ => actions.push(open_reaction_picker_action(&view.chat.id, &message.id)),
-                    }
-                }
-            });
-    }
+        from_thread: in_thread_pass(),
+        frame,
+        pointer,
+        exit: super::hover_actions::ExitGrace::default(),
+    };
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(hover_snapshot_id(), snapshot.clone()));
+
     true
 }
 
@@ -13797,6 +14221,69 @@ fn chat_of(chat: &ChatId) -> &str {
 mod tests {
     use super::*;
     #[test]
+    fn retained_grid_keeps_target_after_shift_and_missing_row() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let mut message = album_picture("original-grid-target", None, "alice");
+            message.chat = view.chat.id.clone();
+            let mut actions = Vec::new();
+            let mut draw = |pointer, bubble_y: Option<f32>, pressed: Option<bool>| {
+                let mut events = vec![egui::Event::PointerMoved(pointer)];
+                if let Some(pressed) = pressed {
+                    events.push(egui::Event::PointerButton {
+                        pos: pointer,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(700., 600.))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if let Some(y) = bubble_y {
+                            let bubble = ui.interact(
+                                Rect::from_min_size(pos2(20., y), vec2(250., 80.)),
+                                egui::Id::new("original-grid-target"),
+                                Sense::hover(),
+                            );
+                            grouped_hover_actions(ui, view, &message, &bubble, &mut actions);
+                        }
+                        finish_hover_grid(ui.ctx(), &mut actions);
+                    },
+                );
+                output.textures_delta.clear();
+            };
+            draw(pos2(100., 150.), Some(120.), None);
+            let original = ctx
+                .data(|d| d.get_temp::<HoverSnapshot>(hover_snapshot_id()))
+                .unwrap();
+            draw(pos2(100., 150.), Some(350.), None);
+            let shifted = ctx
+                .data(|d| d.get_temp::<HoverSnapshot>(hover_snapshot_id()))
+                .unwrap();
+            assert_eq!(shifted.message.id, original.message.id);
+            assert_eq!(shifted.geometry.bounds(), original.geometry.bounds());
+            draw(pos2(100., 150.), None, None);
+            assert!(
+                hover_grid_open(&ctx),
+                "virtualization/removal must keep the grid"
+            );
+            let reply = original.geometry.reply.center();
+            draw(reply, None, None);
+            draw(reply, None, Some(true));
+            draw(reply, None, Some(false));
+            drop(draw);
+            assert!(
+                matches!(actions.last(), Some(Action::Reply(id)) if id == "original-grid-target")
+            );
+        });
+    }
+    #[test]
     fn mention_width_is_cached_until_its_resolved_name_changes() {
         let mut row = message(Content::text("hello @user"));
         row.mentions = vec![crate::model::MentionRef {
@@ -14874,6 +15361,7 @@ mod tests {
                             clicks += 1;
                         }
                         grouped_hover_actions(ui, view, &message, &bubble, &mut Vec::new());
+                        finish_hover_grid(ui.ctx(), &mut Vec::new());
                     },
                 );
                 output.textures_delta.clear();
@@ -14928,6 +15416,7 @@ mod tests {
                             clicks += 1;
                         }
                         grouped_hover_actions(ui, view, &message, &bubble, &mut Vec::new());
+                        finish_hover_grid(ui.ctx(), &mut Vec::new());
                     },
                 );
                 output.textures_delta.clear();
@@ -15103,6 +15592,7 @@ mod tests {
                             Sense::click(),
                         );
                         grouped_hover_actions(ui, view, &message, &bubble, &mut Vec::new());
+                        finish_hover_grid(ui.ctx(), &mut Vec::new());
                         active = ui
                             .ctx()
                             .data(|d| d.get_temp::<u64>(id.with("hover-actions")))
@@ -15201,6 +15691,7 @@ mod tests {
                             let bubble =
                                 ui.interact(rect, egui::Id::new("toolbar-message"), Sense::hover());
                             grouped_hover_actions(ui, view, &message, &bubble, &mut actions);
+                            finish_hover_grid(ui.ctx(), &mut actions);
                         },
                     );
                     output.textures_delta.clear();
