@@ -3256,9 +3256,12 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 }
                 messages[1].status = Delivery::Failed;
             }
-            "media-album-partial" => {
+            "media-album-partial" | "media-album-menu" => {
                 media_album_sample(app, true);
                 let (saved, _) = sample_files(app);
+                if part == "media-album-menu" {
+                    app.open_message_menu = Some("album-0".into());
+                }
                 let messages = &mut app.conversations.get_mut(SAMPLES[0].id).unwrap().messages;
                 messages[3].content.media_at_mut(None).unwrap().path = Some(saved);
                 messages[2].quoted = Some(crate::model::Quoted {
@@ -14582,6 +14585,12 @@ mod tests {
         let mut app = app();
         media_album_sample(&mut app, false);
         let chat = app.open_chat.clone().unwrap();
+        let (saved, _) = sample_files(&app);
+        app.conversations.get_mut(&chat).unwrap().messages[3]
+            .content
+            .media_at_mut(None)
+            .unwrap()
+            .path = Some(saved);
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         app.attach(&ctx);
@@ -14627,6 +14636,10 @@ mod tests {
             "the album's menu opened"
         );
         let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
+        assert!(
+            nodes.iter().any(|(label, _, _)| label == "Save all…"),
+            "album export remains available in the album context menu"
+        );
         let replies: Vec<_> = nodes
             .into_iter()
             .filter(|(label, _, _)| label == "Reply")
@@ -14823,7 +14836,7 @@ mod tests {
         app.backend.record_demo_commands();
         for first_click in [true, false] {
             let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
-            assert!(nodes.iter().any(|(label, _, _)| label == "Save all…"));
+            assert!(!nodes.iter().any(|(label, _, _)| label == "Save all…"));
             let Some(pos) = nodes
                 .iter()
                 .find(|(label, _, _)| label == "Download all")
@@ -14983,7 +14996,7 @@ mod tests {
         app.attach(&ctx);
         render(&mut app, &ctx);
         let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
-        assert!(nodes.iter().any(|(label, _, _)| label == "Save all…"));
+        assert!(!nodes.iter().any(|(label, _, _)| label == "Save all…"));
         assert!(nodes.iter().any(|(label, _, _)| label == "Download all"));
         // The quote-free chip replaced the quoted text: the member keeps a
         // jump button naming its quoted sender alongside the actions.

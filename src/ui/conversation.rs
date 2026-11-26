@@ -3657,6 +3657,9 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
     if app.sweep.is_some() && (sweep.is_none() || !ui.input(|input| input.pointer.primary_down())) {
         actions.push(Action::EndSweep);
     }
+    // A sweep has already selected its endpoint. Its release must not also
+    // toggle that same row back off when egui reports a click after relayout.
+    let finishing_sweep = sweep.is_some() && !ui.input(|input| input.pointer.primary_down());
     let sweep = sweep.filter(|_| ui.input(|input| input.pointer.primary_down()));
     let sweep_pointer = ui.input(|input| input.pointer.latest_pos());
     // The row under the pointer: the last laid-out row whose top it is
@@ -4404,6 +4407,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                         );
                                     });
                                     if selectable
+                                        && !finishing_sweep
                                         && !keyboard_clicked
                                         && (response.clicked() || pick.clicked())
                                     {
@@ -7770,6 +7774,25 @@ fn bubble_frame(
             link_context_menu(ui, view, url, actions);
         } else {
             context_menu(ui, view, menu_target, MenuOrigin::Chat, actions);
+            if let Some(members) = album {
+                let files: Vec<_> = members
+                    .iter()
+                    .filter_map(|member| {
+                        let path = member.content.media()?.path.as_ref()?;
+                        Some((path.clone(), attachment_name(&member.content, path)))
+                    })
+                    .collect();
+                if !files.is_empty()
+                    && widgets::menu_item(
+                        ui,
+                        &palette,
+                        Some(Icon::Download),
+                        &crate::i18n::gettext(view.locale, "Save all…"),
+                    )
+                {
+                    actions.push(Action::SaveAttachments { files });
+                }
+            }
         }
     });
     // The rect is this frame's truth, published only while the menu draws:
@@ -9123,6 +9146,7 @@ fn message_menu_labels(locale: crate::i18n::Locale) -> Vec<String> {
         gettext(locale, "Open file"),
         gettext(locale, "Copy image"),
         gettext(locale, "Save as…"),
+        gettext(locale, "Save all…"),
         gettext(locale, "Show in folder"),
         gettext(locale, "Downloading…"),
         gettext(locale, "Download"),
@@ -11171,24 +11195,8 @@ fn album_content(
                 .is_some_and(|media| media.path.is_none())
         })
         .collect();
-    let files: Vec<(PathBuf, String)> = messages
-        .iter()
-        .filter_map(|message| {
-            let path = message.content.media()?.path.as_ref()?;
-            Some((path.clone(), attachment_name(&message.content, path)))
-        })
-        .collect();
-    if !files.is_empty()
-        && theme::pill_button(
-            ui,
-            &view.palette,
-            &crate::i18n::gettext(view.locale, "Save all…"),
-            true,
-        )
-        .clicked()
-    {
-        actions.push(Action::SaveAttachments { files });
-    }
+    // Bulk export is deliberately absent. Missing files still have the
+    // independent manual-download controls below, and per-item Save remains.
     if !missing.is_empty() {
         let downloading = missing.iter().all(|message| {
             message
@@ -18993,7 +19001,9 @@ mod reaction_tests {
             .map(String::as_str)
             .filter(|label| !labels.iter().any(|drawn| drawn == label))
             .collect();
-        assert_eq!(undrawn, ["Reactions", "Reply privately"]);
+        // Single-message fixture has no album export. Dedicated album menu
+        // tests below exercise Save all and its exact displayed-member paths.
+        assert_eq!(undrawn, ["Reactions", "Reply privately", "Save all…"]);
         // Hover texts are not in the accessibility tree.
         labels.extend(["React with any emoji".into(), "Remove your reaction".into()]);
         labels.sort();
