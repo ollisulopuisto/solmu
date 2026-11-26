@@ -1754,5 +1754,3 @@ pub mod merged;
 mod view_once;
 
 pub(crate) mod new_message;
-
-mod thread_entry;

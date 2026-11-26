@@ -33,11 +33,16 @@ CI quirks (`.github/workflows/ci.yml`; details in `CI-GUIDE.md`):
 
 - `.github/scripts/ci-scope.py` selects checks by changed paths;
   documentation-only changes skip native compilation.
-- On PRs the macOS test leg is the merge gate: it starts right after the
-  portable checks, and quality, Ubuntu tests and the Nix package report later,
-  so a PR can look gated-green while those still run. Full platform matrices
-  (Windows, Debian 12, all three Nix systems) run on version tags, merge
-  queues and manual scope=full.
+- Native quality, macOS, Ubuntu and selected Nix jobs start in parallel after
+  portable checks. A green macOS leg alone is not all-green CI; check every
+  selected leg before merging. Full platform matrices (Windows, Debian12,
+  all three Nix systems) still run on tags, merge queues and manual scope=full.
+- Same-repository PRs can save the existing cache in their isolated PR scope;
+  forks cannot save. Parallel jobs can spend more minutes before an early
+  failure is discovered; this is the owner's approved latency tradeoff.
+- Screenshot selection uses the single scene registry and reviewed module map;
+  unknown/shared changes run the full gallery, startup/About remain enabled.
+  See `docs/ci-scene-selection.md` before changing the map or its contracts.
 - CI wraps cargo with `mbx` (mr-boxington) on runners; plain `cargo` works
   locally.
 

@@ -24,6 +24,18 @@ def run_block(text, marker):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_baseline_mode_skips_only_gallery_and_keeps_startup_and_about(self):
+        text = workflow('ci.yml')
+        self.assertEqual(text.count('if [ "$scenes" = baseline ]; then scenes=""; fi'), 2)
+        self.assertEqual(text.count('python3 .github/scripts/ci-scope.py --gallery'), 2)
+        self.assertNotIn("all_scenes='", text)
+        self.assertEqual(text.count('--demo-shot-delay 8000'), 6)
+        self.assertIn('[ "$REF_TYPE" = tag ]', text)
+        for selected in ['full', 'baseline', 'refined-thread,dark']:
+            script = 'scenes="all-one all-two"; SELECTED_SCENES="$1"; if [ -n "$SELECTED_SCENES" ] && [ "$SELECTED_SCENES" != full ]; then scenes="$SELECTED_SCENES"; fi; if [ "$scenes" = baseline ]; then scenes=""; fi; for page in $scenes; do echo "$page"; done'
+            out = subprocess.check_output(['bash', '-eu', '-c', script, 'test', selected]).decode().split()
+            self.assertEqual(out, ['all-one', 'all-two'] if selected == 'full' else [] if selected == 'baseline' else [selected])
+
     def test_trial_is_explicit_and_selects_only_requested_native_target(self):
         text = workflow('trial-binaries.yml')
         trigger = text.split('on:', 1)[1].split('permissions:', 1)[0]
@@ -194,12 +206,25 @@ class WorkflowTests(unittest.TestCase):
             ('push', '', dict(portable=True, native=True, audit=True, nix=True)),
         ]:
             with tempfile.NamedTemporaryFile() as out:
-                env = dict(os.environ, EVENT_NAME=event, REQUESTED_SCOPE=scope,
+                env = dict(os.environ, EVENT_NAME=event, REF_TYPE="branch", REQUESTED_SCOPE=scope,
                            BASE='0' * 40, HEAD='HEAD', GITHUB_OUTPUT=out.name)
                 result = subprocess.run(['bash', '-eu', '-c', block], cwd=ROOT, env=env, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 actual = dict(line.split('=') for line in Path(out.name).read_text().splitlines())
-                self.assertEqual(actual, {k: str(v).lower() for k, v in expected.items()})
+                self.assertEqual({k:v for k,v in actual.items() if k != 'scenes'},
+                                 {k: str(v).lower() for k, v in expected.items()})
+
+    def test_tag_uses_full_scope_even_when_diff_is_a_safe_module(self):
+        text = workflow('ci.yml')
+        block = run_block(text.split('id: scope', 1)[1], '        run: |\n')
+        # Real non-zero base would otherwise take changed-file selection.
+        with tempfile.NamedTemporaryFile() as out:
+            env = dict(os.environ, EVENT_NAME='push', REF_TYPE='tag', REQUESTED_SCOPE='',
+                       BASE='HEAD', HEAD='HEAD', GITHUB_OUTPUT=out.name)
+            subprocess.run(['bash', '-eu', '-c', block], cwd=ROOT, env=env, check=True, capture_output=True)
+            actual = dict(line.split('=') for line in Path(out.name).read_text().splitlines())
+            self.assertEqual(actual['scenes'], 'full')
+            self.assertEqual(actual['native'], 'true')
 
     def test_full_matrices_belong_to_tags_and_manual_runs(self):
         text = workflow('ci.yml')
@@ -211,8 +236,13 @@ class WorkflowTests(unittest.TestCase):
 
     def test_expensive_checks_follow_selection_and_portable_failure(self):
         text = workflow('ci.yml')
-        self.assertEqual(text.count('needs: [changes, portable]'), 4)
-        self.assertEqual(text.count('needs: [changes, portable, mac-test]'), 3)
+        self.assertEqual(text.count('needs: [changes, portable]'), 7)
+        self.assertNotIn('needs: [changes, portable, mac-test]', text)
+        self.assertNotIn('needs.mac-test.result', text)
+        self.assertEqual(text.count('save-on-pull-request: true'), 3)
+        self.assertEqual(text.count('SELECTED_SCENES: ${{ needs.changes.outputs.scenes }}'), 2)
+        self.assertEqual(text.count('for page in $scenes; do'), 2)
+        self.assertIn('"$SELECTED_SCENES" != full', text)
         self.assertIn('!cancelled() && !failure()', text)
 
     def test_macos_leg_gates_pull_requests_and_keeps_tag_coverage(self):

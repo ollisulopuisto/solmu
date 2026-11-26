@@ -659,130 +659,125 @@ pub fn has_replies(ctx: &egui::Context, m: &Message) -> bool {
     })
 }
 
-/// Reserved beside the clock in every frame, so revealing it cannot reflow a row.
-pub fn footer_entry(
-    ui: &mut egui::Ui,
-    m: &Message,
-    rect: egui::Rect,
-    hovered: bool,
-    color: egui::Color32,
-    locale: crate::i18n::Locale,
-) {
-    let label = crate::i18n::gettext(locale, "Open thread");
-    let response = super::thread_entry::show(
-        ui,
-        rect,
-        super::conversation::bubble_id(&m.chat, &m.id).with("open-thread"),
-        hovered,
-        label.as_ref(),
-        crate::theme::regular(11.0),
-        color,
-    );
-    ui.ctx().data_mut(|d| {
-        d.insert_temp(
-            super::conversation::bubble_id(&m.chat, &m.id).with("open-thread-rect"),
-            rect,
-        )
-    });
-    if hovered || response.hovered() || response.has_focus() {
-        crate::theme::focus_outline(ui, response.id, rect, 3.0);
+/// Both reply icons and root icons enter the exact loaded thread.
+pub fn open_for_message(ctx: &egui::Context, message: &Message) {
+    if let Some(shared) = frame(ctx) {
+        let f = shared.lock().unwrap_or_else(|e| e.into_inner());
+        let mut root = Key::of(message);
+        let mut seen = HashSet::new();
+        while seen.insert(root.clone()) {
+            let Some(parent) = f.parents.get(&root) else {
+                break;
+            };
+            root = parent.clone();
+        }
+        ctx.data_mut(|d| d.insert_temp(f.scope, root));
+        ctx.request_repaint();
     }
-    if response.clicked()
-        && let Some(shared) = frame(ui.ctx())
-    {
-        let scope = shared.lock().unwrap_or_else(|e| e.into_inner()).scope;
-        ui.ctx().data_mut(|d| d.insert_temp(scope, Key::of(m)));
-        ui.ctx().request_repaint();
-    }
-    crate::theme::reveal_focus(&response);
-    response.on_hover_cursor(egui::CursorIcon::PointingHand);
 }
 
 pub fn finish(ui: &egui::Ui, color: egui::Color32) {
+    if active(ui.ctx()) {
+        return;
+    }
+    finish_routes(ui, color, false);
+}
+fn finish_routes(ui: &egui::Ui, color: egui::Color32, thread: bool) {
     let Some(shared) = frame(ui.ctx()) else {
         return;
     };
     let f = shared.lock().unwrap_or_else(|e| e.into_inner());
-    if f.active {
-        return;
-    }
-    let Some(hover) = f.hover.as_ref() else {
-        return;
-    };
-    let (parent, child) = if let Some(parent) = f.parents.get(hover) {
-        (parent, hover)
-    } else if let Some(child) = f.replies.get(hover).and_then(|r| r.first()) {
-        (hover, child)
+    let pairs: Vec<_> = if thread {
+        f.parents
+            .iter()
+            .map(|(child, parent)| (parent, child))
+            .collect()
+    } else if let Some(hover) = f.hover.as_ref() {
+        if let Some(parent) = f.parents.get(hover) {
+            vec![(parent, hover)]
+        } else if let Some(child) = f.replies.get(hover).and_then(|r| r.first()) {
+            vec![(hover, child)]
+        } else {
+            Vec::new()
+        }
     } else {
-        return;
+        Vec::new()
     };
-    let (Some(a), Some(b)) = (f.rects.get(parent), f.rects.get(child)) else {
-        return;
-    };
-    if !a.intersects(ui.clip_rect()) || !b.intersects(ui.clip_rect()) {
-        return;
-    }
-    let rect = |r: &egui::Rect| crate::reply_router::Box2 {
-        l: r.left(),
-        t: r.top(),
-        r: r.right(),
-        b: r.bottom(),
-    };
-    let obstacles: Vec<_> = f
-        .rects
-        .iter()
-        .filter(|(key, _)| *key != parent && *key != child)
-        .map(|(_, r)| rect(r))
-        .collect();
-    let Some(chain) = f.chains.get(child) else {
-        return;
-    };
-    let Some(points) = crate::reply_router::route_to_chain(
-        rect(a),
-        rect(b),
-        rect(chain),
-        &obstacles,
-        rect(&ui.clip_rect()),
-    ) else {
-        return;
-    };
-    let points: Vec<_> = points.iter().map(|p| egui::pos2(p.x, p.y)).collect();
-    let color = ui
-        .ctx()
-        .data(|data| {
-            data.get_temp::<egui::Color32>(
-                super::conversation::bubble_id(&child.chat, &child.id).with("connector-color"),
-            )
-        })
-        .unwrap_or(color);
-    let stroke = egui::Stroke::new(1.8, color);
-    let mut previous = points[0];
-    for i in 1..points.len() - 1 {
-        let a = points[i - 1];
-        let corner = points[i];
-        let b = points[i + 1];
-        let radius = 4.0_f32
-            .min(a.distance(corner) / 2.0)
-            .min(b.distance(corner) / 2.0);
-        let before = corner + (a - corner).normalized() * radius;
-        let after = corner + (b - corner).normalized() * radius;
-        ui.painter().line_segment([previous, before], stroke);
+    for (parent, child) in pairs {
+        let (Some(a), Some(b)) = (f.rects.get(parent), f.rects.get(child)) else {
+            continue;
+        };
+        if !a.intersects(ui.clip_rect()) || !b.intersects(ui.clip_rect()) {
+            continue;
+        }
+        let rect = |r: &egui::Rect| crate::reply_router::Box2 {
+            l: r.left(),
+            t: r.top(),
+            r: r.right(),
+            b: r.bottom(),
+        };
+        let obstacles: Vec<_> = f
+            .rects
+            .iter()
+            .filter(|(key, _)| *key != parent && *key != child)
+            .map(|(_, r)| rect(r))
+            .collect();
+        let Some(chain) = f.chains.get(child) else {
+            continue;
+        };
+        let Some(points) = crate::reply_router::route_to_chain(
+            rect(a),
+            rect(b),
+            rect(chain),
+            &obstacles,
+            rect(&ui.clip_rect()),
+        ) else {
+            continue;
+        };
+        let points: Vec<_> = points.iter().map(|p| egui::pos2(p.x, p.y)).collect();
+        let color = if thread {
+            // Raised bubble edges can be nearly white in light themes. The
+            // permanent route lies on the modal surface, not on that bubble.
+            color
+        } else {
+            ui.ctx()
+                .data(|data| {
+                    data.get_temp::<egui::Color32>(
+                        super::conversation::bubble_id(&child.chat, &child.id)
+                            .with("connector-color"),
+                    )
+                })
+                .unwrap_or(color)
+        };
+        let stroke = egui::Stroke::new(1.8, color);
+        let mut previous = points[0];
+        for i in 1..points.len() - 1 {
+            let a = points[i - 1];
+            let corner = points[i];
+            let b = points[i + 1];
+            let radius = 4.0_f32
+                .min(a.distance(corner) / 2.0)
+                .min(b.distance(corner) / 2.0);
+            let before = corner + (a - corner).normalized() * radius;
+            let after = corner + (b - corner).normalized() * radius;
+            ui.painter().line_segment([previous, before], stroke);
+            ui.painter()
+                .add(egui::epaint::CubicBezierShape::from_points_stroke(
+                    [
+                        before,
+                        before + (corner - before) * 0.66,
+                        after + (corner - after) * 0.66,
+                        after,
+                    ],
+                    false,
+                    egui::Color32::TRANSPARENT,
+                    stroke,
+                ));
+            previous = after;
+        }
         ui.painter()
-            .add(egui::epaint::CubicBezierShape::from_points_stroke(
-                [
-                    before,
-                    before + (corner - before) * 0.66,
-                    after + (corner - after) * 0.66,
-                    after,
-                ],
-                false,
-                egui::Color32::TRANSPARENT,
-                stroke,
-            ));
-        previous = after;
+            .line_segment([previous, *points.last().unwrap()], stroke);
     }
-    ui.painter()
-        .line_segment([previous, *points.last().unwrap()], stroke);
 }
 pub fn ordinary(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat) -> bool {
     if !bar(ui, app.locale) {
@@ -828,6 +823,14 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
         .auto_shrink([false, false])
         .show(ui, |ui| {
             super::conversation::with_bubble_ns(super::conversation::THREAD_BUBBLE_NS, || {
+                // The modal follows a full timeline pass. Never route using
+                // stale background coordinates, especially for virtualized rows.
+                if let Some(shared) = frame(ui.ctx()) {
+                    let mut f = shared.lock().unwrap_or_else(|e| e.into_inner());
+                    f.rects.clear();
+                    f.chains.clear();
+                    f.hover = None;
+                }
                 ui.set_min_width(ui.available_width());
                 if rows.is_empty() {
                     ui.label(crate::i18n::gettext(
@@ -864,6 +867,7 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
                 if let Some(rect) = landing {
                     ui.scroll_to_rect(rect, Some(egui::Align::Center));
                 }
+                finish_routes(ui, app.conversation_palette().secondary, true);
             })
         });
     if let Some(scroll) = app.scroll_page.take() {
@@ -964,12 +968,15 @@ pub fn modal_overlay(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
                                             if ui
-                                                .button(
-                                                    egui::RichText::new(crate::i18n::gettext(
-                                                        app.locale,
-                                                        "‹ Back to full chat (Esc)",
-                                                    ))
-                                                    .color(palette.on_accent),
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new(crate::i18n::gettext(
+                                                            app.locale,
+                                                            "‹ Back to full chat (Esc)",
+                                                        ))
+                                                        .color(palette.on_accent),
+                                                    )
+                                                    .fill(palette.accent),
                                                 )
                                                 .clicked()
                                             {
@@ -1212,6 +1219,61 @@ mod tests {
         );
         close(&ctx);
         assert!(default_reply(&app, &ctx, &chat).is_none());
+    }
+    #[test]
+    fn chain_entry_on_reply_opens_exact_ancestor_not_only_its_descendants() {
+        let (_dir, app, ctx) = seeded();
+        let reply = app.conversations["a"].message("2").unwrap();
+        open_for_message(&ctx, reply);
+        assert_eq!(current(&ctx).unwrap().id, "1");
+    }
+    #[test]
+    fn thread_routes_are_permanent_and_background_geometry_is_not_reused() {
+        let ctx = egui::Context::default();
+        let mut f = Frame {
+            active: true,
+            ..Default::default()
+        };
+        let parent = Key {
+            chat: "chat".into(),
+            id: "parent".into(),
+        };
+        let child = Key {
+            chat: "chat".into(),
+            id: "child".into(),
+        };
+        f.parents.insert(child.clone(), parent.clone());
+        f.rects.insert(
+            parent.clone(),
+            egui::Rect::from_min_size(egui::pos2(50., 50.), egui::vec2(150., 50.)),
+        );
+        f.rects.insert(
+            child.clone(),
+            egui::Rect::from_min_size(egui::pos2(50., 220.), egui::vec2(150., 50.)),
+        );
+        f.chains.insert(
+            child.clone(),
+            egui::Rect::from_min_size(egui::pos2(65., 220.), egui::Vec2::ZERO),
+        );
+        ctx.data_mut(|d| d.insert_temp(frame_id(), std::sync::Arc::new(std::sync::Mutex::new(f))));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500., 400.),
+                )),
+                ..Default::default()
+            },
+            |ui| finish_routes(ui, egui::Color32::WHITE, true),
+        );
+        output.textures_delta.clear();
+        assert!(
+            output
+                .shapes
+                .iter()
+                .any(|shape| matches!(shape.shape, egui::Shape::LineSegment { .. })),
+            "thread route must paint without hover"
+        );
     }
     #[test]
     fn explicit_quote_search_and_selection_actions_leave_thread_without_scroll_restore() {
