@@ -23551,10 +23551,12 @@ mod tests {
         let mut app = app();
         let (backend, mut commands, _) = Backend::recording_with_events();
         app.backend = backend;
-        let mut state = crate::draft_state::State::default();
-        state.recovery = Some("deleted text".into());
-        state.recovery_left = Some(Duration::from_secs(10));
-        state.recovery_started = Some(Instant::now() - Duration::from_secs(4));
+        let state = crate::draft_state::State {
+            recovery: Some("deleted text".into()),
+            recovery_left: Some(Duration::from_secs(10)),
+            recovery_started: Some(Instant::now() - Duration::from_secs(4)),
+            ..Default::default()
+        };
         app.draft_states.insert("one".into(), state);
         app.store_navigation_draft("one", "new composer text");
         let state = &app.draft_states["one"];
