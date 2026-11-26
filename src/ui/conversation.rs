@@ -2681,9 +2681,6 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
             ),
         )
     });
-    if !app.pending.is_empty() {
-        state.dismiss_recovery_for_new_content();
-    }
     // Normal autosave is silent. A real failure stays visible and recoverable.
     if !state.loaded {
         theme::text(
