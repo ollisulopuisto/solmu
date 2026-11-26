@@ -1,3 +1,22 @@
+## 2026-11-26: Ordinary composer durability, separate from recovery UI
+
+Move encrypted draft load before initial Beeper accounts connectivity and
+route local draft commands through the same helper both disconnected and
+connected. Continuous typing now queues a save after at most2seconds instead
+of resetting the650ms debounce forever. Only one transaction remains in flight;
+stale acknowledgements keep newer edits pending and failure stays visible.
+Draft-only database connections use FULL sync; no schema/key format change.
+Chat/account/normal-quit flushing is unchanged. New state, local-command and
+encrypted reopen/full-sync tests added. Local state harness14tests, selector
+23tests, workflow13tests, fmt/diff pass; native tests are CI-only so far.
+Network worker may still delay a queued local write while a request is blocked,
+up to the existing30second request timeout. No instant-power-loss guarantee;
+keyring/disk failures never use plaintext. Recovery countdown/persistence is
+explicitly excluded. Own review traced edit/tick/ack, local retry dispatch,
+shutdown FIFO/join, archive connection flags and endpoint namespaces.
+Main/open/recent merged PRs inspected:493 changes recovery UI only; this
+change is not duplicated. New PR only, no merge without exact CI/review.
+
 ## 2026-11-25: Given reactions overlay the bottom-right bubble edge
 
 Follow-up on PR460: owner clarified the reaction row, not message indentation. Move given reactions out of the incoming-left footer into an independently wrapped bottom-right edge overlay in both directions; retain 36px background-free glyphs, exact message/emoji targets and album member identity. Reserve only the overlay overhang before separate metadata so clocks cannot collide. Added actual bubble render regression for both directions before edit. Native execution blocked locally: offline cargo cannot fetch the pinned egui fork, no precompiled GUI tree; regression added but not claimed red/green. Rustfmt and diff check pass. No workflow/schema/credential/crypto edits; merge held. Screenshot not yet verified locally, existing native screenshot evidence does not exercise this changed row.

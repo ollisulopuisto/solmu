@@ -2895,6 +2895,40 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     ).into());
                 }
             }
+            "reaction-clearance" => {
+                let chat = SAMPLES[0].id;
+                let mut rows = Vec::new();
+                for (index, own) in [false, true].into_iter().enumerate() {
+                    let mut row = message(
+                        chat,
+                        &format!("reaction-clearance-{index}"),
+                        own,
+                        crate::util::now() + index as i64 * 60,
+                        Content::text("Mutta jääkiekkoässä Late Lauri Latukka on veteraani."),
+                    );
+                    row.reactions = vec![
+                        crate::model::Reaction {
+                            sender: ME.into(),
+                            from_me: true,
+                            emoji: "❤️".into(),
+                        },
+                        crate::model::Reaction {
+                            sender: JONAS.into(),
+                            from_me: false,
+                            emoji: "❤️".into(),
+                        },
+                        crate::model::Reaction {
+                            sender: DOROTHY.into(),
+                            from_me: false,
+                            emoji: "👍".into(),
+                        },
+                    ];
+                    rows.push(row);
+                }
+                app.conversations.get_mut(chat).unwrap().messages = rows;
+                app.open_chat = Some(chat.into());
+                app.scroll_to_bottom = true;
+            }
             "hover-actions" => {
                 SHOT_HOVER_ACTIONS.store(true, std::sync::atomic::Ordering::Relaxed);
                 let chat = SAMPLES[0].id;
@@ -6572,7 +6606,7 @@ mod tests {
     }
 
     #[test]
-    fn quiet_thread_entry_keeps_geometry_and_opens_exact_thread_by_pointer_or_keyboard() {
+    fn chain_entry_keeps_geometry_and_opens_exact_thread_by_pointer_or_keyboard() {
         use crate::ui::conversation::{bubble_id, footer_id};
         for keyboard in [false, true] {
             let mut app = app();
@@ -6585,7 +6619,7 @@ mod tests {
             }
             let id = bubble_id(chat, "refined-original");
             let rect = ctx
-                .data(|d| d.get_temp::<egui::Rect>(id.with("open-thread-rect")))
+                .data(|d| d.get_temp::<egui::Rect>(id.with("quote")))
                 .expect("parent retains thread navigation");
             let before = ctx
                 .data(|d| d.get_temp::<egui::Rect>(footer_id(chat, "refined-original")))
@@ -6602,18 +6636,18 @@ mod tests {
                 .unwrap();
             assert_eq!(before, after, "hover must not shift the timestamp");
             assert!(
-                rect.right() <= after.left(),
-                "thread entry stays beside clock"
+                rect.bottom() <= before.top(),
+                "chain entry stays above its bubble clock"
             );
             assert!(
-                ctx.data(|d| d.get_temp::<egui::Rect>(
-                    bubble_id(chat, "refined-normal").with("open-thread-rect")
-                ))
+                ctx.data(
+                    |d| d.get_temp::<egui::Rect>(bubble_id(chat, "refined-normal").with("quote"))
+                )
                 .is_none(),
                 "unrelated messages get no thread entry"
             );
             if keyboard {
-                ctx.memory_mut(|m| m.request_focus(id.with("open-thread")));
+                ctx.memory_mut(|m| m.request_focus(id.with("chain-open-thread")));
                 streak_test_frame(
                     &mut app,
                     &ctx,
@@ -6671,13 +6705,6 @@ mod tests {
                     .as_mut()
                     .unwrap()
                     .id = "second-original".into();
-                let quoted = rows
-                    .iter()
-                    .find(|m| m.id == reply)
-                    .unwrap()
-                    .quoted
-                    .clone()
-                    .unwrap();
                 let ctx = egui::Context::default();
                 crate::theme::install(&ctx);
                 for _ in 0..4 {
@@ -6685,15 +6712,13 @@ mod tests {
                 }
                 let id = crate::ui::conversation::bubble_id(chat, reply);
                 if keyboard {
-                    ctx.memory_mut(|m| {
-                        m.request_focus(id.with(("quote", &quoted.chat, &quoted.id)))
-                    });
+                    ctx.memory_mut(|m| m.request_focus(id.with("chain-open-thread")));
                     streak_test_frame(
                         &mut app,
                         &ctx,
                         1180.0,
                         1000.0,
-                        vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+                        vec![key(egui::Key::Enter, egui::Modifiers::COMMAND)],
                     );
                 } else {
                     let pos = ctx
@@ -6707,12 +6732,13 @@ mod tests {
                             1180.0,
                             1000.0,
                             vec![
+                                egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
                                 egui::Event::PointerMoved(pos),
                                 egui::Event::PointerButton {
                                     pos,
                                     button: egui::PointerButton::Primary,
                                     pressed,
-                                    modifiers: egui::Modifiers::NONE,
+                                    modifiers: egui::Modifiers::COMMAND,
                                 },
                             ],
                         );
@@ -6857,8 +6883,8 @@ mod tests {
                             "reaction and clock collide: {reaction:?}/{footer:?}"
                         );
                         assert!(
-                            reaction.top() < rect(index).bottom(),
-                            "reaction overlaps bubble edge"
+                            reaction.top() >= rect(index).bottom() + 1.0,
+                            "reaction clears bubble content"
                         );
                         assert!(
                             footer.top() >= reaction.bottom() - 1.0,
@@ -14975,7 +15001,8 @@ mod tests {
         // The quote-free chip replaced the quoted text: the member keeps a
         // jump button naming its quoted sender alongside the actions.
         assert!(nodes.iter().any(|(label, role, _)| {
-            label.starts_with("Jump to the original message")
+            label.starts_with("Open thread replying to ")
+                && label.contains("click to jump to the original message)")
                 && *role == egui::accesskit::Role::Button
         }));
     }
@@ -21741,12 +21768,21 @@ mod tests {
                             egui::vec2(1180.0, 780.0),
                         )),
                         events: vec![
+                            egui::Event::ModifiersChanged(if kind == "quote" {
+                                egui::Modifiers::COMMAND
+                            } else {
+                                egui::Modifiers::NONE
+                            }),
                             egui::Event::PointerMoved(pos),
                             egui::Event::PointerButton {
                                 pos,
                                 button: egui::PointerButton::Primary,
                                 pressed,
-                                modifiers: egui::Modifiers::NONE,
+                                modifiers: if kind == "quote" {
+                                    egui::Modifiers::COMMAND
+                                } else {
+                                    egui::Modifiers::NONE
+                                },
                             },
                         ],
                         ..Default::default()
@@ -22845,12 +22881,13 @@ mod tests {
                     &mut app,
                     &ctx,
                     vec![
+                        egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
                         egui::Event::PointerMoved(pos),
                         egui::Event::PointerButton {
                             pos,
                             button: egui::PointerButton::Primary,
                             pressed,
-                            modifiers: egui::Modifiers::NONE,
+                            modifiers: egui::Modifiers::COMMAND,
                         },
                     ],
                 );
@@ -27504,5 +27541,14 @@ mod card_width_tests {
 /// Synthetic thread review fixture.
 #[cfg(feature = "demo")]
 pub(crate) fn reply_thread() -> bool {
-    std::env::args().any(|arg| arg.contains("reply-thread"))
+    // These two explicit demo pages intentionally exercise the modal. Match
+    // only the demo-page value, never an arbitrary path or unrelated argument.
+    let args: Vec<_> = std::env::args().collect();
+    args.windows(2).any(|pair| {
+        pair[0] == "--demo-page"
+            && matches!(
+                pair[1].split(',').next(),
+                Some("reply-thread" | "refined-thread")
+            )
+    })
 }
