@@ -1,13 +1,19 @@
 # Draft recovery controls
 
-Normal automatic saving is silent. When meaningful text is cleared, show only
-Save as draft, Restore text and Dismiss, no explanatory chip label. New typed text dismisses the old recovery controls. An attachment alone
-preserves recovery text and its buttons. Save failures
-remain visible with Retry; hiding normal saved/saving status never hides errors.
+Normal automatic saving is silent. Clearing meaningful text offers only Save
+deleted text as draft, Restore text and Dismiss. No explanatory label. The
+first new nonblank text starts a10second countdown, shown as a thin shrinking
+edge without numbers. Further typing does not reset it. At zero the offer and
+its temporary snapshot disappear; nothing is automatically added to Drafts.
+Normal same-editor Cmd-Z history is independent and may still restore text.
 
-Cmd-Shift-S on macOS, Ctrl-Shift-S elsewhere, saves current plain composer text
-or the just-cleared recovery text. It does not intercept attachments, editing or
-modal dialogs. Save as draft shows the same shortcut. Shelf/active persistence
-semantics stay transactional; no saved claim or composer clear before success.
+Attachments do not start, reset or dismiss recovery. Navigation pauses the
+timer and keeps its remaining time in memory, resuming when that chat returns.
+Quit/restart does not preserve this unsaved deleted-text snapshot. This does
+not change persistence of ordinary text still in the composer.
 
-This is independent of the queued left-icon/count overlay-shelf redesign.
+Cmd-Shift-S on macOS, Ctrl-Shift-S elsewhere, saves the deleted snapshot while
+the offer exists, otherwise current plain composer text. Save as draft waits
+for durable acknowledgement. Failures stay visible, no false saved claim.
+Restore text is available only while composer is empty; never overwrite new
+text. Shelf layout stays in its separate queued change.

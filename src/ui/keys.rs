@@ -93,11 +93,9 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
         let loaded = app.draft_shelves_loaded;
         let state = app.draft_states.entry(chat).or_default();
         state.loaded |= loaded;
-        if current.trim().is_empty() {
-            if let Some(recovery) = state.recovery.clone() {
-                state.keep_text(&recovery, false);
-            }
-        } else {
+        if let Some(recovery) = state.recovery.clone() {
+            state.keep_text(&recovery, false);
+        } else if !current.trim().is_empty() {
             state.keep_text(&current, true);
         }
         return;

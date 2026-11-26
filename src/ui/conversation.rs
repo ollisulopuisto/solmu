@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use egui::{
     Align, Align2, Color32, CornerRadius, Frame, Key, KeyboardShortcut, Layout, Margin, Modifiers,
@@ -2669,6 +2669,10 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
     }
     let mut state = app.draft_states.remove(chat).unwrap_or_default();
     state.loaded |= app.draft_shelves_loaded;
+    let recovery_fraction = state.recovery_fraction(Instant::now());
+    if recovery_fraction.is_some() {
+        ui.ctx().request_repaint_after(Duration::from_secs(1));
+    }
     #[cfg(test)]
     ui.ctx().data_mut(|d| {
         d.insert_temp(
@@ -2708,13 +2712,13 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
         });
     }
     if let Some(recovery) = state.recovery.clone() {
-        ui.group(|ui| {
+        let recovery_group = ui.group(|ui| {
             ui.horizontal(|ui| {
                 if state.staged_shelf.is_none()
                     && ui
                         .button(format!(
                             "{}  {}",
-                            crate::i18n::gettext(app.locale, "Save as draft"),
+                            crate::i18n::gettext(app.locale, "Save deleted text as draft"),
                             super::keys::hint("save-draft").unwrap_or_default()
                         ))
                         .clicked()
@@ -2739,6 +2743,17 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
                 }
             });
         });
+        if let Some(fraction) = recovery_fraction {
+            let rect = recovery_group.response.rect;
+            let y = rect.bottom() - 1.0;
+            ui.painter().line_segment(
+                [
+                    pos2(rect.left(), y),
+                    pos2(rect.left() + rect.width() * fraction, y),
+                ],
+                Stroke::new(2.0, app.conversation_palette().accent),
+            );
+        }
     }
     if state.shelf_open {
         let palette = app.conversation_palette();

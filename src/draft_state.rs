@@ -22,6 +22,8 @@ pub struct State {
     pub shelf: Vec<Parked>,
     pub staged_shelf: Option<Vec<Parked>>,
     pub recovery: Option<String>,
+    pub recovery_left: Option<Duration>,
+    pub recovery_started: Option<Instant>,
     pub deletion_start: Option<String>,
     pub shelf_open: bool,
     pub loaded: bool,
@@ -67,8 +69,9 @@ impl State {
             return;
         }
         self.clear_after_save = None;
-        if !after.trim().is_empty() {
-            self.recovery = None;
+        if !after.trim().is_empty() && self.recovery.is_some() && self.recovery_left.is_none() {
+            self.recovery_left = Some(Duration::from_secs(10));
+            self.recovery_started = Some(Instant::now());
         }
         if after.trim().is_empty() {
             self.resumed = None;
@@ -84,6 +87,8 @@ impl State {
                         || original.contains('\n'))
                 {
                     self.recovery = Some(original);
+                    self.recovery_left = None;
+                    self.recovery_started = None;
                 }
             }
         } else {
@@ -91,6 +96,29 @@ impl State {
         }
         self.text = after.into();
         self.touch();
+    }
+    pub fn pause_recovery(&mut self, now: Instant) {
+        if let (Some(left), Some(start)) = (self.recovery_left, self.recovery_started.take()) {
+            self.recovery_left = Some(left.saturating_sub(now.saturating_duration_since(start)));
+        }
+    }
+    pub fn recovery_fraction(&mut self, now: Instant) -> Option<f32> {
+        if self.recovery.is_none() {
+            self.recovery_left = None;
+            self.recovery_started = None;
+            return None;
+        }
+        let left = self.recovery_left?;
+        let start = *self.recovery_started.get_or_insert(now);
+        let remaining = left.saturating_sub(now.saturating_duration_since(start));
+        if remaining.is_zero() {
+            self.recovery = None;
+            self.recovery_left = None;
+            self.recovery_started = None;
+            None
+        } else {
+            Some(remaining.as_secs_f32() / 10.0)
+        }
     }
     pub fn keep_text(&mut self, text: &str, clear_composer: bool) -> bool {
         if !self.loaded || self.staged_shelf.is_some() || text.trim().is_empty() {
@@ -107,6 +135,9 @@ impl State {
             self.clear_after_save = Some(text.into());
         } else {
             self.staged_recovery = Some(text.into());
+            // An explicit save must not lose its retry copy to the expiry timer.
+            self.recovery_left = None;
+            self.recovery_started = None;
         }
         self.staged_shelf = Some(shelf);
         self.touch();
@@ -187,18 +218,35 @@ impl State {
 mod tests {
     use super::*;
     #[test]
-    fn new_text_dismisses_clear_recovery() {
+    fn new_text_starts_one_countdown_and_navigation_pauses_it() {
         let mut s = State {
             loaded: true,
             recovery_min_chars: Some(1),
             ..Default::default()
         };
         s.edit("previous text", "", true);
-        assert!(s.recovery.is_some());
+        let now = Instant::now();
+        assert!(
+            s.recovery_fraction(now).is_none(),
+            "deletion alone has no timer"
+        );
         s.edit("", "new", false);
+        let start = s.recovery_started.unwrap();
+        s.edit("new", "new text", false);
+        assert_eq!(
+            s.recovery_started,
+            Some(start),
+            "do not reset on more typing"
+        );
+        s.pause_recovery(start + Duration::from_secs(4));
+        let resumed = start + Duration::from_secs(100);
+        assert!((s.recovery_fraction(resumed).unwrap() - 0.6).abs() < 0.01);
+        assert!(
+            s.recovery_fraction(resumed + Duration::from_secs(6))
+                .is_none()
+        );
         assert!(s.recovery.is_none());
-        s.edit("new", "", true);
-        assert!(s.recovery.is_some());
+        assert!(s.staged_shelf.is_none(), "expiry must not auto-save");
     }
     #[test]
     fn keep_text_stages_without_claiming_saved_before_ack() {

@@ -1,3 +1,11 @@
+## 2026-11-26: Recovery countdown, selected sketch1
+
+First new text starts10seconds; thin quiet progress edge. At zero dismiss the
+unsaved offer with no automatic draft creation. Further typing does not reset
+it; attachments do not affect it. Navigation keeps and pauses the in-memory
+snapshot/timer, returning resumes. Separate from ordinary composer persistence.
+Native captures/tests pending; no merge approval.
+
 ## 2026-11-26: Transient draft recovery controls
 
 Separate four-item cleanup, no shelf layout change. Hide ordinary saving/saved
