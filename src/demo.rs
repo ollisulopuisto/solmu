@@ -14601,6 +14601,10 @@ mod tests {
             "the album's menu opened"
         );
         let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
+        assert!(
+            nodes.iter().any(|(label, _, _)| label == "Save all…"),
+            "album export remains available in the album context menu"
+        );
         let replies: Vec<_> = nodes
             .into_iter()
             .filter(|(label, _, _)| label == "Reply")

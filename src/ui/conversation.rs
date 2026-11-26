@@ -7182,6 +7182,25 @@ fn bubble_frame(
             link_context_menu(ui, view, url, actions);
         } else {
             context_menu(ui, view, menu_target, MenuOrigin::Chat, actions);
+            if let Some(members) = album {
+                let files: Vec<_> = members
+                    .iter()
+                    .filter_map(|member| {
+                        let path = member.content.media()?.path.as_ref()?;
+                        Some((path.clone(), attachment_name(&member.content, path)))
+                    })
+                    .collect();
+                if !files.is_empty()
+                    && widgets::menu_item(
+                        ui,
+                        &palette,
+                        Some(Icon::Download),
+                        &crate::i18n::gettext(view.locale, "Save all…"),
+                    )
+                {
+                    actions.push(Action::SaveAttachments { files });
+                }
+            }
         }
     });
     // The rect is this frame's truth, published only while the menu draws:
@@ -8509,6 +8528,7 @@ fn message_menu_labels(locale: crate::i18n::Locale) -> Vec<String> {
         gettext(locale, "Open file"),
         gettext(locale, "Copy image"),
         gettext(locale, "Save as…"),
+        gettext(locale, "Save all…"),
         gettext(locale, "Show in folder"),
         gettext(locale, "Downloading…"),
         gettext(locale, "Download"),
