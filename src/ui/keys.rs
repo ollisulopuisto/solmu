@@ -2609,6 +2609,8 @@ mod tests {
         ("message-edit", None),
         ("message-star", None),
         ("message-save", None),
+        // Contextual composer action, also shown on recovery's Save button.
+        ("save-draft", None),
     ];
 
     #[test]
