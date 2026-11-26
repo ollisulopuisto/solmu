@@ -6573,7 +6573,7 @@ fn bubble_frame(
         }
         line.paint_decorative(ui, centre - line.size() / 2.0, ink);
         if active {
-            unhide.clone().on_hover_text(hint.as_str());
+            unhide.clone().on_hover_text(hint);
         }
         if unhide.has_focus() {
             view.keyboard_navigation.set(true);
