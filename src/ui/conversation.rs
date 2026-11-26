@@ -145,11 +145,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // Modifier gestures belong to message selection/navigation, before any
     // retained foreground area can participate in this frame's hit testing.
     if ui.input(|i| i.modifiers.command || i.modifiers.ctrl || i.modifiers.shift) {
-        if hover_grid_open(ui.ctx()) && ui.input(|i| i.pointer.primary_pressed()) {
-            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-                ui.ctx()
-                    .data_mut(|d| d.insert_temp(egui::Id::new("grid-modified-press"), pos));
-            }
+        if hover_grid_open(ui.ctx())
+            && ui.input(|i| i.pointer.primary_pressed())
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new("grid-modified-press"), pos));
         }
         dismiss_hover_grid(ui.ctx());
     }
