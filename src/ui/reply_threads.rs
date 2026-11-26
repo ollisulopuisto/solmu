@@ -692,14 +692,20 @@ fn finish_routes(ui: &egui::Ui, color: egui::Color32, thread: bool) {
             continue;
         };
         let points: Vec<_> = points.iter().map(|p| egui::pos2(p.x, p.y)).collect();
-        let color = ui
-            .ctx()
-            .data(|data| {
-                data.get_temp::<egui::Color32>(
-                    super::conversation::bubble_id(&child.chat, &child.id).with("connector-color"),
-                )
-            })
-            .unwrap_or(color);
+        let color = if thread {
+            // Raised bubble edges can be nearly white in light themes. The
+            // permanent route lies on the modal surface, not on that bubble.
+            color
+        } else {
+            ui.ctx()
+                .data(|data| {
+                    data.get_temp::<egui::Color32>(
+                        super::conversation::bubble_id(&child.chat, &child.id)
+                            .with("connector-color"),
+                    )
+                })
+                .unwrap_or(color)
+        };
         let stroke = egui::Stroke::new(1.8, color);
         let mut previous = points[0];
         for i in 1..points.len() - 1 {
@@ -919,12 +925,15 @@ pub fn modal_overlay(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
                                             if ui
-                                                .button(
-                                                    egui::RichText::new(crate::i18n::gettext(
-                                                        app.locale,
-                                                        "‹ Back to full chat (Esc)",
-                                                    ))
-                                                    .color(palette.on_accent),
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new(crate::i18n::gettext(
+                                                            app.locale,
+                                                            "‹ Back to full chat (Esc)",
+                                                        ))
+                                                        .color(palette.on_accent),
+                                                    )
+                                                    .fill(palette.accent),
                                                 )
                                                 .clicked()
                                             {
