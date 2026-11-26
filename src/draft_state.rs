@@ -69,7 +69,11 @@ impl State {
             return;
         }
         self.clear_after_save = None;
-        if !after.trim().is_empty() && self.recovery.is_some() && self.recovery_left.is_none() {
+        if !after.trim().is_empty()
+            && self.recovery.is_some()
+            && self.recovery_left.is_none()
+            && self.staged_recovery.is_none()
+        {
             self.recovery_left = Some(Duration::from_secs(10));
             self.recovery_started = Some(Instant::now());
         }

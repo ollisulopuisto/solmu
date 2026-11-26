@@ -2725,10 +2725,12 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
                 {
                     state.keep_text(&recovery, false);
                 }
-                if app.composer.is_empty()
-                    && ui
-                        .button(crate::i18n::gettext(app.locale, "Restore text"))
-                        .clicked()
+                if ui
+                    .add_enabled(
+                        app.composer.is_empty(),
+                        egui::Button::new(crate::i18n::gettext(app.locale, "Restore text")),
+                    )
+                    .clicked()
                 {
                     app.composer = recovery.clone();
                     state.text = recovery;
