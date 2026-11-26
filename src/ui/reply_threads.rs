@@ -176,7 +176,7 @@ pub fn default_reply(
     ctx: &egui::Context,
     chat: &str,
 ) -> Option<crate::model::ReplyTarget> {
-    if !owns(app, ctx) || app.editing.is_some() {
+    if !owns(app, ctx) || app.editing.is_some() || app.scheduling_draft.is_some() {
         return None;
     }
     if app.open_chat.as_deref() != Some(chat) {
