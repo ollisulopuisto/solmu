@@ -142,6 +142,11 @@ pub(crate) fn connection_status(app: &App, ui: &mut egui::Ui, chats: &[&str]) {
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
+    // Modifier gestures belong to message selection/navigation, before any
+    // retained foreground area can participate in this frame's hit testing.
+    if ui.input(|i| i.modifiers.command || i.modifiers.ctrl || i.modifiers.shift) {
+        dismiss_hover_grid(ui.ctx());
+    }
     ui.ctx().data_mut(|d| {
         d.insert_temp(
             egui::Id::new("hover-grid-scope"),
@@ -5704,7 +5709,11 @@ fn grouped_hover_actions(
     use super::hover_actions::{self, Geometry};
     // A context menu owns foreground input. Its Reply must not compete with
     // a still-held hover grid bound to the album row's first member.
-    if !ui.is_enabled() || egui::Popup::is_any_open(ui.ctx()) {
+    if !ui.is_enabled()
+        || egui::Popup::is_any_open(ui.ctx())
+        || view.selecting
+        || ui.input(|i| i.modifiers.command || i.modifiers.ctrl || i.modifiers.shift)
+    {
         return false;
     }
     let existing = ui
