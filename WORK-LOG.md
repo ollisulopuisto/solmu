@@ -1825,3 +1825,21 @@ fixtures use explicit time for the new open delay instead of assuming instant
 hover. Fresh full native suites and light/dark gallery required. Merge held
 for owner word. Checked main1e7d371 and495 before branching;495 is thread-only,
 this is separate hover interaction work and will need integration afterward.
+## Thread view without connector lines,26November
+
+Owner requested no lines anywhere in the thread, including non-root replies.
+Removed permanent thread routes and obsolete12point per-message/album-row
+connector slots. Normal chat chain glyphs, stubs and hover routes are unchanged.
+One shared painter guard prevents thread routes; no no-op thread painter call.
+Test pairs no thread lines/curves with a positive normal-hover route under the
+same500x400input. Thread-only quote metadata was only consumed by route
+collection and painted-bounds union; the body already supplies those bounds.
+Parent graph, order, send target and scroll behavior stay unchanged.36selector/
+workflow tests and formatting pass; fresh native CI and demo before/after
+light/dark captures required. No merge approval inferred from review comments.
+
+Native follow-up: the new painter fixture initially set Frame.active but did
+not insert the scoped current-thread Key used by active(ctx). Native Linux/
+Mac therefore correctly exposed it as a normal-chat fixture. Insert/remove
+the actual scoped Key around both unchanged shape assertions; explicitly
+assert active/inactive state. All other default tests passed. Fresh CI owed.

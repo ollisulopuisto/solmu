@@ -680,19 +680,11 @@ pub fn finish(ui: &egui::Ui, color: egui::Color32) {
     if active(ui.ctx()) {
         return;
     }
-    finish_routes(ui, color, false);
-}
-fn finish_routes(ui: &egui::Ui, color: egui::Color32, thread: bool) {
     let Some(shared) = frame(ui.ctx()) else {
         return;
     };
     let f = shared.lock().unwrap_or_else(|e| e.into_inner());
-    let pairs: Vec<_> = if thread {
-        f.parents
-            .iter()
-            .map(|(child, parent)| (parent, child))
-            .collect()
-    } else if let Some(hover) = f.hover.as_ref() {
+    let pairs: Vec<_> = if let Some(hover) = f.hover.as_ref() {
         if let Some(parent) = f.parents.get(hover) {
             vec![(parent, hover)]
         } else if let Some(child) = f.replies.get(hover).and_then(|r| r.first()) {
@@ -735,20 +727,14 @@ fn finish_routes(ui: &egui::Ui, color: egui::Color32, thread: bool) {
             continue;
         };
         let points: Vec<_> = points.iter().map(|p| egui::pos2(p.x, p.y)).collect();
-        let color = if thread {
-            // Raised bubble edges can be nearly white in light themes. The
-            // permanent route lies on the modal surface, not on that bubble.
-            color
-        } else {
-            ui.ctx()
-                .data(|data| {
-                    data.get_temp::<egui::Color32>(
-                        super::conversation::bubble_id(&child.chat, &child.id)
-                            .with("connector-color"),
-                    )
-                })
-                .unwrap_or(color)
-        };
+        let color = ui
+            .ctx()
+            .data(|data| {
+                data.get_temp::<egui::Color32>(
+                    super::conversation::bubble_id(&child.chat, &child.id).with("connector-color"),
+                )
+            })
+            .unwrap_or(color);
         let stroke = egui::Stroke::new(1.8, color);
         let mut previous = points[0];
         for i in 1..points.len() - 1 {
@@ -867,7 +853,6 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
                 if let Some(rect) = landing {
                     ui.scroll_to_rect(rect, Some(egui::Align::Center));
                 }
-                finish_routes(ui, app.conversation_palette().secondary, true);
             })
         });
     if let Some(scroll) = app.scroll_page.take() {
@@ -1228,9 +1213,11 @@ mod tests {
         assert_eq!(current(&ctx).unwrap().id, "1");
     }
     #[test]
-    fn thread_routes_are_permanent_and_background_geometry_is_not_reused() {
+    fn thread_has_no_routes_even_for_non_root_replies_and_hover() {
         let ctx = egui::Context::default();
+        let scope = egui::Id::new("thread-route-test-scope");
         let mut f = Frame {
+            scope,
             active: true,
             ..Default::default()
         };
@@ -1243,6 +1230,14 @@ mod tests {
             id: "child".into(),
         };
         f.parents.insert(child.clone(), parent.clone());
+        f.parents.insert(
+            parent.clone(),
+            Key {
+                chat: "chat".into(),
+                id: "root".into(),
+            },
+        );
+        f.hover = Some(child.clone());
         f.rects.insert(
             parent.clone(),
             egui::Rect::from_min_size(egui::pos2(50., 50.), egui::vec2(150., 50.)),
@@ -1256,23 +1251,45 @@ mod tests {
             egui::Rect::from_min_size(egui::pos2(65., 220.), egui::Vec2::ZERO),
         );
         ctx.data_mut(|d| d.insert_temp(frame_id(), std::sync::Arc::new(std::sync::Mutex::new(f))));
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(500., 400.),
-                )),
-                ..Default::default()
-            },
-            |ui| finish_routes(ui, egui::Color32::WHITE, true),
-        );
+        ctx.data_mut(|data| {
+            data.insert_temp(
+                scope,
+                Key {
+                    chat: "chat".into(),
+                    id: "root".into(),
+                },
+            )
+        });
+        assert!(active(&ctx), "the fixture opens an actual scoped thread");
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(500., 400.),
+            )),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input.clone(), |ui| finish(ui, egui::Color32::WHITE));
         output.textures_delta.clear();
         assert!(
-            output
+            !output.shapes.iter().any(|shape| matches!(
+                shape.shape,
+                egui::Shape::LineSegment { .. } | egui::Shape::CubicBezier(_)
+            )),
+            "thread routes must not paint, including non-root replies and hover"
+        );
+        ctx.data_mut(|data| data.remove::<Key>(scope));
+        frame(&ctx).unwrap().lock().unwrap().active = false;
+        assert!(!active(&ctx), "normal chat has no scoped thread");
+        let mut normal = ctx.run_ui(input, |ui| {
+            finish(ui, egui::Color32::WHITE);
+        });
+        normal.textures_delta.clear();
+        assert!(
+            normal
                 .shapes
                 .iter()
                 .any(|shape| matches!(shape.shape, egui::Shape::LineSegment { .. })),
-            "thread route must paint without hover"
+            "normal chat hover route remains"
         );
     }
     #[test]
