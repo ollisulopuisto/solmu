@@ -6299,10 +6299,10 @@ fn bubble(
                         .unwrap_or(0.0);
                     let width = total.min((body.rect.right() - area.left()).max(1.0));
                     let overlay = Rect::from_min_max(
-                        pos2(body.rect.right() - width, body.rect.bottom() - 21.0),
+                        pos2(body.rect.right() - width, body.rect.bottom() + 2.0),
                         pos2(body.rect.right(), area.bottom()),
                     );
-                    // Start over the body edge, then reserve only its measured
+                    // Keep the entire reaction target below the body, then reserve its measured
                     // overhang. A scope would also advance its unrelated cursor
                     // origin; a detached child lets us account for exact height.
                     let mut reaction_ui = ui.new_child(
@@ -9032,21 +9032,10 @@ fn reactions(ui: &mut egui::Ui, view: &View<'_>, message: &Message, actions: &mu
         });
         if ui.is_rect_visible(rect) {
             if mine {
-                // A small underline distinguishes our chosen reaction without
-                // painting a background or a pill border around the emoji.
-                ui.painter().line_segment(
-                    [
-                        pos2(
-                            rect.left() + GIVEN_REACTION_PADDING_X / 2.0,
-                            rect.bottom() - 1.0,
-                        ),
-                        pos2(
-                            rect.right() - GIVEN_REACTION_PADDING_X / 2.0,
-                            rect.bottom() - 1.0,
-                        ),
-                    ],
-                    Stroke::new(2.0, palette.accent),
-                );
+                // Mark only our chosen reaction without changing any target
+                // size or moving other reactions. No underline or ring.
+                ui.painter()
+                    .rect_filled(rect, 8.0, palette.accent.gamma_multiply(0.18));
             }
             line.paint(ui, rect.center() - line.size() / 2.0, palette.text);
         }
@@ -17859,13 +17848,14 @@ mod tests {
     }
 
     #[test]
-    fn given_reaction_overlays_bottom_right_in_both_directions() {
+    fn given_reaction_clears_long_text_bottom_right_in_both_directions() {
         with_still_view(|view| {
             for own in [false, true] {
                 let ctx = egui::Context::default();
                 theme::install(&ctx);
                 let mut message = crate::archive::tests::message(&view.chat.id, "overlay", 0, own);
-                message.content = Content::text("A synthetic message for reaction placement");
+                message.content =
+                    Content::text("Mutta jääkiekkoässä Late Lauri Latukka on veteraani.");
                 message.reactions.push(crate::model::Reaction {
                     sender: "someone".into(),
                     from_me: false,
@@ -17907,8 +17897,8 @@ mod tests {
                                 })
                                 .unwrap();
                             assert!(
-                                reaction.top() < body.rect.bottom(),
-                                "reaction must overlay the edge"
+                                reaction.top() >= body.rect.bottom() + 1.0,
+                                "reaction must not cover any bubble content"
                             );
                             assert!(reaction.bottom() > body.rect.bottom());
                             assert!(
@@ -17920,6 +17910,68 @@ mod tests {
                     output.textures_delta.clear();
                 }
             }
+        });
+    }
+
+    #[test]
+    fn own_reaction_tint_does_not_change_chip_size_and_only_marks_our_choice() {
+        with_still_view(|view| {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let mut message = crate::archive::tests::message(&view.chat.id, "own-marker", 0, false);
+            message.reactions = vec![
+                crate::model::Reaction {
+                    sender: "me".into(),
+                    from_me: true,
+                    emoji: "❤️".into(),
+                },
+                crate::model::Reaction {
+                    sender: "them".into(),
+                    from_me: false,
+                    emoji: "❤️".into(),
+                },
+                crate::model::Reaction {
+                    sender: "another".into(),
+                    from_me: false,
+                    emoji: "👍".into(),
+                },
+            ];
+            let mut sizes = Vec::new();
+            for ours in [true, false] {
+                message.reactions[0].from_me = ours;
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    ui.horizontal_wrapped(|ui| reactions(ui, view, &message, &mut Vec::new()));
+                    sizes.push(
+                        ui.ctx()
+                            .data(|d| {
+                                d.get_temp::<Rect>(
+                                    bubble_id(&message.chat, &message.id).with(("reaction", "❤️")),
+                                )
+                            })
+                            .unwrap()
+                            .size(),
+                    );
+                });
+                let tint = view.palette.accent.gamma_multiply(0.18);
+                let marked = output
+                    .shapes
+                    .iter()
+                    .filter(|shape| {
+                        matches!(
+                    &shape.shape, egui::Shape::Rect(rect) if rect.fill == tint)
+                    })
+                    .count();
+                assert_eq!(
+                    marked,
+                    usize::from(ours),
+                    "only our counted heart gets a tinted chip"
+                );
+                output.textures_delta.clear();
+            }
+            assert_eq!(
+                sizes[0], sizes[1],
+                "marker never moves or resizes its hit target"
+            );
         });
     }
 
