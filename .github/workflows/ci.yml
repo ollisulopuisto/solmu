@@ -58,6 +58,7 @@ jobs:
         id: scope
         env:
           EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
           REQUESTED_SCOPE: ${{ inputs.scope }}
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -68,7 +69,7 @@ jobs:
           elif [ "$EVENT_NAME" = workflow_dispatch ] && [ "$REQUESTED_SCOPE" = fast ]; then
             echo 'portable=true' >> "$GITHUB_OUTPUT"
             for check in native audit nix; do echo "$check=false" >> "$GITHUB_OUTPUT"; done
-          elif [ "$EVENT_NAME" = workflow_dispatch ] || [ "$EVENT_NAME" = merge_group ]; then
+          elif [ "$REF_TYPE" = tag ] || [ "$EVENT_NAME" = workflow_dispatch ] || [ "$EVENT_NAME" = merge_group ]; then
             python3 .github/scripts/ci-scope.py --full --output "$GITHUB_OUTPUT"
           else
             python3 .github/scripts/ci-scope.py --base "$BASE" --head "$HEAD" --output "$GITHUB_OUTPUT"
@@ -198,6 +199,7 @@ jobs:
           if [ -n "$SELECTED_SCENES" ] && [ "$SELECTED_SCENES" != full ]; then
             scenes="$SELECTED_SCENES"
           fi
+          if [ "$scenes" = baseline ]; then scenes=""; fi
           for page in $scenes; do
             hover=()
             case "$page" in refined-thread,*) hover=(--demo-hover 480,367) ;; esac
@@ -270,6 +272,7 @@ jobs:
           if [ -n "$SELECTED_SCENES" ] && [ "$SELECTED_SCENES" != full ]; then
             scenes="$SELECTED_SCENES"
           fi
+          if [ "$scenes" = baseline ]; then scenes=""; fi
           for page in $scenes; do
             hover=()
             case "$page" in refined-thread,*) hover=(--demo-hover 480,367) ;; esac

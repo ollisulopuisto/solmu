@@ -16,6 +16,7 @@ import subprocess
 # Workflow/selector edits always keep every check family.
 FULL_TRIGGER = {'.github/workflows/ci.yml', '.github/scripts/ci-scope.py',
                 '.github/scripts/test-ci-scope.py', '.github/scripts/test-ci-workflows.py',
+                '.github/scripts/scene-map.json', '.github/scripts/test-scene-map.py',
                 '.github/scripts/install-ubuntu-build-deps.py',
                 '.github/scripts/test-install-ubuntu-build-deps.py'}
 
@@ -78,19 +79,62 @@ def classify(paths, full=False):
     return flags
 
 
-# Only pure connector geometry has a reviewed scene subset. Shared app,
-# input, message layout, theme and unknown changes deliberately fail open.
-CONNECTOR_PATHS = {'src/reply_router.rs'}
-CONNECTOR_SCENES = ('tail-run,messages tail-run,messages-light '
-    'chain-above-outgoing,dark regular-tail-outgoing,light '
-    'refined-thread,dark refined-thread,light linked linked,rail linked,rail,light')
+# Every Rust module is classified, including explicit full-coverage entries.
+# The reviewed map is data, and changes to it select full CI themselves.
+SCENE_MAP = Path(__file__).with_name('scene-map.json')
+ROOT = Path(__file__).resolve().parents[2]
 
 
-def scene_scope(paths, full=False):
+def load_scene_map():
+    return json.loads(SCENE_MAP.read_text())
+
+
+def scene_map_errors(root=ROOT, registry=None, check_contracts=False):
+    """Completeness is mechanical; reachability is a reviewed contract."""
+    import hashlib
+    registry = registry if registry is not None else load_scene_map()
+    errors = []
+    actual = {str(p.relative_to(root)) for p in (root / 'src').rglob('*.rs')}
+    mapped = set(registry['modules'])
+    if actual != mapped:
+        errors.append('Rust module map drift: ' + repr(sorted(actual ^ mapped)))
+    scenes = registry['scenes']
+    if not scenes or len(scenes) != len(set(scenes)):
+        errors.append('Empty or duplicate scene registry')
+    workflow = (root / '.github/workflows/ci.yml').read_text()
+    galleries = re.findall(r"all_scenes='([^']+)'", workflow)
+    if len(galleries) != 2 or any(g.split() != scenes for g in galleries):
+        errors.append('Both workflow galleries must exactly match scene registry')
+    for path, entry in registry['modules'].items():
+        coverage = entry['coverage']
+        if not entry.get('reason'):
+            errors.append('Missing review reason: ' + path)
+        if coverage != 'full' and (not isinstance(coverage, list)
+                                   or set(coverage) - set(scenes)):
+            errors.append('Invalid scene coverage: ' + path)
+    required_contracts = {p for p, e in registry['modules'].items() if e['coverage'] == 'full'} | {'Cargo.toml'}
+    if set(registry['contracts']) != required_contracts:
+        errors.append('Incomplete reachability contract inventory')
+    for path, digest in (registry['contracts'].items() if check_contracts else []):
+        if not (root / path).is_file() or hashlib.sha256((root / path).read_bytes()).hexdigest() != digest:
+            errors.append('Reachability contract changed: ' + path)
+    return errors
+
+
+def scene_scope(paths, full=False, root=ROOT, registry=None):
+    registry = registry if registry is not None else load_scene_map()
     heavy = [p for p in paths if not ignored(p)]
-    if not full and heavy and all(p in CONNECTOR_PATHS for p in heavy):
-        return CONNECTOR_SCENES
-    return 'full'
+    # Invalid/stale registry never grants a skip. CI separately rejects missing
+    # scene/module classifications, but a stale call/fixture contract is safe full.
+    if full or not heavy or scene_map_errors(root, registry, check_contracts=True):
+        return 'full'
+    selected = set()
+    for path in heavy:
+        entry = registry['modules'].get(path)
+        if not entry or entry['coverage'] == 'full':
+            return 'full'
+        selected.update(entry['coverage'])
+    return ' '.join(s for s in registry['scenes'] if s in selected) or 'baseline'
 
 
 def main():

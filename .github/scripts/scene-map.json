@@ -1,0 +1,994 @@
+{
+  "version": 1,
+  "scenes": [
+    "translation-review,dark",
+    "translation-review,light",
+    "draft-shelf-confirmed,dark",
+    "draft-clear-recovery,dark",
+    "info-source-sent,dark",
+    "info-source-received,dark",
+    "info-source-group,dark",
+    "tail-run,messages",
+    "tail-run,messages-light",
+    "chain-above-outgoing,dark",
+    "regular-tail-outgoing,light",
+    "hover-actions,dark",
+    "hover-actions,light",
+    "refined-thread,dark",
+    "refined-thread,light",
+    "avatar-overflow,dark",
+    "image-burst,dark",
+    "image-burst,light",
+    "hidden-message",
+    "hidden-message,light",
+    "edit",
+    "edit,light",
+    "group-stacks",
+    "history-date",
+    "message-info-direct",
+    "linked",
+    "linked-loading",
+    "shortcuts",
+    "linked,rail",
+    "linked,rail,light",
+    "flat-groups,dark",
+    "info-media",
+    "info-videos",
+    "info-voice",
+    "voice-transcripts",
+    "voice-transcripts-search",
+    "chat-transcript-search",
+    "settings-search=voice",
+    "whisper-setup",
+    "batch-results,dark",
+    "batch-results,light",
+    "batch-results,debug,dark",
+    "batch-results,debug,light"
+  ],
+  "modules": {
+    "src/a11y.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/account.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/animation.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/announcer.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/app.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/app_lock.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/appearance.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/archive/calls.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/archive/drafts.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/archive/encryption.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/archive/favorites.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/archive/labels.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/archive/pins.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/archive/polls.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/archive/receipts.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/archive/reconcile.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/archive/reconcile_tests.rs": {
+      "coverage": [],
+      "reason": "Test-only module behind parent cfg(test); excluded from screenshot binary. Full Rust tests remain. Startup/about screenshots still run."
+    },
+    "src/archive/stars.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/archive/stickers.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/archive.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/audience_queue.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/audio/microphone.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/audio/output.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/audio.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/automation_client.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/automation_mcp.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/autostart.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/backdrop.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/backend/beeper/gallery.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/backend/beeper/shared.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/backend/beeper/ws.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/backend/beeper.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/backend/linked_media.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/backend/local_ai.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/backend/local_files.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/backend/picture_edit.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/backend/sticker_import.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/backend/sticker_store.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/backend.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/beeper_signin.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/bidi.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/bin/solmu-control.rs": {
+      "coverage": [],
+      "reason": "Separate Cargo binary target, never linked into target/debug/solmu and not launched by screenshot harness; Rust all-target tests stay full."
+    },
+    "src/bin/solmu-mcp.rs": {
+      "coverage": [],
+      "reason": "Separate Cargo binary target, never linked into target/debug/solmu and not launched by screenshot harness; Rust all-target tests stay full."
+    },
+    "src/bin/solmu-reader.rs": {
+      "coverage": [],
+      "reason": "Separate Cargo binary target, never linked into target/debug/solmu and not launched by screenshot harness; Rust all-target tests stay full."
+    },
+    "src/bin/solmu-scheduler.rs": {
+      "coverage": [],
+      "reason": "Separate Cargo binary target, never linked into target/debug/solmu and not launched by screenshot harness; Rust all-target tests stay full."
+    },
+    "src/biometrics.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/categories.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/chat_search_names.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/composed_forward.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/demo/focus_trace.rs": {
+      "coverage": [],
+      "reason": "Test-only module behind parent cfg(test); excluded from screenshot binary. Full Rust tests remain. Startup/about screenshots still run."
+    },
+    "src/demo/frame_perf.rs": {
+      "coverage": [],
+      "reason": "Test-only module behind parent cfg(test); excluded from screenshot binary. Full Rust tests remain. Startup/about screenshots still run."
+    },
+    "src/demo/stock.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/demo/tour/capture.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/demo/tour/media.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/demo/tour/session.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/demo/tour/whats_new.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/demo/tour.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/demo.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/draft_state.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/emoji.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/energy.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/face_detect.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/flat_groups.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/forward_results.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/geo.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ghost_groups.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/group_admin.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/hidden_messages.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/hyphenate.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/i18n.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/image_cache.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/image_preview.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/lib.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/link_policy.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/link_preview.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/linked_read.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/list_layout.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/literal_hints.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/local_avatars.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/local_whisper.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/macos.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/main.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/markup.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/media_pause.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/media_tool_setup.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/media_tools.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/mentions.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/merged.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/model.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/model_presence.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/motion.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/nav.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/new_group.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/notify.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/opener.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/paths.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/pending_media.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/preview_worker.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/privacy.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/proxy.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/read_api.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/read_http.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/read_sync.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/recurrence.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/reply_graph.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/reply_router.rs": {
+      "coverage": [
+        "tail-run,messages",
+        "tail-run,messages-light",
+        "chain-above-outgoing,dark",
+        "regular-tail-outgoing,light",
+        "refined-thread,dark",
+        "refined-thread,light",
+        "linked",
+        "linked,rail",
+        "linked,rail,light"
+      ],
+      "reason": "Pure connector routing, called only by reply_threads::finish. Includes conversation/thread/linked evidence; startup/about still always run."
+    },
+    "src/rich_edit.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/run_widths.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/safety.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/saved.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/scheduler.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/scheduler_api.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/scheduler_client.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/settings.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/single_instance.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/sticker_meta.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/sticker_search.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/suggest.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/target.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/text_replace.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/theme.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/timestretch.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/transcribe_worker.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/transcriber/encrypted.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/transcriber.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/transcriber_engine.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/transcript.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/accounts.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/album_menu_target.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/batch_actions.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/call_log.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/chats.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/conversation.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/dialogs.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/flat_groups.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/focus.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/ghost_groups.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/glass.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/hover_actions.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/image_editor.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/image_preview.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/info.rs": {
+      "coverage": "full",
+      "reason": "Shared panel docking changes the conversation layout and thumbnail lifecycle; retain all scenes."
+    },
+    "src/ui/keys.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/labels.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/list_nav.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/local_avatars.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/locations.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/lock.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/login.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/media_tools.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/merged.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/message_info.rs": {
+      "coverage": [
+        "info-source-sent,dark",
+        "info-source-received,dark",
+        "info-source-group,dark",
+        "message-info-direct"
+      ],
+      "reason": "source_facts and source section used only inside MessageInfo dialog; dialogs::show dispatches MessageInfo. Other gallery fixtures do not open it."
+    },
+    "src/ui/message_key_menu.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/mod.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/new_group.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/new_message.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/palette.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/pane.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/pending_picture_preview.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/picker.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/polls.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/rail.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/reply_tail.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/reply_threads.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/send_later.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/settings.rs": {
+      "coverage": [
+        "settings-search=voice",
+        "whisper-setup"
+      ],
+      "reason": "ui::main_view dispatches show only on Page::Settings, wallpaper_show only Page::Wallpaper. Gallery settings fixtures plus unconditional before/after settings-about captures. No settings page in other fixtures."
+    },
+    "src/ui/switcher.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/thread_entry.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/transcript_text.rs": {
+      "coverage": [
+        "info-voice",
+        "voice-transcripts",
+        "voice-transcripts-search",
+        "chat-transcript-search"
+      ],
+      "reason": "Only production caller is conversation::voice_transcript for downloaded voice with ready local transcript. Include info voice and all transcript fixtures; the ready-state fixtures are kept conservatively."
+    },
+    "src/ui/update.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/view_once.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/ui/widgets.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/updates.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/util/day_date.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/util.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/version.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/video.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/voice.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/wallpaper.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/whatsnew.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/whisper_runtime.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/wrap/tests.rs": {
+      "coverage": [],
+      "reason": "Test-only module behind parent cfg(test); excluded from screenshot binary. Full Rust tests remain. Startup/about screenshots still run."
+    },
+    "src/wrap.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/write_api.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/write_grants.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    },
+    "src/write_journal.rs": {
+      "coverage": "full",
+      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
+    }
+  },
+  "contracts": {
+    "src/a11y.rs": "8053e0aa20d99d1f9ce0d3c68bf875f27719c95d1e9ca3011d16b7e800f2447b",
+    "src/account.rs": "7587c2fe115ed17f9dbea3c7793e130daf41dde504c2e637ccaec99732dd68c4",
+    "src/animation.rs": "14986812fc012a243c51693d7eaaf97e27f25ade14e424f20514c472a6b09cbf",
+    "src/announcer.rs": "944409c311daae137df93987a966dd8dd55f057c9afe3da722729c269a7dba5c",
+    "src/app.rs": "29665772e6ebcf4ba9eccfd655d3c6fe757849b74321e17b9194757b8d95d33c",
+    "src/app_lock.rs": "a440c5386aa62c7fcb02cdbfc3fd33070d74b81f2b8e3b346fadfc6eb45311bc",
+    "src/appearance.rs": "cd41099dffe17762fb8cbd77e1d782ebf74e7ac2a751d4be82d45a33329775f4",
+    "src/archive/calls.rs": "08f0fd8e1fd85928b6a7356f1de1f9b08a715a2d7e2de21e08a77f52329f66b7",
+    "src/archive/drafts.rs": "0a21a5245e58cd236ed8642643d7bee5afa7413375a53528675ecdffd7b17101",
+    "src/archive/encryption.rs": "10827456b20fa9a61d4c53a6ebfcad6daddd97be531cbd131db9f73882922173",
+    "src/archive/favorites.rs": "7b7fded42c1189b9246240867bdc855378377edb056cfea5b66566f1415240e1",
+    "src/archive/labels.rs": "8ac2542d56ec7710912c01d97b6d7d5d7cddea092c045131562d9d67aec7c453",
+    "src/archive/pins.rs": "08c022d273d9e7ed848e10f0a71f4a50ab5733385d23ea184a186f2adcc601bc",
+    "src/archive/polls.rs": "1341693698e4cacabe51dbb88eb355d1b8bb57ca067c8b4993162133d640951e",
+    "src/archive/receipts.rs": "eece5fc443509bce4f8c5d44da0af7248d75d83e02b8e31fdd110d6050c69a96",
+    "src/archive/reconcile.rs": "957ffd2f53531cc80678a02b33fa7e433a6da6dc89a924ca1ddd66f68b7018d9",
+    "src/archive/stars.rs": "01829a925c2dacd96b3ea4326a95459c3b5b6f731995f1d9736393516cbb61c6",
+    "src/archive/stickers.rs": "ad1f66a7ac813be18af6a55dec877dd06e5928c4cf16c5061cf2f6d1e569f453",
+    "src/archive.rs": "183905bfbd9a03140cd93fbacb317aaa8655af148da4f3197e498b7b547053d1",
+    "src/audience_queue.rs": "6837115e23b87850ff745a41528b8d6f2e5b59aa525dc13eb144ab76ee1c052a",
+    "src/audio/microphone.rs": "f7ba12134063790dbaf6f2d5f8c1c560b8f915cc4916c9e43dabb27eb27f3925",
+    "src/audio/output.rs": "13f3de703b2f9784bd14f6686a862f32e6436d0691a6ae09a7fee8dceec8fa56",
+    "src/audio.rs": "78c0e91404805a2fd4d11011a78a5fae81ad139f0827d4c56174717797056e8d",
+    "src/automation_client.rs": "9cf2f071023394c5b2f50a436e191e556e52f223598a683e9be347abfe256c62",
+    "src/automation_mcp.rs": "11971c888cbfdf4708146deff947181b7a26687dc01e637d228e5a3d7c06e3bf",
+    "src/autostart.rs": "5ae20c397b1cd00adf8c16f93f8c95999fd774fa8a729f5bd3a9e327a7c078cc",
+    "src/backdrop.rs": "45e75d4ae48da6de8af3ae86662790166aeec45c02d3d013545f911212efa05e",
+    "src/backend/beeper/gallery.rs": "ba5950685785ba8ba79e543d279b88012099a606ad7a0ebe5ffabb0c3c5fe39b",
+    "src/backend/beeper/shared.rs": "9e037642da7d152a5998463afa02b8349ccc0a68721c7acaeae1aacb11a05c6c",
+    "src/backend/beeper/ws.rs": "966f62fc7d4a18f54681139b0d44db4e21269c89c8234f36d7642ee5da26b16f",
+    "src/backend/beeper.rs": "b907d9cd1b6ebd5b4f07eeb4f5dc87c39bb23d77e936b98bec94b4ab44e4811d",
+    "src/backend/linked_media.rs": "a53056ab2038b3445d23df5d10353fd81f4558ec4185444c4e0ef025be86bf94",
+    "src/backend/local_ai.rs": "613afcc6926c639022c01eb2b674426cc7cbd4d6c42b08cc45f2dd1bfaf010df",
+    "src/backend/local_files.rs": "6c5d72b8720d503bac24fb767adb0e0473f913db52852917578f524aee5fabf1",
+    "src/backend/picture_edit.rs": "3d20da410e69ac7de9a9b14060470dcc11cf9de2a3186731b06a70b2e8c8242e",
+    "src/backend/sticker_import.rs": "6487e876c498b9ff3cc45a38fdbb21aaef8afffdb0f23285b143767753f3b050",
+    "src/backend/sticker_store.rs": "512beef09753458c361fe38642ce00ca6f62e13acfaba4d0160cc1f415868676",
+    "src/backend.rs": "8a6486c94eeca81422527b8ebf3eabe2cf989d4e50ab5a62edf9d227fe03edec",
+    "src/beeper_signin.rs": "623a47026d04847ac9e4239d30d93eed77c6cad83052b8334f39f202d4e6b4be",
+    "src/bidi.rs": "d2d0b039521721dabd6b504597f6a7662007497ef4f1b89dbc58e7d7df6b736b",
+    "src/biometrics.rs": "01b1c01c757ae534ee8464971fa60228aeb4ea7de9b0e75e4d141f2825392ba7",
+    "src/categories.rs": "058e547c8cb4d8facc713cefe3d09be83ae9771aaabbb4e80640959ba8f4fb49",
+    "src/chat_search_names.rs": "283a9ca99f17c68d7d5922ea012b9d81315cbb1e155f458bcdfd7a07fe3639b3",
+    "src/composed_forward.rs": "2592bf9373dc4c3156099f3b9495505fccb338d878328abbeee40f956381a6ac",
+    "src/demo/stock.rs": "70ad5c77f7917f1bd8647f2edf4cb2d7ea0eef86029cade1a2f998aa2f154894",
+    "src/demo/tour/capture.rs": "713f304f843bac44c7e7b2c03b643a1ab3db072f073d33542422d52deab3ec56",
+    "src/demo/tour/media.rs": "d91d8e7b7552f5a884ebc0a90fd17196327e785dd5acb99b3cb52d5f51d773f1",
+    "src/demo/tour/session.rs": "ffecb151160017b2932801a060d63d43cfe67f70aca3fdd8fbbd164bb54fd5a2",
+    "src/demo/tour/whats_new.rs": "c29ecd55fd19ce4799f0fcd78aa0a862cdacaaa285516b39ed01ecb64cadae1a",
+    "src/demo/tour.rs": "62d5c3326856bb899de7c4b2b1b6ce4e5f6ba9f63b8b33afba5803ab8f20153b",
+    "src/demo.rs": "d1af94c18d98a81f3f1012a665bca9269a7febcc2d958875bdda45aab360854d",
+    "src/draft_state.rs": "4115f69f2b454e7fac6c0676612f42d29c8bc87666974cd8f64f22bb06d93197",
+    "src/emoji.rs": "6395b4be787b193f1ed5e45e2b5cb40f4e3d7686e4b08204440a3fab64426708",
+    "src/energy.rs": "0005662a59cb22447b470c6dc5792c9e8784a4f73f4a04eeae1352f24a5bbc9a",
+    "src/face_detect.rs": "8588b4aa530bdeddf2255de84917115e58024be8fadbdc6abbb4aab7df10b877",
+    "src/flat_groups.rs": "9af5ab5844844f850bf339e8e1f49357a2a4f0c65183b7be9d521c0f290e8954",
+    "src/forward_results.rs": "9883800d0566ce5ae1181daca1609f7fd2a65fca430fa6f55390a1ef65b11ded",
+    "src/geo.rs": "f2884fd8dad9e8ae23ae0bd210c2c04b45b04016d68fb804f399d5d2ca81b4e7",
+    "src/ghost_groups.rs": "a9a035b3b45b2fdbdf16c0e2b6620e4396a72bc0312293a2c11b0ba3f395efe9",
+    "src/group_admin.rs": "496bc500a721c9ee29d6d0b35029ec3425e47b436a1fe20141ee85c035a24d04",
+    "src/hidden_messages.rs": "f298c6cd54a0cbfdd8a8ab7a93cbdc3dc728a3c5d6320f9dfced2555f2d15b99",
+    "src/hyphenate.rs": "f8405f8c162f5e918042d29c7adf8d4da9db6b0ea1f4e973420feb6cb5bc2c60",
+    "src/i18n.rs": "d1663bbcbdef76b438aa4a2486e31fa061249d3e5004a81f4eacfc5253d16067",
+    "src/image_cache.rs": "16942cf9c16af65e8a49343f2a00aefa649d2b8b17f3fa2f1440ed0c4ce11fc5",
+    "src/image_preview.rs": "f5cfd54b2aeef252b77271127729a7d66a84423b40c07c3dc5adf2cceb536e2d",
+    "src/lib.rs": "072fc7eb4c90382adf4de086f5360a94bb6eb88c2a06094f3348098549733419",
+    "src/link_policy.rs": "6f0a2ebaf914923819dc534f9c43bd309c67b6de7020b76cb489a0e1c44cdc6a",
+    "src/link_preview.rs": "82d64cb170f0868361d5ea6bc46ed0ceed4ce0e972bc6d4da4f8d3d01d94ed0c",
+    "src/linked_read.rs": "a349c4765fee397359a274b69649e6067b504b292f1885217fd14cbfef4ad970",
+    "src/list_layout.rs": "fae72bf672b407306e9478a28f0b1e8ac6b5a220239dcea01f358f8b525fba86",
+    "src/literal_hints.rs": "174079a60836d864439796c98e152a8b8e09d3272f4394928f72347a5cb8f2f2",
+    "src/local_avatars.rs": "e0dad591049006a5a946aa28f2014440cd8495b56f15ff994c99f3b12ca331ae",
+    "src/local_whisper.rs": "3f193e489b978271908b0ced29573315a7621e697300c55699e552f9715c6b0a",
+    "src/macos.rs": "546cbe7188e6fd061690034236ff385b6b2eada5ccb8d6483ceea68f01d461ea",
+    "src/main.rs": "dcf7b81f6b49377bff392507a4fa2cc176117461e43504ef63b29731e0d36b97",
+    "src/markup.rs": "e7b18f4854e2e8f6cae7b18b3e64334c8500e1248eb0515656480fb6d8f33347",
+    "src/media_pause.rs": "21c9fa7e5446a8fa4e8046f379c678ad6341f7e54e0afa575dace7c2269d05ec",
+    "src/media_tool_setup.rs": "eebbd76f917e33930c0142ba820afc86e77a75b9d0ac6c2402a017caf1757af5",
+    "src/media_tools.rs": "94882819144d8e19c325d18df944f94274c2c07084048a69be911cf8562fadf8",
+    "src/mentions.rs": "66efe608efed23af301f4ef90c9fd06d9bebcbabfaec6328a1d077eddbcba2b6",
+    "src/merged.rs": "7278dce5652d611f70866b4f6804f0483ba3a4418719151f3cd2af9c8a02a340",
+    "src/model.rs": "51b978de70907d89e54964aa67881d033419bf0e133203c820838c87de004693",
+    "src/model_presence.rs": "3a4b39e7da300de41580c7d597f8cee23fc76745195a47e4ae0957e0e74dff14",
+    "src/motion.rs": "a98aa98d60e62777d0091f9430be465344ad218a66621bf8e486a32f39a8ec84",
+    "src/nav.rs": "109c4c5e21fe64f8c6bc3b8f92803814484a22fc04ac59a877cf445265e3b928",
+    "src/new_group.rs": "cde0bbfca8f919d74d2d644397157c0777386250b96141b9202949aa8c39f322",
+    "src/notify.rs": "cd492f4a1176240de16c65099de3032b02a9326dfcd75f6d32c7ce93a20e0ca4",
+    "src/opener.rs": "dbe4caa44f667b204b605652604bd549804fc6a1f3115d4b4bd1a431eb2729d8",
+    "src/paths.rs": "2b28179f7a4a697d45ad5d8446b31f6c07850e04d0e9c1122e1983fc9f3d9ac2",
+    "src/pending_media.rs": "c554255a4a093215e590176b28b15cc0f01b01a0af66c805eb95f13901e6e64c",
+    "src/preview_worker.rs": "0f4862b33204e985e927b64f2258bd2c371b230541e9811c66f2d14f48aebf12",
+    "src/privacy.rs": "bceb6c27a2084283589fed19f014ff969fb73a47a0e3288f691ed7873963a67b",
+    "src/proxy.rs": "ba87d5b8bea5916f62fe59b640f66c05303ac37326e8ee4ca7c7e73b8bc24207",
+    "src/read_api.rs": "4b852e886e3bfb55862015a62b617dc534b2b0bc5aefb9a84eff6a88fe455b19",
+    "src/read_http.rs": "5b2c0115f80bd9e419426721c68e3380a04abf9e6c334296be343dd73ea1a0f1",
+    "src/read_sync.rs": "31682d79a82ef63d222d804181fbd55df55b45d37842234c10ebcd5454f4ce25",
+    "src/recurrence.rs": "3d9934989301436270008e2f585be023c3b69f9f6180f4c9e6c7a85ba7744e20",
+    "src/reply_graph.rs": "4ca6c448bcfba699a73da41f4478db8c17860c59024ccbddb39fda3527dbb614",
+    "src/rich_edit.rs": "20364ae66eaa01f5414bfd826a811d765cac01598787163017e2313b30ff8d05",
+    "src/run_widths.rs": "199498d05f3271beb2f716db7eaa38c2330ab0d39077fd2a93d8a6f1d00516ee",
+    "src/safety.rs": "bf9220940300bdf0f0fd5747b74b1343e70fe151186e4952b1d110b6148b9da6",
+    "src/saved.rs": "f737e9baa70082b6e6010a255637cb161941d692cedc480422a3a44ffcf9b511",
+    "src/scheduler.rs": "b02e91b4fa62c1444b372598d680aff9186b5fefb838bf2089173958f6aceecc",
+    "src/scheduler_api.rs": "26d261f49f472c8a9a45471df068640f41f5e5a7e296e5a8d4d0cc70d2a59044",
+    "src/scheduler_client.rs": "9fb1437fc5a9c6bf5b94f316d3c9f6b716ae601992fd8a52ec8a1d4860e63cdc",
+    "src/settings.rs": "e56e78356b19a857d4a51e923ae6e08f80d2878878c1f238eaaa8afa3d6ef66e",
+    "src/single_instance.rs": "3c5bad81db10e9e30c814f96ab5c1e65d07112e47e11658ac9c80bf64677b8bb",
+    "src/sticker_meta.rs": "4d099c0d7b10243c9f46e1e352a1fefb00b36501da16c17b351935a9ade7c6ae",
+    "src/sticker_search.rs": "9931be661ea24d30de560cce068541dcdcb5a5ffb35cf504ca0414939b5b3e77",
+    "src/suggest.rs": "afeff99b6c935061826f023473170982a44e1af65e331ebd3d9ab77849a65602",
+    "src/target.rs": "7566ca46c0f0300667631333fb770d2196b05d572003b38c8cd516d1158ca7bb",
+    "src/text_replace.rs": "f1c47dce28d8fb5e7508c0cfbf669509af7075ce616ea0defd5cdbeae5af4b33",
+    "src/theme.rs": "c50b24717dbdb2484f3487de59815f42851b8f6646b0ea0f96d3a4ba3f0e9bff",
+    "src/timestretch.rs": "901b619be8cc74f075336ec54ea4af0709946737fec995ea5dc3a809db1cfe84",
+    "src/transcribe_worker.rs": "a9fb012a2d5071143e122af6ec1a43a4aef3de67fc925392f8b47134e3a878b2",
+    "src/transcriber/encrypted.rs": "16b83b9ce1b57aee9010a5636a8ce861d83f1ea652e66590d54a9a03c09aa18a",
+    "src/transcriber.rs": "a88ede3f98dd07d03e9f4df63d271d31705d36dd929f6108e7f44411bce8016f",
+    "src/transcriber_engine.rs": "e88c4c900d274d9302783bc76f1a908a7626a41acd43da259e556baede28cba2",
+    "src/transcript.rs": "41fadcb809b0f2968fe7c8cb315a37a1edfc5e5e3cfff47bea54e3fdf3dbf483",
+    "src/ui/accounts.rs": "a055cbfc4ef2b63e84ac0fb6baaeab09fdf9cff8602a05dc16c263e0b4e6d666",
+    "src/ui/album_menu_target.rs": "6d833cb30defbf83aab7e3529902a5fd9e52b3f393da6c0c75e9133676ede719",
+    "src/ui/batch_actions.rs": "025eda92d140e00f7b083d8aecc423fea3336fb3949825b06159cd22d3411b79",
+    "src/ui/call_log.rs": "55d19b34f4b8478f1345d98a118e740a1400d4aaa7cf2097a14869926cb3badc",
+    "src/ui/chats.rs": "b7338293c1cfbb3d11d39f6d2807632bd4ed9fabf15cc9786d92f75b6ed7cd0a",
+    "src/ui/conversation.rs": "17f13479d91161f9e496e1aa2a6b38d322ebda356543d8efee2f3de39dbae4a7",
+    "src/ui/dialogs.rs": "c4824518000199917c2edd834175e77043672db635a9d1fe6e7b8adaa6ad92b8",
+    "src/ui/flat_groups.rs": "644c4cadd4ff40dc2916975cee12725d79e4efe483bcf6a17ca8b649d1d8086f",
+    "src/ui/focus.rs": "a357d478c8eddfeeef69359a233b1b517d39a5c50850d0060ad135711d30283c",
+    "src/ui/ghost_groups.rs": "2c9d6fc37431b197057e0d9d8a4ea357194176ca779b97460080d3cd3ea57e47",
+    "src/ui/glass.rs": "b2e7ded41810246d882afd07c72c34e08ec4d0edbdfeebcc253134f2546bae2b",
+    "src/ui/hover_actions.rs": "a17a0dbb0e0a7208307523737b83542ccb6bf3c12b40c760e62c608304a4b867",
+    "src/ui/image_editor.rs": "fefeb08ec40d69dba5dc616af859a944924477f8b90ad649c27f45c438117c2f",
+    "src/ui/image_preview.rs": "4e36d7c50bb542bee1c25442835092791e0e89897e72cd797cad91092351a929",
+    "src/ui/info.rs": "9c7ca4c13050f484d47dd2e9dbfbe0a0d3cc5a3a9a29f3ca6b49b78c1f4ddedc",
+    "src/ui/keys.rs": "9f1f768f335ad86cc0fa9d4b9e5a83071911122dc75201894ef57bbbf1e4abf6",
+    "src/ui/labels.rs": "9ee1b7bcf5d3b0510b7650ce7c1a0d52171d4aec6f3c3615653b8438c09c636e",
+    "src/ui/list_nav.rs": "b78d1adbab502e243ecac08ab39a34dcdaeb1796e89bbcbade34a86b1eebc4c4",
+    "src/ui/local_avatars.rs": "8c665753ec35524174cfe37913c0c7c55c42f3e999d7d58fd2bbdb87f49c5630",
+    "src/ui/locations.rs": "4035b10493b1519636fbd577279775bd363744a3411e1473aa0d25acb8961ea5",
+    "src/ui/lock.rs": "b076a3adc1d12fa7d1e08fcbbe34fbd550fc37ec25079537adbacc24a8239edb",
+    "src/ui/login.rs": "8b9ade9531fa7a391f5c4b80c81b5b6e42c400c927086802d2e37eb10c33cd23",
+    "src/ui/media_tools.rs": "ea0c8daa7393442992e2c24366b1775fc9f74e9914a65acebc984d893e3c81cf",
+    "src/ui/merged.rs": "cade161639d45f626d228087acdd0aa913b4e60d1c0f4733ef347d443f4503a4",
+    "src/ui/message_key_menu.rs": "25623fe539286a7b515f14feffa96d4a0a53bc6b27e8e8f87845be9c96326cf7",
+    "src/ui/mod.rs": "1a4aa93a5f20d83be312a84ef33ea1a2ee2764a003a01546f1233fa0490c6cce",
+    "src/ui/new_group.rs": "c211ef87b13e81912da5b5c9255403c726322c29e2e2c9d5aa2bd14d756bb6c5",
+    "src/ui/new_message.rs": "326198274114b86638e45c3ad2aa4bf089e298bbc398a6e654a5902363cdf7e2",
+    "src/ui/palette.rs": "6bf9e98f4af68eb30ea20230baa555614097ade11f1b8f7a38ebf69354335034",
+    "src/ui/pane.rs": "c9a4a0ef4ef2e962ebbbce0ac45e0df0c4bc25d56cf0455f872860a638872cf5",
+    "src/ui/pending_picture_preview.rs": "11a88a7c901a6792278063b22fc24cee1915098792c4df05356dc8b1242fbe71",
+    "src/ui/picker.rs": "e47c909c9a413f72721e490c794c893d6ede9d03c9efdd178635dc7a64ef68aa",
+    "src/ui/polls.rs": "1a6a97c6cdf9b1a6eb0111d4c0d0054e8c69d37027d20eef1045bee84cb1e3a5",
+    "src/ui/rail.rs": "381a33505ee951d8eec6f6814b90fb2bf3612f05045215236d33a328e570e50f",
+    "src/ui/reply_tail.rs": "259dc2f36c0d5a4a6672863699ecb087e339b410e5846809ff98e208b39a0b05",
+    "src/ui/reply_threads.rs": "21a212186f1a285b47c454577f91892f2b8ecf82e10f897d59791daf506888f3",
+    "src/ui/send_later.rs": "2d990a2ce05a45aec644c010f6f3695087cf96de87690d6abd1c355389315340",
+    "src/ui/switcher.rs": "a5af37ba76d762481ba14d4a51541b71e73108014b2074e43d17fdbe79d28886",
+    "src/ui/thread_entry.rs": "93c65615d90805235e75fa3387bd2fe956912500987693a2623da511e390c213",
+    "src/ui/update.rs": "e193cd3224ff3ef21907c4a8f4c2a037f1c1964e5989cacafae68e26b2f89fc0",
+    "src/ui/view_once.rs": "f3e2050d708016916b223b6af565d8f8c15bbbc5e7dc5a6376341d4b703c83b6",
+    "src/ui/widgets.rs": "0759ef5fcaf4ce014c18e699d82ed6f63a369d86c07c5ad94a74bd30c7a4ff2a",
+    "src/updates.rs": "f55d29c64f1477c17f0b9b30c3eccf3e024a0690cf6ebd2a620b62db1dc01d06",
+    "src/util/day_date.rs": "9a40d04cd811b9b5fc5d6009d7667486b45cd9dadd6c79912f3cbb2989bf1772",
+    "src/util.rs": "aeec9274319e07b28565603e3f96f7675db62578c23126bf7491a6ffab75471e",
+    "src/version.rs": "5ea054f786a26b875bee74c23786e40ceec92c30f8b7a3dd162d6638b6a923da",
+    "src/video.rs": "14044ed6516e7dd291963156c81793eb7a5bb69da766fbb7f845fee5c2e1d99c",
+    "src/voice.rs": "df3be56e6182e31c9bb951f48131fe92622b68d901ba1a3ae429fa8ef7c05483",
+    "src/wallpaper.rs": "3e84e1240e8226151f4287dfd3c0074538e6589c26b519e680c3a5aadbbeb700",
+    "src/whatsnew.rs": "8fac017fc136bb0ca857a00e31624100892e975eb96efc8883cdbfb37aad32ad",
+    "src/whisper_runtime.rs": "e99548324931966a17dd6fa31dceafd038b8718cc273a64fc8882ba74886597b",
+    "src/wrap.rs": "ba5cc2f646746dce7807b8dcbf679b08679bad027ba957c34b34f4380291b13f",
+    "src/write_api.rs": "3c278bbd0e14e85f18cad28c49b5ec7e05205e8ea2874ff8d135afb6b316c140",
+    "src/write_grants.rs": "2902dab3636f495e99bbc35f97c4d5245b33111c729bc618e1ce9cd32b224afd",
+    "src/write_journal.rs": "e9f7187146dee44c1e49e2534f217a91258f381347a9fec8ab9d49a2a3d89d9f",
+    "Cargo.toml": "54e3b5f12e7cd5c28f9aac7a793dff6ac313a3f4a96c594db139dc27dd51a615"
+  }
+}
