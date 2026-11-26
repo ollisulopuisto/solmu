@@ -1055,6 +1055,42 @@ mod tests {
         (dir, app, ctx)
     }
     #[test]
+    fn thread_default_preserves_explicit_quote_and_tracks_new_members_without_render() {
+        let (_dir, mut app, ctx) = seeded();
+        let chat = app.open_chat.clone().unwrap();
+        let (backend, mut commands) = crate::backend::Backend::recording();
+        app.backend = backend;
+        app.apply(
+            crate::model::Action::SendText {
+                chat: chat.clone(),
+                text: "first".into(),
+                quoting: Some("1".into()),
+            },
+            &ctx,
+        );
+        assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(
+            |c| matches!(c,crate::backend::Command::SendText {quoting:Some(q),..} if q.id=="1")
+        ));
+        let mut latest = m("a", "3", Some(("a", "2")));
+        latest.timestamp = 999999;
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .messages
+            .push(latest);
+        app.apply(
+            crate::model::Action::SendText {
+                chat: chat.clone(),
+                text: "next".into(),
+                quoting: None,
+            },
+            &ctx,
+        );
+        assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(
+            |c| matches!(c,crate::backend::Command::SendText {quoting:Some(q),..} if q.id=="3")
+        ));
+    }
+    #[test]
     fn thread_send_defaults_to_latest_loaded_member_and_stops_after_close() {
         let (_dir, app, ctx) = seeded();
         let chat = app.open_chat.clone().unwrap();
