@@ -46,6 +46,10 @@
     "batch-results,debug,light",
     "reaction-clearance,dark",
     "reaction-clearance,light",
+    "media-album-partial,dark",
+    "media-album-menu,dark",
+    "media-album-menu,light",
+    "media-album-partial,light",
     "draft-shelf-confirmed,light",
     "draft-clear-recovery,light",
     "draft-clear-countdown,dark",
@@ -1172,6 +1176,22 @@
     "reaction-clearance,light": {
       "fixture": "reaction-clearance",
       "review": "Long text on incoming/outgoing bubbles with own+other heart count2 and another reaction; all bubble/shared layout changes retain this scene."
+    },
+    "media-album-partial,dark": {
+      "fixture": "media-album-partial",
+      "review": "Mixed local/missing album: no bulk Save all, Download all remains for manual recovery; per-item menus retained."
+    },
+    "media-album-menu,dark": {
+      "fixture": "media-album-menu",
+      "review": "Production mixed-download album with available export path. Menu variant opens the album popup to verify Save all is retained there, light counterpart checks contrast. Full shared layout coverage retained."
+    },
+    "media-album-menu,light": {
+      "fixture": "media-album-menu",
+      "review": "Production mixed-download album with available export path. Menu variant opens the album popup to verify Save all is retained there, light counterpart checks contrast. Full shared layout coverage retained."
+    },
+    "media-album-partial,light": {
+      "fixture": "media-album-partial",
+      "review": "Production mixed-download album with available export path. Menu variant opens the album popup to verify Save all is retained there, light counterpart checks contrast. Full shared layout coverage retained."
     },
     "draft-shelf-confirmed,light": {
       "fixture": "draft-shelf-confirmed",
