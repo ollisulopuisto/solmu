@@ -49,7 +49,11 @@
     "media-album-partial,dark",
     "media-album-menu,dark",
     "media-album-menu,light",
-    "media-album-partial,light"
+    "media-album-partial,light",
+    "draft-shelf-confirmed,light",
+    "draft-clear-recovery,light",
+    "draft-clear-countdown,dark",
+    "draft-clear-countdown,light"
   ],
   "modules": {
     "src/a11y.rs": {
@@ -1188,6 +1192,22 @@
     "media-album-partial,light": {
       "fixture": "media-album-partial",
       "review": "Production mixed-download album with available export path. Menu variant opens the album popup to verify Save all is retained there, light counterpart checks contrast. Full shared layout coverage retained."
+    },
+    "draft-shelf-confirmed,light": {
+      "fixture": "draft-shelf-confirmed",
+      "review": "Same production draft controls fixture as dark; light counterpart verifies button contrast and silent normal autosave. Full shared layout coverage retained."
+    },
+    "draft-clear-recovery,light": {
+      "fixture": "draft-clear-recovery",
+      "review": "Same production draft controls fixture as dark; light counterpart verifies button contrast and silent normal autosave. Full shared layout coverage retained."
+    },
+    "draft-clear-countdown,dark": {
+      "fixture": "draft-clear-countdown",
+      "review": "Cleared text with new composer text and active10second expiry. Thin progress line only, no numeric tick; no automatic draft creation. Full gallery retained."
+    },
+    "draft-clear-countdown,light": {
+      "fixture": "draft-clear-countdown",
+      "review": "Cleared text with new composer text and active10second expiry. Thin progress line only, no numeric tick; no automatic draft creation. Full gallery retained."
     }
   }
 }

@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use egui::{
     Align, Align2, Color32, CornerRadius, Frame, Key, KeyboardShortcut, Layout, Margin, Modifiers,
@@ -2758,6 +2758,10 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
     }
     let mut state = app.draft_states.remove(chat).unwrap_or_default();
     state.loaded |= app.draft_shelves_loaded;
+    let recovery_fraction = state.recovery_fraction(Instant::now());
+    if recovery_fraction.is_some() {
+        ui.ctx().request_repaint_after(Duration::from_secs(1));
+    }
     #[cfg(test)]
     ui.ctx().data_mut(|d| {
         d.insert_temp(
@@ -2770,75 +2774,52 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
             ),
         )
     });
-    ui.horizontal(|ui| {
-        if !state.loaded || state.changed.is_some() || state.confirmed.is_some() || state.failed {
+    // Normal autosave is silent. A real failure stays visible and recoverable.
+    if !state.loaded {
+        theme::text(
+            ui,
+            crate::i18n::gettext(app.locale, "Not saved here until restart"),
+            theme::regular(12.0),
+            Color32::GRAY,
+        );
+    }
+    if state.failed {
+        ui.horizontal(|ui| {
             theme::text(
                 ui,
-                match state.status() {
-                    "Saved locally" => crate::i18n::gettext(app.locale, "Saved locally"),
-                    "Not saved" => crate::i18n::gettext(app.locale, "Not saved"),
-                    "Not saved here until restart" => {
-                        crate::i18n::gettext(app.locale, "Not saved here until restart")
-                    }
-                    _ => crate::i18n::gettext(app.locale, "Saving"),
-                },
+                crate::i18n::gettext(app.locale, "Not saved"),
                 theme::regular(12.0),
                 Color32::GRAY,
             );
-        }
-        if state.loaded
-            && state.failed
-            && ui
+            if ui
                 .button(crate::i18n::gettext(app.locale, "Retry"))
                 .clicked()
-        {
-            state.failed = false;
-            state.changed = Some(std::time::Instant::now() - Duration::from_secs(1));
-        }
-        if state.loaded
-            && !app.composer.trim().is_empty()
-            && state.staged_shelf.is_none()
-            && ui
-                .button(crate::i18n::gettext(app.locale, "Keep as draft"))
-                .clicked()
-        {
-            state.resumed = None;
-            let mut shelf = state.shelf.clone();
-            shelf.push(crate::draft_state::Parked {
-                id: crate::util::now() as u64 * 1000 + state.revision,
-                text: app.composer.clone(),
-            });
-            state.text = app.composer.clone();
-            state.clear_after_save = Some(app.composer.clone());
-            state.staged_shelf = Some(shelf);
-            state.touch();
-        }
-    });
+            {
+                state.failed = false;
+                state.changed = Some(std::time::Instant::now() - Duration::from_secs(1));
+            }
+        });
+    }
     if let Some(recovery) = state.recovery.clone() {
-        ui.group(|ui| {
-            ui.label(crate::i18n::gettext(
-                app.locale,
-                "Text cleared. Keep it for later?",
-            ));
+        let recovery_group = ui.group(|ui| {
             ui.horizontal(|ui| {
                 if state.staged_shelf.is_none()
                     && ui
-                        .button(crate::i18n::gettext(app.locale, "Keep as draft"))
+                        .button(format!(
+                            "{}  {}",
+                            crate::i18n::gettext(app.locale, "Save deleted text as draft"),
+                            super::keys::hint("save-draft").unwrap_or_default()
+                        ))
                         .clicked()
                 {
-                    let mut shelf = state.shelf.clone();
-                    shelf.push(crate::draft_state::Parked {
-                        id: crate::util::now() as u64 * 1000 + state.revision,
-                        text: recovery.clone(),
-                    });
-                    state.staged_recovery = Some(recovery.clone());
-                    state.staged_shelf = Some(shelf);
-                    state.touch();
+                    state.keep_text(&recovery, false);
                 }
-                if app.composer.is_empty()
-                    && ui
-                        .button(crate::i18n::gettext(app.locale, "Undo"))
-                        .clicked()
+                if ui
+                    .add_enabled(
+                        app.composer.is_empty(),
+                        egui::Button::new(crate::i18n::gettext(app.locale, "Restore text")),
+                    )
+                    .clicked()
                 {
                     app.composer = recovery.clone();
                     state.text = recovery;
@@ -2853,6 +2834,17 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
                 }
             });
         });
+        if let Some(fraction) = recovery_fraction {
+            let rect = recovery_group.response.rect;
+            let y = rect.bottom() - 1.0;
+            ui.painter().line_segment(
+                [
+                    pos2(rect.left(), y),
+                    pos2(rect.left() + rect.width() * fraction, y),
+                ],
+                Stroke::new(2.0, app.conversation_palette().accent),
+            );
+        }
     }
     if state.shelf_open {
         let palette = app.conversation_palette();

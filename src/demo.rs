@@ -2863,11 +2863,11 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 app.open_chat = Some(chat.into());
                 app.scroll_to_bottom = false;
             }
-            "draft-shelf-confirmed" | "draft-clear-recovery" => {
+            "draft-shelf-confirmed" | "draft-clear-recovery" | "draft-clear-countdown" => {
                 let chat = SAMPLES[0].id.to_owned();
                 app.open_chat = Some(chat.clone());
                 app.draft_shelves_loaded = true;
-                let text = if part == "draft-clear-recovery" {
+                let text = if matches!(part, "draft-clear-recovery" | "draft-clear-countdown") {
                     ""
                 } else {
                     "A fresh message while two drafts wait safely."
@@ -2888,11 +2888,17 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                         text: "Second retained draft: ask Alex about the slides before Friday.".into(),
                     },
                 ];
-                if part == "draft-clear-recovery" {
+                if matches!(part, "draft-clear-recovery" | "draft-clear-countdown") {
                     state.recovery = Some(concat!(
                         "The longer message that was just cleared remains available here.\n",
                         "Keep it for later, undo into an empty composer, or dismiss it and carry on."
                     ).into());
+                }
+                if part == "draft-clear-countdown" {
+                    state.text = "Actually, the new plan is".into();
+                    state.recovery_left = Some(std::time::Duration::from_secs(10));
+                    state.recovery_started = Some(std::time::Instant::now());
+                    app.composer = "Actually, the new plan is".into();
                 }
             }
             "reaction-clearance" => {
@@ -13553,6 +13559,18 @@ mod tests {
             drawn(&mut app).unwrap().3,
             "actual recovery controls rendered"
         );
+        // An attachment alone must preserve the only copy of cleared text.
+        app.stage(crate::app::Pending::File(std::path::PathBuf::from(
+            "new.png",
+        )));
+        assert!(drawn(&mut app).unwrap().3);
+        assert!(
+            app.draft_states[app.open_chat.as_ref().unwrap()]
+                .recovery
+                .is_some()
+        );
+        app.pending.clear();
+        apply_flags(&mut app, Some("draft-clear-recovery"));
         app.reply_to = Some(crate::model::ReplyTarget {
             chat: Some(SAMPLES[2].id.into()),
             id: "unavailable".into(),

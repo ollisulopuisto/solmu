@@ -1969,7 +1969,7 @@ impl App {
         if let Some(previous) = self.open_chat.clone() {
             if let Some(state) = self.draft_states.get_mut(&previous) {
                 state.resumed = None;
-                state.recovery = None;
+                state.pause_recovery(Instant::now());
                 state.deletion_start = None;
             }
             self.save_attachment_draft(&previous);
@@ -1989,7 +1989,7 @@ impl App {
             }
             self.stop_composing(&previous);
             let text = self.drafts.get(&previous).cloned().unwrap_or_default();
-            self.store_draft(&previous, &text);
+            self.store_navigation_draft(&previous, &text);
         }
         self.picker = None;
         self.pending.clear();
@@ -8224,6 +8224,19 @@ impl App {
 
     /// Mirrors a chat's draft into the encrypted archive, so unsent text
     /// survives a restart. An empty text clears the stored row.
+    /// Navigation keeps the unsaved recovery offer in memory, with its timer paused.
+    /// Ordinary composer text is still stored through the existing path.
+    fn store_navigation_draft(&mut self, chat: &str, text: &str) {
+        let recovery = self.draft_states.get_mut(chat).and_then(|state| {
+            state.pause_recovery(Instant::now());
+            state.recovery.take()
+        });
+        self.store_draft(chat, text);
+        if let Some(state) = self.draft_states.get_mut(chat) {
+            state.recovery = recovery;
+        }
+    }
+
     fn store_draft(&mut self, chat: &str, text: &str) {
         if let Some(state) = self.draft_states.get_mut(chat) {
             state.resumed = None;
@@ -8939,7 +8952,7 @@ impl App {
                 }
                 self.stop_composing(&previous);
                 let draft = self.drafts.get(&previous).cloned().unwrap_or_default();
-                self.store_draft(&previous, &draft);
+                self.store_navigation_draft(&previous, &draft);
             }
             self.selection = None;
             self.unread_divider =
@@ -10864,7 +10877,7 @@ impl App {
                         self.composer_mentions.clear();
                     }
                     let saved = self.drafts.get(&chat).cloned().unwrap_or_default();
-                    self.store_draft(&chat, &saved);
+                    self.store_navigation_draft(&chat, &saved);
                 }
                 self.reply_to = None;
                 // A pending quote belongs to the chat being left, like the
@@ -23566,6 +23579,29 @@ mod tests {
         app.follow_receipts();
         assert!(app.receipts_watch.is_none());
         assert!(commands.try_recv().is_err());
+    }
+
+    #[test]
+    fn chat_navigation_preserves_and_pauses_recovery_without_saving_it() {
+        let mut app = app();
+        let (backend, mut commands, _) = Backend::recording_with_events();
+        app.backend = backend;
+        let state = crate::draft_state::State {
+            recovery: Some("deleted text".into()),
+            recovery_left: Some(Duration::from_secs(10)),
+            recovery_started: Some(Instant::now() - Duration::from_secs(4)),
+            ..Default::default()
+        };
+        app.draft_states.insert("one".into(), state);
+        app.store_navigation_draft("one", "new composer text");
+        let state = &app.draft_states["one"];
+        assert_eq!(state.recovery.as_deref(), Some("deleted text"));
+        assert!(state.recovery_started.is_none());
+        assert!(state.recovery_left.unwrap() <= Duration::from_secs(6));
+        assert!(state.staged_shelf.is_none());
+        assert!(
+            matches!(commands.try_recv().unwrap(), Command::SaveDraft { text, .. } if text == "new composer text")
+        );
     }
 
     #[test]

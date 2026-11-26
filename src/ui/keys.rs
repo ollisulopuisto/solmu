@@ -82,6 +82,31 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     if app.page == Page::Chats
         && app.dialog.is_none()
         && !app.show_update
+        && app.editing.is_none()
+        && app.picker.is_none()
+        && app.reaction_target.is_none()
+        && app.recording.is_none()
+        && app.pending.is_empty()
+        && (!ctx.text_edit_focused() || ctx.memory(|m| m.has_focus(egui::Id::new("composer-text"))))
+        && app.composer_holds_draft()
+        && let Some(chat) = app.open_chat.clone()
+        && take_exact(ctx, COMMAND_SHIFT, Key::S)
+    {
+        let current = app.composer.clone();
+        let loaded = app.draft_shelves_loaded;
+        let state = app.draft_states.entry(chat).or_default();
+        state.loaded |= loaded;
+        state.recovery_fraction(std::time::Instant::now());
+        if let Some(recovery) = state.recovery.clone() {
+            state.keep_text(&recovery, false);
+        } else if !current.trim().is_empty() {
+            state.keep_text(&current, true);
+        }
+        return;
+    }
+    if app.page == Page::Chats
+        && app.dialog.is_none()
+        && !app.show_update
         && app.picker.is_none()
         && app.reaction_target.is_none()
         && app.recording.is_none()
@@ -1461,6 +1486,13 @@ const MESSAGE_TEMPLATE_MENU: Shortcut = Shortcut {
         accelerator: "Super+KeyY",
     }),
 };
+const SAVE_DRAFT: Shortcut = Shortcut {
+    id: "save-draft",
+    keys: &[(COMMAND_SHIFT, Key::S)],
+    label: Some("Ctrl+Shift+S"),
+    description: Some("Save composer or cleared text as a draft"),
+    menu: None,
+};
 const MESSAGE_STAR: Shortcut = Shortcut {
     id: "message-star",
     keys: &[(COMMAND_ALT, Key::S)],
@@ -1799,6 +1831,7 @@ pub static REGISTRY: &[Row] = &[
     Row::Binding(&FORWARD),
     Row::Binding(&MESSAGE_STAR),
     Row::Binding(&MESSAGE_SAVE),
+    Row::Binding(&SAVE_DRAFT),
     Row::Help(
         "\u{2191} / \u{2193}, Enter",
         "Walk the open chat's search results and jump to one",
@@ -2345,6 +2378,7 @@ mod tests {
             ("Ctrl+L", "Forward selected messages, or the latest message"),
             ("Ctrl+Alt+S", "Star or unstar the context-menu message"),
             ("Ctrl+Alt+B", "Save or unsave the context-menu message"),
+            ("Ctrl+Shift+S", "Save composer or cleared text as a draft"),
             (
                 "\u{2191} / \u{2193}, Enter",
                 "Walk the open chat's search results and jump to one",
@@ -2578,6 +2612,8 @@ mod tests {
         ("message-edit", None),
         ("message-star", None),
         ("message-save", None),
+        // Contextual composer action, also shown on recovery's Save button.
+        ("save-draft", None),
     ];
 
     #[test]
@@ -3097,6 +3133,36 @@ mod tests {
         assert!(!EDIT_REDO.keys.contains(&(Modifiers::COMMAND, Key::Y)));
     }
 
+    #[test]
+    fn save_draft_shortcut_stages_current_or_cleared_text_and_respects_modal() {
+        let (_root, mut app, ids) = app_with_chats(1);
+        let chat = ids[0].clone();
+        app.open_chat = Some(chat.clone());
+        app.draft_shelves_loaded = true;
+        app.composer = "current message".into();
+        let ctx = egui::Context::default();
+        assert!(!press(&mut app, &ctx, Key::S, COMMAND_SHIFT));
+        assert_eq!(app.composer, "current message", "wait for durable success");
+        let state = &app.draft_states[&chat];
+        assert_eq!(
+            state.staged_shelf.as_ref().unwrap()[0].text,
+            "current message"
+        );
+        assert_eq!(state.clear_after_save.as_deref(), Some("current message"));
+        app.draft_states.remove(&chat);
+        app.composer.clear();
+        app.draft_states.entry(chat.clone()).or_default().recovery = Some("cleared message".into());
+        assert!(!press(&mut app, &ctx, Key::S, COMMAND_SHIFT));
+        assert_eq!(
+            app.draft_states[&chat].staged_shelf.as_ref().unwrap()[0].text,
+            "cleared message"
+        );
+        app.draft_states.remove(&chat);
+        app.composer = "behind modal".into();
+        app.dialog = Some(Dialog::Shortcuts);
+        press(&mut app, &ctx, Key::S, COMMAND_SHIFT);
+        assert!(!app.draft_states.contains_key(&chat));
+    }
     #[test]
     fn message_menu_does_not_take_redo_shift_command_z() {
         let (_root, mut app, ids) = app_with_chats(1);

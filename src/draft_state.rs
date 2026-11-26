@@ -23,6 +23,8 @@ pub struct State {
     pub shelf: Vec<Parked>,
     pub staged_shelf: Option<Vec<Parked>>,
     pub recovery: Option<String>,
+    pub recovery_left: Option<Duration>,
+    pub recovery_started: Option<Instant>,
     pub deletion_start: Option<String>,
     pub shelf_open: bool,
     pub loaded: bool,
@@ -68,6 +70,14 @@ impl State {
             return;
         }
         self.clear_after_save = None;
+        if !after.trim().is_empty()
+            && self.recovery.is_some()
+            && self.recovery_left.is_none()
+            && self.staged_recovery.is_none()
+        {
+            self.recovery_left = Some(Duration::from_secs(10));
+            self.recovery_started = Some(Instant::now());
+        }
         if after.trim().is_empty() {
             self.resumed = None;
         }
@@ -82,6 +92,8 @@ impl State {
                         || original.contains('\n'))
                 {
                     self.recovery = Some(original);
+                    self.recovery_left = None;
+                    self.recovery_started = None;
                 }
             }
         } else {
@@ -89,6 +101,52 @@ impl State {
         }
         self.text = after.into();
         self.touch();
+    }
+    pub fn pause_recovery(&mut self, now: Instant) {
+        if let (Some(left), Some(start)) = (self.recovery_left, self.recovery_started.take()) {
+            self.recovery_left = Some(left.saturating_sub(now.saturating_duration_since(start)));
+        }
+    }
+    pub fn recovery_fraction(&mut self, now: Instant) -> Option<f32> {
+        if self.recovery.is_none() {
+            self.recovery_left = None;
+            self.recovery_started = None;
+            return None;
+        }
+        let left = self.recovery_left?;
+        let start = *self.recovery_started.get_or_insert(now);
+        let remaining = left.saturating_sub(now.saturating_duration_since(start));
+        if remaining.is_zero() {
+            self.recovery = None;
+            self.recovery_left = None;
+            self.recovery_started = None;
+            None
+        } else {
+            Some(remaining.as_secs_f32() / 10.0)
+        }
+    }
+    pub fn keep_text(&mut self, text: &str, clear_composer: bool) -> bool {
+        if !self.loaded || self.staged_shelf.is_some() || text.trim().is_empty() {
+            return false;
+        }
+        self.resumed = None;
+        let mut shelf = self.shelf.clone();
+        shelf.push(Parked {
+            id: crate::util::now() as u64 * 1000 + self.revision,
+            text: text.into(),
+        });
+        if clear_composer {
+            self.text = text.into();
+            self.clear_after_save = Some(text.into());
+        } else {
+            self.staged_recovery = Some(text.into());
+            // An explicit save must not lose its retry copy to the expiry timer.
+            self.recovery_left = None;
+            self.recovery_started = None;
+        }
+        self.staged_shelf = Some(shelf);
+        self.touch();
+        true
     }
     pub fn touch(&mut self) {
         self.revision = self.revision.wrapping_add(1);
@@ -191,6 +249,75 @@ mod tests {
         assert!(!s.ready(), "only one in-flight transaction");
         s.ack(s.pending.unwrap(), true);
         assert!(s.ready(), "newer edits remain due after stale ack");
+    }
+    #[test]
+    fn explicit_recovery_save_keeps_failure_retry_without_a_new_expiry() {
+        let mut state = State {
+            loaded: true,
+            text: "new composer".into(),
+            recovery: Some("deleted original".into()),
+            recovery_left: Some(Duration::from_secs(4)),
+            recovery_started: Some(Instant::now()),
+            ..Default::default()
+        };
+        assert!(state.keep_text("deleted original", false));
+        state.pending = Some(state.revision);
+        state.ack(state.revision, false);
+        state.edit("new composer", "new composer continues", false);
+        assert!(state.recovery_left.is_none());
+        assert!(
+            state
+                .recovery_fraction(Instant::now() + Duration::from_secs(30))
+                .is_none()
+        );
+        assert_eq!(state.recovery.as_deref(), Some("deleted original"));
+        assert_eq!(state.staged_recovery.as_deref(), Some("deleted original"));
+        assert_eq!(state.staged_shelf.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn new_text_starts_one_countdown_and_navigation_pauses_it() {
+        let mut s = State {
+            loaded: true,
+            recovery_min_chars: Some(1),
+            ..Default::default()
+        };
+        s.edit("previous text", "", true);
+        let now = Instant::now();
+        assert!(
+            s.recovery_fraction(now).is_none(),
+            "deletion alone has no timer"
+        );
+        s.edit("", "new", false);
+        let start = s.recovery_started.unwrap();
+        s.edit("new", "new text", false);
+        assert_eq!(
+            s.recovery_started,
+            Some(start),
+            "do not reset on more typing"
+        );
+        s.pause_recovery(start + Duration::from_secs(4));
+        let resumed = start + Duration::from_secs(100);
+        assert!((s.recovery_fraction(resumed).unwrap() - 0.6).abs() < 0.01);
+        assert!(
+            s.recovery_fraction(resumed + Duration::from_secs(6))
+                .is_none()
+        );
+        assert!(s.recovery.is_none());
+        assert!(s.staged_shelf.is_none(), "expiry must not auto-save");
+    }
+    #[test]
+    fn keep_text_stages_without_claiming_saved_before_ack() {
+        let mut s = State {
+            loaded: true,
+            ..Default::default()
+        };
+        assert!(s.keep_text("draft", true));
+        assert_eq!(s.clear_after_save.as_deref(), Some("draft"));
+        assert_eq!(s.text, "draft", "WriteDraftState reads the current text");
+        assert_ne!(s.status(), "Saved locally");
+        assert!(s.shelf.is_empty());
+        assert!(!s.keep_text("duplicate", true));
     }
     fn resumed_pair() -> State {
         State {
