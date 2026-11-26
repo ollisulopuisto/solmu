@@ -27,6 +27,8 @@ class WorkflowTests(unittest.TestCase):
     def test_baseline_mode_skips_only_gallery_and_keeps_startup_and_about(self):
         text = workflow('ci.yml')
         self.assertEqual(text.count('if [ "$scenes" = baseline ]; then scenes=""; fi'), 2)
+        self.assertEqual(text.count('python3 .github/scripts/ci-scope.py --gallery'), 2)
+        self.assertNotIn("all_scenes='", text)
         self.assertEqual(text.count('--demo-shot-delay 8000'), 6)
         self.assertIn('[ "$REF_TYPE" = tag ]', text)
         for selected in ['full', 'baseline', 'refined-thread,dark']:

@@ -99,12 +99,13 @@ def scene_map_errors(root=ROOT, registry=None, check_contracts=False):
     if actual != mapped:
         errors.append('Rust module map drift: ' + repr(sorted(actual ^ mapped)))
     scenes = registry['scenes']
+    if set(registry.get('scene_reviews', {})) != set(scenes):
+        errors.append('Unreviewed or stale scene mapping')
     if not scenes or len(scenes) != len(set(scenes)):
         errors.append('Empty or duplicate scene registry')
     workflow = (root / '.github/workflows/ci.yml').read_text()
-    galleries = re.findall(r"all_scenes='([^']+)'", workflow)
-    if len(galleries) != 2 or any(g.split() != scenes for g in galleries):
-        errors.append('Both workflow galleries must exactly match scene registry')
+    if workflow.count('python3 .github/scripts/ci-scope.py --gallery') != 2:
+        errors.append('Both workflow galleries must load the scene registry')
     for path, entry in registry['modules'].items():
         coverage = entry['coverage']
         if not entry.get('reason'):
@@ -139,11 +140,15 @@ def scene_scope(paths, full=False, root=ROOT, registry=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--gallery', action='store_true', help='Print the canonical full gallery')
     parser.add_argument('--base')
     parser.add_argument('--head', default='HEAD')
     parser.add_argument('--full', action='store_true')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
+    if args.gallery:
+        print(' '.join(load_scene_map()['scenes']))
+        return
     paths = []
     if args.full:
         result = classify([], full=True)

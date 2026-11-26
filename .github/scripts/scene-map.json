@@ -990,5 +990,179 @@
     "src/write_grants.rs": "2902dab3636f495e99bbc35f97c4d5245b33111c729bc618e1ce9cd32b224afd",
     "src/write_journal.rs": "e9f7187146dee44c1e49e2534f217a91258f381347a9fec8ab9d49a2a3d89d9f",
     "Cargo.toml": "54e3b5f12e7cd5c28f9aac7a793dff6ac313a3f4a96c594db139dc27dd51a615"
+  },
+  "scene_reviews": {
+    "translation-review,dark": {
+      "fixture": "translation-review",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "translation-review,light": {
+      "fixture": "translation-review",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "draft-shelf-confirmed,dark": {
+      "fixture": "draft-shelf-confirmed",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "draft-clear-recovery,dark": {
+      "fixture": "draft-clear-recovery",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "info-source-sent,dark": {
+      "fixture": "info-source-sent",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "info-source-received,dark": {
+      "fixture": "info-source-received",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "info-source-group,dark": {
+      "fixture": "info-source-group",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "tail-run,messages": {
+      "fixture": "tail-run",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "tail-run,messages-light": {
+      "fixture": "tail-run",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "chain-above-outgoing,dark": {
+      "fixture": "chain-above-outgoing",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "regular-tail-outgoing,light": {
+      "fixture": "regular-tail-outgoing",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "hover-actions,dark": {
+      "fixture": "hover-actions",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "hover-actions,light": {
+      "fixture": "hover-actions",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "refined-thread,dark": {
+      "fixture": "refined-thread",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "refined-thread,light": {
+      "fixture": "refined-thread",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "avatar-overflow,dark": {
+      "fixture": "avatar-overflow",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "image-burst,dark": {
+      "fixture": "image-burst",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "image-burst,light": {
+      "fixture": "image-burst",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "hidden-message": {
+      "fixture": "hidden-message",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "hidden-message,light": {
+      "fixture": "hidden-message",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "edit": {
+      "fixture": "edit",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "edit,light": {
+      "fixture": "edit",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "group-stacks": {
+      "fixture": "group-stacks",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "history-date": {
+      "fixture": "history-date",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "message-info-direct": {
+      "fixture": "message-info-direct",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "linked": {
+      "fixture": "linked",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "linked-loading": {
+      "fixture": "linked-loading",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "shortcuts": {
+      "fixture": "shortcuts",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "linked,rail": {
+      "fixture": "linked",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "linked,rail,light": {
+      "fixture": "linked",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "flat-groups,dark": {
+      "fixture": "flat-groups",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "info-media": {
+      "fixture": "info-media",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "info-videos": {
+      "fixture": "info-videos",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "info-voice": {
+      "fixture": "info-voice",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "voice-transcripts": {
+      "fixture": "voice-transcripts",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "voice-transcripts-search": {
+      "fixture": "voice-transcripts-search",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "chat-transcript-search": {
+      "fixture": "chat-transcript-search",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "settings-search=voice": {
+      "fixture": "settings-search=voice",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "whisper-setup": {
+      "fixture": "whisper-setup",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "batch-results,dark": {
+      "fixture": "batch-results",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "batch-results,light": {
+      "fixture": "batch-results",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "batch-results,debug,dark": {
+      "fixture": "batch-results",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "batch-results,debug,light": {
+      "fixture": "batch-results",
+      "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    }
   }
 }
