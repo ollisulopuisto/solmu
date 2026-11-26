@@ -10548,24 +10548,8 @@ fn album_content(
                 .is_some_and(|media| media.path.is_none())
         })
         .collect();
-    let files: Vec<(PathBuf, String)> = messages
-        .iter()
-        .filter_map(|message| {
-            let path = message.content.media()?.path.as_ref()?;
-            Some((path.clone(), attachment_name(&message.content, path)))
-        })
-        .collect();
-    if !files.is_empty()
-        && theme::pill_button(
-            ui,
-            &view.palette,
-            &crate::i18n::gettext(view.locale, "Save all…"),
-            true,
-        )
-        .clicked()
-    {
-        actions.push(Action::SaveAttachments { files });
-    }
+    // Bulk export is deliberately absent. Missing files still have the
+    // independent manual-download controls below, and per-item Save remains.
     if !missing.is_empty() {
         let downloading = missing.iter().all(|message| {
             message

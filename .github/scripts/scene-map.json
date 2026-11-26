@@ -43,7 +43,8 @@
     "batch-results,dark",
     "batch-results,light",
     "batch-results,debug,dark",
-    "batch-results,debug,light"
+    "batch-results,debug,light",
+    "media-album-partial,dark"
   ],
   "modules": {
     "src/a11y.rs": {
@@ -1163,6 +1164,10 @@
     "batch-results,debug,light": {
       "fixture": "batch-results",
       "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "media-album-partial,dark": {
+      "fixture": "media-album-partial",
+      "review": "Mixed local/missing album: no bulk Save all, Download all remains for manual recovery; per-item menus retained."
     }
   }
 }

@@ -14797,7 +14797,7 @@ mod tests {
         app.backend.record_demo_commands();
         for first_click in [true, false] {
             let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
-            assert!(nodes.iter().any(|(label, _, _)| label == "Save all…"));
+            assert!(!nodes.iter().any(|(label, _, _)| label == "Save all…"));
             let Some(pos) = nodes
                 .iter()
                 .find(|(label, _, _)| label == "Download all")
@@ -14957,7 +14957,7 @@ mod tests {
         app.attach(&ctx);
         render(&mut app, &ctx);
         let nodes = accessible_nodes(&mut app, &ctx, Vec::new());
-        assert!(nodes.iter().any(|(label, _, _)| label == "Save all…"));
+        assert!(!nodes.iter().any(|(label, _, _)| label == "Save all…"));
         assert!(nodes.iter().any(|(label, _, _)| label == "Download all"));
         // The quote-free chip replaced the quoted text: the member keeps a
         // jump button naming its quoted sender alongside the actions.
