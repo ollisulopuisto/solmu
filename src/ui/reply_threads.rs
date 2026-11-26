@@ -1023,8 +1023,10 @@ mod tests {
     #[test]
     fn thread_routes_are_permanent_and_background_geometry_is_not_reused() {
         let ctx = egui::Context::default();
-        let mut f = Frame::default();
-        f.active = true;
+        let mut f = Frame {
+            active: true,
+            ..Default::default()
+        };
         let parent = Key {
             chat: "chat".into(),
             id: "parent".into(),

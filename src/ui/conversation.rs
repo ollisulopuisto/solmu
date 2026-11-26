@@ -7743,8 +7743,14 @@ fn quote_chip(
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), hint.as_ref())
     });
-    if response.clicked() {
-        let source_jump = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+    let modified_keyboard_jump = response.has_focus()
+        && ui.input_mut(|i| {
+            i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)
+        });
+    if response.clicked() || modified_keyboard_jump {
+        let source_jump =
+            modified_keyboard_jump || ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
         if !source_jump || quoted.is_none() {
             super::reply_threads::open_for_message(ui.ctx(), message);
             return;
