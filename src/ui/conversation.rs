@@ -5182,6 +5182,7 @@ struct HoverSnapshot {
     pointer: Option<egui::Pos2>,
     exit: super::hover_actions::ExitGrace,
     last_focus: Option<egui::Id>,
+    visited_grid: bool,
 }
 fn hover_snapshot_id() -> egui::Id {
     egui::Id::new("message-actions-snapshot")
@@ -5277,6 +5278,15 @@ fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
     let before = actions.len();
     paint_hover_grid(ctx, &snapshot, actions);
     snapshot.last_focus = ctx.memory(|m| m.focused());
+    snapshot.visited_grid |= snapshot.last_focus.is_some_and(|id| {
+        super::hover_actions::focus_order(snapshot.bubble_id, snapshot.can_reply, snapshot.can_star)
+            .into_iter()
+            .any(|candidate| {
+                candidate == id
+                    && id != snapshot.bubble_id
+                    && id != snapshot.bubble_id.with("react-keyboard")
+            })
+    });
     if actions.len() > before {
         dismiss_hover_grid(ctx);
     } else {
@@ -5775,7 +5785,8 @@ fn grouped_hover_actions(
             // The fallback precedes the foreground Areas in native widget
             // registration. Do not register the grid again on its exit Tab,
             // or native focus loops into the first emoji instead of leaving.
-            if snapshot.last_focus == Some(bubble.id.with("react-keyboard"))
+            if snapshot.visited_grid
+                && snapshot.last_focus == Some(bubble.id.with("react-keyboard"))
                 && ui.input(|i| i.key_pressed(Key::Tab) && !i.modifiers.shift)
             {
                 dismiss_hover_grid(ui.ctx());
@@ -5929,6 +5940,7 @@ fn grouped_hover_actions(
         pointer,
         exit: super::hover_actions::ExitGrace::default(),
         last_focus: ui.memory(|m| m.focused()),
+        visited_grid: false,
     };
     ui.ctx()
         .data_mut(|d| d.insert_temp(hover_snapshot_id(), snapshot.clone()));
