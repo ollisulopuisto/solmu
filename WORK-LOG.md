@@ -5,10 +5,10 @@ status and persistent Keep action, keep real save failures with Retry. Cleared
 text has Save as draft / Restore text / Dismiss only. Exact Cmd/Ctrl-Shift-S
 is registered and shown on Save as draft; registry collision test covers both
 platforms. It stages existing transactional persistence rather than claiming
-a save or clearing the composer early. New edits or attachments dismiss stale
-recovery; deletion gesture accumulation stays intact. Traced edit, tick,
+a save or clearing the composer early. New edits dismiss stale recovery; attachments preserve the cleared text
+and its controls; deletion gesture accumulation stays intact. Traced edit, tick,
 WriteDraftState, ack, stage, keyboard overlay guards, prefill and shelf resume.
-State, native keyboard and attachment regression tests added; not yet executed
+State, native keyboard and attachment-preservation regression tests added; not yet executed
 on native CI. Rustfmt and diff checks pass locally. Open PRs487-492 contain no
 draft cleanup; prior shelf/recovery feature is reused. No schema, workflow or
 credential changes. Shelf layout remains separate. Merge needs owner word.

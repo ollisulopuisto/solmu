@@ -13524,11 +13524,16 @@ mod tests {
             drawn(&mut app).unwrap().3,
             "actual recovery controls rendered"
         );
-        // A picture without a caption dismisses the old offer too.
+        // An attachment alone must preserve the only copy of cleared text.
         app.stage(crate::app::Pending::File(std::path::PathBuf::from(
             "new.png",
         )));
-        assert!(!drawn(&mut app).unwrap().3);
+        assert!(drawn(&mut app).unwrap().3);
+        assert!(
+            app.draft_states[app.open_chat.as_ref().unwrap()]
+                .recovery
+                .is_some()
+        );
         app.pending.clear();
         apply_flags(&mut app, Some("draft-clear-recovery"));
         app.reply_to = Some(crate::model::ReplyTarget {

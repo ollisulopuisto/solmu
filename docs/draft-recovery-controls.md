@@ -1,8 +1,8 @@
 # Draft recovery controls
 
 Normal automatic saving is silent. When meaningful text is cleared, show only
-Save as draft, Restore text and Dismiss, no explanatory chip label. New text or
-a newly staged attachment dismisses the old recovery controls. Save failures
+Save as draft, Restore text and Dismiss, no explanatory chip label. New typed text dismisses the old recovery controls. An attachment alone
+preserves recovery text and its buttons. Save failures
 remain visible with Retry; hiding normal saved/saving status never hides errors.
 
 Cmd-Shift-S on macOS, Ctrl-Shift-S elsewhere, saves current plain composer text

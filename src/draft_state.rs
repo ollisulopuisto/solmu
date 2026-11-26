@@ -92,10 +92,6 @@ impl State {
         self.text = after.into();
         self.touch();
     }
-    pub fn dismiss_recovery_for_new_content(&mut self) {
-        self.recovery = None;
-        self.deletion_start = None;
-    }
     pub fn keep_text(&mut self, text: &str, clear_composer: bool) -> bool {
         if !self.loaded || self.staged_shelf.is_some() || text.trim().is_empty() {
             return false;
@@ -191,7 +187,7 @@ impl State {
 mod tests {
     use super::*;
     #[test]
-    fn new_text_and_new_attachment_dismiss_clear_recovery() {
+    fn new_text_dismisses_clear_recovery() {
         let mut s = State {
             loaded: true,
             recovery_min_chars: Some(1),
@@ -203,8 +199,6 @@ mod tests {
         assert!(s.recovery.is_none());
         s.edit("new", "", true);
         assert!(s.recovery.is_some());
-        s.dismiss_recovery_for_new_content();
-        assert!(s.recovery.is_none());
     }
     #[test]
     fn keep_text_stages_without_claiming_saved_before_ack() {
