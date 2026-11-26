@@ -1812,3 +1812,16 @@ regressions plus a synthetic given-reactions-large scene. Pre-push adversarial
 pass traced row-width consumers, footer wrapping, own toggle, album member IDs and
 color-emoji line height. Full native checks and actual feature capture await CI;
 local formatting/diff checks alone are not visual proof. No workflow edit/release.
+
+## Six-rule action-grid intent and tolerance,26November
+
+Owner21:04 approved all six rules. Add150ms pointer intent,250ms exit grace,
+12point padding enlarged24points facing target and direction-checked safe
+triangle from last in-bubble pointer. Keyboard opening remains immediate,
+Escape/click-away/scroll immediate close and target highlight preserved.
+Same single snapshot/action target, no invisible widgets, no settings or
+workflow change. Local exact hover_actions source15tests pass; integration
+fixtures use explicit time for the new open delay instead of assuming instant
+hover. Fresh full native suites and light/dark gallery required. Merge held
+for owner word. Checked main1e7d371 and495 before branching;495 is thread-only,
+this is separate hover interaction work and will need integration afterward.

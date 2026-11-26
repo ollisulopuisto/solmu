@@ -5177,6 +5177,7 @@ struct HoverSnapshot {
     from_thread: bool,
     frame: u64,
     pointer: Option<egui::Pos2>,
+    transit_origin: egui::Pos2,
     exit: super::hover_actions::ExitGrace,
     last_focus: Option<egui::Id>,
     visited_grid: bool,
@@ -5215,15 +5216,22 @@ fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
             })
             .filter(|pos| Some(*pos) != snapshot.pointer);
         let pointer = i.pointer.interact_pos();
-        let reach = snapshot
-            .geometry
-            .bounds()
-            .contains(pointer.unwrap_or(pos2(f32::INFINITY, f32::INFINITY)))
-            || (rendered
-                && pointer.is_some_and(|p| {
-                    snapshot.bubble_rect.contains(p)
-                        || snapshot.geometry.bridge(snapshot.bubble_rect).contains(p)
-                }));
+        let reach = pointer.is_some_and(|p| {
+            snapshot
+                .geometry
+                .padded_bounds(snapshot.bubble_rect)
+                .contains(p)
+                || (rendered
+                    && (snapshot.bubble_rect.contains(p)
+                        || snapshot.geometry.bridge(snapshot.bubble_rect).contains(p)))
+                || moved.is_some_and(|_| {
+                    snapshot.pointer.is_some_and(|previous| {
+                        snapshot
+                            .geometry
+                            .safe_triangle(snapshot.transit_origin, previous, p)
+                    })
+                })
+        });
         let dismiss = (i.pointer.any_pressed()
             && !snapshot
                 .geometry
@@ -5242,6 +5250,9 @@ fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
         (moved, reach, dismiss, i.time)
     });
     if let Some(pos) = input.0 {
+        if rendered && snapshot.bubble_rect.contains(pos) {
+            snapshot.transit_origin = pos;
+        }
         snapshot.pointer = Some(pos);
     }
     if snapshot
@@ -5252,7 +5263,7 @@ fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
         return;
     }
     if snapshot.exit.since.is_some() {
-        ctx.request_repaint_after(Duration::from_millis(150));
+        ctx.request_repaint_after(Duration::from_secs_f64(hover_actions::CLOSE_DELAY));
     }
     if rendered {
         ctx.layer_painter(hover_actions::target_outline_layer(snapshot.bubble_id))
@@ -5917,9 +5928,23 @@ fn grouped_hover_actions(
                 .iter()
                 .any(|event| matches!(event, egui::Event::MouseWheel { .. }))
     });
+    let now = ui.input(|i| i.time);
+    let intent_id = area_id.with("open-intent");
+    let (pointer_ready, intent_left) = ui.ctx().data_mut(|data| {
+        let mut intent = data
+            .get_temp::<hover_actions::OpenIntent>(intent_id)
+            .unwrap_or_default();
+        let ready = intent.update(entry.fresh(), over && uncovered && !scrolling, now);
+        if let Some(left) = intent.remaining(now) {
+            ui.ctx()
+                .request_repaint_after(Duration::from_secs_f64(left));
+        }
+        data.insert_temp(intent_id, intent);
+        ready
+    });
     let active = hover_actions::show_grid(
         scrolling,
-        over && uncovered && entry.fresh(),
+        pointer_ready,
         keyboard_mode && (bubble.has_focus() || keyboard),
     );
     if !active {
@@ -5954,6 +5979,7 @@ fn grouped_hover_actions(
         from_thread: in_thread_pass(),
         frame,
         pointer,
+        transit_origin: anchor,
         exit: super::hover_actions::ExitGrace::default(),
         last_focus: ui.memory(|m| m.focused()),
         visited_grid: false,
@@ -14448,6 +14474,7 @@ mod tests {
                 };
                 let mut out = ctx.run_ui(
                     egui::RawInput {
+                        time: Some(ctx.input(|input| input.time) + 0.2),
                         screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(640., 640.))),
                         events,
                         ..Default::default()
@@ -14571,6 +14598,7 @@ mod tests {
                 }
                 let mut output = ctx.run_ui(
                     egui::RawInput {
+                        time: Some(ctx.input(|input| input.time) + 0.2),
                         screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(700., 600.))),
                         events,
                         ..Default::default()
@@ -14589,6 +14617,8 @@ mod tests {
                 );
                 output.textures_delta.clear();
             };
+            draw(pos2(100., 150.), Some(120.), None);
+            assert!(!hover_grid_open(&ctx), "pointer opening waits for intent");
             draw(pos2(100., 150.), Some(120.), None);
             let original = ctx
                 .data(|d| d.get_temp::<HoverSnapshot>(hover_snapshot_id()))
@@ -15676,6 +15706,7 @@ mod tests {
                 }
                 let mut output = ctx.run_ui(
                     egui::RawInput {
+                        time: Some(ctx.input(|input| input.time) + 0.2),
                         screen_rect: Some(Rect::from_min_size(
                             egui::Pos2::ZERO,
                             vec2(420.0, 340.0),
@@ -15731,6 +15762,7 @@ mod tests {
                 }
                 let mut output = ctx.run_ui(
                     egui::RawInput {
+                        time: Some(ctx.input(|input| input.time) + 0.2),
                         screen_rect: Some(Rect::from_min_size(
                             egui::Pos2::ZERO,
                             vec2(420.0, 340.0),
@@ -15912,6 +15944,7 @@ mod tests {
                 }
                 let mut out = ctx.run_ui(
                     egui::RawInput {
+                        time: Some(ctx.input(|input| input.time) + 0.2),
                         screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(420., 640.))),
                         events,
                         ..Default::default()
@@ -16003,6 +16036,7 @@ mod tests {
                     }
                     let mut output = ctx.run_ui(
                         egui::RawInput {
+                            time: Some(ctx.input(|input| input.time) + 0.2),
                             screen_rect: Some(Rect::from_min_size(
                                 egui::Pos2::ZERO,
                                 vec2(420.0, 340.0),
