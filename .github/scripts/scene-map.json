@@ -44,7 +44,10 @@
     "batch-results,light",
     "batch-results,debug,dark",
     "batch-results,debug,light",
-    "media-album-partial,dark"
+    "media-album-partial,dark",
+    "media-album-menu,dark",
+    "media-album-menu,light",
+    "media-album-partial,light"
   ],
   "modules": {
     "src/a11y.rs": {
@@ -1168,6 +1171,18 @@
     "media-album-partial,dark": {
       "fixture": "media-album-partial",
       "review": "Mixed local/missing album: no bulk Save all, Download all remains for manual recovery; per-item menus retained."
+    },
+    "media-album-menu,dark": {
+      "fixture": "media-album-menu",
+      "review": "Production mixed-download album with available export path. Menu variant opens the album popup to verify Save all is retained there, light counterpart checks contrast. Full shared layout coverage retained."
+    },
+    "media-album-menu,light": {
+      "fixture": "media-album-menu",
+      "review": "Production mixed-download album with available export path. Menu variant opens the album popup to verify Save all is retained there, light counterpart checks contrast. Full shared layout coverage retained."
+    },
+    "media-album-partial,light": {
+      "fixture": "media-album-partial",
+      "review": "Production mixed-download album with available export path. Menu variant opens the album popup to verify Save all is retained there, light counterpart checks contrast. Full shared layout coverage retained."
     }
   }
 }

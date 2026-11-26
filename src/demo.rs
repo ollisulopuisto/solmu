@@ -3222,11 +3222,14 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                 }
                 messages[1].status = Delivery::Failed;
             }
-            "media-album-partial" => {
+            "media-album-partial" | "media-album-menu" => {
                 media_album_sample(app, true);
                 let (saved, _) = sample_files(app);
                 let messages = &mut app.conversations.get_mut(SAMPLES[0].id).unwrap().messages;
                 messages[3].content.media_at_mut(None).unwrap().path = Some(saved);
+                if part == "media-album-menu" {
+                    app.open_message_menu = Some("album-0".into());
+                }
                 messages[2].quoted = Some(crate::model::Quoted {
                     labelled: None,
                     id: "synthetic-quoted-message".into(),
@@ -14556,6 +14559,12 @@ mod tests {
         let mut app = app();
         media_album_sample(&mut app, false);
         let chat = app.open_chat.clone().unwrap();
+        let (saved, _) = sample_files(&mut app);
+        app.conversations.get_mut(&chat).unwrap().messages[3]
+            .content
+            .media_at_mut(None)
+            .unwrap()
+            .path = Some(saved);
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         app.attach(&ctx);
