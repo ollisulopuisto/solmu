@@ -10,10 +10,10 @@ Native captures/tests pending; no merge approval.
 
 Separate four-item cleanup, no shelf layout change. Hide ordinary saving/saved
 status and persistent Keep action, keep real save failures with Retry. Cleared
-text has Save as draft / Restore text / Dismiss only. Exact Cmd/Ctrl-Shift-S
+text has Save deleted text as draft / Restore text / Dismiss only. Exact Cmd/Ctrl-Shift-S
 is registered and shown on Save as draft; registry collision test covers both
 platforms. It stages existing transactional persistence rather than claiming
-a save or clearing the composer early. New edits dismiss stale recovery; attachments preserve the cleared text
+a save or clearing the composer early. New edits start the selected countdown; attachments preserve the cleared text
 and its controls; deletion gesture accumulation stays intact. Traced edit, tick,
 WriteDraftState, ack, stage, keyboard overlay guards, prefill and shelf resume.
 State, native keyboard and attachment-preservation regression tests added; not yet executed
