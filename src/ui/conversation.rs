@@ -4898,6 +4898,16 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
             explicit,
         });
     }
+    #[cfg(test)]
+    if !actions.is_empty()
+        && ui.input(|input| input.pointer.any_pressed() || input.pointer.any_released())
+    {
+        eprintln!(
+            "selection-actions pass={} {:?}",
+            ui.ctx().cumulative_pass_nr(),
+            actions
+        );
+    }
     app.actions.extend(actions);
     if edge_scrolled_up {
         // Scrolling up releases stick-to-bottom.

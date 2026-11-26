@@ -11776,6 +11776,12 @@ impl App {
             }
             Action::EndSweep => self.sweep = None,
             Action::ToggleSelected(id) => {
+                #[cfg(test)]
+                eprintln!(
+                    "apply-toggle {id} pass={} selection={:?}",
+                    ctx.cumulative_pass_nr(),
+                    self.selection
+                );
                 let mut next = self.selection.clone();
                 if let Some((chat, ids)) = next.as_mut() {
                     let selectable = self
