@@ -770,6 +770,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     // timeline owns its scroll area, and the single-chat message list never
     // runs while this view is up.
     let pending_scroll = app.scroll_page.take();
+    let hover_hold = super::conversation::hover_grid_open(ui.ctx());
     let forced_bottom = std::mem::take(&mut app.scroll_to_bottom_forced);
 
     // Caching the merged timeline order avoids collecting and sorting O(N log N)
@@ -840,6 +841,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
             app.conversations
                 .get(chat_id)
                 .and_then(|conv| conv.messages.get(*idx))
+                .filter(|message| {
+                    super::conversation::hover_keeps_message(ui.ctx(), &message.chat, &message.id)
+                })
         })
         .collect();
     super::reply_threads::bar(ui, app.locale);
@@ -976,7 +980,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
                 } else {
                     egui::IdSalt::new(("person-timeline", &person.members))
                 })
-                .stick_to_bottom(!filtered)
+                .stick_to_bottom(!filtered && !hover_hold)
                 .min_scrolled_height(remaining)
                 .max_height(remaining)
                 .auto_shrink([false, false])
@@ -1316,7 +1320,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         scroll.store(ui.ctx(), output.id);
         ui.ctx()
             .request_discard("linked view jumps to the newest message");
-    } else if grew_above.abs() > 0.5
+    } else if !hover_hold
+        && grew_above.abs() > 0.5
         && !redo
         && output.state.offset.y > 1.0
         && output.state.offset.y < bottom - 2.0
@@ -1326,6 +1331,32 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
         scroll.store(ui.ctx(), output.id);
         ui.ctx()
             .request_discard("linked row height changed above viewport");
+    }
+    if hover_hold
+        && valid.iter().any(|member| {
+            app.conversations.get(&member.chat).is_some_and(|c| {
+                c.messages
+                    .iter()
+                    .any(|m| !super::conversation::hover_keeps_message(ui.ctx(), &m.chat, &m.id))
+            })
+        })
+    {
+        let rect = egui::Rect::from_center_size(
+            egui::pos2(
+                output.inner_rect.center().x,
+                output.inner_rect.bottom() - 26.0,
+            ),
+            egui::vec2(180.0, 34.0),
+        );
+        if ui
+            .put(
+                rect,
+                egui::Button::new(crate::i18n::gettext(app.locale, "\u{2193} Jump to latest")),
+            )
+            .clicked()
+        {
+            app.actions.push(Action::ScrollToBottom);
+        }
     }
     ui.ctx().data_mut(|data| data.insert_temp(rows_key, cache));
     if let Some((member, id)) = selected_reply {
@@ -1339,6 +1370,43 @@ pub fn show(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> bool {
     app.finish_deferred_linked_reads(&displayed_sources.into_iter().collect::<Vec<_>>());
     app.actions.extend(actions);
     ui.ctx().data_mut(|d| d.insert_temp(key, state));
+    true
+}
+
+/// A retained hover overlay is painted outside virtualized rows. Route its
+/// stored source explicitly, using the same linked reply state as row actions.
+pub(crate) fn reply_to_hover_target(
+    app: &mut App,
+    ctx: &egui::Context,
+    chat: &Chat,
+    id: &str,
+) -> bool {
+    let Some(member) = Member::of(chat) else {
+        return false;
+    };
+    let Some(current) = app
+        .open_chat
+        .as_deref()
+        .and_then(|id| app.chat(id))
+        .and_then(Member::of)
+    else {
+        return false;
+    };
+    let Some(person) = app
+        .settings
+        .beeper
+        .people
+        .iter()
+        .find(|p| p.members.contains(&current) && p.members.contains(&member))
+    else {
+        return false;
+    };
+    let key = egui::Id::new(("linked-person-state", &person.members));
+    let Some(mut state) = ctx.data(|d| d.get_temp::<State>(key)) else {
+        return false;
+    };
+    apply_selected_reply(app, &mut state, member, id.to_owned());
+    ctx.data_mut(|d| d.insert_temp(key, state));
     true
 }
 
@@ -2888,6 +2956,18 @@ mod tests {
             let state = ctx.data(|data| data.get_temp::<State>(key)).unwrap();
             assert_eq!(state.destination, person.primary);
             assert!(state.reply.is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod hover_grid_localization_regression {
+    #[test]
+    fn jump_to_latest_uses_the_same_translated_label_as_plain_chat() {
+        let source = include_str!("merged.rs");
+        assert!(!source.contains(concat!("Button::new(\"", "↓ Jump to latest", "\")")));
+        for locale in crate::i18n::Locale::ALL {
+            assert!(!crate::i18n::gettext(locale, "\u{2193} Jump to latest").is_empty());
         }
     }
 }

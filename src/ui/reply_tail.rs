@@ -13,7 +13,7 @@ pub fn geometry(body: Rect, own: bool) -> Rect {
     )
 }
 
-pub const SLOT_HEIGHT: f32 = 36.0;
+pub const SLOT_HEIGHT: f32 = 48.0;
 
 /// The chain is separate from the filled tail and never covers its message.
 pub fn chain_geometry(body: Rect, own: bool) -> Rect {
@@ -22,7 +22,7 @@ pub fn chain_geometry(body: Rect, own: bool) -> Rect {
     } else {
         body.left()
     };
-    Rect::from_min_size(pos2(x, body.top() - SLOT_HEIGHT), vec2(30.0, 30.0))
+    Rect::from_min_size(pos2(x, body.top() - 36.0), vec2(30.0, 30.0))
 }
 
 /// Albums connect straight to their own tile top, with no filled side tail.
@@ -32,6 +32,31 @@ pub fn album_connector(body: Rect, own: bool) -> [egui::Pos2; 2] {
         pos2(chain.center().x, chain.bottom()),
         pos2(chain.center().x, body.top()),
     ]
+}
+
+/// Resting continuation stops above the chain instead of suggesting a full route.
+pub fn resting_stub(body: Rect, own: bool) -> Vec<([egui::Pos2; 2], f32)> {
+    let chain = chain_geometry(body, own);
+    let x = chain.center().x;
+    let mut lines = vec![
+        ([pos2(x, chain.bottom()), pos2(x, body.top())], 1.0),
+        ([pos2(x, chain.top()), pos2(x, chain.bottom())], 1.0),
+    ];
+    for i in 0..12 {
+        lines.push((
+            [
+                pos2(x, chain.top() - i as f32),
+                pos2(x, chain.top() - i as f32 - 1.0),
+            ],
+            1.0 - i as f32 / 12.0,
+        ));
+    }
+    lines
+}
+pub fn paint_resting_stub(painter: &Painter, body: Rect, own: bool, ink: Color32) {
+    for (points, strength) in resting_stub(body, own) {
+        painter.line_segment(points, Stroke::new(1.8, ink.gamma_multiply(strength)));
+    }
 }
 
 pub fn paint(painter: &Painter, body: Rect, own: bool, ink: Color32) {
@@ -55,6 +80,19 @@ pub fn interact(ui: &mut egui::Ui, rect: Rect, id: egui::Id) -> egui::Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resting_stub_reaches_chain_and_fades_above_it() {
+        let body = Rect::from_min_size(pos2(80., 100.), vec2(180., 100.));
+        for own in [false, true] {
+            let chain = chain_geometry(body, own);
+            let lines = resting_stub(body, own);
+            assert_eq!(lines[0].0[0].y, chain.bottom());
+            assert_eq!(lines[0].0[1].y, body.top());
+            assert_eq!(lines[2].0[0].y, chain.top());
+            assert_eq!(lines.last().unwrap().0[1].y, chain.top() - 12.);
+            assert!(lines[2..].windows(2).all(|pair| pair[0].1 > pair[1].1));
+        }
+    }
     #[test]
     fn chain_is_above_and_disjoint_from_body_tail_and_album_sibling() {
         let body = Rect::from_min_size(pos2(80.0, 80.0), vec2(180.0, 132.0));

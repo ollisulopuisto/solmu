@@ -44,6 +44,8 @@
     "batch-results,light",
     "batch-results,debug,dark",
     "batch-results,debug,light",
+    "reaction-clearance,dark",
+    "reaction-clearance,light",
     "draft-shelf-confirmed,light",
     "draft-clear-recovery,light",
     "draft-clear-countdown,dark",
@@ -736,10 +738,6 @@
       "coverage": "full",
       "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
     },
-    "src/ui/thread_entry.rs": {
-      "coverage": "full",
-      "reason": "Unreviewed or shared runtime/state/input/layout dependency; retain every scene."
-    },
     "src/ui/transcript_text.rs": {
       "coverage": [
         "info-voice",
@@ -976,7 +974,6 @@
     "src/ui/reply_threads.rs": "21a212186f1a285b47c454577f91892f2b8ecf82e10f897d59791daf506888f3",
     "src/ui/send_later.rs": "2d990a2ce05a45aec644c010f6f3695087cf96de87690d6abd1c355389315340",
     "src/ui/switcher.rs": "a5af37ba76d762481ba14d4a51541b71e73108014b2074e43d17fdbe79d28886",
-    "src/ui/thread_entry.rs": "93c65615d90805235e75fa3387bd2fe956912500987693a2623da511e390c213",
     "src/ui/update.rs": "e193cd3224ff3ef21907c4a8f4c2a037f1c1964e5989cacafae68e26b2f89fc0",
     "src/ui/view_once.rs": "f3e2050d708016916b223b6af565d8f8c15bbbc5e7dc5a6376341d4b703c83b6",
     "src/ui/widgets.rs": "0759ef5fcaf4ce014c18e699d82ed6f63a369d86c07c5ad94a74bd30c7a4ff2a",
@@ -1167,6 +1164,14 @@
     "batch-results,debug,light": {
       "fixture": "batch-results",
       "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "reaction-clearance,dark": {
+      "fixture": "reaction-clearance",
+      "review": "Long text on incoming/outgoing bubbles with own+other heart count2 and another reaction; all bubble/shared layout changes retain this scene."
+    },
+    "reaction-clearance,light": {
+      "fixture": "reaction-clearance",
+      "review": "Long text on incoming/outgoing bubbles with own+other heart count2 and another reaction; all bubble/shared layout changes retain this scene."
     },
     "draft-shelf-confirmed,light": {
       "fixture": "draft-shelf-confirmed",

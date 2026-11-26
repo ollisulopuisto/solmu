@@ -451,6 +451,17 @@ impl Archive {
         Self::open_with_key(path, &key)
     }
 
+    /// Local composer commits must survive a machine restart, not only an app crash.
+    pub(crate) fn open_drafts(path: &Path) -> anyhow::Result<Self> {
+        let archive = Self::open(path)?;
+        archive.enable_draft_durability()?;
+        Ok(archive)
+    }
+
+    pub(crate) fn enable_draft_durability(&self) -> Result<()> {
+        self.connection.execute_batch("PRAGMA synchronous=FULL;")
+    }
+
     fn open_with_key(path: &Path, key: &[u8; 32]) -> anyhow::Result<Self> {
         Ok(Self::prepare(encryption::open(path, key)?)?)
     }

@@ -778,6 +778,74 @@ fn measure_cache(dirs: &AccountDirs) -> std::io::Result<crate::model::StorageSta
     Ok(stats)
 }
 
+fn draft_keyring_warning(shown: &mut bool, emit: &dyn Fn(Event)) {
+    if !*shown {
+        *shown = true;
+        emit(Event::Error("Draft not saved: OS keyring unavailable. Keep the app open or copy the draft before closing; no plaintext fallback was used.".into()));
+    }
+}
+
+fn save_local_draft(
+    store: &mut Option<crate::archive::Archive>,
+    path: &std::path::Path,
+    origin: &str,
+    chat: &str,
+    text: &str,
+    emit: &dyn Fn(Event),
+    warning_shown: &mut bool,
+) {
+    if store.is_none() && !text.trim().is_empty() {
+        match crate::archive::Archive::open_drafts(path) {
+            Ok(archive) => *store = Some(archive),
+            Err(_) => {
+                draft_keyring_warning(warning_shown, emit);
+                return;
+            }
+        }
+    }
+    if let Some(store) = store
+        && store
+            .set_draft(
+                &draft_namespace(origin, chat),
+                text,
+                jiff::Timestamp::now().as_second(),
+            )
+            .is_err()
+    {
+        emit(Event::Error(
+            "Draft not saved: encrypted local write failed. Keep the draft before closing.".into(),
+        ));
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // Existing command context plus once-per-worker warning state.
+pub(crate) fn local_draft_command(
+    command: Command,
+    loaded: bool,
+    store: &mut Option<crate::archive::Archive>,
+    path: &std::path::Path,
+    origin: &str,
+    emit: &dyn Fn(Event),
+    warning_shown: &mut bool,
+) -> bool {
+    match command {
+        Command::SaveDraft { chat, text } => {
+            save_local_draft(store, path, origin, &chat, &text, emit, warning_shown);
+        }
+        Command::WriteDraftState {
+            chat,
+            revision,
+            text,
+            shelf,
+        } => {
+            let ok = write_local_draft_state(loaded, store, path, origin, &chat, &text, &shelf);
+            emit(Event::DraftWritten { chat, revision, ok });
+        }
+        _ => return false,
+    }
+    true
+}
+
 pub(crate) fn write_local_draft_state(
     loaded: bool,
     store: &mut Option<crate::archive::Archive>,
@@ -791,7 +859,7 @@ pub(crate) fn write_local_draft_state(
         return false;
     }
     if store.is_none() {
-        *store = crate::archive::Archive::open(path).ok();
+        *store = crate::archive::Archive::open_drafts(path).ok();
     }
     store.as_ref().is_some_and(|store| {
         let key = serde_json::to_string(&(origin, chat, "parked-v1")).expect("strings serialize");
@@ -4416,6 +4484,57 @@ pub fn run(
         })
         .expect("Beeper typed upload worker");
 
+    // Separate encrypted draft-only archive. Never store duplicate message history.
+    // OS keyring failure is explicit; never fall back to plaintext.
+    let draft_path = dirs.state.join("beeper-drafts").join("drafts.db");
+    let mut draft_warning_shown = false;
+    let mut draft_store = if draft_path.exists() {
+        match crate::archive::Archive::open_drafts(&draft_path) {
+            Ok(store) => Some(store),
+            Err(_) => {
+                emit(Event::Error("Encrypted Beeper drafts could not be unlocked. Unlock the OS keyring and restart; existing drafts were not changed.".into()));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(store) = &draft_store {
+        match stored_drafts(store, &api.base_url) {
+            Ok(drafts) => emit(Event::Drafts(drafts)),
+            Err(e) => emit(Event::Info(e)),
+        }
+    } else {
+        emit(Event::Drafts(Vec::new()));
+    }
+
+    let shelves: Result<Vec<(String, Vec<crate::draft_state::Parked>)>, ()> = (|| {
+        let rows = if let Some(store) = &draft_store {
+            store.drafts().map_err(|_| ())?
+        } else if draft_path.exists() {
+            return Err(());
+        } else {
+            Vec::new()
+        };
+        let mut shelves = Vec::new();
+        for (key, value) in rows {
+            let Ok((origin, chat, kind)) = serde_json::from_str::<(String, String, String)>(&key)
+            else {
+                continue;
+            };
+            if origin == api.base_url && kind == "parked-v1" {
+                let shelf = serde_json::from_str(&value).map_err(|_| ())?;
+                shelves.push((chat, shelf));
+            }
+        }
+        Ok(shelves)
+    })();
+    let shelves_loaded = shelves.is_ok();
+    match shelves {
+        Ok(shelves) => emit(Event::DraftShelf(shelves)),
+        Err(()) => emit(Event::DraftShelfUnavailable),
+    }
+
     let mut accounts = loop {
         match api.accounts() {
             Ok(a) => break a,
@@ -4425,6 +4544,10 @@ pub fn run(
                 }));
                 for _ in 0..25 {
                     match commands.try_recv() {
+                    Ok(command) if matches!(command, Command::SaveDraft { .. } | Command::WriteDraftState { .. }) => {
+                        let _ = local_draft_command(command, shelves_loaded, &mut draft_store,
+                            &draft_path, &api.base_url, &emit, &mut draft_warning_shown);
+                    },
                     Ok(Command::Shutdown) => return,
                     Ok(Command::SendText { chat, text, .. }) => emit(Event::BeeperSendUncertain {
                         chat, text, message: "Beeper is not connected yet. Text restored; nothing was sent or queued for automatic retry.".into(),
@@ -4481,57 +4604,6 @@ pub fn run(
     // Beeper itself remains authoritative about its supported limits.
     emit(Event::PinLimit(usize::MAX));
     emit(Event::Labels(Vec::new()));
-    // Separate encrypted draft-only archive. Never store duplicate message history.
-    // OS keyring failure is explicit; never fall back to plaintext.
-    let draft_path = dirs.state.join("beeper-drafts").join("drafts.db");
-    let mut draft_warning_shown = false;
-    let mut draft_store = if draft_path.exists() {
-        match crate::archive::Archive::open(&draft_path) {
-            Ok(store) => Some(store),
-            Err(_) => {
-                emit(Event::Error("Encrypted Beeper drafts could not be unlocked. Unlock the OS keyring and restart; existing drafts were not changed.".into()));
-                None
-            }
-        }
-    } else {
-        None
-    };
-    if let Some(store) = &draft_store {
-        match stored_drafts(store, &api.base_url) {
-            Ok(drafts) => emit(Event::Drafts(drafts)),
-            Err(e) => emit(Event::Info(e)),
-        }
-    } else {
-        emit(Event::Drafts(Vec::new()));
-    }
-
-    let shelves: Result<Vec<(String, Vec<crate::draft_state::Parked>)>, ()> = (|| {
-        let rows = if let Some(store) = &draft_store {
-            store.drafts().map_err(|_| ())?
-        } else if draft_path.exists() {
-            return Err(());
-        } else {
-            Vec::new()
-        };
-        let mut shelves = Vec::new();
-        for (key, value) in rows {
-            let Ok((origin, chat, kind)) = serde_json::from_str::<(String, String, String)>(&key)
-            else {
-                continue;
-            };
-            if origin == api.base_url && kind == "parked-v1" {
-                let shelf = serde_json::from_str(&value).map_err(|_| ())?;
-                shelves.push((chat, shelf));
-            }
-        }
-        Ok(shelves)
-    })();
-    let shelves_loaded = shelves.is_ok();
-    match shelves {
-        Ok(shelves) => emit(Event::DraftShelf(shelves)),
-        Err(()) => emit(Event::DraftShelfUnavailable),
-    }
-
     // The favorites bar's order persists beside the drafts: Beeper has no
     // favorites of its own, so the archive is the only copy.
     let favorites = draft_store
@@ -4633,51 +4705,20 @@ pub fn run(
                     }
                 }
                 Command::Shutdown => return,
-                Command::WriteDraftState {
-                    chat,
-                    revision,
-                    text,
-                    shelf,
-                } => {
-                    let ok = write_local_draft_state(
+                command @ (Command::WriteDraftState { .. } | Command::SaveDraft { .. }) => {
+                    let _ = local_draft_command(
+                        command,
                         shelves_loaded,
                         &mut draft_store,
                         &draft_path,
                         &api.base_url,
-                        &chat,
-                        &text,
-                        &shelf,
+                        &emit,
+                        &mut draft_warning_shown,
                     );
-                    emit(Event::DraftWritten { chat, revision, ok });
-                }
-                Command::SaveDraft { chat, text } => {
-                    if draft_store.is_none() && !text.trim().is_empty() {
-                        match crate::archive::Archive::open(&draft_path) {
-                            Ok(store) => draft_store = Some(store),
-                            Err(_) => {
-                                if !draft_warning_shown {
-                                    draft_warning_shown = true;
-                                    emit(Event::Error("Draft not saved: OS keyring unavailable. Keep the app open or copy the draft before closing; no plaintext fallback was used.".into()));
-                                }
-                                continue;
-                            }
-                        }
-                    }
-                    if let Some(store) = &draft_store
-                        && store
-                            .set_draft(
-                                &draft_namespace(&api.base_url, &chat),
-                                &text,
-                                jiff::Timestamp::now().as_second(),
-                            )
-                            .is_err()
-                    {
-                        emit(Event::Error("Draft not saved: encrypted local write failed. Keep the draft before closing.".into()));
-                    }
                 }
                 Command::SetFavorite(chat, favorite) => {
                     if draft_store.is_none() {
-                        match crate::archive::Archive::open(&draft_path) {
+                        match crate::archive::Archive::open_drafts(&draft_path) {
                             Ok(store) => draft_store = Some(store),
                             Err(_) => {
                                 emit(Event::Error("Favorite not saved: OS keyring unavailable. The mark lasts until restart; unlock the OS keyring to keep it.".into()));
@@ -4726,7 +4767,7 @@ pub fn run(
                 }
                 Command::MirrorPins(pins) => {
                     if draft_store.is_none() {
-                        match crate::archive::Archive::open(&draft_path) {
+                        match crate::archive::Archive::open_drafts(&draft_path) {
                             Ok(store) => draft_store = Some(store),
                             Err(_) => {
                                 emit(Event::Info("Pins not mirrored into favorites: OS keyring unavailable. Unlock it and restart to keep favorites across restarts.".into()));
@@ -8282,6 +8323,17 @@ mod tests {
             );
             server.join().unwrap();
         }
+    }
+
+    #[test]
+    fn draft_keyring_warning_is_once_per_worker_session() {
+        let events = Mutex::new(Vec::new());
+        let mut shown = false;
+        for _ in 0..4 {
+            draft_keyring_warning(&mut shown, &|event| events.lock().unwrap().push(event));
+        }
+        assert!(shown);
+        assert_eq!(events.lock().unwrap().len(), 1);
     }
 
     #[test]

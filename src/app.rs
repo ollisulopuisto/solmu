@@ -9906,18 +9906,16 @@ impl App {
                 if state.changed.is_some() {
                     ctx.request_repaint_after(Duration::from_millis(200));
                 }
-                if !state.loaded
-                    && state
-                        .changed
-                        .is_some_and(|at| at.elapsed() >= Duration::from_millis(650))
-                {
+                if !state.loaded && state.due() {
                     account.backend.send(Command::SaveDraft {
                         chat: chat.clone(),
                         text: state.text.clone(),
                     });
+                    state.submitted();
                     state.changed = None; // Legacy path has no durable ack. Status remains unavailable.
                 }
                 if state.ready() {
+                    state.submitted();
                     state.pending = Some(state.revision);
                     state.pending_shelf = state.staged_shelf.clone();
                     state.pending_recovery = state.staged_recovery.clone();

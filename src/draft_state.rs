@@ -18,6 +18,7 @@ pub struct State {
     pub staged_recovery: Option<String>,
     pub failed: bool,
     pub changed: Option<Instant>,
+    pub dirty_since: Option<Instant>,
     pub text: String,
     pub shelf: Vec<Parked>,
     pub staged_shelf: Option<Vec<Parked>>,
@@ -150,15 +151,22 @@ impl State {
     pub fn touch(&mut self) {
         self.revision = self.revision.wrapping_add(1);
         self.failed = false;
-        self.changed = Some(Instant::now());
+        let now = Instant::now();
+        self.changed = Some(now);
+        self.dirty_since.get_or_insert(now);
+    }
+    pub fn due(&self) -> bool {
+        self.changed
+            .is_some_and(|t| t.elapsed() >= Duration::from_millis(650))
+            || self
+                .dirty_since
+                .is_some_and(|t| t.elapsed() >= Duration::from_secs(2))
+    }
+    pub fn submitted(&mut self) {
+        self.dirty_since = None;
     }
     pub fn ready(&self) -> bool {
-        self.loaded
-            && self
-                .changed
-                .is_some_and(|t| t.elapsed() >= Duration::from_millis(650))
-            && self.pending.is_none()
-            && !self.failed
+        self.loaded && self.due() && self.pending.is_none() && !self.failed
     }
     pub fn ack(&mut self, revision: u64, ok: bool) {
         if self.pending != Some(revision) {
@@ -177,6 +185,7 @@ impl State {
             }
         } else {
             self.pending_shelf = None;
+            self.failed = true;
         }
         if revision != self.revision {
             self.stage_sent_removals();
@@ -186,6 +195,7 @@ impl State {
         if ok {
             self.confirmed = Some(revision);
             self.changed = None;
+            self.dirty_since = None;
             if let Some(shelf) = self.staged_shelf.take() {
                 self.shelf = shelf;
                 if self.pending_recovery.is_some() && self.recovery == self.pending_recovery {
@@ -221,6 +231,25 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn continuous_edits_cannot_postpone_autosave_forever() {
+        let mut s = State {
+            loaded: true,
+            ..Default::default()
+        };
+        s.touch();
+        s.dirty_since = Some(Instant::now() - Duration::from_secs(3));
+        s.touch();
+        assert!(s.ready());
+        s.submitted();
+        assert!(!s.ready());
+        s.pending = Some(s.revision);
+        s.touch();
+        s.dirty_since = Some(Instant::now() - Duration::from_secs(3));
+        assert!(!s.ready(), "only one in-flight transaction");
+        s.ack(s.pending.unwrap(), true);
+        assert!(s.ready(), "newer edits remain due after stale ack");
+    }
     #[test]
     fn explicit_recovery_save_keeps_failure_retry_without_a_new_expiry() {
         let mut state = State {
