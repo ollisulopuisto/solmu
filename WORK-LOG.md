@@ -1855,3 +1855,20 @@ it clicked before150ms elapsed. The fixture now advances explicit input time,
 asserts no immediate opening then opening after200ms, and retains all picker,
 message-binding, no-context-menu and no-reply assertions. Other2791default
 Linux tests passed. New full native runs are required after this fixture fix.
+
+## Composer-left drafts and overlay shelf,26November
+
+Implements the owner's Nov25 18:22 marker/count placement and18:52 overlay
+choice plus Go. Checked main79b5b94, all remote branches, open PRs (none), and
+recent merged draft work before editing: existing shelf is inline with preview
+rows and icon at Send, so this is the remaining distinct layout request.
+Move icon/count to left composer border; zero is dim. Shelf overlays the thread,
+with shade, Escape/outside close, capped scrolling, saved-time rather than text
+preview, and resume closes/focuses without replacing working text. Older ids
+without encoded save time display a dash rather than an invented timestamp.
+Delete remains revision-aware and offers Undo after its write confirms; no DB
+schema, dependency, workflow or capture-cadence change. Recovery stays above
+shelf when open, otherwise above composer.18local state tests pass, including
+identity-specific delete/ack/undo; native full-frame geometry, no-preview,
+no-overwrite, Escape, cap and resume coverage added. Formatting/diff pass. Full
+native tests and light/dark captures still pending. Separate PR, no merge.

@@ -27,6 +27,7 @@ pub struct State {
     pub recovery_started: Option<Instant>,
     pub deletion_start: Option<String>,
     pub shelf_open: bool,
+    pub deleted_draft: Option<Parked>,
     pub loaded: bool,
     pub clear_after_save: Option<String>,
 }
@@ -37,6 +38,33 @@ pub fn can_write_shelf(loaded: bool, store_available: bool) -> bool {
 }
 
 impl State {
+    pub fn delete_draft(&mut self, id: u64) -> bool {
+        if self.pending.is_some() || self.staged_shelf.is_some() {
+            return false;
+        }
+        let Some(draft) = self.shelf.iter().find(|d| d.id == id).cloned() else {
+            return false;
+        };
+        self.deleted_draft = Some(draft);
+        self.staged_shelf = Some(self.shelf.iter().filter(|d| d.id != id).cloned().collect());
+        self.touch();
+        true
+    }
+    pub fn undo_delete(&mut self, draft: Parked) {
+        if self.pending.is_some()
+            || self.staged_shelf.is_some()
+            || self.sent_removals.contains(&draft.id)
+        {
+            return;
+        }
+        let mut shelf = self.shelf.clone();
+        if !shelf.iter().any(|d| d.id == draft.id) {
+            shelf.push(draft);
+        }
+        self.staged_shelf = Some(shelf);
+        self.touch();
+    }
+
     pub fn resume(&mut self, id: u64) -> Option<String> {
         let text = self.shelf.iter().find(|d| d.id == id)?.text.clone();
         self.resumed = Some(id);
@@ -538,5 +566,42 @@ mod tests {
         assert_eq!(s.recovery, Some(original));
         s.edit("a", "", true);
         assert!(s.deletion_start.is_none());
+    }
+}
+
+#[cfg(test)]
+mod shelf_tests {
+    use super::*;
+    #[test]
+    fn deletion_waits_for_ack_and_undo_restores_only_its_identity() {
+        let mut state = State {
+            loaded: true,
+            shelf: vec![
+                Parked {
+                    id: 1,
+                    text: "same".into(),
+                },
+                Parked {
+                    id: 2,
+                    text: "same".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(state.delete_draft(1));
+        assert_eq!(state.shelf.len(), 2, "unsaved delete is not confirmed");
+        assert_eq!(state.staged_shelf.as_ref().unwrap()[0].id, 2);
+        assert!(!state.delete_draft(2), "cannot overwrite staged deletion");
+        let revision = state.revision;
+        state.pending = Some(revision);
+        state.pending_shelf = state.staged_shelf.clone();
+        state.ack(revision, true);
+        assert_eq!(state.shelf.len(), 1);
+        let draft = state.deleted_draft.take().unwrap();
+        state.undo_delete(draft);
+        let restored = state.staged_shelf.as_ref().unwrap();
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored.iter().filter(|d| d.id == 1).count(), 1);
+        assert!(restored.iter().any(|d| d.id == 2));
     }
 }
