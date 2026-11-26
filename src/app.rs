@@ -10362,7 +10362,7 @@ impl App {
     }
 
     /// Applies one model action after drawing the views, respecting the app lock and account state.
-    pub(crate) fn apply(&mut self, action: Action, ctx: &egui::Context) {
+    pub(crate) fn apply(&mut self, mut action: Action, ctx: &egui::Context) {
         if self.app_lock.is_locked() && !allowed_while_locked(&action) {
             // A clicked notification opens its message once unlocked, and a
             // link opens the chat it named; the rest would show or change
@@ -10461,6 +10461,43 @@ impl App {
         let media_destination = crate::ui::merged::attachment_destination(self, ctx)
             .ok()
             .flatten();
+        // Thread composition defaults to the latest exact member. Explicit
+        // reply choices remain authoritative, edits and scheduled sends keep
+        // their existing semantics. Resolve only for the actual destination.
+        match &mut action {
+            Action::SendText { chat, quoting, .. } | Action::SendLocation { chat, quoting, .. }
+                if quoting.is_none() =>
+            {
+                *quoting = crate::ui::reply_threads::default_reply(self, ctx, chat);
+            }
+            Action::SendPending { account, chat, .. }
+                if *account == self.account().id
+                    && self.reply_to.is_none()
+                    && !self
+                        .pending
+                        .iter()
+                        .any(|item| self.attachment_retry_quotes.contains_key(&item.id)) =>
+            {
+                self.reply_to = crate::ui::reply_threads::default_reply(self, ctx, chat);
+            }
+            Action::SendGif(_) | Action::SendSticker(_) | Action::MakeSticker { send: true }
+                if self.reply_to.is_none() =>
+            {
+                let target = media_destination
+                    .as_deref()
+                    .or(self.open_chat.as_deref())
+                    .and_then(|chat| crate::ui::reply_threads::default_reply(self, ctx, chat));
+                self.reply_to = target;
+            }
+            Action::SendRecording if self.reply_to.is_none() && self.unsent_voice.is_none() => {
+                let target = media_destination
+                    .as_deref()
+                    .or(self.open_chat.as_deref())
+                    .and_then(|chat| crate::ui::reply_threads::default_reply(self, ctx, chat));
+                self.reply_to = target;
+            }
+            _ => {}
+        }
         let reply_send = match &action {
             Action::SendText { chat, quoting, .. } | Action::SendLocation { chat, quoting, .. } => {
                 Some((chat.as_str(), quoting.as_ref()))

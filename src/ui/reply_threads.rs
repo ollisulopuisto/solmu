@@ -169,6 +169,49 @@ pub fn owns(app: &App, ctx: &egui::Context) -> bool {
             && ctx.data(|d| d.get_temp::<Key>(f.scope)).is_some()
     })
 }
+/// Rebuild from loaded messages at send time, so consecutive sends extend
+/// the thread even before another rendering frame updates its cached index.
+pub fn default_reply(
+    app: &App,
+    ctx: &egui::Context,
+    chat: &str,
+) -> Option<crate::model::ReplyTarget> {
+    if !owns(app, ctx) || app.editing.is_some() || app.scheduling_draft.is_some() {
+        return None;
+    }
+    if app.open_chat.as_deref() != Some(chat)
+        || app.chat(chat).is_none_or(|destination| {
+            !destination.can_send() || (destination.locked && !app.locked_folder_open())
+        })
+    {
+        return None;
+    }
+    let root = current(ctx)?;
+    let conversation = app.conversations.get(chat)?;
+    let messages: Vec<_> = conversation
+        .messages
+        .iter()
+        .filter(|m| {
+            !hidden(app, chat, &m.id)
+                && !matches!(m.content, crate::model::Content::Revoked)
+                && !app
+                    .pending_media
+                    .values()
+                    .any(|p| p.visible == m.id && p.job.member.chat == chat)
+        })
+        .collect();
+    let (_, parents) = index(&messages);
+    let included = chain(&root, &parents);
+    let latest = messages
+        .into_iter()
+        .filter(|m| included.contains(&Key::of(m)))
+        .max_by_key(|m| m.timestamp)?;
+    Some(crate::model::ReplyTarget {
+        id: latest.id.clone(),
+        chat: None,
+    })
+}
+
 /// Explicit navigation and selection take over the full transcript, without restoring an old offset over the jump.
 pub fn leave_for_navigation(ctx: &egui::Context) {
     if let Some(shared) = frame(ctx) {
@@ -1021,6 +1064,161 @@ mod tests {
             )
         });
         (dir, app, ctx)
+    }
+    #[test]
+    fn thread_media_send_defaults_and_retry_quotes_are_preserved() {
+        use crate::backend::{Backend, Command};
+        use crate::model::{Action, Gif};
+        use std::path::PathBuf;
+        for kind in 0..6 {
+            let (_dir, mut app, ctx) = seeded();
+            let (backend, mut commands) = Backend::recording();
+            app.backend = backend;
+            let action = match kind {
+                0 => Action::SendGif(Gif {
+                    id: "fixture".into(),
+                    still: None,
+                    mp4: "https://example.invalid/fixture.mp4".into(),
+                    width: 2,
+                    height: 2,
+                }),
+                1 => Action::SendSticker(PathBuf::from("synthetic.webp")),
+                2 => {
+                    app.recording = Some(crate::audio::Recorder::recorded_fixture(vec![
+                            0.0;
+                            crate::voice::RATE
+                                as usize
+                        ]));
+                    Action::SendRecording
+                }
+                3 => Action::SendLocation {
+                    chat: "a".into(),
+                    latitude: 60.0,
+                    longitude: 25.0,
+                    quoting: None,
+                },
+                4 => {
+                    app.stage(crate::app::Pending::File(PathBuf::from("synthetic.png")));
+                    Action::SendPending {
+                        account: app.account().id.clone(),
+                        chat: "a".into(),
+                        caption: "".into(),
+                        mentions: vec![],
+                    }
+                }
+                _ => {
+                    app.stage(crate::app::Pending::File(PathBuf::from("retry.png")));
+                    let id = app.pending[0].id;
+                    app.attachment_retry_quotes.insert(id, "1".into());
+                    app.reply_to = Some("1".into());
+                    Action::SendPending {
+                        account: app.account().id.clone(),
+                        chat: "a".into(),
+                        caption: "".into(),
+                        mentions: vec![],
+                    }
+                }
+            };
+            app.apply(action, &ctx);
+            let expected = if kind == 5 { "1" } else { "2" };
+            let sent: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok()).collect();
+            assert!(
+                sent.iter().any(|c| matches!(c,
+                    Command::SendGif { quoting: Some(q), .. } |
+                    Command::SendSticker { quoting: Some(q), .. } |
+                    Command::SendVoice { quoting: Some(q), .. } |
+                    Command::SendLocation { quoting: Some(q), .. } |
+                    Command::SendFiles { quoting: Some(q), .. } if q.id == expected
+                )),
+                "media kind {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn stale_attachment_account_cannot_set_current_thread_reply() {
+        let (_dir, mut app, ctx) = seeded();
+        let chat = app.open_chat.clone().unwrap();
+        app.apply(
+            crate::model::Action::SendPending {
+                account: crate::model::AccountId("other-account".into()),
+                chat,
+                caption: "stale".into(),
+                mentions: vec![],
+            },
+            &ctx,
+        );
+        assert!(app.reply_to.is_none());
+    }
+    #[test]
+    fn thread_default_rechecks_locked_destination_and_edit_state() {
+        let (_dir, mut app, ctx) = seeded();
+        assert!(default_reply(&app, &ctx, "a").is_some());
+        app.editing = Some("2".into());
+        assert!(default_reply(&app, &ctx, "a").is_none());
+        app.editing = None;
+        app.chats.iter_mut().find(|c| c.id == "a").unwrap().locked = true;
+        assert!(default_reply(&app, &ctx, "a").is_none());
+    }
+    #[test]
+    fn thread_default_preserves_explicit_quote_and_tracks_new_members_without_render() {
+        let (_dir, mut app, ctx) = seeded();
+        let chat = app.open_chat.clone().unwrap();
+        let (backend, mut commands) = crate::backend::Backend::recording();
+        app.backend = backend;
+        app.apply(
+            crate::model::Action::SendText {
+                chat: chat.clone(),
+                text: "first".into(),
+                quoting: Some("1".into()),
+            },
+            &ctx,
+        );
+        assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(
+            |c| matches!(c,crate::backend::Command::SendText {quoting:Some(q),..} if q.id=="1")
+        ));
+        let mut latest = m("a", "3", Some(("a", "2")));
+        latest.timestamp = 999999;
+        app.conversations
+            .get_mut(&chat)
+            .unwrap()
+            .messages
+            .push(latest);
+        app.apply(
+            crate::model::Action::SendText {
+                chat: chat.clone(),
+                text: "next".into(),
+                quoting: None,
+            },
+            &ctx,
+        );
+        assert!(std::iter::from_fn(|| commands.try_recv().ok()).any(
+            |c| matches!(c,crate::backend::Command::SendText {quoting:Some(q),..} if q.id=="3")
+        ));
+    }
+    #[test]
+    fn thread_send_defaults_to_latest_loaded_member_and_stops_after_close() {
+        let (_dir, app, ctx) = seeded();
+        let chat = app.open_chat.clone().unwrap();
+        let target = default_reply(&app, &ctx, &chat).expect("thread has a default");
+        let root = current(&ctx).unwrap();
+        let rows: Vec<_> = app.conversations[&chat].messages.iter().collect();
+        let (_, parents) = index(&rows);
+        let included = chain(&root, &parents);
+        assert!(included.contains(&Key {
+            chat: chat.clone(),
+            id: target.id.clone()
+        }));
+        assert_eq!(
+            target.id,
+            rows.iter()
+                .filter(|m| included.contains(&Key::of(m)))
+                .max_by_key(|m| m.timestamp)
+                .unwrap()
+                .id
+        );
+        close(&ctx);
+        assert!(default_reply(&app, &ctx, &chat).is_none());
     }
     #[test]
     fn chain_entry_on_reply_opens_exact_ancestor_not_only_its_descendants() {
