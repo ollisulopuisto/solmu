@@ -680,12 +680,6 @@ pub fn finish(ui: &egui::Ui, color: egui::Color32) {
     if active(ui.ctx()) {
         return;
     }
-    finish_routes(ui, color);
-}
-fn finish_routes(ui: &egui::Ui, color: egui::Color32) {
-    if active(ui.ctx()) {
-        return;
-    }
     let Some(shared) = frame(ui.ctx()) else {
         return;
     };
@@ -859,10 +853,6 @@ fn thread_scroll(app: &mut App, ui: &mut egui::Ui, chat: &crate::model::Chat, ro
                 if let Some(rect) = landing {
                     ui.scroll_to_rect(rect, Some(egui::Align::Center));
                 }
-                // The thread is already grouped. No connecting lines, even
-                // for replies to a non-root member. Normal chat hover routes
-                // are still drawn by finish outside this thread pass.
-                finish(ui, app.conversation_palette().secondary);
             })
         });
     if let Some(scroll) = app.scroll_page.take() {
@@ -1259,16 +1249,14 @@ mod tests {
             egui::Rect::from_min_size(egui::pos2(65., 220.), egui::Vec2::ZERO),
         );
         ctx.data_mut(|d| d.insert_temp(frame_id(), std::sync::Arc::new(std::sync::Mutex::new(f))));
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(500., 400.),
-                )),
-                ..Default::default()
-            },
-            |ui| finish_routes(ui, egui::Color32::WHITE),
-        );
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(500., 400.),
+            )),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input.clone(), |ui| finish(ui, egui::Color32::WHITE));
         output.textures_delta.clear();
         assert!(
             !output.shapes.iter().any(|shape| matches!(
@@ -1278,8 +1266,8 @@ mod tests {
             "thread routes must not paint, including non-root replies and hover"
         );
         frame(&ctx).unwrap().lock().unwrap().active = false;
-        let mut normal = ctx.run_ui(egui::RawInput::default(), |ui| {
-            finish_routes(ui, egui::Color32::WHITE);
+        let mut normal = ctx.run_ui(input, |ui| {
+            finish(ui, egui::Color32::WHITE);
         });
         normal.textures_delta.clear();
         assert!(

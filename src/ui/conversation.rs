@@ -6138,14 +6138,11 @@ fn bubble(
     }
     // Reserve the chain slot before layout, not on hover, so neighbouring
     // messages and their media cannot be covered and hover never reflows.
-    if album.is_none()
+    if !in_thread_pass()
+        && album.is_none()
         && (message.quoted.is_some() || super::reply_threads::has_replies(ui.ctx(), message))
     {
-        ui.add_space(if in_thread_pass() {
-            12.0
-        } else {
-            super::reply_tail::SLOT_HEIGHT
-        });
+        ui.add_space(super::reply_tail::SLOT_HEIGHT);
     }
     let mut response = None;
     let mut area = ui.available_rect_before_wrap();
@@ -8300,18 +8297,9 @@ fn quote_chip(
     let ink = theme::readable_on(fill, ink, palette.text, 3.0);
     let in_thread = super::reply_threads::active(ui.ctx()) && in_thread_pass();
     if in_thread {
-        // Keep the shared row metadata without a chain glyph, connector,
-        // or invisible click target in the thread view.
-        let id = bubble_id(&message.chat, &message.id);
-        let pass = ui.ctx().cumulative_pass_nr();
-        ui.ctx().data_mut(|data| {
-            data.insert_temp(
-                id.with("quote"),
-                Rect::from_min_size(pos2(rect.center().x, body.top()), vec2(0.0, 0.0)),
-            );
-            data.insert_temp(id.with("quote-pass"), pass);
-            data.insert_temp(id.with("quote-focus"), false);
-        });
+        // The thread has no chain glyph, connector or reserved slot. Its
+        // body rect already supplies painted bounds; no quote temp data is
+        // needed by the normal-chat route collector here.
         return;
     }
     if quoted.is_some() {
@@ -11121,14 +11109,12 @@ fn album_content(
     for (row, chunk) in messages.chunks(columns).enumerate() {
         // A chain sits above its own tile. Reserve that space for each
         // media row, so a later row cannot place it over earlier media.
-        if chunk.iter().any(|message| {
-            message.quoted.is_some() || super::reply_threads::has_replies(ui.ctx(), message)
-        }) {
-            ui.add_space(if in_thread_pass() {
-                12.0
-            } else {
-                super::reply_tail::SLOT_HEIGHT
-            });
+        if !in_thread_pass()
+            && chunk.iter().any(|message| {
+                message.quoted.is_some() || super::reply_threads::has_replies(ui.ctx(), message)
+            })
+        {
+            ui.add_space(super::reply_tail::SLOT_HEIGHT);
         }
         // An own bubble lays out right to left; the grid keeps reading order.
         ui.allocate_ui_with_layout(
