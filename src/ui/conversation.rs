@@ -14258,7 +14258,7 @@ mod tests {
         let ctx = egui::Context::default();
         let id = egui::Id::new("bubble");
         ctx.memory_mut(|m| m.request_focus(id.with("hover-actions").with(("emoji", 0_usize))));
-        let _ = ctx.run_ui(
+        let mut output = ctx.run_ui(
             egui::RawInput {
                 events: vec![egui::Event::Key {
                     key: Key::Tab,
@@ -14273,6 +14273,7 @@ mod tests {
                 hover_grid_focus(&ctx, id, false, true, true);
             },
         );
+        output.textures_delta.clear();
         assert_eq!(
             ctx.memory(|m| m.focused()),
             Some(id.with("hover-actions").with(("emoji", 1_usize)))
