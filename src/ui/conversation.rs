@@ -5935,13 +5935,14 @@ fn grouped_hover_actions(
             .get_temp::<hover_actions::OpenIntent>(intent_id)
             .unwrap_or_default();
         let ready = intent.update(entry.fresh(), over && uncovered && !scrolling, now);
-        if let Some(left) = intent.remaining(now) {
-            ui.ctx()
-                .request_repaint_after(Duration::from_secs_f64(left));
-        }
+        let remaining = intent.remaining(now);
         data.insert_temp(intent_id, intent);
-        ready
+        (ready, remaining)
     });
+    if let Some(left) = intent_left {
+        ui.ctx()
+            .request_repaint_after(Duration::from_secs_f64(left));
+    }
     let active = hover_actions::show_grid(
         scrolling,
         pointer_ready,
