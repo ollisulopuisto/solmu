@@ -79,6 +79,20 @@ pub fn handle(app: &mut App, ctx: &egui::Context) {
     if egui::Popup::is_any_open(ctx) {
         return;
     }
+    // The draft shelf is above the transcript, so Escape closes it before
+    // the ordinary chat/reply escape path. Higher overlays and menus won above.
+    if app.chat_view()
+        && app.dialog.is_none()
+        && !app.show_update
+        && app.picker.is_none()
+        && app.reaction_target.is_none()
+        && let Some(chat) = app.open_chat.clone()
+        && app.draft_states.get(&chat).is_some_and(|s| s.shelf_open)
+        && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+    {
+        app.draft_states.get_mut(&chat).unwrap().shelf_open = false;
+        return;
+    }
     if app.page == Page::Chats
         && app.dialog.is_none()
         && !app.show_update

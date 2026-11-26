@@ -24524,7 +24524,7 @@ mod tests {
             "send's centre is {} off the field's centre line",
             send.center().y - field_middle
         );
-        // The plus mirrors it in the left end, and emoji stays close by.
+        // Drafts now owns the left border; attach and emoji remain paired.
         let rect = |stop| {
             let id = crate::ui::focus::stops(&ctx)
                 .into_iter()
@@ -24535,11 +24535,15 @@ mod tests {
         };
         let plus = rect(crate::ui::focus::Stop::Attach);
         let emoji = rect(crate::ui::focus::Stop::Emoji);
-        let left = plus.center().x - pill.left();
-        let right = pill.right() - send.center().x;
+        let chat = app.open_chat.as_ref().unwrap();
+        let drafts = ctx
+            .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_button_id(chat)))
+            .unwrap();
+        assert!(pill.contains_rect(drafts), "drafts stays inside composer");
+        assert!(drafts.right() < plus.left(), "drafts precedes Attach");
         assert!(
-            (left - right).abs() <= 1.0,
-            "plus centre is {left} from the left, send's {right} from the right"
+            drafts.left() - pill.left() <= 6.0,
+            "drafts is at left border"
         );
         let apart = emoji.center().x - plus.center().x;
         assert!(apart <= 32.0, "plus and emoji are {apart} apart");
@@ -26934,10 +26938,7 @@ mod rail_tests {
             .unwrap();
         click(&mut app, &ctx, 1180.0, row.center());
         assert!(!app.draft_states[&chat].shelf_open, "resume closes shelf");
-        assert!(
-            app.focus_composer
-                || ctx.memory(|m| m.has_focus(crate::ui::conversation::composer_text_id()))
-        );
+        assert!(app.focus_composer || ctx.memory(|m| m.has_focus(egui::Id::new("composer-text"))));
         assert!(app.composer.starts_with(&retained));
         assert!(
             app.composer.contains("Second line"),

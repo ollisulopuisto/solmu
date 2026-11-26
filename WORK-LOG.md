@@ -1877,3 +1877,10 @@ Pre-merge review: bound the shade to the message viewport so it does not dim
 chat header controls, and make Undo own its retained identity so a blocked
 undo attempt cannot discard the retry copy.18state tests still pass, including
 blocked undo retaining the identity. Native CI remains the integration check.
+
+First native run: quality passed; both default suites exposed Escape consumed
+by the generic chat handler before the overlay. Added shelf dismissal ahead of
+that handler, after higher-overlay/menu priority. Resume test now checks the
+actual editor id, not its geometry-record id. Composer inset test retains the
+send inset and Attach/Emoji spacing checks, replacing obsolete Attach-leftmost
+expectation with drafts-inside/left-border/before-Attach checks. No test waiver.
