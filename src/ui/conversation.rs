@@ -5388,7 +5388,20 @@ pub(crate) fn hover_grid_keyboard(app: &mut App, ctx: &egui::Context) -> bool {
     }
     // Hovering is not keyboard activation. Keep composer/search typing and
     // digits intact when a text editor still owns focus.
-    if ctx.text_edit_focused() {
+    if ctx.text_edit_focused()
+        && ctx.input(|i| {
+            i.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Text(_)
+                        | egui::Event::Paste(_)
+                        | egui::Event::Copy
+                        | egui::Event::Cut
+                        | egui::Event::Key { pressed: true, .. }
+                )
+            })
+        })
+    {
         dismiss_hover_grid(ctx);
         return false;
     }
