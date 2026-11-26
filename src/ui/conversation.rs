@@ -5382,6 +5382,10 @@ pub(crate) fn hover_grid_keyboard(app: &mut App, ctx: &egui::Context) -> bool {
     )
     .iter()
     .any(|id| Some(*id) == focused);
+    if !owns_focus && ctx.input(|i| i.key_pressed(Key::Enter) || i.key_pressed(Key::Space)) {
+        dismiss_hover_grid(ctx);
+        return false;
+    }
     let mut selected = None;
     let mut escape = false;
     ctx.input_mut(|input| {
@@ -5820,13 +5824,17 @@ fn grouped_hover_actions(
             Content::Revoked | Content::PhoneOnly { .. }
         );
     let can_star = !matches!(message.content, Content::Revoked);
-    let (keyboard_mode, keyboard) = hover_grid_focus(
-        ui.ctx(),
-        bubble.id,
-        bubble.lost_focus(),
-        can_reply,
-        can_star,
-    );
+    let (keyboard_mode, keyboard) = if bubble.gained_focus() {
+        (true, false)
+    } else {
+        hover_grid_focus(
+            ui.ctx(),
+            bubble.id,
+            bubble.lost_focus(),
+            can_reply,
+            can_star,
+        )
+    };
     let scrolling = ui.input(|i| {
         i.smooth_scroll_delta.length_sq() > 0.0
             || i.raw
