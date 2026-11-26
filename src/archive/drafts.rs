@@ -65,6 +65,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn composer_database_uses_full_sync_and_survives_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("durable-drafts.db");
+        let key = [37; 32];
+        {
+            let archive = Archive::open_with_key(&path, &key).unwrap();
+            archive.enable_draft_durability().unwrap();
+            let sync: i64 = archive
+                .connection
+                .query_row("PRAGMA synchronous", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(sync, 2, "FULL, not NORMAL");
+            archive.set_draft("chat", "unsent composer", 1).unwrap();
+        }
+        let archive = Archive::open_with_key(&path, &key).unwrap();
+        assert_eq!(
+            archive.drafts().unwrap(),
+            vec![("chat".into(), "unsent composer".into())]
+        );
+    }
+
+    #[test]
     fn locked_start_then_unlock_cannot_replace_unread_shelf() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("drafts.db");
