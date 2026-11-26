@@ -14962,7 +14962,7 @@ mod tests {
         // The quote-free chip replaced the quoted text: the member keeps a
         // jump button naming its quoted sender alongside the actions.
         assert!(nodes.iter().any(|(label, role, _)| {
-            label.starts_with("Jump to the original message")
+            label.starts_with("Open thread (Cmd/Ctrl-click")
                 && *role == egui::accesskit::Role::Button
         }));
     }
@@ -21728,12 +21728,21 @@ mod tests {
                             egui::vec2(1180.0, 780.0),
                         )),
                         events: vec![
+                            egui::Event::ModifiersChanged(if kind == "quote" {
+                                egui::Modifiers::COMMAND
+                            } else {
+                                egui::Modifiers::NONE
+                            }),
                             egui::Event::PointerMoved(pos),
                             egui::Event::PointerButton {
                                 pos,
                                 button: egui::PointerButton::Primary,
                                 pressed,
-                                modifiers: egui::Modifiers::NONE,
+                                modifiers: if kind == "quote" {
+                                    egui::Modifiers::COMMAND
+                                } else {
+                                    egui::Modifiers::NONE
+                                },
                             },
                         ],
                         ..Default::default()
@@ -22832,12 +22841,13 @@ mod tests {
                     &mut app,
                     &ctx,
                     vec![
+                        egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
                         egui::Event::PointerMoved(pos),
                         egui::Event::PointerButton {
                             pos,
                             button: egui::PointerButton::Primary,
                             pressed,
-                            modifiers: egui::Modifiers::NONE,
+                            modifiers: egui::Modifiers::COMMAND,
                         },
                     ],
                 );
