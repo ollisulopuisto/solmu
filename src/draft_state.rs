@@ -107,6 +107,7 @@ impl State {
             text: text.into(),
         });
         if clear_composer {
+            self.text = text.into();
             self.clear_after_save = Some(text.into());
         } else {
             self.staged_recovery = Some(text.into());
