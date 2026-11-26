@@ -5228,7 +5228,15 @@ fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
             .rect_stroke(
                 snapshot.bubble_rect.expand(2.0),
                 10.0,
-                Stroke::new(2.0, snapshot.palette.accent),
+                Stroke::new(
+                    2.0,
+                    theme::readable_on(
+                        snapshot.palette.bubble_in,
+                        snapshot.palette.accent,
+                        snapshot.palette.text,
+                        3.0,
+                    ),
+                ),
                 egui::StrokeKind::Inside,
             );
     }
@@ -5329,6 +5337,22 @@ pub(crate) fn hover_grid_keyboard(app: &mut App, ctx: &egui::Context) -> bool {
         || app.app_lock.is_locked()
         || app.dialog.is_some()
     {
+        dismiss_hover_grid(ctx);
+        return false;
+    }
+    let navigation_scroll = ctx.input(|i| {
+        i.events.iter().any(|event| {
+            matches!(
+                event,
+                egui::Event::Key {
+                    key: Key::PageUp | Key::PageDown | Key::Home | Key::End,
+                    pressed: true,
+                    ..
+                }
+            )
+        })
+    });
+    if navigation_scroll {
         dismiss_hover_grid(ctx);
         return false;
     }
@@ -5525,7 +5549,12 @@ fn paint_hover_grid(ctx: &egui::Context, snapshot: &HoverSnapshot, actions: &mut
                         bar.painter(),
                         rect,
                         snapshot.palette.surface_hover,
-                        snapshot.palette.accent,
+                        theme::readable_on(
+                            snapshot.palette.surface_hover,
+                            snapshot.palette.accent,
+                            snapshot.palette.text,
+                            3.0,
+                        ),
                     );
                 } else if snapshot.mine.as_deref() == Some(emoji.as_str()) {
                     bar.painter().circle_filled(
@@ -5599,7 +5628,12 @@ fn paint_hover_grid(ctx: &egui::Context, snapshot: &HoverSnapshot, actions: &mut
                         bar.painter(),
                         rect,
                         snapshot.palette.surface_hover,
-                        snapshot.palette.accent,
+                        theme::readable_on(
+                            snapshot.palette.surface_hover,
+                            snapshot.palette.accent,
+                            snapshot.palette.text,
+                            3.0,
+                        ),
                     );
                 }
                 theme::paint_icon(
