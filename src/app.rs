@@ -10364,7 +10364,7 @@ impl App {
     }
 
     /// Applies one model action after drawing the views, respecting the app lock and account state.
-    pub(crate) fn apply(&mut self, action: Action, ctx: &egui::Context) {
+    pub(crate) fn apply(&mut self, mut action: Action, ctx: &egui::Context) {
         if self.app_lock.is_locked() && !allowed_while_locked(&action) {
             // A clicked notification opens its message once unlocked, and a
             // link opens the chat it named; the rest would show or change
@@ -10463,6 +10463,30 @@ impl App {
         let media_destination = crate::ui::merged::attachment_destination(self, ctx)
             .ok()
             .flatten();
+        // Thread composition defaults to the latest exact member. Explicit
+        // reply choices remain authoritative, edits and scheduled sends keep
+        // their existing semantics. Resolve only for the actual destination.
+        match &mut action {
+            Action::SendText { chat, quoting, .. } | Action::SendLocation { chat, quoting, .. }
+                if quoting.is_none() =>
+            {
+                *quoting = crate::ui::reply_threads::default_reply(self, ctx, chat);
+            }
+            Action::SendPending { chat, .. } if self.reply_to.is_none() => {
+                self.reply_to = crate::ui::reply_threads::default_reply(self, ctx, chat);
+            }
+            Action::SendGif(_)
+            | Action::SendSticker(_)
+            | Action::MakeSticker { send: true }
+            | Action::SendRecording
+                if self.reply_to.is_none() =>
+            {
+                if let Some(chat) = media_destination.as_deref().or(self.open_chat.as_deref()) {
+                    self.reply_to = crate::ui::reply_threads::default_reply(self, ctx, chat);
+                }
+            }
+            _ => {}
+        }
         let reply_send = match &action {
             Action::SendText { chat, quoting, .. } | Action::SendLocation { chat, quoting, .. } => {
                 Some((chat.as_str(), quoting.as_ref()))

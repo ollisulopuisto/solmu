@@ -169,6 +169,45 @@ pub fn owns(app: &App, ctx: &egui::Context) -> bool {
             && ctx.data(|d| d.get_temp::<Key>(f.scope)).is_some()
     })
 }
+/// Rebuild from loaded messages at send time, so consecutive sends extend
+/// the thread even before another rendering frame updates its cached index.
+pub fn default_reply(
+    app: &App,
+    ctx: &egui::Context,
+    chat: &str,
+) -> Option<crate::model::ReplyTarget> {
+    if !owns(app, ctx) || app.editing.is_some() {
+        return None;
+    }
+    if app.open_chat.as_deref() != Some(chat) {
+        return None;
+    }
+    let root = current(ctx)?;
+    let conversation = app.conversations.get(chat)?;
+    let messages: Vec<_> = conversation
+        .messages
+        .iter()
+        .filter(|m| {
+            !hidden(app, chat, &m.id)
+                && !matches!(m.content, crate::model::Content::Revoked)
+                && !app
+                    .pending_media
+                    .values()
+                    .any(|p| p.visible == m.id && p.job.member.chat == chat)
+        })
+        .collect();
+    let (_, parents) = index(&messages);
+    let included = chain(&root, &parents);
+    let latest = messages
+        .into_iter()
+        .filter(|m| included.contains(&Key::of(m)))
+        .max_by_key(|m| m.timestamp)?;
+    Some(crate::model::ReplyTarget {
+        id: latest.id.clone(),
+        chat: None,
+    })
+}
+
 /// Explicit navigation and selection take over the full transcript, without restoring an old offset over the jump.
 pub fn leave_for_navigation(ctx: &egui::Context) {
     if let Some(shared) = frame(ctx) {
@@ -1014,6 +1053,30 @@ mod tests {
             )
         });
         (dir, app, ctx)
+    }
+    #[test]
+    fn thread_send_defaults_to_latest_loaded_member_and_stops_after_close() {
+        let (_dir, app, ctx) = seeded();
+        let chat = app.open_chat.clone().unwrap();
+        let target = default_reply(&app, &ctx, &chat).expect("thread has a default");
+        let root = current(&ctx).unwrap();
+        let rows: Vec<_> = app.conversations[&chat].messages.iter().collect();
+        let (_, parents) = index(&rows);
+        let included = chain(&root, &parents);
+        assert!(included.contains(&Key {
+            chat: chat.clone(),
+            id: target.id.clone()
+        }));
+        assert_eq!(
+            target.id,
+            rows.iter()
+                .filter(|m| included.contains(&Key::of(m)))
+                .max_by_key(|m| m.timestamp)
+                .unwrap()
+                .id
+        );
+        close(&ctx);
+        assert!(default_reply(&app, &ctx, &chat).is_none());
     }
     #[test]
     fn explicit_quote_search_and_selection_actions_leave_thread_without_scroll_restore() {
