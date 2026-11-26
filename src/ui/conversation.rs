@@ -145,6 +145,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // Modifier gestures belong to message selection/navigation, before any
     // retained foreground area can participate in this frame's hit testing.
     if ui.input(|i| i.modifiers.command || i.modifiers.ctrl || i.modifiers.shift) {
+        if hover_grid_open(ui.ctx()) && ui.input(|i| i.pointer.primary_pressed()) {
+            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(egui::Id::new("grid-modified-press"), pos));
+            }
+        }
         dismiss_hover_grid(ui.ctx());
     }
     ui.ctx().data_mut(|d| {
@@ -205,6 +211,23 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
     }
     paint_grid_feedback(ui.ctx());
+    if ui.input(|i| !i.pointer.primary_down()) {
+        ui.ctx()
+            .data_mut(|d| d.remove::<egui::Pos2>(egui::Id::new("grid-modified-press")));
+    }
+}
+fn grid_modified_click(ui: &egui::Ui, response: &egui::Response) -> bool {
+    let pressed = ui
+        .ctx()
+        .data(|d| d.get_temp::<egui::Pos2>(egui::Id::new("grid-modified-press")));
+    pressed.is_some_and(|p| response.rect.contains(p))
+        && ui.input(|i| {
+            i.pointer.primary_clicked()
+                && i.pointer
+                    .interact_pos()
+                    .is_some_and(|p| response.rect.contains(p))
+        })
+        && response.rect.intersects(ui.clip_rect())
 }
 fn show_inner(app: &mut App, ui: &mut egui::Ui) {
     let Some(chat) = app.current_chat().cloned() else {
@@ -4391,7 +4414,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32) {
                                         });
                                     }
                                 } else if let Some(response) = &response
-                                    && response.clicked()
+                                    && (response.clicked() || grid_modified_click(ui, response))
                                     && ui.input(|input| input.modifiers.command)
                                     && crate::app::can_select(&message.content)
                                 {
@@ -5158,6 +5181,7 @@ struct HoverSnapshot {
     frame: u64,
     pointer: Option<egui::Pos2>,
     exit: super::hover_actions::ExitGrace,
+    last_focus: Option<egui::Id>,
 }
 fn hover_snapshot_id() -> egui::Id {
     egui::Id::new("message-actions-snapshot")
@@ -5252,6 +5276,7 @@ fn finish_hover_grid(ctx: &egui::Context, actions: &mut Vec<Action>) {
     }
     let before = actions.len();
     paint_hover_grid(ctx, &snapshot, actions);
+    snapshot.last_focus = ctx.memory(|m| m.focused());
     if actions.len() > before {
         dismiss_hover_grid(ctx);
     } else {
@@ -5360,6 +5385,11 @@ pub(crate) fn hover_grid_keyboard(app: &mut App, ctx: &egui::Context) -> bool {
                 .any(|e| matches!(e, egui::Event::Copy | egui::Event::Cut))
     });
     if native_command {
+        if ctx.input(|i| i.pointer.primary_pressed())
+            && let Some(pos) = ctx.input(|i| i.pointer.interact_pos())
+        {
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new("grid-modified-press"), pos));
+        }
         dismiss_hover_grid(ctx);
         return false;
     }
@@ -5745,7 +5775,7 @@ fn grouped_hover_actions(
             // The fallback precedes the foreground Areas in native widget
             // registration. Do not register the grid again on its exit Tab,
             // or native focus loops into the first emoji instead of leaving.
-            if ui.memory(|m| m.has_focus(bubble.id.with("react-keyboard")))
+            if snapshot.last_focus == Some(bubble.id.with("react-keyboard"))
                 && ui.input(|i| i.key_pressed(Key::Tab) && !i.modifiers.shift)
             {
                 dismiss_hover_grid(ui.ctx());
@@ -5898,6 +5928,7 @@ fn grouped_hover_actions(
         frame,
         pointer,
         exit: super::hover_actions::ExitGrace::default(),
+        last_focus: ui.memory(|m| m.focused()),
     };
     ui.ctx()
         .data_mut(|d| d.insert_temp(hover_snapshot_id(), snapshot.clone()));
