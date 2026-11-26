@@ -179,7 +179,11 @@ pub fn default_reply(
     if !owns(app, ctx) || app.editing.is_some() || app.scheduling_draft.is_some() {
         return None;
     }
-    if app.open_chat.as_deref() != Some(chat) {
+    if app.open_chat.as_deref() != Some(chat)
+        || app.chat(chat).is_none_or(|destination| {
+            !destination.can_send() || (destination.locked && !app.locked_folder_open())
+        })
+    {
         return None;
     }
     let root = current(ctx)?;
@@ -1053,6 +1057,31 @@ mod tests {
             )
         });
         (dir, app, ctx)
+    }
+    #[test]
+    fn stale_attachment_account_cannot_set_current_thread_reply() {
+        let (_dir, mut app, ctx) = seeded();
+        let chat = app.open_chat.clone().unwrap();
+        app.apply(
+            crate::model::Action::SendPending {
+                account: crate::model::AccountId("other-account".into()),
+                chat,
+                caption: "stale".into(),
+                mentions: vec![],
+            },
+            &ctx,
+        );
+        assert!(app.reply_to.is_none());
+    }
+    #[test]
+    fn thread_default_rechecks_locked_destination_and_edit_state() {
+        let (_dir, mut app, ctx) = seeded();
+        assert!(default_reply(&app, &ctx, "a").is_some());
+        app.editing = Some("2".into());
+        assert!(default_reply(&app, &ctx, "a").is_none());
+        app.editing = None;
+        app.chats.iter_mut().find(|c| c.id == "a").unwrap().locked = true;
+        assert!(default_reply(&app, &ctx, "a").is_none());
     }
     #[test]
     fn thread_default_preserves_explicit_quote_and_tracks_new_members_without_render() {

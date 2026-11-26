@@ -10472,8 +10472,9 @@ impl App {
             {
                 *quoting = crate::ui::reply_threads::default_reply(self, ctx, chat);
             }
-            Action::SendPending { chat, .. }
-                if self.reply_to.is_none()
+            Action::SendPending { account, chat, .. }
+                if *account == self.account().id
+                    && self.reply_to.is_none()
                     && !self
                         .pending
                         .iter()
