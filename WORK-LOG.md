@@ -1813,6 +1813,18 @@ pass traced row-width consumers, footer wrapping, own toggle, album member IDs a
 color-emoji line height. Full native checks and actual feature capture await CI;
 local formatting/diff checks alone are not visual proof. No workflow edit/release.
 
+## Six-rule action-grid intent and tolerance,26November
+
+Owner21:04 approved all six rules. Add150ms pointer intent,250ms exit grace,
+12point padding enlarged24points facing target and direction-checked safe
+triangle from last in-bubble pointer. Keyboard opening remains immediate,
+Escape/click-away/scroll immediate close and target highlight preserved.
+Same single snapshot/action target, no invisible widgets, no settings or
+workflow change. Local exact hover_actions source15tests pass; integration
+fixtures use explicit time for the new open delay instead of assuming instant
+hover. Fresh full native suites and light/dark gallery required. Merge held
+for owner word. Checked main1e7d371 and495 before branching;495 is thread-only,
+this is separate hover interaction work and will need integration afterward.
 ## Thread view without connector lines,26November
 
 Owner requested no lines anywhere in the thread, including non-root replies.
@@ -1831,3 +1843,15 @@ not insert the scoped current-thread Key used by active(ctx). Native Linux/
 Mac therefore correctly exposed it as a normal-chat fixture. Insert/remove
 the actual scoped Key around both unchanged shape assertions; explicitly
 assert active/inactive state. All other default tests passed. Fresh CI owed.
+
+Own review follow-up: motion-only safe-triangle protection now starts the
+250ms exit grace if the pointer stops outside the normal reach regions.
+Layout-only movement still cannot start an exit. Added a regression that
+fails with the old motion-only exit update, plus re-entry coverage. Transit
+starts at the latest in-bubble pointer rather than the frozen placement anchor.
+
+Native CI exposed the full-app hover-picker fixture's implicit frame timing:
+it clicked before150ms elapsed. The fixture now advances explicit input time,
+asserts no immediate opening then opening after200ms, and retains all picker,
+message-binding, no-context-menu and no-reply assertions. Other2791default
+Linux tests passed. New full native runs are required after this fixture fix.

@@ -27,6 +27,38 @@ pub fn click_feedback(age: f64, reduced: bool) -> f32 {
     (1.0 - (age / 0.16).clamp(0.0, 1.0)) as f32
 }
 pub const CELL: f32 = 44.0;
+pub const OPEN_DELAY: f64 = 0.15;
+pub const CLOSE_DELAY: f64 = 0.25;
+pub const HIT_PADDING: f32 = 12.0;
+pub const ARRIVAL_PADDING: f32 = 24.0;
+const _: () = assert!(CLOSE_DELAY > OPEN_DELAY);
+
+/// One pointer-entry attempt. Keyboard opening bypasses this delay.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OpenIntent {
+    since: Option<f64>,
+}
+impl OpenIntent {
+    pub fn update(&mut self, fresh: bool, eligible: bool, now: f64) -> bool {
+        if !eligible {
+            self.since = None;
+            return false;
+        }
+        if fresh {
+            self.since = Some(now);
+        }
+        if self.since.is_some_and(|since| now - since >= OPEN_DELAY) {
+            self.since = None;
+            return true;
+        }
+        false
+    }
+    pub fn remaining(self, now: f64) -> Option<f64> {
+        self.since
+            .map(|since| (OPEN_DELAY - (now - since)).max(0.0))
+    }
+}
+
 const GAP: f32 = 4.0;
 const SECTION_GAP: f32 = 8.0;
 pub fn focus_order(bubble: egui::Id, reply: bool, star: bool) -> Vec<egui::Id> {
@@ -89,8 +121,23 @@ impl EntryAnchor {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExitGrace {
     pub since: Option<f64>,
+    transit: bool,
 }
 impl ExitGrace {
+    /// Losing motion-only triangle protection starts grace even if the pointer
+    /// stops, without turning layout-only movement into a generic exit.
+    pub fn update_transit(
+        &mut self,
+        moved: bool,
+        in_reach: bool,
+        transit: bool,
+        dismiss: bool,
+        now: f64,
+    ) -> bool {
+        let left_transit = self.transit && !transit;
+        self.transit = transit;
+        self.update(moved || left_transit, in_reach || transit, dismiss, now)
+    }
     pub fn update(&mut self, moved: bool, in_reach: bool, dismiss: bool, now: f64) -> bool {
         if dismiss {
             return true;
@@ -102,7 +149,7 @@ impl ExitGrace {
                 self.since = Some(now);
             }
         }
-        self.since.is_some_and(|since| now - since >= 0.15)
+        self.since.is_some_and(|since| now - since >= CLOSE_DELAY)
     }
 }
 /// A separate foreground layer keeps all target edges above later message rows.
@@ -212,6 +259,52 @@ impl Geometry {
         None
     }
 
+    /// Invisible tolerance is not an input-capturing widget. The side facing
+    /// the target bubble is wider to make the arrival less exacting.
+    pub fn padded_bounds(self, bubble: Rect) -> Rect {
+        let grid = self.bounds();
+        let mut padded = grid.expand(HIT_PADDING);
+        if grid.center().x >= bubble.center().x {
+            padded.min.x = grid.left() - ARRIVAL_PADDING;
+        } else {
+            padded.max.x = grid.right() + ARRIVAL_PADDING;
+        }
+        padded
+    }
+    /// A short diagonal journey from the trigger toward the grid is safe.
+    /// It never protects motion away from the grid or a stationary outside
+    /// pointer, and owns no click targets of its own.
+    pub fn safe_triangle(
+        self,
+        origin: egui::Pos2,
+        previous: egui::Pos2,
+        pointer: egui::Pos2,
+    ) -> bool {
+        let grid = self.bounds().expand(HIT_PADDING);
+        if grid.distance_sq_to_pos(pointer) >= grid.distance_sq_to_pos(previous) {
+            return false;
+        }
+        let x = if grid.center().x >= origin.x {
+            grid.left()
+        } else {
+            grid.right()
+        };
+        let a = origin;
+        let b = pos2(x, grid.top());
+        let c = pos2(x, grid.bottom());
+        let cross = |p: egui::Pos2, q: egui::Pos2, r: egui::Pos2| {
+            (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+        };
+        if cross(a, b, c).abs() < 0.01 {
+            return false;
+        }
+        let values = [
+            cross(a, b, pointer),
+            cross(b, c, pointer),
+            cross(c, a, pointer),
+        ];
+        values.iter().all(|v| *v >= 0.0) || values.iter().all(|v| *v <= 0.0)
+    }
     /// Only the corridor directly between the facing edges, never the full
     /// bounding box that also contains unrelated neighbouring message rows.
     pub fn bridge(self, bubble: Rect) -> Rect {
@@ -276,6 +369,74 @@ pub fn paint(p: &egui::Painter, g: Geometry, rear: Color32, front: Color32, outl
 mod tests {
     use super::*;
     #[test]
+    fn stopping_in_transit_starts_grace_but_layout_only_exit_does_not() {
+        let mut exit = ExitGrace::default();
+        assert!(!exit.update_transit(true, false, true, false, 1.0));
+        assert!(!exit.update_transit(false, false, false, false, 1.1));
+        assert!(!exit.update_transit(false, false, false, false, 1.34));
+        assert!(exit.update_transit(false, false, false, false, 1.36));
+        let mut layout = ExitGrace::default();
+        assert!(!layout.update_transit(false, false, false, false, 9.0));
+        assert!(layout.since.is_none());
+        let mut reentry = ExitGrace::default();
+        assert!(!reentry.update_transit(true, false, true, false, 1.0));
+        assert!(!reentry.update_transit(false, true, false, false, 1.1));
+        assert!(reentry.since.is_none());
+    }
+    #[test]
+    fn intent_opens_once_after_delay_and_fast_passes_cancel() {
+        let mut intent = OpenIntent::default();
+        assert!(!intent.update(true, true, 1.0));
+        assert!(!intent.update(false, true, 1.14));
+        assert!(intent.update(false, true, 1.16));
+        assert!(
+            !intent.update(false, true, 9.0),
+            "no stationary reopen after dismissal"
+        );
+        assert!(!intent.update(true, true, 10.0));
+        assert!(!intent.update(false, false, 10.1));
+        assert!(
+            !intent.update(false, true, 11.0),
+            "layout-only re-entry is not intent"
+        );
+    }
+    #[test]
+    fn padded_arrival_and_safe_diagonal_are_symmetric_and_cancel_exit() {
+        let bubble = Rect::from_min_max(pos2(50., 200.), pos2(300., 300.));
+        let bounds = Rect::from_min_size(pos2(0., 0.), vec2(800., 600.));
+        let g = Geometry::beside_pointer(bubble, bounds, 7, bubble.center()).unwrap();
+        assert_eq!(
+            g.bounds().left() - g.padded_bounds(bubble).left(),
+            ARRIVAL_PADDING
+        );
+        assert_eq!(
+            g.padded_bounds(bubble).right() - g.bounds().right(),
+            HIT_PADDING
+        );
+        let origin = pos2(100., 250.);
+        assert!(g.safe_triangle(origin, pos2(150., 250.), pos2(220., 240.)));
+        assert!(!g.safe_triangle(origin, pos2(220., 240.), pos2(150., 250.)));
+        assert!(!g.safe_triangle(origin, pos2(150., 250.), pos2(220., 30.)));
+        let left_bubble = Rect::from_min_max(pos2(600., 200.), pos2(780., 300.));
+        let left = Geometry::beside_pointer(left_bubble, bounds, 7, left_bubble.center()).unwrap();
+        assert_eq!(
+            left.padded_bounds(left_bubble).right() - left.bounds().right(),
+            ARRIVAL_PADDING
+        );
+        assert!(left.safe_triangle(pos2(700., 250.), pos2(680., 250.), pos2(620., 250.)));
+        let mut exit = ExitGrace::default();
+        assert!(!exit.update(true, false, false, 1.0));
+        assert!(!exit.update(true, true, false, 1.2));
+        assert!(
+            !exit.update(false, false, false, 5.0),
+            "re-entry cancels timer"
+        );
+        assert!(
+            exit.update(false, true, true, 5.0),
+            "explicit dismiss always wins"
+        );
+    }
+    #[test]
     fn modal_grid_keys_are_unique_exact_and_feedback_respects_reduced_motion() {
         let mut keys = std::collections::HashSet::new();
         for (cell, (key, label)) in GRID_KEYS.iter().enumerate() {
@@ -308,7 +469,8 @@ mod tests {
         assert!(!exit.update(false, false, false, 20.));
         assert!(!exit.update(true, false, false, 21.));
         assert!(!exit.update(false, false, false, 21.1));
-        assert!(exit.update(false, false, false, 21.16));
+        assert!(!exit.update(false, false, false, 21.24));
+        assert!(exit.update(false, false, false, 21.26));
         assert!(ExitGrace::default().update(false, true, true, 1.));
     }
     #[test]
