@@ -620,7 +620,15 @@ pub fn has_replies(ctx: &egui::Context, m: &Message) -> bool {
 pub fn open_for_message(ctx: &egui::Context, message: &Message) {
     if let Some(shared) = frame(ctx) {
         let f = shared.lock().unwrap_or_else(|e| e.into_inner());
-        ctx.data_mut(|d| d.insert_temp(f.scope, Key::of(message)));
+        let mut root = Key::of(message);
+        let mut seen = HashSet::new();
+        while seen.insert(root.clone()) {
+            let Some(parent) = f.parents.get(&root) else {
+                break;
+            };
+            root = parent.clone();
+        }
+        ctx.data_mut(|d| d.insert_temp(f.scope, root));
         ctx.request_repaint();
     }
 }
