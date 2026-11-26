@@ -78,6 +78,15 @@ impl State {
         Some(text)
     }
     pub fn sent(&mut self, id: u64) {
+        // A later Undo must never resurrect a draft whose send succeeded,
+        // even after the removal acknowledgement clears sent_removals.
+        if self
+            .deleted_draft
+            .as_ref()
+            .is_some_and(|draft| draft.id == id)
+        {
+            self.deleted_draft = None;
+        }
         if self.resumed == Some(id) {
             self.resumed = None;
         }
@@ -577,6 +586,29 @@ mod tests {
 #[cfg(test)]
 mod shelf_tests {
     use super::*;
+    #[test]
+    fn successful_send_invalidates_delete_undo_even_after_ack() {
+        let mut state = State {
+            loaded: true,
+            shelf: vec![Parked {
+                id: 1,
+                text: "sent".into(),
+            }],
+            ..Default::default()
+        };
+        assert!(state.delete_draft(1));
+        state.sent(1);
+        let revision = state.revision;
+        state.pending = Some(revision);
+        state.pending_shelf = state.staged_shelf.clone();
+        state.ack(revision, true);
+        assert!(state.sent_removals.is_empty());
+        assert!(
+            !state.undo_delete(),
+            "cannot resurrect a successfully sent draft"
+        );
+        assert!(state.shelf.is_empty());
+    }
     #[test]
     fn deletion_waits_for_ack_and_undo_restores_only_its_identity() {
         let mut state = State {

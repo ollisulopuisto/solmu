@@ -1884,3 +1884,8 @@ that handler, after higher-overlay/menu priority. Resume test now checks the
 actual editor id, not its geometry-record id. Composer inset test retains the
 send inset and Attach/Emoji spacing checks, replacing obsolete Attach-leftmost
 expectation with drafts-inside/left-border/before-Attach checks. No test waiver.
+
+Own review traced send completion through draft acknowledgements: invalidate
+the deleted-item Undo on successful send, before sent_removals is eventually
+cleared, so Undo cannot resurrect a sent draft. Added that exact transition;
+19local state tests pass. Fresh CI remains required after this change.
