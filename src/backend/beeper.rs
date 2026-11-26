@@ -817,7 +817,7 @@ fn local_draft_command(
     path: &std::path::Path,
     origin: &str,
     emit: &dyn Fn(Event),
-) -> Result<(), Command> {
+) -> bool {
     match command {
         Command::SaveDraft { chat, text } => {
             save_local_draft(store, path, origin, &chat, &text, emit);
@@ -831,9 +831,9 @@ fn local_draft_command(
             let ok = write_local_draft_state(loaded, store, path, origin, &chat, &text, &shelf);
             emit(Event::DraftWritten { chat, revision, ok });
         }
-        other => return Err(other),
+        _ => return false,
     }
-    Ok(())
+    true
 }
 
 pub(crate) fn write_local_draft_state(
@@ -8321,42 +8321,36 @@ mod tests {
         let origin = "http://127.0.0.1:1";
         let events = Mutex::new(Vec::new());
         let emit = |event| events.lock().unwrap().push(event);
-        assert!(
-            local_draft_command(
-                Command::SaveDraft {
-                    chat: "one".into(),
-                    text: "offline text".into()
-                },
-                true,
-                &mut store,
-                &path,
-                origin,
-                &emit
-            )
-            .is_ok()
-        );
+        assert!(local_draft_command(
+            Command::SaveDraft {
+                chat: "one".into(),
+                text: "offline text".into()
+            },
+            true,
+            &mut store,
+            &path,
+            origin,
+            &emit
+        ));
         assert!(
             stored_drafts(store.as_ref().unwrap(), origin)
                 .unwrap()
                 .iter()
                 .any(|(chat, text)| chat == "one" && text == "offline text")
         );
-        assert!(
-            local_draft_command(
-                Command::WriteDraftState {
-                    chat: "one".into(),
-                    revision: 7,
-                    text: "new offline text".into(),
-                    shelf: Vec::new()
-                },
-                true,
-                &mut store,
-                &path,
-                origin,
-                &emit
-            )
-            .is_ok()
-        );
+        assert!(local_draft_command(
+            Command::WriteDraftState {
+                chat: "one".into(),
+                revision: 7,
+                text: "new offline text".into(),
+                shelf: Vec::new()
+            },
+            true,
+            &mut store,
+            &path,
+            origin,
+            &emit
+        ));
         assert!(events.lock().unwrap().iter().any(|event| matches!(
             event,
             Event::DraftWritten {
@@ -8371,22 +8365,19 @@ mod tests {
                 .iter()
                 .any(|(chat, text)| chat == "one" && text == "new offline text")
         );
-        assert!(
-            local_draft_command(
-                Command::WriteDraftState {
-                    chat: "one".into(),
-                    revision: 8,
-                    text: "unread shelf".into(),
-                    shelf: Vec::new()
-                },
-                false,
-                &mut store,
-                &path,
-                origin,
-                &emit
-            )
-            .is_ok()
-        );
+        assert!(local_draft_command(
+            Command::WriteDraftState {
+                chat: "one".into(),
+                revision: 8,
+                text: "unread shelf".into(),
+                shelf: Vec::new()
+            },
+            false,
+            &mut store,
+            &path,
+            origin,
+            &emit
+        ));
         assert!(events.lock().unwrap().iter().any(|event| matches!(
             event,
             Event::DraftWritten {
