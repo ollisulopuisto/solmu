@@ -43,7 +43,9 @@
     "batch-results,dark",
     "batch-results,light",
     "batch-results,debug,dark",
-    "batch-results,debug,light"
+    "batch-results,debug,light",
+    "draft-shelf-confirmed,light",
+    "draft-clear-recovery,light"
   ],
   "modules": {
     "src/a11y.rs": {
@@ -1163,6 +1165,14 @@
     "batch-results,debug,light": {
       "fixture": "batch-results",
       "review": "Reviewed against demo::apply_flags and UI dispatch at pinned contracts. Full modules retain this scene; isolated module coverage is listed per module."
+    },
+    "draft-shelf-confirmed,light": {
+      "fixture": "draft-shelf-confirmed",
+      "review": "Same production draft controls fixture as dark; light counterpart verifies button contrast and silent normal autosave. Full shared layout coverage retained."
+    },
+    "draft-clear-recovery,light": {
+      "fixture": "draft-clear-recovery",
+      "review": "Same production draft controls fixture as dark; light counterpart verifies button contrast and silent normal autosave. Full shared layout coverage retained."
     }
   }
 }

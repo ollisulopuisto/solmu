@@ -13524,6 +13524,13 @@ mod tests {
             drawn(&mut app).unwrap().3,
             "actual recovery controls rendered"
         );
+        // A picture without a caption dismisses the old offer too.
+        app.stage(crate::app::Pending::File(std::path::PathBuf::from(
+            "new.png",
+        )));
+        assert!(!drawn(&mut app).unwrap().3);
+        app.pending.clear();
+        apply_flags(&mut app, Some("draft-clear-recovery"));
         app.reply_to = Some(crate::model::ReplyTarget {
             chat: Some(SAMPLES[2].id.into()),
             id: "unavailable".into(),

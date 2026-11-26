@@ -1088,6 +1088,11 @@ impl App {
     /// Stages an attachment and answers with the identity the backend names
     /// when it is done with it.
     pub fn stage(&mut self, item: Pending) -> AttachmentId {
+        if let Some(chat) = &self.open_chat {
+            if let Some(state) = self.draft_states.get_mut(chat) {
+                state.dismiss_recovery_for_new_content();
+            }
+        }
         let id = self.next_attachment_id();
         self.pending.push(Staged { id, item });
         id

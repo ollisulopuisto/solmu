@@ -67,6 +67,9 @@ impl State {
             return;
         }
         self.clear_after_save = None;
+        if !after.trim().is_empty() {
+            self.recovery = None;
+        }
         if after.trim().is_empty() {
             self.resumed = None;
         }
@@ -88,6 +91,29 @@ impl State {
         }
         self.text = after.into();
         self.touch();
+    }
+    pub fn dismiss_recovery_for_new_content(&mut self) {
+        self.recovery = None;
+        self.deletion_start = None;
+    }
+    pub fn keep_text(&mut self, text: &str, clear_composer: bool) -> bool {
+        if !self.loaded || self.staged_shelf.is_some() || text.trim().is_empty() {
+            return false;
+        }
+        self.resumed = None;
+        let mut shelf = self.shelf.clone();
+        shelf.push(Parked {
+            id: crate::util::now() as u64 * 1000 + self.revision,
+            text: text.into(),
+        });
+        if clear_composer {
+            self.clear_after_save = Some(text.into());
+        } else {
+            self.staged_recovery = Some(text.into());
+        }
+        self.staged_shelf = Some(shelf);
+        self.touch();
+        true
     }
     pub fn touch(&mut self) {
         self.revision = self.revision.wrapping_add(1);
@@ -163,6 +189,34 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_text_and_new_attachment_dismiss_clear_recovery() {
+        let mut s = State {
+            loaded: true,
+            recovery_min_chars: Some(1),
+            ..Default::default()
+        };
+        s.edit("previous text", "", true);
+        assert!(s.recovery.is_some());
+        s.edit("", "new", false);
+        assert!(s.recovery.is_none());
+        s.edit("new", "", true);
+        assert!(s.recovery.is_some());
+        s.dismiss_recovery_for_new_content();
+        assert!(s.recovery.is_none());
+    }
+    #[test]
+    fn keep_text_stages_without_claiming_saved_before_ack() {
+        let mut s = State {
+            loaded: true,
+            ..Default::default()
+        };
+        assert!(s.keep_text("draft", true));
+        assert_eq!(s.clear_after_save.as_deref(), Some("draft"));
+        assert_ne!(s.status(), "Saved locally");
+        assert!(s.shelf.is_empty());
+        assert!(!s.keep_text("duplicate", true));
+    }
     fn resumed_pair() -> State {
         State {
             loaded: true,

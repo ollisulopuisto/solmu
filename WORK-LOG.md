@@ -1,3 +1,18 @@
+## 2026-11-26: Transient draft recovery controls
+
+Separate four-item cleanup, no shelf layout change. Hide ordinary saving/saved
+status and persistent Keep action, keep real save failures with Retry. Cleared
+text has Save as draft / Restore text / Dismiss only. Exact Cmd/Ctrl-Shift-S
+is registered and shown on Save as draft; registry collision test covers both
+platforms. It stages existing transactional persistence rather than claiming
+a save or clearing the composer early. New edits or attachments dismiss stale
+recovery; deletion gesture accumulation stays intact. Traced edit, tick,
+WriteDraftState, ack, stage, keyboard overlay guards, prefill and shelf resume.
+State, native keyboard and attachment regression tests added; not yet executed
+on native CI. Rustfmt and diff checks pass locally. Open PRs487-492 contain no
+draft cleanup; prior shelf/recovery feature is reused. No schema, workflow or
+credential changes. Shelf layout remains separate. Merge needs owner word.
+
 ## 2026-11-25: Given reactions overlay the bottom-right bubble edge
 
 Follow-up on PR460: owner clarified the reaction row, not message indentation. Move given reactions out of the incoming-left footer into an independently wrapped bottom-right edge overlay in both directions; retain 36px background-free glyphs, exact message/emoji targets and album member identity. Reserve only the overlay overhang before separate metadata so clocks cannot collide. Added actual bubble render regression for both directions before edit. Native execution blocked locally: offline cargo cannot fetch the pinned egui fork, no precompiled GUI tree; regression added but not claimed red/green. Rustfmt and diff check pass. No workflow/schema/credential/crypto edits; merge held. Screenshot not yet verified locally, existing native screenshot evidence does not exercise this changed row.
