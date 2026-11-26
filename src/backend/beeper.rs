@@ -8386,9 +8386,14 @@ mod tests {
                 ..
             }
         )));
-        assert!(
-            local_draft_command(Command::Shutdown, true, &mut store, &path, origin, &emit).is_err()
-        );
+        assert!(!local_draft_command(
+            Command::Shutdown,
+            true,
+            &mut store,
+            &path,
+            origin,
+            &emit
+        ));
     }
 
     #[test]
