@@ -24524,7 +24524,7 @@ mod tests {
             "send's centre is {} off the field's centre line",
             send.center().y - field_middle
         );
-        // The plus mirrors it in the left end, and emoji stays close by.
+        // Drafts now owns the left border; attach and emoji remain paired.
         let rect = |stop| {
             let id = crate::ui::focus::stops(&ctx)
                 .into_iter()
@@ -24535,11 +24535,15 @@ mod tests {
         };
         let plus = rect(crate::ui::focus::Stop::Attach);
         let emoji = rect(crate::ui::focus::Stop::Emoji);
-        let left = plus.center().x - pill.left();
-        let right = pill.right() - send.center().x;
+        let chat = app.open_chat.as_ref().unwrap();
+        let drafts = ctx
+            .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_button_id(chat)))
+            .unwrap();
+        assert!(pill.contains_rect(drafts), "drafts stays inside composer");
+        assert!(drafts.right() < plus.left(), "drafts precedes Attach");
         assert!(
-            (left - right).abs() <= 1.0,
-            "plus centre is {left} from the left, send's {right} from the right"
+            drafts.left() - pill.left() <= 6.0,
+            "drafts is at left border"
         );
         let apart = emoji.center().x - plus.center().x;
         assert!(apart <= 32.0, "plus and emoji are {apart} apart");
@@ -26875,7 +26879,7 @@ mod rail_tests {
     }
 
     #[test]
-    fn numbered_drafts_open_beside_send_and_never_replace_working_text() {
+    fn numbered_drafts_overlay_from_left_and_never_replace_working_text() {
         let mut app = app();
         let ctx = egui::Context::default();
         app.attach(&ctx);
@@ -26892,7 +26896,7 @@ mod rail_tests {
             }
             let button = ctx
                 .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_button_id(&chat)))
-                .expect("draft icon beside Send");
+                .expect("draft icon at composer left");
             let pill = ctx
                 .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::composer_pill_id()))
                 .unwrap();
@@ -26900,7 +26904,8 @@ mod rail_tests {
                 pill.contains_rect(button),
                 "icon remains in composer at {width}"
             );
-            assert!(button.center().x > pill.center().x, "icon is at Send end");
+            assert!(button.center().x < pill.center().x, "icon is at left end");
+            let open_pill = pill;
             let row = ctx
                 .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_row_id(&chat, 1)))
                 .expect("numbered row");
@@ -26910,6 +26915,14 @@ mod rail_tests {
             assert_eq!(app.composer, original, "a row cannot replace unsent text");
             click(&mut app, &ctx, width, button.center());
             assert!(!app.draft_states[&chat].shelf_open);
+            for _ in 0..3 {
+                frame(&mut app, &ctx, width, Vec::new());
+            }
+            let closed_pill = recorded(&ctx, crate::ui::conversation::composer_pill_id()).unwrap();
+            assert!(
+                (open_pill.top() - closed_pill.top()).abs() < 1.0,
+                "shelf must not push composer"
+            );
             let button = ctx
                 .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_button_id(&chat)))
                 .unwrap();
@@ -26924,6 +26937,8 @@ mod rail_tests {
             .data(|d| d.get_temp::<egui::Rect>(crate::ui::conversation::draft_row_id(&chat, 1)))
             .unwrap();
         click(&mut app, &ctx, 1180.0, row.center());
+        assert!(!app.draft_states[&chat].shelf_open, "resume closes shelf");
+        assert!(app.focus_composer || ctx.memory(|m| m.has_focus(egui::Id::new("composer-text"))));
         assert!(app.composer.starts_with(&retained));
         assert!(
             app.composer.contains("Second line"),
@@ -26934,6 +26949,55 @@ mod rail_tests {
             2,
             "resume copies without deleting retained drafts"
         );
+    }
+
+    #[test]
+    fn draft_overlay_dismisses_without_preview_and_caps_many_rows() {
+        let mut app = app();
+        let ctx = egui::Context::default();
+        app.attach(&ctx);
+        apply_flags(&mut app, Some("draft-shelf-confirmed"));
+        let chat = app.open_chat.clone().unwrap();
+        for id in 3..40 {
+            app.draft_states
+                .get_mut(&chat)
+                .unwrap()
+                .shelf
+                .push(crate::draft_state::Parked {
+                    id,
+                    text: "PRIVATE_PREVIEW_MUST_NOT_RENDER".into(),
+                });
+        }
+        for size in [egui::vec2(1180.0, 780.0), egui::vec2(760.0, 560.0)] {
+            app.draft_states.get_mut(&chat).unwrap().shelf_open = true;
+            for _ in 0..3 {
+                frame_at(&mut app, &ctx, size, Vec::new());
+            }
+            let texts = frame_at(&mut app, &ctx, size, Vec::new());
+            assert!(
+                !texts
+                    .iter()
+                    .any(|t| t.contains("PRIVATE_PREVIEW_MUST_NOT_RENDER")),
+                "rows have time, not preview"
+            );
+            let shelf = recorded(&ctx, crate::ui::conversation::draft_shelf_id(&chat)).unwrap();
+            let pill = recorded(&ctx, crate::ui::conversation::composer_pill_id()).unwrap();
+            assert!(shelf.top() >= 0.0 && shelf.bottom() <= pill.top());
+            assert!(shelf.height() < 300.0, "many rows scroll rather than grow");
+            frame_at(
+                &mut app,
+                &ctx,
+                size,
+                vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            assert!(!app.draft_states[&chat].shelf_open);
+        }
     }
 
     /// The rail stands at the window's left edge beside the list, with Chats

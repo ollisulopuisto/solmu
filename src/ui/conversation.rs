@@ -1732,7 +1732,9 @@ pub(crate) fn composer_with_capabilities(
             {
                 unsent_voice_strip(app, ui, samples);
             }
-            draft_controls(app, ui, &chat.id);
+            if !app.draft_states.get(&chat.id).is_some_and(|s| s.shelf_open) {
+                draft_controls(app, ui, &chat.id);
+            }
             if app.editing.is_some() {
                 edit_strip(app, ui);
             } else if let Some(reply_id) = app.reply_to.clone() {
@@ -1975,6 +1977,7 @@ pub(crate) fn composer_with_capabilities(
                 // the send button is in the right one.
                 ui.add_space((line / 2.0 - PLUS_EDGE / 2.0).max(0.0));
                 if app.editing.is_none() {
+                    last_line(ui, line, |ui| draft_button(app, ui, &chat.id));
                     if attachments {
                     let tools = last_line(ui, line, |ui| theme::icon_button(
                         ui,
@@ -2017,9 +2020,8 @@ pub(crate) fn composer_with_capabilities(
                     ui.add_space(COMPOSER_TEXT_GAP - ui.spacing().item_spacing.x - 8.0);
                 }
                 // The send button closes the row, flush with the field's end.
-                let drafts_width = if app.editing.is_none() { 22.0 + theme::ICON_BUTTON_PAD + ui.spacing().item_spacing.x } else { 0.0 };
                 let field_width =
-                    (ui.available_width() - drafts_width - button_width - SEND_BUTTON_GAP - view_once_width - schedule_width - extras_width - later_width - if super::message_key_menu::is_open(ui.ctx()) { 0.0 } else { super::message_key_menu::buttons_width(ui) + ui.spacing().item_spacing.x } - ui.spacing().item_spacing.x).max(0.0);
+                    (ui.available_width() - button_width - SEND_BUTTON_GAP - view_once_width - schedule_width - extras_width - later_width - if super::message_key_menu::is_open(ui.ctx()) { 0.0 } else { super::message_key_menu::buttons_width(ui) + ui.spacing().item_spacing.x } - ui.spacing().item_spacing.x).max(0.0);
 
                 // The ink is centred on the controls, not the line box: the
                 // span from a capital's top to a descender's bottom sits as far
@@ -2273,9 +2275,6 @@ pub(crate) fn composer_with_capabilities(
                 {
                     app.actions.push(Action::ShowDialog(Dialog::ScheduledList));
                 }
-                if app.editing.is_none() {
-                    last_line(ui, line, |ui| draft_button(app, ui, &chat.id));
-                }
                 let ready = !app.composer.trim().is_empty()
                     || !app.pending.is_empty()
                     || (unsent_voice.is_some() && app.editing.is_none());
@@ -2464,6 +2463,7 @@ pub(crate) fn composer_with_capabilities(
     // Toasts sit above the composer so they never cover its buttons.
     ui.ctx()
         .data_mut(|data| data.insert_temp(super::composer_rect_id(), shown.response.rect));
+    draft_shelf_overlay(app, ui, &chat.id, shown.response.rect);
 }
 
 /// Below this hint width the full shortcut hint wraps onto a third line
@@ -2719,20 +2719,39 @@ pub(crate) fn draft_row_id(chat: &str, draft: u64) -> egui::Id {
 fn draft_button(app: &mut App, ui: &mut egui::Ui, chat: &str) {
     let palette = app.conversation_palette();
     let open = app.draft_states.get(chat).is_some_and(|s| s.shelf_open);
+    let count = app.draft_states.get(chat).map_or(0, |s| s.shelf.len());
     let response = ui
         .push_id(draft_button_id(chat), |ui| {
-            theme::icon_button(
+            let color = if open {
+                palette.accent
+            } else if count == 0 {
+                palette.dim
+            } else {
+                palette.secondary
+            };
+            let (rect, response) = ui.allocate_exact_size(vec2(42.0, 28.0), Sense::click());
+            theme::paint_icon(
                 ui,
                 Icon::Copy,
+                Rect::from_center_size(rect.left_center() + vec2(13.0, 0.0), vec2(22.0, 22.0)),
                 22.0,
-                if open {
-                    palette.accent
-                } else {
-                    palette.secondary
-                },
-                palette.text,
-                &crate::i18n::gettext(app.locale, "Drafts"),
-            )
+                color,
+            );
+            ui.painter().text(
+                rect.right_center() - vec2(3.0, 0.0),
+                Align2::RIGHT_CENTER,
+                count.to_string(),
+                theme::regular(11.0),
+                color,
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    true,
+                    format!("{} ({count})", crate::i18n::gettext(app.locale, "Drafts")),
+                )
+            });
+            response.on_hover_text(crate::i18n::gettext(app.locale, "Drafts"))
         })
         .inner;
     ui.ctx()
@@ -2744,6 +2763,62 @@ fn draft_button(app: &mut App, ui: &mut egui::Ui, chat: &str) {
 }
 
 /// Truthful local save status, retained drafts and nonblocking clear recovery.
+pub(crate) fn draft_shelf_id(chat: &str) -> egui::Id {
+    egui::Id::new(("draft-shelf-overlay", chat))
+}
+fn draft_shelf_overlay(app: &mut App, ui: &mut egui::Ui, chat: &str, composer: Rect) {
+    if app.editing.is_some()
+        || !app.composer_holds_draft()
+        || !app.draft_states.get(chat).is_some_and(|s| s.shelf_open)
+    {
+        return;
+    }
+    let thread_top = ui
+        .ctx()
+        .data(|d| d.get_temp::<Rect>(egui::Id::new("message-actions-viewport")))
+        .map_or(ui.ctx().content_rect().top(), |rect| rect.top());
+    let bounds = Rect::from_min_max(
+        pos2(composer.left(), thread_top),
+        pos2(composer.right(), composer.top()),
+    );
+    if bounds.height() < 40.0 {
+        return;
+    }
+    let blocker = egui::Area::new(draft_shelf_id(chat).with("shade"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(bounds.min)
+        .show(ui.ctx(), |ui| {
+            let (rect, response) = ui.allocate_exact_size(bounds.size(), Sense::click());
+            ui.painter()
+                .rect_filled(rect, 0.0, Color32::from_black_alpha(60));
+            response
+        });
+    let mut dismissed =
+        blocker.inner.clicked() || ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+    let overlay = egui::Area::new(draft_shelf_id(chat))
+        .order(egui::Order::Foreground)
+        .pivot(Align2::LEFT_BOTTOM)
+        .fixed_pos(pos2(bounds.left(), bounds.bottom() - STRIP_GAP))
+        .show(ui.ctx(), |ui| {
+            ui.set_width(bounds.width());
+            ui.set_max_height(bounds.height() - STRIP_GAP);
+            draft_controls(app, ui, chat);
+        });
+    ui.ctx().move_to_top(overlay.response.layer_id);
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(draft_shelf_id(chat), overlay.response.rect));
+    // The button remains outside the shade, so it can toggle the shelf.
+    if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
+        let button = ui.ctx().data(|d| d.get_temp::<Rect>(draft_button_id(chat)));
+        dismissed |= ui.input(|i| i.pointer.any_pressed())
+            && !overlay.response.rect.contains(pointer)
+            && !button.is_some_and(|r| r.contains(pointer));
+    }
+    if dismissed && let Some(state) = app.draft_states.get_mut(chat) {
+        state.shelf_open = false;
+    }
+}
+
 fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
     if app.editing.is_some()
         || !app.composer_holds_draft()
@@ -2872,8 +2947,20 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
                     }
                 });
             });
+            if state.deleted_draft.is_some() {
+                let ready = state.pending.is_none() && state.staged_shelf.is_none();
+                if ui
+                    .add_enabled(
+                        ready,
+                        egui::Button::new(crate::i18n::gettext(app.locale, "Undo")),
+                    )
+                    .clicked()
+                {
+                    state.undo_delete();
+                }
+            }
             egui::ScrollArea::vertical()
-                .max_height(180.0)
+                .max_height((ui.available_height() - 70.0).clamp(30.0, 180.0))
                 .id_salt(("draft-shelf", chat))
                 .show(ui, |ui| {
                     if state.shelf.is_empty() {
@@ -2892,9 +2979,14 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
                                     if response.hovered() {
                                         ui.painter().rect_filled(rect, 4.0, palette.surface_hover);
                                     }
-                                    let preview =
-                                        draft.text.split_whitespace().collect::<Vec<_>>().join(" ");
-                                    let label = format!("{}   {}", index + 1, preview);
+                                    // Production ids encode the save time; old/imported ids
+                                    // without one must not invent a time.
+                                    let stamp = if draft.id / 1000 >= 946684800 {
+                                        crate::util::full_stamp((draft.id / 1000) as i64)
+                                    } else {
+                                        "-".to_owned()
+                                    };
+                                    let label = format!("{}   {}", index + 1, stamp);
                                     let galley = widgets::line(
                                         ui,
                                         &label,
@@ -2922,7 +3014,7 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
                                 })
                                 .inner;
                             let response = response.on_hover_text(if app.composer.is_empty() {
-                                draft.text.clone()
+                                crate::i18n::gettext(app.locale, "Resume draft").into_owned()
                             } else {
                                 crate::i18n::gettext(
                                     app.locale,
@@ -2933,8 +3025,10 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
                             if response.clicked() && app.composer.is_empty() {
                                 app.composer = state.resume(draft.id).unwrap_or_default();
                                 app.focus_composer = true;
+                                state.shelf_open = false;
                             }
                             if state.staged_shelf.is_none()
+                                && state.pending.is_none()
                                 && theme::icon_button(
                                     ui,
                                     Icon::Trash,
@@ -2945,15 +3039,7 @@ fn draft_controls(app: &mut App, ui: &mut egui::Ui, chat: &str) {
                                 )
                                 .clicked()
                             {
-                                state.staged_shelf = Some(
-                                    state
-                                        .shelf
-                                        .iter()
-                                        .filter(|d| d.id != draft.id)
-                                        .cloned()
-                                        .collect(),
-                                );
-                                state.touch();
+                                state.delete_draft(draft.id);
                             }
                         });
                     }

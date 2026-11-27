@@ -1855,3 +1855,37 @@ it clicked before150ms elapsed. The fixture now advances explicit input time,
 asserts no immediate opening then opening after200ms, and retains all picker,
 message-binding, no-context-menu and no-reply assertions. Other2791default
 Linux tests passed. New full native runs are required after this fixture fix.
+
+## Composer-left drafts and overlay shelf,26November
+
+Implements the owner's Nov25 18:22 marker/count placement and18:52 overlay
+choice plus Go. Checked main79b5b94, all remote branches, open PRs (none), and
+recent merged draft work before editing: existing shelf is inline with preview
+rows and icon at Send, so this is the remaining distinct layout request.
+Move icon/count to left composer border; zero is dim. Shelf overlays the thread,
+with shade, Escape/outside close, capped scrolling, saved-time rather than text
+preview, and resume closes/focuses without replacing working text. Older ids
+without encoded save time display a dash rather than an invented timestamp.
+Delete remains revision-aware and offers Undo after its write confirms; no DB
+schema, dependency, workflow or capture-cadence change. Recovery stays above
+shelf when open, otherwise above composer.18local state tests pass, including
+identity-specific delete/ack/undo; native full-frame geometry, no-preview,
+no-overwrite, Escape, cap and resume coverage added. Formatting/diff pass. Full
+native tests and light/dark captures still pending. Separate PR, no merge.
+
+Pre-merge review: bound the shade to the message viewport so it does not dim
+chat header controls, and make Undo own its retained identity so a blocked
+undo attempt cannot discard the retry copy.18state tests still pass, including
+blocked undo retaining the identity. Native CI remains the integration check.
+
+First native run: quality passed; both default suites exposed Escape consumed
+by the generic chat handler before the overlay. Added shelf dismissal ahead of
+that handler, after higher-overlay/menu priority. Resume test now checks the
+actual editor id, not its geometry-record id. Composer inset test retains the
+send inset and Attach/Emoji spacing checks, replacing obsolete Attach-leftmost
+expectation with drafts-inside/left-border/before-Attach checks. No test waiver.
+
+Own review traced send completion through draft acknowledgements: invalidate
+the deleted-item Undo on successful send, before sent_removals is eventually
+cleared, so Undo cannot resurrect a sent draft. Added that exact transition;
+19local state tests pass. Fresh CI remains required after this change.
